@@ -1,0 +1,68 @@
+# Native SwiftUI Kade-AI app -> internal TestFlight.
+# Reuses the SAME signing setup as kade-ai-app: ASC integration KadeAI_ASC_Key +
+# secure var CERT_KEY in group `signing` (never regenerate the cert or installs break).
+workflows:
+  ios-native-testflight:
+    name: Kade-AI Native iOS -> TestFlight
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: KadeAI_ASC_Key
+    environment:
+      groups:
+        - signing
+      vars:
+        BUNDLE_ID: "com.kademurdock.kadeai"
+        APP_STORE_APPLE_ID: 6791024001
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+      - name: Set up code signing (reusable certificate)
+        script: |
+          set -e
+          keychain initialize
+          printf '%s' "$CERT_KEY" | openssl base64 -d -A > /tmp/cert_key.pem
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Auto-increment the TestFlight build number (floor 100 for native)
+        script: |
+          set -e
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          NEXT=$(($LATEST + 1)); [ $NEXT -lt 100 ] && NEXT=100
+          agvtool new-version -all $NEXT
+      - name: Build signed .ipa
+        script: |
+          xcode-project build-ipa \
+            --project "KadeAI.xcodeproj" \
+            --scheme "KadeAI"
+      - name: Simulator screenshot for visual review (blind-friendly loop)
+        script: |
+          set -e
+          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(dev['udid'] for devs in d['devices'].values() for dev in devs if 'iPhone' in dev['name']))") || exit 0
+          xcrun simctl boot "$SIM" || true
+          xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -destination "id=$SIM" -derivedDataPath /tmp/dd build || exit 0
+          APP=$(find /tmp/dd -name "KadeAI.app" -path "*iphonesimulator*" | head -1)
+          xcrun simctl install "$SIM" "$APP" && xcrun simctl launch "$SIM" com.kademurdock.kadeai && sleep 5
+          xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/screenshot-home.png" || true
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - screenshot-home.png
+    publishing:
+      app_store_connect:
+        auth: integration
+        # Internal testers only -> instant, no Apple review.
+        submit_to_testflight: false
+      email:
+        recipients:
+          - kademurdock@gmail.com
+        notify:
+          success: true
+          failure: true

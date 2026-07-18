@@ -1,0 +1,35 @@
+name: KadeAI
+options:
+  bundleIdPrefix: com.kademurdock
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+targets:
+  KadeAI:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
+        MARKETING_VERSION: "2.0"
+        CURRENT_PROJECT_VERSION: 100
+        DEVELOPMENT_TEAM: JQPWZ2RL9P
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Kade-AI
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        CODE_SIGN_STYLE: Manual
+    entitlements:
+      path: KadeAI.entitlements
+      properties:
+        aps-environment: production
+schemes:
+  KadeAI:
+    build:
+      targets:
+        KadeAI: all
+    archive:
+      config: Release
