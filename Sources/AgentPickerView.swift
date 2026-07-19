@@ -74,6 +74,15 @@ struct AgentPickerView: View {
                 row(for: agent)
             }
             .buttonStyle(.plain)
+            // Grouping lives on the Button itself, not nested inside its
+            // label (row(for:)) -- the same fix applied across
+            // ConversationListView this session after Kade's first real
+            // pass found rows that select but don't activate when the
+            // wrapping is on the label subtree instead of the control.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
+            .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
+            .accessibilityHint("Switches to this agent for your next message.")
         }
         .listStyle(.plain)
     }
@@ -99,10 +108,6 @@ struct AgentPickerView: View {
             }
         }
         .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibleLabel(for: agent, isSelected: isSelected))
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .accessibilityHint("Switches to this agent for your next message.")
     }
 
     private func accessibleLabel(for agent: KadeAgent, isSelected: Bool) -> String {

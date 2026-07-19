@@ -219,16 +219,22 @@ struct ConversationDetailView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if case .failed(let message) = sendState {
+                // Focus targets the Text directly (its own natural
+                // accessibility element -- no wrapping needed, same
+                // pattern as ContentView's sign-in error) rather than an
+                // .accessibilityElement(children: .combine) around the
+                // whole row: combining would have swallowed Retry's own
+                // tap action, the same bug fixed in ConversationListView's
+                // row/loadMoreRow/errorState this same session.
                 HStack(alignment: .top) {
                     Text(message)
                         .font(.footnote)
                         .foregroundStyle(.red)
+                        .accessibilityFocused($a11yFocus, equals: .composerError)
                     Spacer()
                     Button("Retry") { Task { await send() } }
                         .font(.footnote.bold())
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityFocused($a11yFocus, equals: .composerError)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message", text: $draftText, axis: .vertical)

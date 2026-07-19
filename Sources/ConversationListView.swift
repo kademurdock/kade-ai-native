@@ -39,6 +39,18 @@ struct ConversationListView: View {
                 NavigationLink(value: convo) {
                     row(for: convo)
                 }
+                // Accessibility modifiers live HERE, on the NavigationLink
+                // itself -- not nested inside its label (see row(for:)) --
+                // on purpose. Kade's first real pass on this screen (build
+                // 106, July 19 2026) found rows that VoiceOver could select
+                // and read but not ACTIVATE: wrapping a NavigationLink's
+                // label in its own .accessibilityElement(children:) creates
+                // a synthesized node VoiceOver focuses on that doesn't carry
+                // the link's own navigation action. Moving the grouping to
+                // the control itself (not its label subtree) is the fix;
+                // applies to every Button/NavigationLink row in this file.
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Opens this conversation and reads its history.")
             }
             if conversationsService.hasMore {
                 loadMoreRow
@@ -61,10 +73,12 @@ struct ConversationListView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("Opens this conversation and reads its history.")
     }
 
+    // No .accessibilityElement wrapping here: it's a plain Button ("Load
+    // more conversations") or ProgressView (own label already set), each
+    // fine as its own natural VoiceOver stop -- combining the container
+    // would swallow the Button's tap action, the same bug fixed above.
     private var loadMoreRow: some View {
         HStack {
             Spacer()
@@ -78,7 +92,6 @@ struct ConversationListView: View {
             }
             Spacer()
         }
-        .accessibilityElement(children: .combine)
     }
 
     private var emptyState: some View {
@@ -104,6 +117,5 @@ struct ConversationListView: View {
             .buttonStyle(.borderedProminent)
         }
         .padding()
-        .accessibilityElement(children: .combine)
     }
 }
