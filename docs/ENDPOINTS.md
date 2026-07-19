@@ -348,3 +348,61 @@ server afterward) implement exactly that. A conversation can freely have turns f
 agents interleaved in its history — the app doesn't attempt to detect or badge that in the
 message list for v1 (each `MessageRow` already shows its own `speakerLabel` per message, which is
 enough to keep it readable).
+
+## Edit and Regenerate (Phase 8, message actions) — verified live 2026-07-19
+
+Added a per-message actions menu (`ConversationDetailView`'s `MessageRow`) with Copy, Read Aloud,
+Edit and Resend (last user message only), and Regenerate (last assistant message only). Before
+building this, ran a live probe against a disposable test conversation to find the SAFE way to
+implement Edit/Regenerate, because `api/server/controllers/agents/request.js` really does destructure
+extra fields off `req.body` that look purpose-built for this: `isRegenerate`, `editedContent`,
+`overrideParentMessageId`, `responseMessageId` (aliased from `responseMessageId` in the body).
+
+**Do NOT use `isRegenerate`/`overrideParentMessageId`/`responseMessageId` from this client without
+much deeper source investigation than a session has time for.** A live test sent:
+
+```jsonc
+{
+  "text": "<same prompt text again>",
+  "messageId": "<fresh uuid>",
+  "parentMessageId": "<U1, the original user message's id>",
+  "overrideParentMessageId": "<A1, the assistant reply being regenerated>",
+  "responseMessageId": "<A1>",
+  "isRegenerate": true,
+  "conversationId": "<cid>",
+  "endpoint": "agents",
+  "agent_id": "agent_6llV0eMu4fmIaj8f2x1Sb"
+}
+```
+
+The POST returned a normal `200 {streamId, conversationId, status:"started"}` and the job completed
+with no error event — but `GET /api/messages/:conversationId` afterward showed message A1 had been
+**rewritten in place**: `isCreatedByUser` flipped `false` → `true`, `sender` flipped `"Kiana"` →
+`"User"`, `text` became the prompt text, and its original `content` (the "PONG" reply) was gone.
+No new third message ever appeared. Whatever this fork's regenerate path actually expects from a
+caller, this wasn't it, and the result silently corrupts the target message rather than erroring —
+worth knowing before anyone's tempted to reach for these fields again.
+
+**The safe, verified-clean alternative** (what `MessageRow`'s Edit/Regenerate actually use): resend
+through the exact same plain request shape `MessageSendingService.send` already used before this
+feature existed (`text`, `messageId`, `parentMessageId`, `conversationId`, `endpoint`, `agent_id` --
+no `isRegenerate`/`overrideParentMessageId`/`responseMessageId` at all), just passing an EARLIER
+message's own `parentMessageId` instead of `messages.last?.messageId`. Tested live immediately after
+the corruption above, same conversation: sent `{text: "<edited prompt>", parentMessageId: P0 (=
+U1's own parent, the all-zero sentinel)}` — came back completely clean, a brand-new user message
+(fresh id, correct `isCreatedByUser`/`sender`/`text`) followed by a brand-new assistant reply
+(correct `content`, correct `sender`, `parentMessageId` pointing at the new user message). Nothing
+else in the conversation was touched. This is a real branch (a sibling to the original), not an
+in-place edit -- since `fetchMessages` doesn't reconstruct the parentMessageId tree (see that
+function's own "known simplification" doc comment above), both the old and new turns render in the
+flat chronological list. `ConversationDetailView` restricts Edit/Regenerate to only the single most
+recent turn specifically so the appended branch always lands immediately next to what it replaces,
+which is the one case where that flat rendering still reads cleanly.
+
+**Bonus finding from the same probe:** an assistant message's raw JSON includes a `"model"` field
+holding its `agent_id` (e.g. `"model": "agent_6llV0eMu4fmIaj8f2x1Sb"`), `null` on user messages.
+Not documented above because `KadeMessage` didn't decode it before this session -- now does, as
+`agentId` (see `ConversationsService.swift`), so a per-message "Read Aloud" always speaks a past
+reply in the voice that agent actually used.
+
+Test conversation deleted afterward via `DELETE /api/convos/` (`deletedCount` messages: 4).

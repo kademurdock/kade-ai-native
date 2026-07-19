@@ -40,6 +40,30 @@ struct KadeMessage: Codable, Identifiable {
     let sender: String?
     let text: String?
     let content: [ContentBlock]?
+    /// Which message this branches from. The all-zero UUID sentinel
+    /// ("00000000-0000-0000-0000-000000000000") marks the first turn in a
+    /// conversation (confirmed live 2026-07-19, see docs/ENDPOINTS.md).
+    /// Added alongside the message-actions feature (Edit/Regenerate, see
+    /// `ConversationDetailView`'s "Message actions" section): both work by
+    /// resending a new sibling message that reuses an EARLIER message's
+    /// own `parentMessageId` -- verified live as the safe way to do this
+    /// (a naive attempt using the server's `isRegenerate`/
+    /// `overrideParentMessageId`/`responseMessageId` fields corrupted the
+    /// target message in a throwaway live test; see ENDPOINTS.md).
+    let parentMessageId: String?
+    /// The agent that produced this reply. Raw API field name is "model"
+    /// (confirmed live 2026-07-19) -- NOT an LLM model name despite the
+    /// field name, an `agent_id` like "agent_6llV0eMu4fmIaj8f2x1Sb". Nil on
+    /// user messages. Lets a per-message "Read Aloud" action speak an OLDER
+    /// reply in the SAME voice that agent actually used, rather than
+    /// whichever agent is currently selected for the NEXT message.
+    let agentId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case messageId, conversationId, createdAt, isCreatedByUser, sender, text, content
+        case parentMessageId
+        case agentId = "model"
+    }
 
     var id: String { messageId }
 
@@ -50,6 +74,12 @@ struct KadeMessage: Codable, Identifiable {
     /// at all) say so explicitly rather than rendering a silent empty bubble
     /// — a blind VoiceOver user has no other way to tell "nothing" apart
     /// from "this loaded wrong."
+    ///
+    /// Keeps any inline "%%%..." TTS steering tag / Game Parlor token
+    /// intact on purpose -- this is the string handed to
+    /// `VoiceService.enqueueSpeak`, and those tags need to survive to reach
+    /// inworld-tts-proxy. Anything a human reads or VoiceOver speaks instead
+    /// must go through `readableText` below, never this property directly.
     var displayText: String {
         if let blocks = content, !blocks.isEmpty {
             let joined = blocks
@@ -62,6 +92,18 @@ struct KadeMessage: Codable, Identifiable {
             return t
         }
         return isCreatedByUser ? "" : "(No text in this reply — it looks like tool activity only.)"
+    }
+
+    /// `displayText` with every display-only tag stripped (TTS steering,
+    /// Game Parlor cues, the Deep Think marker) -- what the chat bubble
+    /// shows, what its accessibility label speaks, and what the per-message
+    /// Copy action puts on the pasteboard. See `MessageTextSanitizer`'s own
+    /// doc comment for the full reasoning and why `displayText` itself
+    /// stays raw. Ported July 19 2026 after Kade reported VoiceOver reading
+    /// raw "%%%" tags aloud in the native chat view -- this property didn't
+    /// exist before, `displayText` was shown/spoken directly.
+    var readableText: String {
+        MessageTextSanitizer.forDisplay(displayText)
     }
 
     /// Who VoiceOver announces this message as coming from.

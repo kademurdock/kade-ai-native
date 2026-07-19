@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Phase 2 reads history; Phase 3 adds sending a follow-up and waiting for
 /// the agent's reply; Phase 4 adds switching which agent answers the next
@@ -47,6 +48,13 @@ struct ConversationDetailView: View {
     /// `AgentPickerView`'s doc comment).
     @State private var selectedAgentId: String?
     @State private var showingAgentPicker = false
+
+    /// Non-nil only in the brief window between tapping "Edit and Resend"
+    /// on the last user message (`MessageRow`'s actions menu) and the next
+    /// `send()` call: overrides which message the new turn branches from
+    /// (see `beginEdit(_:)`). `nil` is the normal case -- reply to
+    /// whatever's currently last.
+    @State private var sendParentOverride: String?
 
     /// Phase 5: when on, each new assistant reply is spoken aloud
     /// automatically after it lands (queued through `VoiceService`, same
@@ -168,9 +176,16 @@ struct ConversationDetailView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(messages) { message in
-                        MessageRow(message: message)
-                            .id(message.id)
-                            .accessibilityFocused($a11yFocus, equals: .message(message.id))
+                        MessageRow(
+                            message: message,
+                            canEdit: canEdit(message),
+                            canRegenerate: canRegenerate(message),
+                            onReadAloud: { readAloud(message) },
+                            onEdit: { beginEdit(message) },
+                            onRegenerate: { Task { await regenerate(message) } }
+                        )
+                        .id(message.id)
+                        .accessibilityFocused($a11yFocus, equals: .message(message.id))
                     }
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
@@ -242,7 +257,7 @@ struct ConversationDetailView: View {
     /// just be noise while dialing through the rotor.
     private func rotorLabel(for message: KadeMessage) -> String {
         let time = KadeDateFormatting.time(from: message.createdAt) ?? ""
-        let preview = message.displayText.isEmpty ? "…" : message.displayText
+        let preview = message.readableText.isEmpty ? "…" : message.readableText
         let truncated = preview.count > 60 ? String(preview.prefix(60)) + "…" : preview
         return time.isEmpty ? truncated : "\(time): \(truncated)"
     }
@@ -486,24 +501,141 @@ struct ConversationDetailView: View {
             return
         }
 
-        let parentId = messages.last?.messageId
+        // `sendParentOverride` (see its own doc comment) redirects a normal
+        // Send tap into branching from an EARLIER message instead of
+        // `messages.last` -- set by `beginEdit(_:)` when this send is
+        // really "edit and resend" for the last user message. Consumed
+        // exactly once: a plain Send after that always goes back to
+        // replying to whatever's now last, same as before this feature
+        // existed.
+        let parentId = sendParentOverride ?? messages.last?.messageId
+        sendParentOverride = nil
+        draftText = ""
+        await performSend(text: trimmed, parentId: parentId)
+    }
+
+    // MARK: - Message actions (Copy / Read Aloud / Edit / Regenerate)
+    //
+    // Added July 19 2026 after Kade asked for message actions instead of
+    // only the Phase 7 VoiceOver rotor for moving between messages -- the
+    // rotor is kept (it does a genuinely different, complementary job:
+    // fast navigation across many turns) alongside this, which is for
+    // ACTING on one already-focused message. See `MessageRow`'s own doc
+    // comment for the accessible-button-plus-Menu design and why a rotor
+    // and a menu aren't redundant.
+    //
+    // Edit and Regenerate both work by resending a brand-new sibling
+    // message that reuses an EARLIER message's own `parentMessageId`,
+    // exactly the same request shape `send()` already used before this
+    // feature existed -- verified live 2026-07-19 against a disposable
+    // test conversation (sent, then branched a sibling reusing the first
+    // message's parentMessageId: a clean new user turn plus a clean new
+    // reply appeared, nothing else touched). Deliberately NOT using the
+    // server's `isRegenerate`/`overrideParentMessageId`/`responseMessageId`
+    // fields, even though `api/server/controllers/agents/request.js` really
+    // does accept them: the same live test tried that combination FIRST
+    // and it silently corrupted the target message (rewrote it in place as
+    // a mislabeled, content-losing user message rather than adding a clean
+    // new reply) -- see docs/ENDPOINTS.md for the full writeup. This
+    // simpler approach costs a repeated question in the transcript on
+    // Regenerate (no way around that without the tree-reconstruction this
+    // client deliberately doesn't do -- see `fetchMessages`'s own "known
+    // simplification" doc comment) but is honest and uses only the
+    // already-proven request shape.
+    //
+    // Both actions are offered ONLY on the single most recent turn (the
+    // last user message for Edit, the last assistant message for
+    // Regenerate) on purpose: since this client always renders the flat
+    // chronological line rather than reconstructing the active branch,
+    // resending from somewhere in the MIDDLE of a long conversation would
+    // append the new branch at the bottom, far from the message it
+    // logically replaces -- confusing by eye and by ear. Restricting both
+    // to the most recent turn keeps the appended branch immediately
+    // adjacent to what it's replying to, which reads cleanly either way.
+
+    /// The most recent message the user sent, regardless of whether it's
+    /// been replied to yet -- the only message "Edit and Resend" is ever
+    /// offered on.
+    private var lastUserMessageId: String? {
+        messages.last(where: { $0.isCreatedByUser })?.id
+    }
+
+    private func canEdit(_ message: KadeMessage) -> Bool {
+        !isSending && message.isCreatedByUser && message.id == lastUserMessageId
+    }
+
+    /// Only true when the assistant's reply is the very last thing in the
+    /// conversation -- see this section's doc comment for why an older
+    /// exchange doesn't get a Regenerate action.
+    private func canRegenerate(_ message: KadeMessage) -> Bool {
+        guard !isSending, !message.isCreatedByUser, let last = messages.last else { return false }
+        return !last.isCreatedByUser && message.id == last.id
+    }
+
+    private func readAloud(_ message: KadeMessage) {
+        // Raw `displayText`, not `readableText` -- same reasoning as the
+        // auto-read-aloud call in `performSend` below: this is the actual
+        // TTS request, which needs any "%%%" steering tag intact. Prefers
+        // the voice this SPECIFIC message actually used (`message.agentId`,
+        // decoded from the API's "model" field) over whichever agent is
+        // currently picked for the next message, so reading back an older
+        // reply never plays it in the wrong character's voice.
+        voiceService.enqueueSpeak(
+            text: message.displayText,
+            agentId: message.agentId ?? selectedAgentId,
+            agentName: message.speakerLabel
+        )
+    }
+
+    /// Prefills the composer with the last user message's own text and
+    /// arms `sendParentOverride` so the next Send branches a corrected
+    /// sibling from that message's own parent instead of replying to
+    /// whatever's last. Moves VoiceOver focus straight to the composer
+    /// field so the prefilled text is announced immediately, matching how
+    /// a transcribed voice message already lands in the composer
+    /// (`finishRecording`, below).
+    private func beginEdit(_ message: KadeMessage) {
+        guard canEdit(message) else { return }
+        draftText = message.displayText
+        sendParentOverride = message.parentMessageId
+        a11yFocus = .composerField
+    }
+
+    /// Resends the ORIGINAL prompting user message's own text, branched
+    /// from ITS OWN parent -- see this section's top doc comment for why
+    /// this (not the server's isRegenerate/overrideParentMessageId fields)
+    /// is the safe way to ask for another attempt at the same question.
+    private func regenerate(_ assistantMessage: KadeMessage) async {
+        guard canRegenerate(assistantMessage),
+              let parentId = assistantMessage.parentMessageId,
+              let promptingUser = messages.first(where: { $0.messageId == parentId }) else {
+            return
+        }
+        await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId)
+    }
+
+    /// The shared guts of every send -- a plain Send tap (via `send()`
+    /// above), "Edit and Resend," and "Regenerate" all fund here,
+    /// differing only in which text and which parent they pass.
+    private func performSend(text: String, parentId: String?) async {
         let optimisticMessage = KadeMessage(
             messageId: "pending-\(UUID().uuidString)",
             conversationId: conversationId ?? "pending",
             createdAt: KadeDateFormatting.isoNow(),
             isCreatedByUser: true,
             sender: "User",
-            text: trimmed,
-            content: nil
+            text: text,
+            content: nil,
+            parentMessageId: parentId,
+            agentId: nil
         )
         messages.append(optimisticMessage)
-        draftText = ""
         sendState = .sending
 
         do {
             let wasNewConversation = conversationId == nil
             let resolvedConversationId = try await messageSendingService.send(
-                text: trimmed,
+                text: text,
                 conversationId: conversationId,
                 parentMessageId: parentId,
                 agentId: selectedAgentId
@@ -519,7 +651,11 @@ struct ConversationDetailView: View {
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
             if readAloudEnabled, let reply = messages.last, !reply.isCreatedByUser {
-                voiceService.enqueueSpeak(text: reply.displayText, agentId: selectedAgentId, agentName: agentDisplayLabel)
+                voiceService.enqueueSpeak(
+                    text: reply.displayText,
+                    agentId: reply.agentId ?? selectedAgentId,
+                    agentName: agentDisplayLabel
+                )
             }
             if wasNewConversation {
                 // The conversation list (one screen back) doesn't know this
@@ -602,40 +738,129 @@ struct ConversationDetailView: View {
 /// One message. VoiceOver reads speaker + time + body as a single element
 /// with deliberate phrasing ("You said: …" / "Kiana said: …") rather than
 /// letting auto-combination stitch together whatever order the subviews
-/// happen to be in.
+/// happen to be in. A separate "Message actions" button sits right below
+/// as its OWN sibling accessibility element (never combined into the
+/// element above -- same house rule every other interactive control in
+/// this app follows: a plain Button/Menu + `.accessibilityElement(children:
+/// .ignore)` + an explicit `.accessibilityLabel`, never `.combine`) so
+/// VoiceOver reaches it with one more swipe after hearing the message, and
+/// double-tapping it opens a native, fully accessible `Menu` rather than
+/// requiring a long-press or a rotor gesture to discover it.
+///
+/// Added July 19 2026, replacing "the only way to interact with an older
+/// message is the VoiceOver rotor" -- the rotor (see `messageList`'s
+/// `accessibilityRotor`s) is kept alongside this on purpose, it does a
+/// different job (fast navigation across many turns) than this (acting on
+/// one already-focused message).
 private struct MessageRow: View {
     let message: KadeMessage
+    /// Only the last user message gets an Edit action; see
+    /// `ConversationDetailView.canEdit(_:)`.
+    let canEdit: Bool
+    /// Only the last assistant message gets a Regenerate action; see
+    /// `ConversationDetailView.canRegenerate(_:)`.
+    let canRegenerate: Bool
+    let onReadAloud: () -> Void
+    let onEdit: () -> Void
+    let onRegenerate: () -> Void
 
     private var timeLabel: String {
         KadeDateFormatting.time(from: message.createdAt) ?? ""
     }
 
+    /// `readableText`, not `displayText` -- this is a surface a human
+    /// reads/VoiceOver speaks, so any "%%%" TTS steering tag or Game
+    /// Parlor token must already be stripped. See `KadeMessage`'s own doc
+    /// comments for why the two properties stay separate.
     private var bodyText: String {
-        message.displayText.isEmpty ? "…" : message.displayText
+        message.readableText.isEmpty ? "…" : message.readableText
     }
 
     var body: some View {
-        VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 4) {
-            Text(message.speakerLabel)
-                .font(.caption.bold())
-                .foregroundStyle(.secondary)
-            Text(bodyText)
-                .font(.body)
-                .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
-            if !timeLabel.isEmpty {
-                Text(timeLabel)
-                    .font(.caption2)
+        VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 6) {
+            VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 4) {
+                Text(message.speakerLabel)
+                    .font(.caption.bold())
                     .foregroundStyle(.secondary)
+                Text(bodyText)
+                    .font(.body)
+                    .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
+                if !timeLabel.isEmpty {
+                    Text(timeLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: message.isCreatedByUser ? .trailing : .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibleLabel)
+
+            actionsButton
         }
         .frame(maxWidth: .infinity, alignment: message.isCreatedByUser ? .trailing : .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibleLabel)
     }
 
     private var accessibleLabel: String {
         let who = message.isCreatedByUser ? "You said" : "\(message.speakerLabel) said"
         let time = timeLabel.isEmpty ? "" : ", \(timeLabel)"
         return "\(who)\(time): \(bodyText)"
+    }
+
+    // MARK: - Actions menu
+
+    private var actionsButton: some View {
+        Menu {
+            Button {
+                UIPasteboard.general.string = message.readableText
+                UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
+            } label: {
+                Label("Copy Text", systemImage: "doc.on.doc")
+            }
+            Button {
+                onReadAloud()
+            } label: {
+                Label("Read Aloud", systemImage: "speaker.wave.2")
+            }
+            if canEdit {
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit and Resend", systemImage: "pencil")
+                }
+            }
+            if canRegenerate {
+                Button {
+                    onRegenerate()
+                } label: {
+                    Label("Regenerate Reply", systemImage: "arrow.clockwise")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Message actions")
+        .accessibilityHint(actionsHint)
+    }
+
+    /// Built dynamically so VoiceOver only ever promises what THIS
+    /// specific message can actually do right now -- Edit and Regenerate
+    /// only ever appear on the single most recent turn (see
+    /// `ConversationDetailView`'s "Message actions" doc comment).
+    private var actionsHint: String {
+        var options = ["copy the text", "read it aloud"]
+        if canEdit { options.append("edit and resend it") }
+        if canRegenerate { options.append("regenerate this reply") }
+        return "Shows options to \(naturalJoin(options))."
+    }
+
+    private func naturalJoin(_ items: [String]) -> String {
+        guard let last = items.last else { return "" }
+        if items.count == 1 { return last }
+        if items.count == 2 { return "\(items[0]) or \(last)" }
+        return items.dropLast().joined(separator: ", ") + ", or \(last)"
     }
 }
