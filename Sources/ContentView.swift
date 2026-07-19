@@ -15,6 +15,21 @@ struct ContentView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
+    @EnvironmentObject private var apiClient: KadeAPIClient
+
+    // Session 14 (Kade asked for it by name): one tap from the home screen
+    // straight into a Spotter call, no agent to pick and no conversation to
+    // open first. The server has supported exactly this since July 18 --
+    // `{type:'hello', spotterDirect:true}` on the call socket, a parameter
+    // `CallView` has carried since session 13 but which nothing in the app
+    // had ever actually SET to true. Placed HERE rather than in the
+    // conversation list's toolbar deliberately: "I need eyes right now" is a
+    // top-level, time-sensitive thing to want, and it should never be two
+    // screens and a picker deep. `agentId: nil` lets the ticket route use
+    // the account default for the session envelope; the Spotter takes over
+    // the voice immediately either way, so which character nominally opened
+    // the call is not something the caller ever hears.
+    @State private var callingSpotter = false
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -215,13 +230,31 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            Button {
+                callingSpotter = true
+            } label: {
+                Label("Call your Spotter", systemImage: "eye")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Call your Spotter")
+            .accessibilityHint("Starts a live call with your visual companion straight away, without picking anyone first.")
+            .fullScreenCover(isPresented: $callingSpotter) {
+                CallView(
+                    agentId: nil,
+                    agentName: "Your Spotter",
+                    apiClient: apiClient,
+                    spotterDirect: true
+                )
+            }
+
             NavigationLink {
                 ConversationListView()
             } label: {
                 Label("Your conversations", systemImage: "bubble.left.and.bubble.right")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .accessibilityHint("Opens your conversation list.")
 
             Button(role: .destructive, action: auth.signOut) {
@@ -325,6 +358,7 @@ struct SafariView: UIViewControllerRepresentable {
 #Preview {
     let client = KadeAPIClient()
     return ContentView()
+        .environmentObject(client)
         .environmentObject(AuthService(client: client))
         .environmentObject(ConversationsService(client: client))
         .environmentObject(AgentsService(client: client))

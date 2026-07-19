@@ -146,6 +146,12 @@ final class ConversationsService: ObservableObject {
     @Published private(set) var isLoadingList = false
     @Published private(set) var isLoadingMore = false
     @Published private(set) var listError: String?
+    /// Result of the last delete/rename/archive, in plain language, for the
+    /// list screen to announce. Session 14 (Kade: "maybe a rotor of actions
+    /// in the conversations list where you can delete stuff"). Deliberately
+    /// NOT folded into `listError`: that one means "the list itself failed
+    /// to load" and drives a whole different UI state.
+    @Published var actionMessage: String?
 
     private var nextCursor: String?
     private let client: KadeAPIClient
@@ -162,6 +168,7 @@ final class ConversationsService: ObservableObject {
         conversations = []
         nextCursor = nil
         listError = nil
+        actionMessage = nil
     }
 
     func loadFirstPage() async {
@@ -202,6 +209,111 @@ final class ConversationsService: ObservableObject {
         // if a conversation has been branched/regenerated, this renders the
         // straight chronological line rather than the exact active branch.
         return try decoder.decode([KadeMessage].self, from: data)
+    }
+
+    // MARK: - Row actions (session 14)
+
+    /// DELETE /api/convos with `{"arg":{"conversationId":...}}`.
+    /// Contract read straight off the fork's own `api/server/routes/convos.js`
+    /// rather than guessed: the route reads `req.body.arg`, refuses outright
+    /// if no identifying parameter is present (its own guard against
+    /// wiping every conversation at once), and answers **201**, not 200, on
+    /// success -- so the status check here accepts both rather than the 200
+    /// that would have been the natural assumption.
+    @discardableResult
+    func deleteConversation(id: String, title: String) async -> Bool {
+        var req = client.request(path: "api/convos", method: "DELETE", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["arg": ["conversationId": id]]
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...201).contains(http.statusCode) else {
+                actionMessage = "Couldn't delete \(title). Try again."
+                return false
+            }
+            conversations.removeAll { $0.conversationId == id }
+            actionMessage = "Deleted \(title)."
+            return true
+        } catch {
+            actionMessage = "Couldn't delete \(title). Try again."
+            return false
+        }
+    }
+
+    /// POST /api/convos/update with `{"arg":{"conversationId":...,"title":...}}`.
+    /// Server trims and caps the title at 1024 characters; this trims first
+    /// so an all-whitespace rename is refused locally instead of quietly
+    /// becoming an empty title on the server.
+    @discardableResult
+    func renameConversation(id: String, title newTitle: String) async -> Bool {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            actionMessage = "A name can't be empty."
+            return false
+        }
+        var req = client.request(path: "api/convos/update", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["arg": ["conversationId": id, "title": trimmed]]
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...201).contains(http.statusCode) else {
+                actionMessage = "Couldn't rename that conversation. Try again."
+                return false
+            }
+            applyLocalTitle(trimmed, to: id)
+            actionMessage = "Renamed to \(trimmed)."
+            return true
+        } catch {
+            actionMessage = "Couldn't rename that conversation. Try again."
+            return false
+        }
+    }
+
+    /// POST /api/convos/archive with `{"arg":{"conversationId":...,"isArchived":true}}`.
+    /// The list route defaults to `isArchived=false`, so an archived
+    /// conversation simply stops appearing here -- it is NOT deleted, and
+    /// it's still reachable on the web app. Worth saying out loud in the
+    /// confirmation copy, since "archive" and "delete" are easy to confuse
+    /// when you're navigating by ear.
+    @discardableResult
+    func archiveConversation(id: String, title: String) async -> Bool {
+        var req = client.request(path: "api/convos/archive", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["arg": ["conversationId": id, "isArchived": true]]
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...201).contains(http.statusCode) else {
+                actionMessage = "Couldn't archive \(title). Try again."
+                return false
+            }
+            conversations.removeAll { $0.conversationId == id }
+            actionMessage = "Archived \(title)."
+            return true
+        } catch {
+            actionMessage = "Couldn't archive \(title). Try again."
+            return false
+        }
+    }
+
+    /// `KadeConversation` is a `let`-only value type (correct -- it models a
+    /// server response), so a rename replaces the element rather than
+    /// mutating it in place.
+    private func applyLocalTitle(_ title: String, to id: String) {
+        guard let index = conversations.firstIndex(where: { $0.conversationId == id }) else { return }
+        let old = conversations[index]
+        conversations[index] = KadeConversation(
+            conversationId: old.conversationId,
+            title: title,
+            agentId: old.agentId,
+            createdAt: old.createdAt,
+            updatedAt: old.updatedAt
+        )
     }
 
     private func fetchPage(cursor: String?) async throws -> ConversationsPage {

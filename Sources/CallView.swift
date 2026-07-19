@@ -34,10 +34,12 @@ struct CallView: View {
             VStack(spacing: 20) {
                 statusHeader
                 captionArea
-                if callService.liveOn {
+                if callService.liveOn || callService.videoOn {
                     cameraPreview
                 }
                 Spacer(minLength: 0)
+                audioCheck
+                cameraButton
                 spotterButton
                 controls
             }
@@ -57,8 +59,24 @@ struct CallView: View {
                     notification: .announcement,
                     argument: "\(callService.spotterName ?? "Your Spotter") is on the line."
                 )
-            } else {
+            } else if !callService.videoOn {
+                // Only stop the capture session if the OTHER camera lane
+                // isn't still using it -- handing Spotter back to the
+                // character while plain camera-describe stays on must not
+                // kill the camera out from under it.
                 camera.stop()
+            }
+        }
+        .onChange(of: callService.videoOn) { _, on in
+            if on {
+                Task { await camera.start() }
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "\(agentName) can see your camera now."
+                )
+            } else {
+                if !callService.liveOn { camera.stop() }
+                UIAccessibility.post(notification: .announcement, argument: "Camera off.")
             }
         }
         .onChange(of: callService.status) { _, new in
@@ -89,6 +107,22 @@ struct CallView: View {
             Button("Put them on") {
                 callService.clearLiveNotice()
                 callService.setLive(on: true, ack: true)
+            }
+        } message: { text in
+            Text(text)
+        }
+        .alert(
+            "Camera",
+            isPresented: Binding(
+                get: { callService.videoNotice != nil },
+                set: { if !$0 { callService.clearVideoNotice() } }
+            ),
+            presenting: callService.videoNotice
+        ) { _ in
+            Button("Not now", role: .cancel) { callService.clearVideoNotice() }
+            Button("Turn the camera on") {
+                callService.clearVideoNotice()
+                callService.setVideo(on: true, ack: true)
             }
         } message: { text in
             Text(text)
@@ -188,6 +222,52 @@ struct CallView: View {
                 }
             }
             .accessibilityHidden(true)
+    }
+
+    /// Read-out-loud audio diagnostic. Added after build 119: the call
+    /// connected and captions rendered, but no sound came out, and there was
+    /// no way for the caller to tell anyone WHICH part had failed. Paired
+    /// with the short two-note tone the service now plays the moment the
+    /// audio engine starts, this turns "no sound" into an answerable
+    /// question: heard the tone but not the agent means clips aren't
+    /// arriving or aren't decoding (and the numbers here say which); heard
+    /// nothing at all means route, session, or volume.
+    private var audioCheck: some View {
+        Text(callService.audioDiagnostic)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Audio check. \(callService.audioDiagnostic)")
+            .accessibilityHint("Read this out if the call has no sound.")
+    }
+
+    /// Plain camera-describe lane. Deliberately worded to make the
+    /// difference from Spotter unmistakable by ear alone: this one keeps
+    /// the SAME voice you're already talking to and just gives her sight,
+    /// where Spotter hands the call to a different companion entirely.
+    private var cameraButton: some View {
+        Button {
+            if callService.videoOn {
+                callService.setVideo(on: false)
+            } else {
+                callService.setVideo(on: true, ack: false)
+            }
+        } label: {
+            Label(
+                callService.videoOn ? "\(agentName) can see your camera" : "Let \(agentName) see your camera",
+                systemImage: "camera"
+            )
+        }
+        .buttonStyle(.bordered)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Camera")
+        .accessibilityValue(callService.videoOn ? "On" : "Off")
+        .accessibilityHint(
+            callService.videoOn
+                ? "Double-tap to stop sharing your camera. \(agentName) keeps talking either way."
+                : "Double-tap to let \(agentName) describe what your camera sees, in her own voice."
+        )
     }
 
     private var spotterButton: some View {

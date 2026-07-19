@@ -92,7 +92,34 @@ final class StreamingCallService: NSObject, ObservableObject {
     @Published private(set) var liveNotice: String?
     @Published private(set) var spotterName: String?
     @Published private(set) var liveMinutesLeft: Int?
+    /// The PLAIN camera-describe lane (`video-sight.js`), distinct from
+    /// Spotter/Live: the agent you're already talking to gains sight of your
+    /// camera and works what she sees into her own replies, in her own
+    /// voice, with no handoff to a separate live companion. Ported in
+    /// session 14 -- it was explicitly carved out of the session-13 calling
+    /// batch as "its own well-scoped follow-up" and Kade asked for it by
+    /// name ("plain camera describe mode").
+    @Published private(set) var videoOn: Bool = false
+    @Published private(set) var videoNotice: String?
+    @Published private(set) var videoMinutesLeft: Int?
     @Published private(set) var errorMessage: String?
+
+    /// Plain-language audio diagnostic, surfaced on the call screen as its
+    /// own VoiceOver element. Added after build 119's live report: the call
+    /// connected and the caption read "Kiana here, go ahead" on screen, but
+    /// no sound ever came out. With no device and no compiler in this
+    /// sandbox, a second round of blind guessing is worth less than giving
+    /// the caller something she can actually READ OUT and report back, so
+    /// the next attempt narrows the cause in one pass instead of three.
+    /// Reports: clips received off the wire, clips actually scheduled for
+    /// playback, conversion failures, the live output route, and the system
+    /// output volume.
+    @Published private(set) var audioDiagnostic: String = "No audio received yet."
+
+    private var clipsReceived = 0
+    private var clipsScheduled = 0
+    private var clipFailures = 0
+    private var routeObserver: NSObjectProtocol?
 
     /// True once `start()` has fully wired the engine/socket and the call
     /// screen should be showing live controls rather than a spinner.
@@ -161,6 +188,12 @@ final class StreamingCallService: NSObject, ObservableObject {
         }
 
         let task = socketSession.webSocketTask(with: url)
+        // Default is 1 MiB. A single Inworld WAV clip for a long sentence
+        // can approach that, and URLSession's failure mode when a frame
+        // exceeds the limit is to fail the whole task -- cheap insurance,
+        // and one of the candidate explanations for build 119's silent
+        // audio that costs nothing to rule out.
+        task.maximumMessageSize = 16 * 1024 * 1024
         webSocketTask = task
         task.resume()
         sendJSON(["type": "hello", "ticket": ticket, "spotterDirect": spotterDirect])
@@ -201,6 +234,18 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// comes back true.
     func setLive(on: Bool, ack: Bool = false, direct: Bool = false) {
         sendJSON(["type": "live", "on": on, "ack": ack, "direct": direct])
+    }
+
+    /// Toggle the plain camera-describe lane. Same two-step consent shape
+    /// as `setLive`: the server re-sends `video-notice` (and speaks it)
+    /// every time until `ack` comes back true, so the caller always hears
+    /// the cost note before any camera minutes are billed.
+    func setVideo(on: Bool, ack: Bool = false) {
+        sendJSON(["type": "video", "on": on, "ack": ack])
+    }
+
+    func clearVideoNotice() {
+        videoNotice = nil
     }
 
     /// Dismisses the first-use cost notice without accepting it (the
@@ -290,11 +335,19 @@ final class StreamingCallService: NSObject, ObservableObject {
         // "LIVE" magic = 0x4C 0x49 0x56 0x45 -- matches `LIVE_AUDIO_MAGIC`
         // in video-live.js exactly. Anything else is a WAV clip (starts
         // "RIFF"); the web client checks the same 4 bytes the same way.
-        if data.count > 4, data[0] == 0x4C, data[1] == 0x49, data[2] == 0x56, data[3] == 0x45 {
+        clipsReceived += 1
+        // Prefix compared through `elementsEqual` rather than `data[0...3]`
+        // subscripting: `Data` indices are NOT guaranteed to start at 0 for
+        // every `Data` value, and a slice whose `startIndex` is non-zero
+        // would make the direct subscript form read the wrong bytes (or
+        // trap). `prefix` is index-agnostic.
+        let liveMagic: [UInt8] = [0x4C, 0x49, 0x56, 0x45] // "LIVE"
+        if data.count > 4, data.prefix(4).elementsEqual(liveMagic) {
             enqueueLivePCM(data)
         } else {
             enqueueWav(data)
         }
+        updateAudioDiagnostic()
     }
 
     private func handleControl(_ text: String) {
@@ -320,8 +373,17 @@ final class StreamingCallService: NSObject, ObservableObject {
             if let m = msg.message { liveNotice = m }
         case "live-notice":
             liveNotice = msg.text
-        case "video-notice", "video-state":
-            break // native call screen doesn't build the snapshot video lane yet
+        case "video-notice":
+            videoNotice = msg.text
+        case "video-state":
+            videoOn = msg.on ?? false
+            videoMinutesLeft = msg.minutesLeft
+            // `video-state` doubles as the refusal channel (`reason` of
+            // "disabled" or "cap" arrives with `on:false` plus a plain-
+            // language `message`). Surfacing it as a notice rather than a
+            // hard `errorMessage` is deliberate: the CALL is completely
+            // fine, only the camera lane was declined.
+            if let m = msg.message { videoNotice = m }
         case "error":
             errorMessage = msg.message ?? "Call error."
         default:
@@ -354,12 +416,30 @@ final class StreamingCallService: NSObject, ObservableObject {
         // the closest native equivalent to `getUserMedia`'s
         // echoCancellation/noiseSuppression/autoGainControl flags the web
         // client requests explicitly.
+        // `.allowBluetoothA2DP` is deliberately NOT requested here (it was,
+        // through build 119): A2DP is an OUTPUT-ONLY profile and combining
+        // it with a duplex `.playAndRecord` + `.voiceChat` graph is a known
+        // source of odd route selection. `.allowBluetooth` (HFP) already
+        // covers a real headset, which is what a caller actually wants.
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
-            options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+            options: [.allowBluetooth, .defaultToSpeaker]
         )
         try session.setActive(true)
+        // FIX CANDIDATE #1 for build 119's "captions appear, no sound"
+        // report. `.voiceChat` MODE makes iOS treat this like a phone call,
+        // and a phone call's default output is the BUILT-IN RECEIVER (the
+        // earpiece), not the speaker -- the `.defaultToSpeaker` option above
+        // is documented against the category but is not reliably honored
+        // once a call-style mode is set. A caller holding the phone in her
+        // hand rather than against her ear would hear exactly nothing while
+        // every caption still rendered perfectly, which is precisely the
+        // symptom reported. `overrideOutputAudioPort` is the explicit,
+        // unambiguous way to say "speaker" and is re-applied on every route
+        // change below (plugging in or dropping a headset resets it).
+        forceSpeakerRoute()
+        observeRouteChanges()
 
         let input = audioEngine.inputNode
         // FIX (live-tested, first real call): the caller heard the agent
@@ -421,10 +501,109 @@ final class StreamingCallService: NSObject, ObservableObject {
             }
         }
 
+        // Belt and braces: both of these default to 1.0, but a silent-audio
+        // bug is exactly the situation where asserting the obvious costs
+        // nothing and rules out a whole branch of the search.
+        playerNode.volume = 1.0
+        audioEngine.mainMixerNode.outputVolume = 1.0
+
         audioEngine.prepare()
         try audioEngine.start()
         playerNode.play()
         engineRunning = true
+        updateAudioDiagnostic()
+        // AUDIBLE SELF-TEST. A short, soft two-note tone pushed through the
+        // exact same `playerNode` -> mixer -> output path the agent's voice
+        // uses. This is the single most valuable thing that can be added
+        // without a device: it turns the next bug report into one clean bit
+        // of information instead of another guess. If the caller HEARS the
+        // tone but still hears no agent, playback is fine and the problem is
+        // upstream (clips not arriving, or not decoding -- and
+        // `audioDiagnostic` says which). If she hears NOTHING at all, the
+        // problem is the route/session/volume layer. It also does real UX
+        // work as a "call connected" earcon.
+        playConnectTone()
+    }
+
+    /// Explicitly routes call audio out the loudspeaker. Fail-soft: a
+    /// wired/Bluetooth headset route legitimately rejects the override, and
+    /// in that case the headset IS the right output anyway.
+    private func forceSpeakerRoute() {
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+    }
+
+    /// Re-forces the speaker whenever iOS reroutes mid-call (headset
+    /// plugged/unplugged, Bluetooth connecting late, the system taking the
+    /// route back after activating voice processing). Without this, a single
+    /// route change silently undoes `forceSpeakerRoute()` for the rest of
+    /// the call.
+    private func observeRouteChanges() {
+        guard routeObserver == nil else { return }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.engineRunning else { return }
+                let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+                let onHeadset = outputs.contains {
+                    $0.portType == .headphones || $0.portType == .bluetoothA2DP
+                        || $0.portType == .bluetoothHFP || $0.portType == .bluetoothLE
+                        || $0.portType == .usbAudio
+                }
+                if !onHeadset { self.forceSpeakerRoute() }
+                self.updateAudioDiagnostic()
+            }
+        }
+    }
+
+    /// Two short sine blips (880Hz then 1175Hz, ~110ms each) synthesized
+    /// straight into `playerFormat` and scheduled like any agent clip.
+    private func playConnectTone() {
+        let sampleRate = playerFormat.sampleRate
+        let noteFrames = Int(sampleRate * 0.11)
+        let total = noteFrames * 2
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: playerFormat, frameCapacity: AVAudioFrameCount(total)
+        ), let channel = buffer.floatChannelData else { return }
+        buffer.frameLength = AVAudioFrameCount(total)
+        let dst = channel[0]
+        for i in 0..<total {
+            let isSecond = i >= noteFrames
+            let freq: Double = isSecond ? 1175.0 : 880.0
+            let localIndex = isSecond ? (i - noteFrames) : i
+            let phase = 2.0 * Double.pi * freq * (Double(localIndex) / sampleRate)
+            // Short linear fade in/out so the blip doesn't click.
+            let fade = min(1.0, Double(min(localIndex, noteFrames - localIndex)) / (sampleRate * 0.01))
+            dst[i] = Float(sin(phase) * 0.22 * fade)
+        }
+        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    /// Rebuilds the human-readable diagnostic string. Cheap, and only ever
+    /// called on genuinely interesting transitions (engine start, a clip
+    /// arriving, a route change), never per audio frame.
+    private func updateAudioDiagnostic() {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute.outputs.first.map { port -> String in
+            switch port.portType {
+            case .builtInSpeaker: return "speaker"
+            case .builtInReceiver: return "earpiece"
+            case .headphones: return "headphones"
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE: return "Bluetooth"
+            case .usbAudio: return "USB audio"
+            default: return port.portName
+            }
+        } ?? "unknown"
+        let volumePercent = Int((session.outputVolume * 100).rounded())
+        var parts = [
+            "Playing through \(route).",
+            "Volume \(volumePercent) percent.",
+            "\(clipsReceived) clips received, \(clipsScheduled) played."
+        ]
+        if clipFailures > 0 { parts.append("\(clipFailures) could not be decoded.") }
+        audioDiagnostic = parts.joined(separator: " ")
     }
 
     private func sendMicData(_ pcmData: Data) {
@@ -485,7 +664,12 @@ final class StreamingCallService: NSObject, ObservableObject {
             schedule(raw, from: file.processingFormat)
         } catch {
             // One bad clip must never kill the call -- same fail-soft
-            // philosophy as every other audio path in this app.
+            // philosophy as every other audio path in this app. Counted,
+            // though: "clips arrived but none decoded" is a completely
+            // different bug from "no clips arrived," and before the
+            // diagnostic string existed there was no way to tell them apart
+            // from the caller's side.
+            clipFailures += 1
         }
     }
 
@@ -522,7 +706,29 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// unlike the web client's Web Audio workaround.
     private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat) {
         guard engineRunning else { return }
-        guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else { return }
+        // The engine can be stopped out from under us by an interruption
+        // (another app taking the session, a real phone call) without this
+        // service ever hearing about it -- and once stopped, every
+        // `scheduleBuffer` is silently swallowed. Restarting here is a
+        // no-op in the normal case and recovers the whole call in the bad
+        // one. Another candidate cause of build 119's silence: enabling
+        // voice processing can itself provoke a configuration change.
+        if !audioEngine.isRunning {
+            try? audioEngine.start()
+            playerNode.play()
+        }
+        // Fast path: a clip already in the player's own format needs no
+        // conversion at all, and skipping the converter removes one more
+        // place a silent failure could hide.
+        if sourceFormat == playerFormat {
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+            clipsScheduled += 1
+            return
+        }
+        guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else {
+            clipFailures += 1
+            return
+        }
         let ratio = playerFormat.sampleRate / sourceFormat.sampleRate
         let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
         guard let outBuffer = AVAudioPCMBuffer(pcmFormat: playerFormat, frameCapacity: outCapacity) else { return }
@@ -535,8 +741,12 @@ final class StreamingCallService: NSObject, ObservableObject {
         }
         var convError: NSError?
         let status = converter.convert(to: outBuffer, error: &convError, withInputFrom: inputBlock)
-        guard status != .error, convError == nil, outBuffer.frameLength > 0 else { return }
+        guard status != .error, convError == nil, outBuffer.frameLength > 0 else {
+            clipFailures += 1
+            return
+        }
         playerNode.scheduleBuffer(outBuffer, completionHandler: nil)
+        clipsScheduled += 1
     }
 
     /// Barge-in / `{type:'clear'}`: stop whatever's queued immediately.
@@ -551,6 +761,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     }
 
     private func teardownAudio() {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
         guard engineRunning else { return }
         engineRunning = false
         audioEngine.inputNode.removeTap(onBus: 0)

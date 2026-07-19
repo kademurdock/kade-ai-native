@@ -32,6 +32,38 @@ struct ConversationListView: View {
     // reads it has to re-decide which kind of nil it's looking at.
     @State private var startingNewConversation = false
 
+    // Session 14 (Kade: "maybe a rotor of actions in the conversations list
+    // where you can delete stuff? Stuff like that.").
+    //
+    // Two deliberate calls, both mirroring what already works elsewhere in
+    // this app:
+    //
+    // 1. Every row gets an explicit "Conversation actions" MENU BUTTON as
+    //    its own sibling VoiceOver stop -- exactly the pattern the
+    //    per-message actions menu shipped with in session 13, and chosen
+    //    over relying only on `.swipeActions`. Swipe actions DO surface in
+    //    VoiceOver's Actions rotor, but they're a rotor mode you have to
+    //    already be in; a real button is findable by plain swipe navigation
+    //    with nothing to know in advance. `.swipeActions` is added too, for
+    //    the sighted muscle memory everyone else has from Mail.
+    // 2. Delete asks for confirmation; rename opens a text-entry alert.
+    //    Deleting a conversation is irreversible on the server, and this is
+    //    a screen navigated by ear -- an accidental double-tap must not be
+    //    able to destroy history silently.
+    @State private var renamingConversation: KadeConversation?
+    @State private var renameText: String = ""
+    @State private var deletingConversation: KadeConversation?
+    // Local, case- and diacritic-insensitive filter over the conversations
+    // already loaded. Deliberately NOT the server's own `?search=` parameter:
+    // that path runs through Meilisearch on the fork, which this deployment
+    // doesn't guarantee is up, and a search box that silently returns
+    // nothing when an unrelated service is down is worse than no search box.
+    // Filtering what's in hand is instant, works with no network at all, and
+    // degrades honestly -- the footer says how many are loaded so "not
+    // found" never means "doesn't exist."
+    @State private var searchText: String = ""
+    @FocusState private var searchFocused: Bool
+
     var body: some View {
         Group {
             if conversationsService.isLoadingList && conversationsService.conversations.isEmpty {
@@ -71,6 +103,15 @@ struct ConversationListView: View {
             // the same session still gets a predictable starting focus.
             focusedConversationID = conversationsService.conversations.first?.id
         }
+        .onChange(of: conversationsService.conversations) { _, _ in
+            // A deleted/archived row disappearing must not strand VoiceOver
+            // focus on an element that no longer exists -- move it to
+            // whatever is now first rather than letting the system pick.
+            if let current = focusedConversationID,
+               !conversationsService.conversations.contains(where: { $0.id == current }) {
+                focusedConversationID = conversationsService.conversations.first?.id
+            }
+        }
         .onChange(of: selectedConversation) { oldValue, newValue in
             // Returned from a conversation (was set, now nil going back to
             // this list): restore focus to the row they came from instead
@@ -81,9 +122,67 @@ struct ConversationListView: View {
         }
     }
 
+    private var filteredConversations: [KadeConversation] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return conversationsService.conversations }
+        return conversationsService.conversations.filter {
+            $0.displayTitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    /// Plain `TextField` pinned above the list rather than the system
+    /// `.searchable` bar -- same choice, for the same reason, as
+    /// `AgentPickerView`'s search-first redesign (build 119): `.searchable`'s
+    /// focus API (`.searchFocused`) requires iOS 18 and this project targets
+    /// 17, and a hand-built field keeps focus behaviour identical across
+    /// both screens. Unlike the agent picker, focus is NOT grabbed on
+    /// appear here: the conversation list's job on open is to land you on
+    /// your most recent conversation (deliberate, session 11), and hijacking
+    /// that into a keyboard would undo a fix Kade specifically asked for.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search conversations", text: $searchText)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .focused($searchFocused)
+                .accessibilityLabel("Search conversations")
+                .accessibilityHint("Type to narrow the list to conversations whose name matches.")
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    searchFocused = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal)
+        .padding(.bottom, 4)
+    }
+
     private var list: some View {
+        VStack(spacing: 0) {
+            searchField
+            listBody
+        }
+    }
+
+    private var listBody: some View {
         List {
-            ForEach(conversationsService.conversations) { convo in
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                searchSummaryRow
+            }
+            ForEach(filteredConversations) { convo in
                 Button {
                     selectedConversation = convo
                 } label: {
@@ -115,8 +214,28 @@ struct ConversationListView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this conversation and reads its history.")
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        deletingConversation = convo
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        beginRename(convo)
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    Button {
+                        Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+                }
+
+                actionsMenu(for: convo)
+                    .listRowSeparator(.hidden)
             }
-            if conversationsService.hasMore {
+            if conversationsService.hasMore && searchText.isEmpty {
                 loadMoreRow
             }
         }
@@ -125,6 +244,104 @@ struct ConversationListView: View {
         .navigationDestination(item: $selectedConversation) { convo in
             ConversationDetailView(conversation: convo)
         }
+        .alert(
+            "Delete conversation?",
+            isPresented: Binding(
+                get: { deletingConversation != nil },
+                set: { if !$0 { deletingConversation = nil } }
+            ),
+            presenting: deletingConversation
+        ) { convo in
+            Button("Delete", role: .destructive) {
+                deletingConversation = nil
+                Task { await conversationsService.deleteConversation(id: convo.id, title: convo.displayTitle) }
+            }
+            Button("Keep it", role: .cancel) { deletingConversation = nil }
+        } message: { convo in
+            Text("\(convo.displayTitle) and everything said in it will be gone for good. Archiving keeps it instead.")
+        }
+        .alert(
+            "Rename conversation",
+            isPresented: Binding(
+                get: { renamingConversation != nil },
+                set: { if !$0 { renamingConversation = nil } }
+            )
+        ) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let convo = renamingConversation {
+                    let newTitle = renameText
+                    renamingConversation = nil
+                    Task { await conversationsService.renameConversation(id: convo.id, title: newTitle) }
+                }
+            }
+            Button("Cancel", role: .cancel) { renamingConversation = nil }
+        } message: {
+            Text("Give this conversation a name you'll recognise later.")
+        }
+        .onChange(of: conversationsService.actionMessage) { _, message in
+            // Every row action is announced rather than left to be
+            // inferred from a row quietly vanishing -- the whole point of
+            // the actions menu is that this screen is worked by ear.
+            guard let message else { return }
+            UIAccessibility.post(notification: .announcement, argument: message)
+            conversationsService.actionMessage = nil
+        }
+    }
+
+    /// One-line "what am I looking at" summary while a filter is active.
+    /// Its own VoiceOver stop on purpose: without it, typing into the search
+    /// field and getting silence gives no way to tell "nothing matched" from
+    /// "the list didn't update."
+    private var searchSummaryRow: some View {
+        Text(searchSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(searchSummary)
+    }
+
+    private var searchSummary: String {
+        let count = filteredConversations.count
+        let loaded = conversationsService.conversations.count
+        if count == 0 {
+            return "No matches in the \(loaded) conversations loaded so far. Clear the search and load more to look further back."
+        }
+        let noun = count == 1 ? "match" : "matches"
+        return "\(count) \(noun) in the \(loaded) conversations loaded so far."
+    }
+
+    /// Per-row actions menu — its own sibling accessibility element, same
+    /// shape as the per-message actions menu in `ConversationDetailView`.
+    private func actionsMenu(for convo: KadeConversation) -> some View {
+        Menu {
+            Button {
+                beginRename(convo)
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button {
+                Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            Button(role: .destructive) {
+                deletingConversation = convo
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        } label: {
+            Label("Conversation actions", systemImage: "ellipsis.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityLabel("Actions for \(convo.displayTitle)")
+        .accessibilityHint("Rename, archive, or delete this conversation.")
+    }
+
+    private func beginRename(_ convo: KadeConversation) {
+        renameText = convo.displayTitle
+        renamingConversation = convo
     }
 
     private func accessibleLabel(for convo: KadeConversation) -> String {
