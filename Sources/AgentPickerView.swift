@@ -17,6 +17,15 @@ import SwiftUI
 /// reachable); each row is one combined element (name + description +
 /// "Currently selected" when applicable) with a clear hint of what tapping
 /// does, matching the row pattern used in `ConversationListView`.
+///
+/// Layout notes (added 2026-07-19, after Kade's real-use feedback that a
+/// flat alphabetical list of her ~221 owned agents was "spammy and hard
+/// to scroll through," asking for something quicker with "short
+/// explanatory labels"): when NOT searching, the list is now a Recent
+/// section (your last few picks, fastest path back to who you just used)
+/// followed by real category sections straight off the server's own
+/// `category` field. While searching, it collapses back to one flat
+/// filtered list, since search already does the narrowing.
 struct AgentPickerView: View {
     @EnvironmentObject private var agentsService: AgentsService
     let currentAgentId: String?
@@ -25,12 +34,47 @@ struct AgentPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
 
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     private var filtered: [KadeAgent] {
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return agentsService.agents }
         return agentsService.agents.filter {
             $0.name.localizedCaseInsensitiveContains(trimmed)
                 || ($0.description ?? "").localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    private var recentAgents: [KadeAgent] {
+        let byId = Dictionary(uniqueKeysWithValues: agentsService.agents.map { ($0.id, $0) })
+        return RecentAgents.ids.compactMap { byId[$0] }
+    }
+
+    /// Groups the full agent list by their server-provided `category`
+    /// (companions, roleplay, personal, expert, creative, ...), sorted
+    /// alphabetically with an "Other" bucket last for anything missing a
+    /// category. Each bucket is itself sorted by agent name.
+    private var groupedByCategory: [(title: String, agents: [KadeAgent])] {
+        var buckets: [String: [KadeAgent]] = [:]
+        for agent in agentsService.agents {
+            let raw = agent.category?.trimmingCharacters(in: .whitespaces) ?? ""
+            let key = raw.isEmpty ? "Other" : raw
+            buckets[key, default: []].append(agent)
+        }
+        let sortedKeys = buckets.keys.sorted { lhs, rhs in
+            if lhs == "Other" { return false }
+            if rhs == "Other" { return true }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        return sortedKeys.map { key in
+            (
+                title: key.localizedCapitalized,
+                agents: buckets[key]!.sorted {
+                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+            )
         }
     }
 
@@ -44,8 +88,13 @@ struct AgentPickerView: View {
                 } else if let error = agentsService.loadError, agentsService.agents.isEmpty {
                     errorState(error)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filtered.isEmpty {
-                    Text(searchText.isEmpty ? "No agents available." : "No agents match \"\(searchText)\".")
+                } else if agentsService.agents.isEmpty {
+                    Text("No agents available.")
+                        .foregroundStyle(.secondary)
+                        .padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if isSearching && filtered.isEmpty {
+                    Text("No agents match \"\(searchText)\".")
                         .foregroundStyle(.secondary)
                         .padding()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -66,25 +115,59 @@ struct AgentPickerView: View {
     }
 
     private var list: some View {
-        List(filtered) { agent in
-            Button {
-                onSelect(agent)
-                dismiss()
-            } label: {
-                row(for: agent)
+        List {
+            if isSearching {
+                ForEach(filtered) { agent in
+                    rowButton(for: agent)
+                }
+            } else {
+                if !recentAgents.isEmpty {
+                    Section {
+                        ForEach(recentAgents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text("Recent")
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                }
+                ForEach(groupedByCategory, id: \.title) { group in
+                    Section {
+                        ForEach(group.agents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text(group.title)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            // Grouping lives on the Button itself, not nested inside its
-            // label (row(for:)) -- the same fix applied across
-            // ConversationListView this session after Kade's first real
-            // pass found rows that select but don't activate when the
-            // wrapping is on the label subtree instead of the control.
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
-            .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
-            .accessibilityHint("Switches to this agent for your next message.")
         }
         .listStyle(.plain)
+    }
+
+    /// One row, wired up identically everywhere it's used (Recent section,
+    /// category sections, and the flat search results) so there's exactly
+    /// one place that owns the accessibility contract instead of three
+    /// copies that could drift apart.
+    private func rowButton(for agent: KadeAgent) -> some View {
+        Button {
+            RecentAgents.record(agent.id)
+            onSelect(agent)
+            dismiss()
+        } label: {
+            row(for: agent)
+        }
+        .buttonStyle(.plain)
+        // Grouping lives on the Button itself, not nested inside its
+        // label (row(for:)) -- the same fix applied across
+        // ConversationListView this session after Kade's first real
+        // pass found rows that select but don't activate when the
+        // wrapping is on the label subtree instead of the control.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
+        .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
+        .accessibilityHint("Switches to this agent for your next message.")
     }
 
     private func row(for agent: KadeAgent) -> some View {
@@ -113,10 +196,31 @@ struct AgentPickerView: View {
     private func accessibleLabel(for agent: KadeAgent, isSelected: Bool) -> String {
         var parts = [agent.name]
         if let description = agent.description, !description.isEmpty {
-            parts.append(description)
+            parts.append(shortDescription(description))
         }
         if isSelected { parts.append("Currently selected") }
         return parts.joined(separator: ". ")
+    }
+
+    /// Kade's ask was "short explanatory labels" -- this is separate from
+    /// the visual `.lineLimit(2)` truncation on the row, because VoiceOver
+    /// reads the FULL accessibility label regardless of how much text fits
+    /// on screen. Caps to the first sentence, or ~90 characters if there's
+    /// no sentence break, so scanning 221 agents by ear doesn't mean
+    /// sitting through a paragraph per row.
+    private func shortDescription(_ description: String) -> String {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sentenceEnders: Set<Character> = [".", "!", "?"]
+        if let firstEnderIndex = trimmed.firstIndex(where: { sentenceEnders.contains($0) }) {
+            let sentence = trimmed[..<trimmed.index(after: firstEnderIndex)]
+            if sentence.count <= 120 {
+                return String(sentence)
+            }
+        }
+        let limit = 90
+        if trimmed.count <= limit { return trimmed }
+        let cutoff = trimmed.index(trimmed.startIndex, offsetBy: limit)
+        return String(trimmed[..<cutoff]) + "…"
     }
 
     private func errorState(_ message: String) -> some View {
@@ -126,6 +230,29 @@ struct AgentPickerView: View {
                 .buttonStyle(.borderedProminent)
         }
         .padding()
+    }
+}
+
+/// Lightweight, non-sensitive "recently used agents" tracker. Deliberately
+/// backed by UserDefaults, not Keychain -- Keychain in this app is reserved
+/// for sensitive data (access token, user record; see Keychain.swift), and
+/// which characters you've picked recently doesn't belong there.
+enum RecentAgents {
+    private static let key = "kade.recentAgentIds"
+    private static let maxEntries = 8
+
+    static var ids: [String] {
+        UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+
+    static func record(_ id: String) {
+        var current = ids
+        current.removeAll { $0 == id }
+        current.insert(id, at: 0)
+        if current.count > maxEntries {
+            current = Array(current.prefix(maxEntries))
+        }
+        UserDefaults.standard.set(current, forKey: key)
     }
 }
 

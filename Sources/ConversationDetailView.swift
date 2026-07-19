@@ -289,7 +289,19 @@ struct ConversationDetailView: View {
         .padding(.horizontal)
         .padding(.top, 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(readAloudEnabled ? "Read aloud, on" : "Read aloud, off")
+        // Session 11 (Kade: "it says off button on or on button off...
+        // when you toggle it you can't tell if it's off or on"): baking
+        // "on"/"off" INTO the label text while also carrying the
+        // `.isToggle` trait is the bug -- VoiceOver expects a toggle's
+        // current state in `.accessibilityValue`, separate from its name,
+        // and announces both together ("Read aloud, on, switch button" for
+        // example). With the state word living inside the label instead,
+        // VoiceOver's own toggle narration and the hand-written label text
+        // talked over each other. Fixed by giving the label just the NAME
+        // and the state its own `.accessibilityValue` -- the standard,
+        // unambiguous pattern every native iOS Settings toggle uses.
+        .accessibilityLabel("Read aloud")
+        .accessibilityValue(readAloudEnabled ? "On" : "Off")
         .accessibilityHint(
             readAloudEnabled
                 ? "Turns off automatic spoken replies."

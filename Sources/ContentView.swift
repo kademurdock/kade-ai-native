@@ -54,19 +54,14 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    // Deliberately not marked .isHeader: the nav bar's own
-                    // "Kade-AI" title already reads as the screen's heading,
-                    // and a second heading right after it (this used to say
-                    // "Kade-AI Native" -- internal build-track jargon a
-                    // tester has no reason to know) was confusing on a real
-                    // VoiceOver pass (Kade, TestFlight build 105, July 19
-                    // 2026: landed on "Kade-AI" then immediately another
-                    // heading "Kade-AI Native"). Kept as a plain welcoming
-                    // line instead of removing it outright, since sighted
-                    // testers still benefit from a real hero title.
-                    Text("Welcome to Kade-AI")
-                        .font(.largeTitle.bold())
-
+                    // Session 11: the "Welcome to Kade-AI" hero line
+                    // above this used to live here, right under the nav
+                    // bar's own "Kade-AI" title -- Kade confirmed it reads
+                    // like a doubled title ("yeah it says that twice") and
+                    // said to just remove it ("it's already there
+                    // basically"), so it's gone; the nav bar title alone
+                    // covers the screen's heading now.
+                    //
                     // Same pass flagged this: "native app" / "web app" as if
                     // they're two separate products is an internal framing
                     // (this app vs. the Capacitor shell / kademurdock.com)
