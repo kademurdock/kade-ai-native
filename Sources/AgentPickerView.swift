@@ -202,22 +202,33 @@ struct AgentPickerView: View {
         return parts.joined(separator: ". ")
     }
 
-    /// Kade's ask was "short explanatory labels" -- this is separate from
-    /// the visual `.lineLimit(2)` truncation on the row, because VoiceOver
-    /// reads the FULL accessibility label regardless of how much text fits
-    /// on screen. Caps to the first sentence, or ~90 characters if there's
-    /// no sentence break, so scanning 221 agents by ear doesn't mean
-    /// sitting through a paragraph per row.
+    /// Kade's original ask was "short explanatory labels" -- this is
+    /// separate from the visual `.lineLimit(2)` truncation on the row,
+    /// because VoiceOver reads the FULL accessibility label regardless of
+    /// how much text fits on screen. First shipped capping to one sentence
+    /// or ~90 characters (session 11); after actually using the picker with
+    /// real agents, Kade reported that cap was cutting off exactly the
+    /// information that decides whether to talk to someone -- her example,
+    /// "Bob like planting seeds in his garden he also..." trailing into
+    /// nothing. Widened (session 13) to roughly 2 sentences, or ~220
+    /// characters if the description doesn't break into short sentences --
+    /// still meaningfully shorter than a full bio per row while scanning
+    /// many agents, but no longer routinely lands mid-thought.
     private func shortDescription(_ description: String) -> String {
         let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let limit = 220
         let sentenceEnders: Set<Character> = [".", "!", "?"]
-        if let firstEnderIndex = trimmed.firstIndex(where: { sentenceEnders.contains($0) }) {
-            let sentence = trimmed[..<trimmed.index(after: firstEnderIndex)]
-            if sentence.count <= 120 {
-                return String(sentence)
+        var enderCount = 0
+        for idx in trimmed.indices {
+            guard sentenceEnders.contains(trimmed[idx]) else { continue }
+            enderCount += 1
+            guard enderCount == 2 else { continue }
+            let cutIndex = trimmed.index(after: idx)
+            if trimmed.distance(from: trimmed.startIndex, to: cutIndex) <= limit {
+                return String(trimmed[..<cutIndex])
             }
+            break
         }
-        let limit = 90
         if trimmed.count <= limit { return trimmed }
         let cutoff = trimmed.index(trimmed.startIndex, offsetBy: limit)
         return String(trimmed[..<cutoff]) + "…"

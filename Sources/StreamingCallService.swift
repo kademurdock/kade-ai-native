@@ -116,7 +116,6 @@ final class StreamingCallService: NSObject, ObservableObject {
     private let sendFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true
     )!
-    private var micConverter: AVAudioConverter?
     private var engineRunning = false
 
     private var byeSent = false
@@ -394,27 +393,29 @@ final class StreamingCallService: NSObject, ObservableObject {
         guard inputFormat.sampleRate > 0 else {
             throw CallError.message("No microphone input available.")
         }
-        guard let converter = AVAudioConverter(from: inputFormat, to: sendFormat) else {
-            throw CallError.message("Couldn't set up microphone audio.")
-        }
-        micConverter = converter // kept alive on self for lifecycle/cleanup only -- never read
-                                  // back off self from the tap closure (see note below).
 
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
-        // The tap closure runs on the real-time audio thread, not the main
-        // actor. To avoid ever touching `self` (a @MainActor type) or an
-        // AVAudioPCMBuffer (not Sendable) from off the main actor, the
-        // converter is captured DIRECTLY by value into the closure (a plain
-        // synchronous capture, no isolation crossing -- this line itself
-        // runs on the main actor, at tap-install time) and the format
-        // conversion happens via a free function that touches no actor
-        // state at all. Only the resulting `Data` (genuinely Sendable)
-        // crosses the hop into `sendMicData`.
-        let sendFormat = self.sendFormat
+        // FIX (live-tested): the first echo fix (enabling voice processing
+        // above) broke mic capture entirely on the very next call -- Kiana
+        // greeted, then never responded, because the converter built here
+        // from `inputFormat` (read right after `setVoiceProcessingEnabled`)
+        // silently stopped matching the format actually delivered to the
+        // tap once the engine was really running, so every conversion call
+        // was failing quietly (`pcm16Data` returning nil) and NOTHING ever
+        // reached the server -- Deepgram had nothing to transcribe, so
+        // there was never a turn to reply to. Rather than guess at the
+        // exact timing voice processing settles its format (unverifiable
+        // without a device), `MicConverterBox` below is self-healing: it
+        // rebuilds its converter from whatever format the REAL buffer
+        // reports on each tap callback, so there is no "read the format at
+        // the right moment" question left to get wrong. Rebuilding only
+        // happens when the format actually changes (cheap after the first
+        // call in the overwhelmingly common case).
+        let box = MicConverterBox(outputFormat: sendFormat)
         input.installTap(onBus: 0, bufferSize: 1600, format: inputFormat) { [weak self] buffer, _ in
-            guard let pcmData = StreamingCallService.pcm16Data(from: buffer, to: sendFormat, using: converter) else { return }
+            guard let pcmData = box.convert(buffer) else { return }
             Task { @MainActor in
                 self?.sendMicData(pcmData)
             }
@@ -438,7 +439,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// the standard `AVAudioConverter` pull pattern for converting exactly
     /// one already-in-memory buffer (used identically for playback in
     /// `schedule(_:from:)` below).
-    nonisolated private static func pcm16Data(
+    nonisolated fileprivate static func pcm16Data(
         from buffer: AVAudioPCMBuffer, to outputFormat: AVAudioFormat, using converter: AVAudioConverter
     ) -> Data? {
         let ratio = outputFormat.sampleRate / buffer.format.sampleRate
@@ -555,8 +556,37 @@ final class StreamingCallService: NSObject, ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         playerNode.stop()
         audioEngine.stop()
-        micConverter = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// Self-healing mic converter, deliberately NOT `@MainActor`: lives only
+/// inside the tap closure's captured state and is touched only from the
+/// real-time audio thread, which `AVAudioEngine` guarantees calls a given
+/// tap's callback serially (never concurrently with itself) -- same
+/// single-threaded-by-construction safety as `CameraCaptureController`'s
+/// `FrameSampler`. Rebuilds its `AVAudioConverter` whenever the incoming
+/// buffer's format differs from the last one it converted, so it can never
+/// go stale against whatever the input node is ACTUALLY delivering --
+/// see `startAudioEngine()`'s comment for the live bug this replaced (a
+/// converter built once from a format read at the wrong moment, which
+/// silently broke every mic chunk after voice processing was enabled).
+private final class MicConverterBox {
+    private let outputFormat: AVAudioFormat
+    private var converter: AVAudioConverter?
+    private var lastInputFormat: AVAudioFormat?
+
+    init(outputFormat: AVAudioFormat) {
+        self.outputFormat = outputFormat
+    }
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
+        if converter == nil || lastInputFormat != buffer.format {
+            lastInputFormat = buffer.format
+            converter = AVAudioConverter(from: buffer.format, to: outputFormat)
+        }
+        guard let converter else { return nil }
+        return StreamingCallService.pcm16Data(from: buffer, to: outputFormat, using: converter)
     }
 }
 

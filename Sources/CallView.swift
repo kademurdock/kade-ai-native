@@ -44,11 +44,6 @@ struct CallView: View {
             .padding()
             .navigationTitle(agentName)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Hang Up", role: .destructive) { hangUp() }
-                }
-            }
         }
         .task { await beginCall() }
         .onDisappear {
