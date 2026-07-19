@@ -194,6 +194,18 @@ doc for how the client handles this).
 message came back with `"parentMessageId": "00000000-0000-0000-0000-000000000000"` even though the
 client sent `parentMessageId: null`.
 
+**Starting a brand-new conversation (confirmed 2026-07-19, session 11, read directly from
+`api/server/controllers/agents/request.js`):** OMIT `conversationId` from the request body
+entirely (not an empty string, not a client-generated UUID) — the server's own check is
+`const isNewConvo = !reqConversationId || reqConversationId === 'new';` (a literal string `"new"`
+also works, matching the web client's own placeholder convention, but omitting the key is simplest
+from Swift). When `isNewConvo`, the server mints `crypto.randomUUID()` server-side and returns it
+as `conversationId` in the immediate response — that's the ONLY place the client learns the real
+id; there is no other endpoint to look it up beforehand. `agent_id` is NOT optional in practice for
+a new conversation the way it can be for a follow-up turn on an existing one (an existing
+conversation's server-side record already knows who's answering; a brand-new one has no such
+record yet) — always send a real `agent_id` on the first turn.
+
 `agent_id` is read via `parseCompactConvo` / `compactAgentsSchema`
 (`packages/data-provider/src/schemas.ts`) — this is the field that selects which agent answers.
 Everything else in the fork's internal `endpointOption` is server-computed from this and ignores

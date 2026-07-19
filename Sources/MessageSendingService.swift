@@ -1,7 +1,9 @@
 import Foundation
 
-/// Sends a user message into an existing conversation and waits for the
-/// agent's reply to finish. Phase 3.
+/// Sends a user message into an existing conversation -- or starts a brand
+/// new one, see below -- and waits for the agent's reply to finish. Phase 3;
+/// new-conversation support added when Kade noticed there was no way to
+/// start one from the native app (session 11).
 ///
 /// The fork's generation contract is two-phase, not a single POST-that-
 /// streams — confirmed both against the live fork source
@@ -13,6 +15,17 @@ import Foundation
 ///      (streamId == conversationId, always)
 ///   B) GET  /api/agents/chat/stream/:streamId -> Server-Sent Events,
 ///      ending in a `{"final": true, ...}` frame.
+///
+/// NEW CONVERSATIONS: read directly from the fork's own controller
+/// (`api/server/controllers/agents/request.js`): `const isNewConvo =
+/// !reqConversationId || reqConversationId === 'new'; const conversationId
+/// = isNewConvo ? crypto.randomUUID() : reqConversationId;` — so simply
+/// OMITTING `conversationId` from the request body (not sending an empty
+/// string, not sending a client-generated UUID) is what tells the server to
+/// mint a brand-new one, which comes back in the response. `conversationId`
+/// is therefore `String?` here: `nil` means "start a new one," and the
+/// caller must read the RETURN VALUE (the resolved id -- the one that was
+/// passed in, or the freshly minted one) to know what to use from here on.
 ///
 /// Two things the live test surfaced that reading the web client's source
 /// alone did not make obvious:
@@ -58,16 +71,20 @@ final class MessageSendingService: ObservableObject {
     }
 
     /// Posts `text` as a new turn in `conversationId` and waits until the
-    /// agent's reply is fully persisted server-side. Returns once done;
-    /// callers should re-fetch messages afterward to render the result
+    /// agent's reply is fully persisted server-side, then returns the
+    /// RESOLVED conversation id -- pass `conversationId: nil` to start a
+    /// brand-new conversation (see type doc); the id the server actually
+    /// created comes back here, since the caller has no other way to learn
+    /// it. Callers should re-fetch messages afterward to render the result
     /// (see type doc for why this method hands back no message content
     /// itself).
+    @discardableResult
     func send(
         text: String,
-        conversationId: String,
+        conversationId: String?,
         parentMessageId: String?,
         agentId: String?
-    ) async throws {
+    ) async throws -> String {
         let start = try await startGeneration(
             text: text,
             conversationId: conversationId,
@@ -75,6 +92,7 @@ final class MessageSendingService: ObservableObject {
             agentId: agentId
         )
         try await waitForFinal(streamId: start.streamId)
+        return start.conversationId
     }
 
     // MARK: - Phase A: kick off generation
@@ -86,16 +104,22 @@ final class MessageSendingService: ObservableObject {
 
     private func startGeneration(
         text: String,
-        conversationId: String,
+        conversationId: String?,
         parentMessageId: String?,
         agentId: String?
     ) async throws -> StartResponse {
         var body: [String: Any] = [
             "text": text,
             "messageId": UUID().uuidString,
-            "conversationId": conversationId,
             "endpoint": "agents",
         ]
+        // Omit the key entirely for a brand-new conversation -- see the
+        // type doc's "NEW CONVERSATIONS" section for why omission
+        // (specifically, not an empty string or a client-made UUID) is
+        // what the server actually checks for.
+        if let conversationId {
+            body["conversationId"] = conversationId
+        }
         // Omit the key entirely rather than send an explicit JSON null: the
         // server destructures `parentMessageId = null` from the body, and
         // that default only fires on a genuinely MISSING key anyway — a

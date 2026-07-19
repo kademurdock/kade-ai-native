@@ -25,6 +25,12 @@ struct ConversationListView: View {
     // row on a fresh open, land back on the row you just came from when you
     // return.
     @AccessibilityFocusState private var focusedConversationID: String?
+    // Session 11 (Kade: "I don't see a way to make a new conversation") --
+    // separate from `selectedConversation` on purpose: that one always
+    // carries a real, already-existing KadeConversation, and folding "no
+    // conversation yet" into the same optional would mean every place that
+    // reads it has to re-decide which kind of nil it's looking at.
+    @State private var startingNewConversation = false
 
     var body: some View {
         Group {
@@ -41,6 +47,20 @@ struct ConversationListView: View {
         }
         .navigationTitle("Conversations")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    startingNewConversation = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("New conversation")
+                .accessibilityHint("Starts a new conversation and lets you pick who to talk to.")
+            }
+        }
+        .navigationDestination(isPresented: $startingNewConversation) {
+            ConversationDetailView(conversation: nil)
+        }
         .task {
             if conversationsService.conversations.isEmpty {
                 await conversationsService.loadFirstPage()
@@ -150,7 +170,10 @@ struct ConversationListView: View {
             Text("No conversations yet")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text("Start a chat on the web app and it'll show up here.")
+            // Session 11: used to say "Start a chat on the web app and
+            // it'll show up here" -- true when this was written, no longer
+            // true now that starting one is possible right here.
+            Text("Tap New Conversation above to start one.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

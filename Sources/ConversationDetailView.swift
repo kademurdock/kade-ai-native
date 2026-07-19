@@ -7,8 +7,20 @@ import SwiftUI
 /// chronological / parent-chain-consistent against a real thread) —
 /// top-to-bottom oldest-to-newest, which is both the natural VoiceOver
 /// swipe order and the natural reading order.
+///
+/// Session 11: `conversation` is now OPTIONAL -- `nil` means "brand new,
+/// nothing sent yet" (Kade: "I don't see a way to make a new
+/// conversation"). Rather than build a second, parallel screen that
+/// duplicates all of this file's composer/voice/agent-picker machinery,
+/// this same view now handles both cases: a nil conversation starts with
+/// no history, no agent seeded (the picker is presented immediately since
+/// there's no existing `agent_id` to inherit), and `conversationId`
+/// (tracked separately from `conversation` itself) stays nil until the
+/// FIRST send resolves one from the server -- see `MessageSendingService`'s
+/// "NEW CONVERSATIONS" doc section for the exact server contract.
 struct ConversationDetailView: View {
-    let conversation: KadeConversation
+    let conversation: KadeConversation?
+    @State private var conversationId: String?
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
     @EnvironmentObject private var agentsService: AgentsService
@@ -75,7 +87,9 @@ struct ConversationDetailView: View {
                     errorState(loadError)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if messages.isEmpty {
-                    Text("No messages in this conversation.")
+                    Text(conversationId == nil
+                         ? "Pick an agent below, then send your first message to start chatting."
+                         : "No messages in this conversation.")
                         .foregroundStyle(.secondary)
                         .padding()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -89,16 +103,27 @@ struct ConversationDetailView: View {
                 composer
             }
         }
-        .navigationTitle(conversation.displayTitle)
+        .navigationTitle(conversation?.displayTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
             // "no custom init" note on `selectedAgentId`'s declaration).
+            // A brand-new conversation has no agent_id to inherit -- leave
+            // it nil and steer straight to the picker instead, since the
+            // composer has nobody to send to otherwise.
             if selectedAgentId == nil {
-                selectedAgentId = conversation.agentId
+                selectedAgentId = conversation?.agentId
             }
-            await load()
+            if conversationId == nil {
+                conversationId = conversation?.conversationId
+            }
+            if conversation != nil {
+                await load()
+            } else {
+                isLoading = false
+                showingAgentPicker = true
+            }
             await agentsService.loadIfNeeded()
         }
         .sheet(isPresented: $showingAgentPicker) {
@@ -172,11 +197,16 @@ struct ConversationDetailView: View {
     }
 
     private func load() async {
+        // Only ever called with a real conversationId in hand (see .task
+        // and errorState's Retry button) -- a brand-new conversation skips
+        // load() entirely (nothing to fetch yet), so this guard is a
+        // belt-and-suspenders no-op, not a path expected to actually fire.
+        guard let conversationId else { return }
         isLoading = true
         loadError = nil
         do {
             messages = try await conversationsService.fetchMessages(
-                conversationId: conversation.conversationId
+                conversationId: conversationId
             )
         } catch {
             loadError = "Couldn't load this conversation. Check your connection and try again."
@@ -222,6 +252,14 @@ struct ConversationDetailView: View {
         return selectedAgentId == nil ? "No agent selected" : "Current agent"
     }
 
+    /// `conversation?.displayTitle` reads oddly before a new conversation
+    /// has a real title yet ("Sends your message to New conversation."
+    /// sounds like a typo) -- fall back to naming whoever's picked instead,
+    /// which is the more useful thing to say in that moment anyway.
+    private var conversationTitleForCopy: String {
+        conversation?.displayTitle ?? agentDisplayLabel
+    }
+
     // MARK: - Read aloud (Phase 5)
 
     /// A single toggle button (not a SwiftUI `Toggle`, to match this app's
@@ -255,7 +293,7 @@ struct ConversationDetailView: View {
         .accessibilityHint(
             readAloudEnabled
                 ? "Turns off automatic spoken replies."
-                : "Turns on automatic spoken replies. Each new reply from \(conversation.displayTitle) will be read aloud in its own voice."
+                : "Turns on automatic spoken replies. Each new reply from \(conversationTitleForCopy) will be read aloud in its own voice."
         )
         .accessibilityAddTraits(.isToggle)
     }
@@ -315,7 +353,7 @@ struct ConversationDetailView: View {
                         || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
                 .accessibilityLabel(isSending ? "Sending" : "Send message")
-                .accessibilityHint(isSending ? "" : "Sends your message to \(conversation.displayTitle).")
+                .accessibilityHint(isSending ? "" : "Sends your message to \(conversationTitleForCopy).")
             }
         }
         .padding()
@@ -364,11 +402,22 @@ struct ConversationDetailView: View {
     private func send() async {
         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else { return }
+        // A brand-new conversation has no agent_id for the server to fall
+        // back on (an EXISTING conversation's turns can omit it and the
+        // server still knows who's answering, per its own stored history --
+        // unchanged behavior, still passes `selectedAgentId` as-is below,
+        // nil or not). A new one genuinely has nobody picked yet the very
+        // first time through, so require it instead of sending into the
+        // void.
+        if conversation == nil, selectedAgentId == nil {
+            showingAgentPicker = true
+            return
+        }
 
         let parentId = messages.last?.messageId
         let optimisticMessage = KadeMessage(
             messageId: "pending-\(UUID().uuidString)",
-            conversationId: conversation.conversationId,
+            conversationId: conversationId ?? "pending",
             createdAt: KadeDateFormatting.isoNow(),
             isCreatedByUser: true,
             sender: "User",
@@ -380,23 +429,32 @@ struct ConversationDetailView: View {
         sendState = .sending
 
         do {
-            try await messageSendingService.send(
+            let wasNewConversation = conversationId == nil
+            let resolvedConversationId = try await messageSendingService.send(
                 text: trimmed,
-                conversationId: conversation.conversationId,
+                conversationId: conversationId,
                 parentMessageId: parentId,
                 agentId: selectedAgentId
             )
+            conversationId = resolvedConversationId
             // Authoritative reload: replaces the optimistic placeholder with
             // whatever the server actually persisted (real ids, real content
             // shape) rather than trusting the SSE payload's exact field set
             // — see MessageSendingService's type doc for why.
             messages = try await conversationsService.fetchMessages(
-                conversationId: conversation.conversationId
+                conversationId: resolvedConversationId
             )
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
             if readAloudEnabled, let reply = messages.last, !reply.isCreatedByUser {
                 voiceService.enqueueSpeak(text: reply.displayText, agentId: selectedAgentId, agentName: agentDisplayLabel)
+            }
+            if wasNewConversation {
+                // The conversation list (one screen back) doesn't know this
+                // conversation exists yet -- refresh it in the background so
+                // it's already there by the time the user navigates back,
+                // instead of requiring a manual pull-to-refresh.
+                Task { await conversationsService.loadFirstPage() }
             }
         } catch let error as MessageSendingService.SendError {
             if case .streamError(let message) = error {
