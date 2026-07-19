@@ -86,6 +86,18 @@ struct ConversationDetailView: View {
     /// opt-in rather than ambient -- a blind user shouldn't get surprise
     /// audio the first time they open a conversation.
     @State private var readAloudEnabled = false
+
+    // Session 14 additions. `ShareItem` wraps either plain text or a
+    // prepared audio file so ONE share sheet serves both "Share Text" and
+    // "Save Voice Message" -- the iOS share sheet is already the
+    // system-standard, fully VoiceOver-navigable way to reach "Save to
+    // Files", AirDrop, Messages and everything else, so building a bespoke
+    // download UI on top of it would be strictly worse and less familiar.
+    @State private var shareItem: ShareItem?
+    @State private var preparingVoiceMessageId: String?
+    @State private var deletingMessage: KadeMessage?
+    @State private var showingSpeedPicker = false
+    @State private var transcriptConversation: KadeConversation?
     @State private var voiceInputError: String?
 
     private enum SendState: Equatable {
@@ -203,8 +215,106 @@ struct ConversationDetailView: View {
             isNowRecording ? .start : .stop
         }
         .fullScreenCover(isPresented: $showingCall) {
-            CallView(agentId: selectedAgentId, agentName: agentDisplayLabel, apiClient: apiClient)
+            CallView(
+                agentId: selectedAgentId,
+                agentName: agentDisplayLabel,
+                apiClient: apiClient,
+                onOpenTranscript: { convo in transcriptConversation = convo }
+            )
         }
+        // Post-call handoff (Kade, session 14: "It doesn't drop you into
+        // your current voice conversation via text after the call"). The
+        // call screen resolves the minted conversation before it dismisses;
+        // this is what actually puts her in it.
+        .navigationDestination(item: $transcriptConversation) { convo in
+            ConversationDetailView(conversation: convo)
+        }
+        .sheet(item: $shareItem) { item in
+            ShareSheet(item: item)
+        }
+        .alert(
+            "Delete this message?",
+            isPresented: Binding(
+                get: { deletingMessage != nil },
+                set: { if !$0 { deletingMessage = nil } }
+            ),
+            presenting: deletingMessage
+        ) { message in
+            Button("Delete", role: .destructive) {
+                deletingMessage = nil
+                Task { await deleteMessage(message) }
+            }
+            Button("Keep it", role: .cancel) { deletingMessage = nil }
+        } message: { _ in
+            Text("This removes the single message for good. Anything replying to it stays.")
+        }
+        .confirmationDialog(
+            "Voice message speed",
+            isPresented: $showingSpeedPicker,
+            titleVisibility: .visible
+        ) {
+            ForEach(VoiceService.availableRates, id: \.self) { rate in
+                Button(VoiceService.rateSpokenLabel(rate)) {
+                    voiceService.playbackRate = rate
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Voice message speed \(VoiceService.rateSpokenLabel(rate))."
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: conversationsService.actionMessage) { _, message in
+            guard let message else { return }
+            UIAccessibility.post(notification: .announcement, argument: message)
+            conversationsService.actionMessage = nil
+        }
+    }
+
+    // MARK: - Session 14 actions
+
+    /// Delete is offered only on the last two messages. See
+    /// `ConversationsService.deleteMessage`'s doc comment: this client
+    /// renders the flat chronological line, so deleting from the middle
+    /// would strand a reply answering a question that no longer exists.
+    private func canDelete(_ message: KadeMessage) -> Bool {
+        guard !isSending else { return false }
+        return messages.suffix(2).contains { $0.id == message.id }
+    }
+
+    private func deleteMessage(_ message: KadeMessage) async {
+        guard let conversationId else { return }
+        let ok = await conversationsService.deleteMessage(
+            conversationId: conversationId, messageId: message.messageId
+        )
+        if ok {
+            messages.removeAll { $0.id == message.id }
+        }
+    }
+
+    /// Synthesizes the message in its own agent's voice, writes it to a real
+    /// file, and hands it to the system share sheet -- which is where "Save
+    /// to Files" lives, along with AirDrop, Messages and everything else.
+    /// Announces progress at both ends because synthesis takes a beat and a
+    /// silent wait is indistinguishable from a dead button.
+    private func saveVoiceMessage(_ message: KadeMessage) async {
+        guard preparingVoiceMessageId == nil else { return }
+        preparingVoiceMessageId = message.id
+        UIAccessibility.post(notification: .announcement, argument: "Preparing the voice message.")
+        defer { preparingVoiceMessageId = nil }
+        let url = await voiceService.voiceMessageFile(
+            text: message.displayText,
+            agentId: message.agentId ?? selectedAgentId,
+            agentName: message.speakerLabel
+        )
+        guard let url else {
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Couldn't prepare that voice message. Try again."
+            )
+            return
+        }
+        shareItem = ShareItem(fileURL: url)
     }
 
     // MARK: - History
@@ -220,7 +330,11 @@ struct ConversationDetailView: View {
                             canRegenerate: canRegenerate(message),
                             onReadAloud: { readAloud(message) },
                             onEdit: { beginEdit(message) },
-                            onRegenerate: { Task { await regenerate(message) } }
+                            onRegenerate: { Task { await regenerate(message) } },
+                            onSaveVoiceMessage: { Task { await saveVoiceMessage(message) } },
+                            onShare: { shareItem = ShareItem(text: message.readableText) },
+                            onDelete: canDelete(message) ? { deletingMessage = message } : nil,
+                            isPreparingVoiceMessage: preparingVoiceMessageId == message.id
                         )
                         .id(message.id)
                         .accessibilityFocused($a11yFocus, equals: .message(message.id))
@@ -390,12 +504,13 @@ struct ConversationDetailView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
-                Text(readAloudEnabled ? "Read aloud: On" : "Read aloud: Off")
+                Text(readAloudEnabled ? "Voice messages: On" : "Voice messages: Off")
                     .font(.footnote)
                 if voiceService.isSpeaking {
                     ProgressView().scaleEffect(0.7)
                 }
                 Spacer()
+                speedButton
             }
         }
         .buttonStyle(.plain)
@@ -413,14 +528,42 @@ struct ConversationDetailView: View {
         // talked over each other. Fixed by giving the label just the NAME
         // and the state its own `.accessibilityValue` -- the standard,
         // unambiguous pattern every native iOS Settings toggle uses.
-        .accessibilityLabel("Read aloud")
+        .accessibilityLabel("Voice messages")
         .accessibilityValue(readAloudEnabled ? "On" : "Off")
         .accessibilityHint(
             readAloudEnabled
-                ? "Turns off automatic spoken replies."
-                : "Turns on automatic spoken replies. Each new reply from \(conversationTitleForCopy) will be read aloud in its own voice."
+                ? "Turns off automatic voice messages."
+                : "Turns on automatic voice messages. Each new reply from \(conversationTitleForCopy) will play as a voice message in its own voice."
         )
         .accessibilityAddTraits(.isToggle)
+    }
+
+    /// Playback-speed control, sitting beside the voice-messages toggle
+    /// because that is where someone already is when they decide a voice is
+    /// too slow. Its own sibling accessibility element, never combined into
+    /// the toggle (same house rule as everywhere else here), and it reads
+    /// its current value rather than burying it in the label -- the exact
+    /// fix session 11 made to the toggle itself.
+    ///
+    /// Applied client-side via `AVAudioPlayer.rate`, NOT by asking the TTS
+    /// service to synthesize faster: re-synthesizing would re-bill every
+    /// clip and would change the voice's actual prosody rather than just
+    /// how fast it plays.
+    private var speedButton: some View {
+        Button {
+            showingSpeedPicker = true
+        } label: {
+            Text(VoiceService.rateLabel(voiceService.playbackRate))
+                .font(.footnote.monospacedDigit())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary.opacity(0.5)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Voice message speed")
+        .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
+        .accessibilityHint("Double-tap to change how fast voice messages play.")
     }
 
     // MARK: - Composer (Phase 3)
@@ -827,6 +970,17 @@ private struct MessageRow: View {
     let onReadAloud: () -> Void
     let onEdit: () -> Void
     let onRegenerate: () -> Void
+    /// Session 14 (Kade: "needs to be a download voice clip button, needs to
+    /// be called a voice message in the first place considering that one
+    /// button is called send voice message"). She's right, and the fix is
+    /// naming, not just a new button: the app called the SAME artefact two
+    /// different things depending on direction -- "Send voice message" going
+    /// out, "Read Aloud" coming back. One noun now, both directions: a voice
+    /// message. Everything user-visible in this file follows that.
+    let onSaveVoiceMessage: () -> Void
+    let onShare: () -> Void
+    let onDelete: (() -> Void)?
+    let isPreparingVoiceMessage: Bool
 
     private var timeLabel: String {
         KadeDateFormatting.time(from: message.createdAt) ?? ""
@@ -883,7 +1037,21 @@ private struct MessageRow: View {
             Button {
                 onReadAloud()
             } label: {
-                Label("Read Aloud", systemImage: "speaker.wave.2")
+                Label("Play as Voice Message", systemImage: "speaker.wave.2")
+            }
+            Button {
+                onSaveVoiceMessage()
+            } label: {
+                Label(
+                    isPreparingVoiceMessage ? "Preparing Voice Message" : "Save Voice Message",
+                    systemImage: "square.and.arrow.down"
+                )
+            }
+            .disabled(isPreparingVoiceMessage)
+            Button {
+                onShare()
+            } label: {
+                Label("Share Text", systemImage: "square.and.arrow.up")
             }
             if canEdit {
                 Button {
@@ -897,6 +1065,13 @@ private struct MessageRow: View {
                     onRegenerate()
                 } label: {
                     Label("Regenerate Reply", systemImage: "arrow.clockwise")
+                }
+            }
+            if let onDelete {
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete Message", systemImage: "trash")
                 }
             }
         } label: {
@@ -915,9 +1090,10 @@ private struct MessageRow: View {
     /// only ever appear on the single most recent turn (see
     /// `ConversationDetailView`'s "Message actions" doc comment).
     private var actionsHint: String {
-        var options = ["copy the text", "read it aloud"]
+        var options = ["copy the text", "play it as a voice message", "save the voice message", "share the text"]
         if canEdit { options.append("edit and resend it") }
         if canRegenerate { options.append("regenerate this reply") }
+        if onDelete != nil { options.append("delete it") }
         return "Shows options to \(naturalJoin(options))."
     }
 
@@ -927,4 +1103,51 @@ private struct MessageRow: View {
         if items.count == 2 { return "\(items[0]) or \(last)" }
         return items.dropLast().joined(separator: ", ") + ", or \(last)"
     }
+}
+
+/// One thing to hand to the system share sheet — either the plain text of a
+/// message ("Share Text") or a prepared audio file ("Save Voice Message").
+///
+/// Session 14. Kade asked for "a download voice clip button"; the system
+/// share sheet IS the download button on iOS — "Save to Files" lives inside
+/// it, alongside AirDrop, Messages, Mail and everything else she might
+/// actually want to do with a clip. Building a bespoke download flow on top
+/// would be less capable AND less familiar to VoiceOver, which already
+/// knows how to navigate this sheet.
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let text: String?
+    let fileURL: URL?
+
+    init(text: String) {
+        self.text = text
+        self.fileURL = nil
+    }
+
+    init(fileURL: URL) {
+        self.text = nil
+        self.fileURL = fileURL
+    }
+
+    var activityItems: [Any] {
+        if let fileURL { return [fileURL] }
+        if let text { return [text] }
+        return []
+    }
+}
+
+/// Minimal bridge to `UIActivityViewController`. SwiftUI's own `ShareLink`
+/// would be tidier, but it needs its payload to exist at the moment the
+/// button is built — and a voice message doesn't exist until it has been
+/// synthesized, which is an async round-trip that happens only after the
+/// user asks for it. Presenting the sheet from prepared state is the
+/// correct shape for that.
+struct ShareSheet: UIViewControllerRepresentable {
+    let item: ShareItem
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: item.activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

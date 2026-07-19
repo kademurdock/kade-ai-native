@@ -11,21 +11,42 @@ struct CallView: View {
     let agentId: String?
     let agentName: String
     let spotterDirect: Bool
+    /// Post-call handoff (Kade, session 14: "It doesn't drop you into your
+    /// current voice conversation via text after the call. I'd like you to
+    /// improve that if you can"). The presenter decides what "open it"
+    /// means for where it sits in the navigation stack; this screen's only
+    /// job is to resolve WHICH conversation and hand it over on the way out.
+    var onOpenTranscript: ((KadeConversation) -> Void)?
 
     @StateObject private var callService: StreamingCallService
     @StateObject private var camera = CameraCaptureController()
+    @EnvironmentObject private var conversationsService: ConversationsService
     @Environment(\.dismiss) private var dismiss
 
     @State private var startError: String?
     @State private var didAnnounceConnected = false
+    /// True while the call is over and the transcript conversation is being
+    /// resolved. Shown as a real, readable step rather than a silent pause:
+    /// the server mints the transcript asynchronously after the socket
+    /// closes, so there IS a genuine wait here and pretending otherwise
+    /// would just look like a frozen screen.
+    @State private var wrappingUp = false
+    @State private var wrapUpTask: Task<Void, Never>?
 
     private enum A11yFocus: Hashable { case status, error }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
 
-    init(agentId: String?, agentName: String, apiClient: KadeAPIClient, spotterDirect: Bool = false) {
+    init(
+        agentId: String?,
+        agentName: String,
+        apiClient: KadeAPIClient,
+        spotterDirect: Bool = false,
+        onOpenTranscript: ((KadeConversation) -> Void)? = nil
+    ) {
         self.agentId = agentId
         self.agentName = agentName
         self.spotterDirect = spotterDirect
+        self.onOpenTranscript = onOpenTranscript
         _callService = StateObject(wrappedValue: StreamingCallService(apiClient: apiClient))
     }
 
@@ -38,6 +59,9 @@ struct CallView: View {
                     cameraPreview
                 }
                 Spacer(minLength: 0)
+                if wrappingUp {
+                    wrapUpPanel
+                }
                 audioCheck
                 cameraButton
                 spotterButton
@@ -49,6 +73,7 @@ struct CallView: View {
         }
         .task { await beginCall() }
         .onDisappear {
+            wrapUpTask?.cancel()
             callService.stop()
             camera.stop()
         }
@@ -318,16 +343,78 @@ struct CallView: View {
 
     private func beginCall() async {
         do {
-            try await callService.start(agentId: agentId, spotterDirect: spotterDirect)
+            try await callService.start(
+                agentId: agentId, displayName: agentName, spotterDirect: spotterDirect
+            )
         } catch {
             startError = (error as? LocalizedError)?.errorDescription ?? "Something went wrong starting the call."
         }
     }
 
+    /// Hang up, then WAIT for the transcript before leaving, so she lands in
+    /// the text version of the call she just had instead of back where she
+    /// started with nothing to show for it.
+    ///
+    /// Sequenced deliberately: `stop()` sends `bye` and closes the socket,
+    /// and the bridge only posts the transcript to the fork on socket CLOSE
+    /// -- so there is nothing to look for until after this point. If nothing
+    /// turns up within the polling window (an empty call logs no transcript
+    /// at all, by design, and the mint is allowed to fail), it dismisses
+    /// exactly as it always did. The handoff is a bonus, never a gate.
     private func hangUp() {
         callService.stop()
         camera.stop()
-        dismiss()
+        guard onOpenTranscript != nil else {
+            dismiss()
+            return
+        }
+        wrappingUp = true
+        a11yFocus = .status
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Call ended. Getting the written version of your call."
+        )
+        let startedAt = callService.startedAt
+        wrapUpTask = Task {
+            let convo = await conversationsService.awaitCallConversation(startedAfter: startedAt)
+            guard !Task.isCancelled else { return }
+            wrappingUp = false
+            if let convo {
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "Opening your call as a conversation."
+                )
+                onOpenTranscript?(convo)
+            }
+            dismiss()
+        }
+    }
+
+    /// Skippable on purpose. The wait is short but it is a wait, and making
+    /// someone sit through a server-side step they did not ask for is
+    /// exactly the kind of thing that turns a nice touch into an annoyance.
+    private var wrapUpPanel: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Writing up your call")
+                    .font(.subheadline.bold())
+                Text("It'll open as a conversation you can read and carry on.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Skip") {
+                wrapUpTask?.cancel()
+                wrappingUp = false
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Closes the call screen without waiting for the written version.")
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
     }
 }
 

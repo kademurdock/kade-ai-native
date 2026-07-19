@@ -41,6 +41,55 @@ final class VoiceService: NSObject, ObservableObject {
     private var speakQueue: [(text: String, agentId: String?, agentName: String?)] = []
     private var isPumping = false
 
+    /// Playback rate for spoken replies. 1.0 is the voice's own natural
+    /// pace; the picker offers 0.75x through 2x. Applied via
+    /// `AVAudioPlayer.rate` (which needs `enableRate` set BEFORE `play()`),
+    /// not by asking the TTS service for a different speed -- that would
+    /// re-synthesize and re-bill every clip, and would change the voice's
+    /// prosody rather than just how fast it plays back. Persisted in
+    /// UserDefaults: this is exactly the lightweight, non-sensitive
+    /// preference that belongs there rather than in the Keychain.
+    @Published var playbackRate: Float = VoiceService.loadPlaybackRate() {
+        didSet {
+            UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey)
+            // Applies mid-clip, so a rate change while a long reply is
+            // playing takes effect immediately instead of at the next one.
+            currentPlayer?.rate = playbackRate
+        }
+    }
+
+    private static let playbackRateKey = "kade.voiceMessage.playbackRate"
+
+    /// The speeds offered in the picker. Deliberately a short, opinionated
+    /// list rather than a slider: a slider is fiddly with VoiceOver and
+    /// nobody actually wants 1.37x.
+    static let availableRates: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+
+    /// Compact form for the on-screen chip ("1x", "1.5x").
+    nonisolated static func rateLabel(_ rate: Float) -> String {
+        // Explicit Double conversion: String(format:) takes CVarArg and a
+        // Float promoting through varargs is exactly the sort of thing that
+        // is "probably fine" rather than known-correct, which is not a trade
+        // worth making with no compiler here.
+        rate == rate.rounded()
+            ? String(format: "%.0fx", Double(rate))
+            : String(format: "%.2gx", Double(rate))
+    }
+
+    /// Spoken form. "Normal speed" rather than "1x" for the default,
+    /// because that is the useful thing to hear when checking where you are.
+    nonisolated static func rateSpokenLabel(_ rate: Float) -> String {
+        if rate == 1.0 { return "Normal speed" }
+        return "\(rateLabel(rate)) speed"
+    }
+
+    private static func loadPlaybackRate() -> Float {
+        let stored = UserDefaults.standard.float(forKey: playbackRateKey)
+        // `float(forKey:)` returns 0 for "never set" -- which is also an
+        // invalid rate, so one check covers both.
+        return (stored >= 0.5 && stored <= 2.0) ? stored : 1.0
+    }
+
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
 
@@ -255,11 +304,47 @@ final class VoiceService: NSObject, ObservableObject {
         await playAudio(data)
     }
 
+    /// FIX (Kade, session 14): "if the auto play is switched on in a text
+    /// conversation, it switches to ear speaker instead of main."
+    ///
+    /// Root cause: this playback path never set an audio session category at
+    /// all, so it inherited whatever was left behind by the last thing that
+    /// DID. Two things in this app set one, and both leave `.playAndRecord`
+    /// active afterwards: `startRecording()` above (sending a voice message)
+    /// and `StreamingCallService.startAudioEngine()` (a call, which also
+    /// sets `.voiceChat` MODE). **`.playAndRecord` routes to the built-in
+    /// RECEIVER -- the earpiece -- by default**, and `.voiceChat` mode makes
+    /// that stickier still. So a reply spoken after either of those came out
+    /// of the earpiece, exactly as reported, while a reply spoken on a fresh
+    /// launch came out of the speaker. Same family of bug as build 120's
+    /// silent-call fix, one layer up.
+    ///
+    /// `.playback` is the correct category for this (output only, no mic),
+    /// and it routes to the speaker. `.mixWithOthers` is deliberate and
+    /// carried forward from an earlier fix in the Capacitor app: without it
+    /// this session DUCKS VoiceOver, which for this user is not a cosmetic
+    /// problem -- her screen reader going quiet or quiet-ish under a spoken
+    /// reply is the app fighting itself.
+    ///
+    /// Fail-soft on purpose: if the category can't be set for some reason,
+    /// still play. Wrong-sounding output beats silence.
+    private func prepareOutputSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? session.setActive(true)
+    }
+
     private func playAudio(_ data: Data) async {
+        prepareOutputSession()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             do {
                 let player = try AVAudioPlayer(data: data)
                 player.delegate = self
+                // `enableRate` MUST be set before `play()` -- setting it
+                // afterwards silently does nothing, which is the kind of
+                // thing that looks fine in review and is dead on device.
+                player.enableRate = true
+                player.rate = playbackRate
                 currentPlayer = player
                 playbackContinuation = continuation
                 if !player.play() {
@@ -270,6 +355,73 @@ final class VoiceService: NSObject, ObservableObject {
                 continuation.resume()
             }
         }
+    }
+
+    // MARK: - Voice message files (save / share)
+
+    /// Synthesizes `text` in the right voice and hands back the raw audio
+    /// plus a filename with the CORRECT extension for what actually came
+    /// back. Kade asked for a download button; a downloaded file with the
+    /// wrong extension is a file that won't open, so the container is
+    /// sniffed from the bytes rather than trusted from the response header
+    /// -- this endpoint is already known to claim `audio/mpeg` while
+    /// returning WAV (see this file's header note), so the header is exactly
+    /// the wrong thing to believe here.
+    func voiceMessageFile(text: String, agentId: String?, agentName: String?) async -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let (voice, speed) = await resolveVoice(agentId: agentId, agentName: agentName)
+
+        var fields: [(String, String)] = [("input", trimmed)]
+        if let voice { fields.append(("voice", voice)) }
+        if let speed { fields.append(("speed", String(speed))) }
+
+        let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {
+            return nil
+        }
+
+        let name = Self.suggestedFileName(for: agentName, ext: Self.audioExtension(for: data))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try data.write(to: url)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// Container sniff by magic bytes. Compared through `prefix`/
+    /// `elementsEqual` rather than index subscripting, for the same reason
+    /// as `StreamingCallService.handleBinary`: `Data` indices are not
+    /// guaranteed to start at zero.
+    nonisolated static func audioExtension(for data: Data) -> String {
+        func startsWith(_ bytes: [UInt8]) -> Bool {
+            data.count >= bytes.count && data.prefix(bytes.count).elementsEqual(bytes)
+        }
+        if startsWith([0x52, 0x49, 0x46, 0x46]) { return "wav" }  // "RIFF"
+        if startsWith([0x4F, 0x67, 0x67, 0x53]) { return "ogg" }  // "OggS"
+        if startsWith([0x66, 0x4C, 0x61, 0x43]) { return "flac" } // "fLaC"
+        if startsWith([0x49, 0x44, 0x33]) { return "mp3" }        // "ID3"
+        if startsWith([0xFF, 0xFB]) || startsWith([0xFF, 0xF3]) || startsWith([0xFF, 0xF2]) { return "mp3" }
+        if data.count >= 12, data.dropFirst(4).prefix(4).elementsEqual([0x66, 0x74, 0x79, 0x70]) { return "m4a" } // "ftyp"
+        // Unknown container: WAV is what this endpoint has actually been
+        // observed to return, so it's the least-wrong default.
+        return "wav"
+    }
+
+    /// A filename she can find again by ear in the Files app: who said it
+    /// and when, not a UUID.
+    nonisolated static func suggestedFileName(for agentName: String?, ext: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HHmm"
+        let stamp = formatter.string(from: Date())
+        let who = (agentName ?? "Kade-AI")
+            .components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeWho = who.isEmpty ? "Kade-AI" : who
+        return "Voice message from \(safeWho) \(stamp).\(ext)"
     }
 
     // MARK: - Voice selection

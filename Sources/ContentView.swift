@@ -30,6 +30,7 @@ struct ContentView: View {
     // the voice immediately either way, so which character nominally opened
     // the call is not something the caller ever hears.
     @State private var callingSpotter = false
+    @State private var spotterTranscript: KadeConversation?
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -244,8 +245,13 @@ struct ContentView: View {
                     agentId: nil,
                     agentName: "Your Spotter",
                     apiClient: apiClient,
-                    spotterDirect: true
+                    spotterDirect: true,
+                    onOpenTranscript: { convo in spotterTranscript = convo }
                 )
+            }
+            // Post-call handoff for a Spotter call started from here.
+            .navigationDestination(item: $spotterTranscript) { convo in
+                ConversationDetailView(conversation: convo)
             }
 
             NavigationLink {

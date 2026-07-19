@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import MediaPlayer
 
 /// Real-time voice (and, once the caller enables Spotter, video) calling —
 /// the native port of the fork's `useStreamingCall.ts` + `video-live.js`
@@ -120,6 +121,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     private var clipsScheduled = 0
     private var clipFailures = 0
     private var routeObserver: NSObjectProtocol?
+    /// When this call started, used by the post-call handoff to make sure it
+    /// opens THIS call's transcript rather than a stale one.
+    private(set) var startedAt: Date = Date()
+    private var remoteCommandsWired = false
 
     /// True once `start()` has fully wired the engine/socket and the call
     /// screen should be showing live controls rather than a spinner.
@@ -165,12 +170,14 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// mirrors `useStreamingCall.ts`'s own `start()` contract exactly
     /// (ticket fetch fails -> throw; mic fails -> throw; socket fails ->
     /// throw), including tearing everything back down on any failure.
-    func start(agentId: String?, spotterDirect: Bool) async throws {
+    func start(agentId: String?, displayName: String, spotterDirect: Bool) async throws {
         guard webSocketTask == nil else { return }
+        agentName = displayName
         status = .connecting
         errorMessage = nil
         byeSent = false
         stopping = false
+        startedAt = Date()
 
         let (ticket, wsUrl) = try await fetchTicket(agentId: agentId)
 
@@ -371,6 +378,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             if let name = msg.spotterName { spotterName = name }
             liveMinutesLeft = msg.minutesLeft
             if let m = msg.message { liveNotice = m }
+            if engineRunning { updateNowPlayingInfo() }
         case "live-notice":
             liveNotice = msg.text
         case "video-notice":
@@ -512,6 +520,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         playerNode.play()
         engineRunning = true
         updateAudioDiagnostic()
+        startNowPlaying()
         // AUDIBLE SELF-TEST. A short, soft two-note tone pushed through the
         // exact same `playerNode` -> mixer -> output path the agent's voice
         // uses. This is the single most valuable thing that can be added
@@ -765,12 +774,94 @@ final class StreamingCallService: NSObject, ObservableObject {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
         }
+        stopNowPlaying()
         guard engineRunning else { return }
         engineRunning = false
         audioEngine.inputNode.removeTap(onBus: 0)
         playerNode.stop()
         audioEngine.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // FIX (session 14, same family as the silent-call bug one layer up):
+        // leaving the session in `.playAndRecord` + `.voiceChat` after a call
+        // is what made spoken replies in a TEXT conversation come out of the
+        // EARPIECE afterwards -- `.playAndRecord` routes to the receiver by
+        // default and nothing else in the app was resetting it. `VoiceService`
+        // now sets its own category before every clip (the real fix), but
+        // handing the session back in a sane state when a call ends is the
+        // right thing to do regardless, and covers anything else that plays
+        // audio without asking first.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+    }
+
+    // MARK: - Lock screen controls
+
+    /// Puts the call on the lock screen and Control Centre as a Now Playing
+    /// item, with working controls. Kade asked for lock-screen call
+    /// controls; worth being precise about what this is and isn't, because
+    /// the distinction matters if someone extends it later:
+    ///
+    /// This is the **Now Playing / remote-command** route, not a Live
+    /// Activity and not CallKit. A Live Activity needs a separate widget
+    /// extension target (a real change to `project.yml` and the signing
+    /// setup), and CallKit would make this look like a system phone call --
+    /// which brings its own interruption behaviour and an "in call" status
+    /// bar, and would be a much bigger, riskier change than anything shipped
+    /// here so far. Now Playing gets the practical win -- see who you are
+    /// talking to and hang up without unlocking -- for a fraction of the
+    /// surface area.
+    ///
+    /// Pause/play is deliberately mapped to BARGE-IN rather than to
+    /// pausing audio: there is no such thing as pausing a live call, and the
+    /// nearest honest meaning of "the big button" mid-call is "stop talking
+    /// and listen to me." Stop hangs up.
+    private func startNowPlaying() {
+        updateNowPlayingInfo()
+        guard !remoteCommandsWired else { return }
+        remoteCommandsWired = true
+        let center = MPRemoteCommandCenter.shared()
+        center.togglePlayPauseCommand.isEnabled = true
+        _ = center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.barge() }
+            return .success
+        }
+        center.pauseCommand.isEnabled = true
+        _ = center.pauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.barge() }
+            return .success
+        }
+        center.stopCommand.isEnabled = true
+        _ = center.stopCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.stop() }
+            return .success
+        }
+        // Skip controls are meaningless on a live call and an enabled-but-
+        // dead control is worse than an absent one, especially by touch.
+        center.nextTrackCommand.isEnabled = false
+        center.previousTrackCommand.isEnabled = false
+        center.playCommand.isEnabled = false
+    }
+
+    /// Keeps the lock screen honest about who is actually talking -- once
+    /// Spotter takes over, the lock screen must say so too, for the same
+    /// reason the call screen does: there is no other way to know.
+    private func updateNowPlayingInfo() {
+        let who = liveOn ? (spotterName ?? "Your Spotter") : (agentName.isEmpty ? "Kade-AI" : agentName)
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: "On a call with \(who)",
+            MPMediaItemPropertyArtist: "Kade-AI",
+            MPNowPlayingInfoPropertyIsLiveStream: true,
+            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+        ]
+    }
+
+    private func stopNowPlaying() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        guard remoteCommandsWired else { return }
+        remoteCommandsWired = false
+        let center = MPRemoteCommandCenter.shared()
+        center.togglePlayPauseCommand.removeTarget(nil)
+        center.pauseCommand.removeTarget(nil)
+        center.stopCommand.removeTarget(nil)
     }
 }
 

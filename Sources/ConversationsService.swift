@@ -134,6 +134,23 @@ struct ContentBlock: Codable {
     }
 }
 
+/// One row from `GET /api/kade/calls`. Only the fields the post-call
+/// handoff actually needs are decoded; the route returns more (preview,
+/// duration, turn count) and this is deliberately lenient about the rest so
+/// a future server-side addition can never fail the decode.
+struct KadeCallSummary: Decodable {
+    let id: String
+    let agentName: String?
+    let startedAt: String
+    /// The chat conversation this call was minted into, or nil while that
+    /// mint is still in flight. Exposed on the fork as of session 14.
+    let mergedConversationId: String?
+}
+
+struct KadeCallsPage: Decodable {
+    let calls: [KadeCallSummary]
+}
+
 enum ConversationsError: Error {
     case server(Int)
 }
@@ -314,6 +331,100 @@ final class ConversationsService: ObservableObject {
             createdAt: old.createdAt,
             updatedAt: old.updatedAt
         )
+    }
+
+    /// DELETE /api/messages/:conversationId/:messageId -- answers **204**
+    /// (no content), read straight off the fork's `api/server/routes/
+    /// messages.js`, not assumed. Session 14, part of the widened message
+    /// actions Kade asked for.
+    ///
+    /// Known and deliberate limitation, worth stating rather than hiding:
+    /// this deletes ONE message, and because this client renders the flat
+    /// chronological line rather than reconstructing the branch tree (the
+    /// standing simplification documented on `fetchMessages`), deleting a
+    /// message in the MIDDLE of a thread leaves its reply behind, orphaned
+    /// and answering a question that is no longer there. The UI therefore
+    /// only offers Delete on the last message or two -- see
+    /// `ConversationDetailView.canDelete(_:)`.
+    @discardableResult
+    func deleteMessage(conversationId: String, messageId: String) async -> Bool {
+        let req = client.request(
+            path: "api/messages/\(conversationId)/\(messageId)",
+            method: "DELETE",
+            authorized: true
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...204).contains(http.statusCode) else {
+                actionMessage = "Couldn't delete that message. Try again."
+                return false
+            }
+            actionMessage = "Message deleted."
+            return true
+        } catch {
+            actionMessage = "Couldn't delete that message. Try again."
+            return false
+        }
+    }
+
+    /// Fetches one conversation by id. Used by the post-call handoff to turn
+    /// the transcript's `mergedConversationId` into a real
+    /// `KadeConversation` it can navigate to.
+    func fetchConversation(id: String) async -> KadeConversation? {
+        let req = client.request(path: "api/convos/\(id)", authorized: true)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200 else { return nil }
+        return try? decoder.decode(KadeConversation.self, from: data)
+    }
+
+    /// Polls the calls history for the conversation the just-finished call
+    /// was minted into. Kade, session 14: "It doesn't drop you into your
+    /// current voice conversation via text after the call."
+    ///
+    /// The whole flow, so the next person doesn't have to re-derive it: on
+    /// hangup the bridge posts the transcript to `/api/kade/calls/ingest`,
+    /// which asynchronously and fail-soft mints it into a normal chat
+    /// conversation and stamps `mergedConversationId` back onto the
+    /// transcript. That id is exposed on `GET /api/kade/calls` as of this
+    /// session (it existed server-side all along but was never returned).
+    /// Because the mint is in flight when the socket closes, the first read
+    /// legitimately returns null -- so this POLLS rather than treating one
+    /// null as "there isn't one," and gives up quietly rather than making
+    /// the user wait forever on a server-side step that is allowed to fail.
+    ///
+    /// `startedAfter` guards against opening a STALE call's conversation if
+    /// this one's transcript never lands (an empty call logs no transcript
+    /// at all -- `logCallTranscript` returns early with zero turns).
+    func awaitCallConversation(startedAfter: Date, attempts: Int = 8) async -> KadeConversation? {
+        for attempt in 0..<attempts {
+            // Back off gently: the mint usually lands within a couple of
+            // seconds, and `KadeAPIClient`'s own pacing gate already spaces
+            // these out, so this is deliberately unhurried.
+            try? await Task.sleep(nanoseconds: UInt64((attempt == 0 ? 1.5 : 2.5) * 1_000_000_000))
+            if Task.isCancelled { return nil }
+            let req = client.request(
+                path: "api/kade/calls",
+                authorized: true,
+                queryItems: [URLQueryItem(name: "limit", value: "3")]
+            )
+            guard let (data, http) = try? await client.send(req), http.statusCode == 200 else { continue }
+            guard let page = try? decoder.decode(KadeCallsPage.self, from: data) else { continue }
+            let fresh = page.calls.first {
+                guard let merged = $0.mergedConversationId, !merged.isEmpty else { return false }
+                guard let started = KadeDateFormatting.date(from: $0.startedAt) else { return false }
+                // 90s of slack: `startedAt` is stamped when the CALL began,
+                // which is necessarily before the moment we started waiting.
+                return started > startedAfter.addingTimeInterval(-90 * 60)
+            }
+            if let merged = fresh?.mergedConversationId,
+               let convo = await fetchConversation(id: merged) {
+                // The list this app is holding predates the new conversation,
+                // so refresh it too -- otherwise going "back" from the
+                // transcript lands on a list that doesn't contain it.
+                await loadFirstPage()
+                return convo
+            }
+        }
+        return nil
     }
 
     private func fetchPage(cursor: String?) async throws -> ConversationsPage {

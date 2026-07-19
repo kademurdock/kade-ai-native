@@ -40,6 +40,15 @@ targets:
         # above. Only requested the moment you actually tap "Bring in your
         # Spotter" (CameraCaptureController.start()), never on a plain voice call.
         NSCameraUsageDescription: "Kade-AI uses your camera so your Spotter can see what's around you and describe it during a call."
+        # Session 14 (lock-screen call controls). Two things need this:
+        # a call must keep its audio engine running when the screen locks or
+        # the app goes to the background -- otherwise hanging up from the
+        # lock screen is moot because the call has already died -- and the
+        # Now Playing item that carries those controls is only honoured for
+        # an app that actually declares background audio. Scoped to `audio`
+        # only; no location, no VoIP (this is deliberately NOT CallKit, see
+        # StreamingCallService.startNowPlaying's doc comment).
+        UIBackgroundModes: [audio]
     entitlements:
       path: KadeAI.entitlements
       properties:
