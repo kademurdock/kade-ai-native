@@ -52,14 +52,25 @@ import AVFoundation
 /// specific things most likely to need a real-device tuning pass (matching
 /// `video-live.js`'s own "first activation is expected to need a tuning
 /// session" honesty about the server side): whether the mic tap's actual
-/// delivered buffer size behaves as expected across real hardware, whether
-/// `.voiceChat` audio session mode's built-in echo cancellation is enough
-/// to keep the agent's own played-back voice out of what gets sent back
-/// (a real duplex-audio problem, not a bug in the sense of "wrong code" --
-/// the phone/web engines this mirrors solve it with `echoCancellation:true`
-/// on `getUserMedia`, which has no direct one-line iOS equivalent; `.voiceChat`
-/// mode is the platform's documented answer), and general first-call latency
-/// feel. None of this can be confirmed until someone is actually on a call.
+/// delivered buffer size behaves as expected across real hardware, and
+/// general first-call latency feel. None of this can be confirmed until
+/// someone is actually on a call.
+///
+/// CONFIRMED LIVE (first real call, build 116): the predicted echo risk
+/// above was real -- the caller heard the agent fine and the agent
+/// understood the caller fine, but the agent kept cutting herself off
+/// mid-sentence, because she was hearing her OWN played-back voice loop
+/// back through the mic and tripping the server's barge-in detection.
+/// Root cause: `.voiceChat` AVAudioSession MODE alone (the original code
+/// here) configures session-level hints but does NOT turn on real acoustic
+/// echo cancellation for a custom `AVAudioEngine` graph -- that needs the
+/// engine's Voice-Processing I/O unit explicitly enabled via
+/// `inputNode.setVoiceProcessingEnabled(true)`, which `startAudioEngine()`
+/// now does. Not yet re-confirmed live (this fix itself is unverified the
+/// same "no device" way everything here is) -- if the cutting-herself-off
+/// behavior is EVER reported again after this fix, this specific API is
+/// the first thing to re-check, not the barge-in logic itself (the server
+/// behaved completely correctly given what it was actually hearing).
 @MainActor
 final class StreamingCallService: NSObject, ObservableObject {
 
@@ -352,6 +363,33 @@ final class StreamingCallService: NSObject, ObservableObject {
         try session.setActive(true)
 
         let input = audioEngine.inputNode
+        // FIX (live-tested, first real call): the caller heard the agent
+        // hearing HERSELF -- the agent's own played-back voice looping back
+        // through the mic and tripping the server's barge-in detection,
+        // cutting her off mid-sentence every time. The caller heard the
+        // agent fine and the agent understood the caller fine, so this was
+        // never the WebSocket/mic-send path -- it was acoustic echo, the
+        // exact risk flagged (but not yet guarded against) in this file's
+        // original top comment. `.voiceChat` MODE alone configures session-
+        // level hints; it does NOT turn on real acoustic echo cancellation
+        // for a custom AVAudioEngine graph like this one. The actual fix is
+        // enabling the engine's Voice-Processing I/O unit directly on the
+        // input node -- this cancels whatever the engine is CURRENTLY
+        // playing (the agent's own clips, scheduled on `playerNode` into
+        // this same engine's mixer) out of what the input node captures,
+        // which is exactly the loop that was tripping the server's VAD.
+        // Enabling it can change the node's own delivered format, so the
+        // format is read AFTER enabling, not before -- reading it first
+        // (the original bug) risked building the mic converter against a
+        // format that was about to change out from under it.
+        do {
+            try input.setVoiceProcessingEnabled(true)
+        } catch {
+            // Fail-soft: a handful of audio route configurations don't
+            // support voice processing. The call still works without it --
+            // just back to the original echo risk -- never worth failing
+            // the whole call over.
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0 else {
             throw CallError.message("No microphone input available.")
