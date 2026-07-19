@@ -196,7 +196,16 @@ struct ContentView: View {
 
     private func signedInSection(_ user: KadeUser) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Signed in as \(user.displayName)")
+            // Session 11 (Kade: "it also says signed in as kade murdock
+            // twice"): this used to repeat "Signed in as {name}" verbatim,
+            // duplicating the Status line right above it -- which already
+            // carries that exact phrase on purpose (a11yFocus jumps there
+            // on sign-in specifically so it's the FIRST thing heard). Kept
+            // a real heading here (a rotor landmark, the only one on this
+            // screen once signed in) but reworded it so it stops repeating
+            // the Status line word for word; the email is still useful
+            // detail Status doesn't carry.
+            Text("Your account")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
             Text(user.email)

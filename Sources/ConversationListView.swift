@@ -14,6 +14,17 @@ struct ConversationListView: View {
     // NavigationLink(value:) -- see the row Button's doc comment in `list`
     // for why.
     @State private var selectedConversation: KadeConversation?
+    // Session 11, cont. (Kade, right after confirming rows activate now:
+    // "it puts you on a random conversation when you open them, like your
+    // focus"): without this, VoiceOver's initial focus when this screen
+    // appears -- and its focus when returning here after opening a
+    // conversation -- is whatever the system happens to land on, not
+    // anything this app chose. Explicitly steering it (same
+    // @AccessibilityFocusState pattern ContentView already uses for its
+    // sign-in flow) makes it behave like Mail/Messages: land on the first
+    // row on a fresh open, land back on the row you just came from when you
+    // return.
+    @AccessibilityFocusState private var focusedConversationID: String?
 
     var body: some View {
         Group {
@@ -34,6 +45,19 @@ struct ConversationListView: View {
             if conversationsService.conversations.isEmpty {
                 await conversationsService.loadFirstPage()
             }
+            // Runs every time this screen freshly appears (a new push of
+            // this view, per NavigationLink), whether or not the fetch
+            // above actually ran -- so re-opening the list a second time in
+            // the same session still gets a predictable starting focus.
+            focusedConversationID = conversationsService.conversations.first?.id
+        }
+        .onChange(of: selectedConversation) { oldValue, newValue in
+            // Returned from a conversation (was set, now nil going back to
+            // this list): restore focus to the row they came from instead
+            // of leaving it to the system.
+            if newValue == nil, let opened = oldValue {
+                focusedConversationID = opened.id
+            }
         }
     }
 
@@ -46,6 +70,7 @@ struct ConversationListView: View {
                     row(for: convo)
                 }
                 .buttonStyle(.plain)
+                .accessibilityFocused($focusedConversationID, equals: convo.id)
                 // Session 11 (Kade's first real report on this screen,
                 // build 110, after signing in successfully): rows could be
                 // VoiceOver-SELECTED (read aloud) but not ACTIVATED (double-
