@@ -12,6 +12,7 @@ import SafariServices
 ///   "Signed in as …" without hunting for it.
 struct ContentView: View {
     @EnvironmentObject private var auth: AuthService
+    @EnvironmentObject private var conversationsService: ConversationsService
     @State private var showingWeb = false
     @State private var email = ""
     @State private var password = ""
@@ -147,6 +148,15 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            NavigationLink {
+                ConversationListView()
+            } label: {
+                Label("Your conversations", systemImage: "bubble.left.and.bubble.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityHint("Opens your conversation list.")
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -199,6 +209,7 @@ struct ContentView: View {
             // Cold launch with no saved session, OR just tapped "Sign out" —
             // either way land VoiceOver straight on the email field instead
             // of leaving focus dangling on a control that just disappeared.
+            conversationsService.reset()   // never show the last user's list to the next signed-in session
             a11yFocus = .email
         default:
             break
@@ -215,4 +226,9 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
 }
 
-#Preview { ContentView().environmentObject(AuthService()) }
+#Preview {
+    let client = KadeAPIClient()
+    return ContentView()
+        .environmentObject(AuthService(client: client))
+        .environmentObject(ConversationsService(client: client))
+}

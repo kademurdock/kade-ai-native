@@ -27,15 +27,14 @@ enum AuthState: Equatable {
     case failed(String)     // human-readable, VoiceOver-announced
 }
 
-/// Talks to kademurdock.com (a LibreChat fork) for auth only.
+/// Talks to kademurdock.com (a LibreChat fork) for auth only. All networking
+/// goes through the shared `KadeAPIClient` so auth calls and data calls
+/// (conversations, messages, …) share one pacing clock — see KadeAPIClient's
+/// doc comment for why that's not optional.
 ///
-/// Design notes:
-/// - Sends a real iPhone-Safari User-Agent and paces requests, because the
-///   site has an anti-abuse system that temporarily bans callers who hit it
-///   fast with a non-browser UA (documented in the project creds file).
 /// - The access token + cached user are persisted in the Keychain. The refresh
 ///   token is an httpOnly cookie the server sets; URLSession's shared cookie
-///   storage persists it across launches, so we never touch it by hand.
+///   storage (owned by KadeAPIClient) persists it across launches.
 /// - Fail-soft on launch: if we have a cached user we show "signed in"
 ///   immediately and refresh the token in the background; a network hiccup
 ///   never logs the user out, only a real 401 does.
@@ -43,27 +42,14 @@ enum AuthState: Equatable {
 final class AuthService: ObservableObject {
     @Published private(set) var state: AuthState = .loading
 
-    private let baseURL = URL(string: "https://kademurdock.com")!
-    private let session: URLSession
+    private let client: KadeAPIClient
     private let decoder = JSONDecoder()
 
-    // Anti-abuse pacing: never fire two auth requests closer than this.
-    private let minGap: TimeInterval = 1.5
-    private var lastRequestAt: Date = .distantPast
-
-    private static let browserUA =
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) " +
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
-
-    init() {
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = HTTPCookieStorage.shared   // persists the refresh cookie
-        config.httpCookieAcceptPolicy = .always
-        config.httpAdditionalHeaders = ["User-Agent": AuthService.browserUA]
-        self.session = URLSession(configuration: config)
+    init(client: KadeAPIClient) {
+        self.client = client
     }
 
-    /// The current access token, for later phases (conversations, streaming).
+    /// The current access token, for other services (conversations, streaming).
     var accessToken: String? { Keychain.string(for: .accessToken) }
 
     // MARK: - Lifecycle
@@ -101,27 +87,20 @@ final class AuthService: ObservableObject {
     func signOut() {
         Keychain.remove(.accessToken)
         Keychain.remove(.user)
-        // Clear the site's cookies so the next sign-in is a clean session.
-        if let cookies = session.configuration.httpCookieStorage?.cookies(for: baseURL) {
-            for c in cookies { session.configuration.httpCookieStorage?.deleteCookie(c) }
-        }
+        client.clearCookies()
         state = .signedOut
     }
 
     // MARK: - Network
 
     private func postLogin(email: String, password: String) async throws -> KadeUser {
-        var req = URLRequest(url: baseURL.appendingPathComponent("api/auth/login"))
-        req.httpMethod = "POST"
+        var req = client.request(path: "api/auth/login", method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
         req.httpBody = try JSONSerialization.data(
             withJSONObject: ["email": email, "password": password]
         )
-        let (data, response) = try await send(req)
-        let http = response as? HTTPURLResponse
-        switch http?.statusCode {
+        let (data, http) = try await client.send(req)
+        switch http.statusCode {
         case 200:
             let decoded = try decoder.decode(LoginResponse.self, from: data)
             persist(token: decoded.token, user: decoded.user)
@@ -131,19 +110,15 @@ final class AuthService: ObservableObject {
         case 429:
             throw AuthError.rateLimited
         default:
-            throw AuthError.server(http?.statusCode ?? -1)
+            throw AuthError.server(http.statusCode)
         }
     }
 
     /// Best-effort token refresh via the httpOnly refresh cookie. Never throws
     /// up to the UI — a failure here only signs the user out on a real 401.
     private func silentRefresh() async {
-        var req = URLRequest(url: baseURL.appendingPathComponent("api/auth/refresh"))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
-        guard let (data, response) = try? await send(req),
-              let http = response as? HTTPURLResponse else { return }  // offline: stay signed in
+        let req = client.request(path: "api/auth/refresh", method: "POST")
+        guard let (data, http) = try? await client.send(req) else { return }  // offline: stay signed in
         if http.statusCode == 200,
            let decoded = try? decoder.decode(LoginResponse.self, from: data) {
             persist(token: decoded.token, user: decoded.user)
@@ -152,16 +127,6 @@ final class AuthService: ObservableObject {
             signOut()  // the refresh token is truly gone/expired
         }
         // any other status: leave the optimistic signed-in state alone
-    }
-
-    /// One choke point for pacing + UA (UA is also set on the session).
-    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        let since = Date().timeIntervalSince(lastRequestAt)
-        if since < minGap {
-            try? await Task.sleep(nanoseconds: UInt64((minGap - since) * 1_000_000_000))
-        }
-        lastRequestAt = Date()
-        return try await session.data(for: request)
     }
 
     private func persist(token: String, user: KadeUser) {
