@@ -12,6 +12,7 @@ struct ConversationDetailView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
     @EnvironmentObject private var agentsService: AgentsService
+    @EnvironmentObject private var voiceService: VoiceService
 
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
@@ -35,6 +36,15 @@ struct ConversationDetailView: View {
     @State private var selectedAgentId: String?
     @State private var showingAgentPicker = false
 
+    /// Phase 5: when on, each new assistant reply is spoken aloud
+    /// automatically after it lands (queued through `VoiceService`, same
+    /// read-aloud concept as the web app's Spotter rooms). Off by default,
+    /// same reasoning as the web app's own per-message TTS controls being
+    /// opt-in rather than ambient -- a blind user shouldn't get surprise
+    /// audio the first time they open a conversation.
+    @State private var readAloudEnabled = false
+    @State private var voiceInputError: String?
+
     private enum SendState: Equatable {
         case idle
         case sending
@@ -49,6 +59,8 @@ struct ConversationDetailView: View {
         case message(String)
         case composerError
         case agentButton
+        case composerField
+        case voiceError
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
 
@@ -73,6 +85,7 @@ struct ConversationDetailView: View {
             }
             if !isLoading && loadError == nil {
                 agentSection
+                readAloudToggle
                 composer
             }
         }
@@ -209,6 +222,44 @@ struct ConversationDetailView: View {
         return selectedAgentId == nil ? "No agent selected" : "Current agent"
     }
 
+    // MARK: - Read aloud (Phase 5)
+
+    /// A single toggle button (not a SwiftUI `Toggle`, to match this app's
+    /// existing plain-`Button` accessibility pattern rather than mixing
+    /// control styles) that turns automatic spoken replies on/off for this
+    /// conversation. Turning it off mid-speech stops whatever's currently
+    /// playing and drops anything still queued -- see
+    /// `VoiceService.stopSpeaking()`.
+    private var readAloudToggle: some View {
+        Button {
+            readAloudEnabled.toggle()
+            if !readAloudEnabled {
+                voiceService.stopSpeaking()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                Text(readAloudEnabled ? "Read aloud: On" : "Read aloud: Off")
+                    .font(.footnote)
+                if voiceService.isSpeaking {
+                    ProgressView().scaleEffect(0.7)
+                }
+                Spacer()
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+        .padding(.top, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(readAloudEnabled ? "Read aloud, on" : "Read aloud, off")
+        .accessibilityHint(
+            readAloudEnabled
+                ? "Turns off automatic spoken replies."
+                : "Turns on automatic spoken replies. Each new reply from \(conversation.displayTitle) will be read aloud in its own voice."
+        )
+        .accessibilityAddTraits(.isToggle)
+    }
+
     // MARK: - Composer (Phase 3)
 
     private var isSending: Bool {
@@ -236,25 +287,78 @@ struct ConversationDetailView: View {
                         .font(.footnote.bold())
                 }
             }
+            if let voiceInputError {
+                // Same pattern as the send-failure row above -- the Text
+                // owns its own accessibility element and focus target so
+                // nothing swallows a sibling control's tap action.
+                Text(voiceInputError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityFocused($a11yFocus, equals: .voiceError)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message", text: $draftText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
-                    .disabled(isSending)
+                    .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
                     .accessibilityLabel("Message")
+                    .accessibilityFocused($a11yFocus, equals: .composerField)
+                micButton
                 Button {
                     Task { await send() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title)
                 }
-                .disabled(isSending || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    isSending || voiceService.isRecording || voiceService.isTranscribing
+                        || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
                 .accessibilityLabel(isSending ? "Sending" : "Send message")
                 .accessibilityHint(isSending ? "" : "Sends your message to \(conversation.displayTitle).")
             }
         }
         .padding()
         .background(.bar)
+    }
+
+    /// Phase 5: tap to start recording, tap again to stop -- deliberately
+    /// NOT a press-and-hold push-to-talk gesture. VoiceOver users activate
+    /// controls with a double-tap, and a screen-reader user can't easily
+    /// "hold down" a control the way a sighted user holds a button under
+    /// their finger; a plain tap-to-toggle is the reliable, predictable
+    /// interaction for this audience, matching every other control in this
+    /// app. Recording auto-stops after 60 seconds as a safety net against
+    /// an accidental open-ended recording nobody remembers to stop.
+    private var micButton: some View {
+        Button {
+            Task { await toggleRecording() }
+        } label: {
+            Group {
+                if voiceService.isTranscribing {
+                    ProgressView()
+                } else if voiceService.isRecording {
+                    Image(systemName: "stop.circle.fill")
+                } else {
+                    Image(systemName: "mic.circle.fill")
+                }
+            }
+            .font(.title)
+            .foregroundStyle(voiceService.isRecording ? .red : .accentColor)
+        }
+        .disabled(isSending || voiceService.isTranscribing)
+        .accessibilityLabel(micAccessibilityLabel)
+        .accessibilityHint(
+            voiceService.isRecording
+                ? "Stops recording and fills your message with what you said."
+                : "Records your voice and turns it into a message you can review before sending."
+        )
+    }
+
+    private var micAccessibilityLabel: String {
+        if voiceService.isTranscribing { return "Transcribing your recording" }
+        if voiceService.isRecording { return "Stop recording" }
+        return "Record a voice message"
     }
 
     private func send() async {
@@ -291,6 +395,9 @@ struct ConversationDetailView: View {
             )
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
+            if readAloudEnabled, let reply = messages.last, !reply.isCreatedByUser {
+                voiceService.enqueueSpeak(text: reply.displayText, agentId: selectedAgentId, agentName: agentDisplayLabel)
+            }
         } catch let error as MessageSendingService.SendError {
             if case .streamError(let message) = error {
                 sendState = .failed(message)
@@ -304,6 +411,60 @@ struct ConversationDetailView: View {
             // come back" half failed.
             sendState = .failed("Didn't get a reply. Check your connection and try again.")
             a11yFocus = .composerError
+        }
+    }
+
+    // MARK: - Voice input (Phase 5)
+
+    private func toggleRecording() async {
+        if voiceService.isRecording {
+            await finishRecording()
+            return
+        }
+        voiceInputError = nil
+        let started = await voiceService.startRecording()
+        guard started else {
+            voiceInputError = voiceService.recordError ?? "Couldn't start recording. Try again."
+            a11yFocus = .voiceError
+            return
+        }
+        // Safety net: auto-stop after 60s so an accidental open-ended
+        // recording (VoiceOver focus moving elsewhere before a second tap
+        // lands, a call coming in, etc.) doesn't run forever.
+        // `VoiceService.stopRecording()` guards on `isRecording` itself, so
+        // this can never double-finish a recording the user already
+        // stopped manually -- calling it again here is always safe.
+        Task {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            if voiceService.isRecording {
+                await finishRecording()
+            }
+        }
+    }
+
+    private func finishRecording() async {
+        guard let url = voiceService.stopRecording() else { return }
+        do {
+            let text = try await voiceService.transcribe(fileURL: url)
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                voiceInputError = "Didn't catch that. Try recording again."
+                a11yFocus = .voiceError
+                return
+            }
+            // Lands in the composer for review rather than auto-sending --
+            // STT is not perfect (a live test this session mis-heard
+            // "Keighty" as "Katie"), so the user always gets a chance to
+            // hear/read what was transcribed and fix or confirm it before
+            // it goes anywhere, exactly like iOS's own built-in dictation.
+            draftText = text
+            voiceInputError = nil
+            a11yFocus = .composerField
+        } catch let error as VoiceService.VoiceError {
+            voiceInputError = error.message
+            a11yFocus = .voiceError
+        } catch {
+            voiceInputError = "Couldn't understand that. Try again."
+            a11yFocus = .voiceError
         }
     }
 }

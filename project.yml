@@ -28,6 +28,12 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
+        # Phase 5 (voice mode): push-to-talk records via AVAudioRecorder.
+        # iOS hard-crashes on first mic access attempt without this key --
+        # no on-device speech recognition is used (no NSSpeechRecognitionUsageDescription
+        # needed), audio is just captured and uploaded to the fork's existing
+        # /api/files/speech/stt endpoint (Deepgram), same as the web app.
+        NSMicrophoneUsageDescription: "Kade-AI uses your microphone so you can talk to your companions with your voice instead of typing."
     entitlements:
       path: KadeAI.entitlements
       properties:

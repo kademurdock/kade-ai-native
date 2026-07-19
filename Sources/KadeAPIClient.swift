@@ -92,6 +92,53 @@ final class KadeAPIClient {
         return req
     }
 
+    /// Builds a `multipart/form-data` request — needed for Phase 5's speech
+    /// endpoints (`/api/files/speech/stt` takes an uploaded audio file;
+    /// `/api/files/speech/tts/manual` takes plain text fields but the fork's
+    /// route still parses it with multer's `upload.none()`, which requires
+    /// real multipart encoding even with zero file parts, not
+    /// `application/x-www-form-urlencoded`). `fields` are sent as plain text
+    /// parts in insertion order; pass `fileField`/`fileData`/`fileName`/
+    /// `fileMimeType` together to also attach one file part (used for STT's
+    /// `audio` field only — nothing here needs more than one file at once).
+    func multipartRequest(
+        path: String,
+        authorized: Bool,
+        fields: [(String, String)],
+        fileField: String? = nil,
+        fileData: Data? = nil,
+        fileName: String? = nil,
+        fileMimeType: String? = nil
+    ) -> URLRequest {
+        var req = request(path: path, method: "POST", authorized: authorized)
+        let boundary = "KadeAI-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        let crlf = "\r\n"
+
+        for (name, value) in fields {
+            body.append("--\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append("\(value)\(crlf)".data(using: .utf8)!)
+        }
+
+        if let fileField, let fileData, let fileName {
+            body.append("--\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(fileName)\"\(crlf)"
+                    .data(using: .utf8)!
+            )
+            body.append("Content-Type: \(fileMimeType ?? "application/octet-stream")\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append(fileData)
+            body.append(crlf.data(using: .utf8)!)
+        }
+
+        body.append("--\(boundary)--\(crlf)".data(using: .utf8)!)
+        req.httpBody = body
+        return req
+    }
+
     /// Clears this host's cookies (used on sign-out so the next sign-in is clean).
     func clearCookies() {
         guard let storage = session.configuration.httpCookieStorage,

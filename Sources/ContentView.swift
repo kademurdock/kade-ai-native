@@ -14,6 +14,7 @@ struct ContentView: View {
     @EnvironmentObject private var auth: AuthService
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var agentsService: AgentsService
+    @EnvironmentObject private var voiceService: VoiceService
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -270,6 +271,7 @@ struct ContentView: View {
             // of leaving focus dangling on a control that just disappeared.
             conversationsService.reset()   // never show the last user's list to the next signed-in session
             agentsService.reset()          // and never show a stale agent list either (Phase 4)
+            voiceService.reset()           // and stop any playback / drop cached voice picks (Phase 5)
             a11yFocus = .email
         default:
             break
@@ -314,4 +316,5 @@ struct SafariView: UIViewControllerRepresentable {
         .environmentObject(AuthService(client: client))
         .environmentObject(ConversationsService(client: client))
         .environmentObject(AgentsService(client: client))
+        .environmentObject(VoiceService(client: client))
 }
