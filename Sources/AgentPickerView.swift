@@ -13,8 +13,9 @@ import SwiftUI
 /// which id this view hands back to `ConversationDetailView`, which passes
 /// it to `MessageSendingService.send` on the next send.
 ///
-/// VoiceOver notes: search uses the standard `.searchable` field (rotor-
-/// reachable); each row is one combined element (name + description +
+/// VoiceOver notes: search is a plain `TextField` (see `searchField`
+/// below), not the system `.searchable` bar -- see the "Search-first" note
+/// below for why. Each row is one combined element (name + description +
 /// "Currently selected" when applicable) with a clear hint of what tapping
 /// does, matching the row pattern used in `ConversationListView`.
 ///
@@ -32,20 +33,28 @@ import SwiftUI
 /// still means browsing, and with ~221 agents that's still a sprawl --
 /// "That's why I suggested a picker or something." Given a choice between
 /// narrowing the default list vs. making search the immediate landing
-/// point, she picked search-first. So the search field now grabs both
-/// keyboard and VoiceOver focus the instant this sheet appears (see the
-/// `.onAppear` below) -- open the picker, start typing, swipe to the one
-/// match. This uses `@FocusState` + `.searchFocused(_:)` rather than the
-/// `@AccessibilityFocusState` pattern used elsewhere in this app (Content-
-/// View, CallView, ConversationListView): those drive VoiceOver focus onto
-/// plain views that have no keyboard concept, while `.searchable`'s field
-/// is a system text input, so pulling it into first-responder status is
-/// the framework's own supported hook and (per standard UIKit behavior for
-/// text-entry controls) VoiceOver follows the responder chain, so one
-/// binding gets both keyboard and VoiceOver users to the same place.
-/// Recent/category browsing underneath is untouched -- this doesn't
-/// remove that path, it just stops making everyone walk through it to
-/// reach search.
+/// point, she picked search-first: open the picker, start typing, swipe
+/// to the one match, no browsing required.
+///
+/// First attempt used the system `.searchable` field plus `.searchFocused
+/// (_:)` to auto-focus it on appear -- the clean, minimal-diff way to do
+/// this. Codemagic's real compiler caught what hand-review didn't:
+/// `.searchFocused(_:)` needs iOS 18, and this project targets iOS 17
+/// (confirmed the hard way -- build 119 failed on exactly this line).
+/// Rather than raise the whole app's deployment target for a picker
+/// tweak, this now uses a plain `TextField` (`searchField` below) pinned
+/// above the list instead of `.searchable`, focused via the ordinary
+/// `.focused(_:)` API (iOS 15+, ordinary keyboard focus, not the search-
+/// bar-specific hook). Noted honestly: this trades away the system search
+/// bar's built-in "Search Fields" VoiceOver rotor category -- a plain
+/// TextField shows up under the generic "Text Fields" rotor instead --
+/// accepted because the entire point here is landing on the field
+/// automatically, without needing the rotor at all. Moving keyboard focus
+/// onto a text field reliably pulls VoiceOver's focus with it too
+/// (standard first-responder behavior), so the one `@FocusState` binding
+/// still covers both sighted-keyboard and VoiceOver users. Recent/
+/// category browsing underneath is untouched -- this doesn't remove that
+/// path, it just stops making everyone walk through it to reach search.
 struct AgentPickerView: View {
     @EnvironmentObject private var agentsService: AgentsService
     let currentAgentId: String?
@@ -101,32 +110,33 @@ struct AgentPickerView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if agentsService.isLoading && agentsService.agents.isEmpty {
-                    ProgressView("Loading agents…")
-                        .accessibilityLabel("Loading agents")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = agentsService.loadError, agentsService.agents.isEmpty {
-                    errorState(error)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if agentsService.agents.isEmpty {
-                    Text("No agents available.")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if isSearching && filtered.isEmpty {
-                    Text("No agents match \"\(searchText)\".")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    list
+            VStack(spacing: 0) {
+                searchField
+                Group {
+                    if agentsService.isLoading && agentsService.agents.isEmpty {
+                        ProgressView("Loading agents…")
+                            .accessibilityLabel("Loading agents")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let error = agentsService.loadError, agentsService.agents.isEmpty {
+                        errorState(error)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if agentsService.agents.isEmpty {
+                        Text("No agents available.")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if isSearching && filtered.isEmpty {
+                        Text("No agents match \"\(searchText)\".")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        list
+                    }
                 }
             }
             .navigationTitle("Choose agent")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Search agents")
-            .searchFocused($isSearchFieldFocused)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -135,17 +145,53 @@ struct AgentPickerView: View {
             .task { await agentsService.loadIfNeeded() }
             .onAppear {
                 // Grabbing focus in the same tick a sheet starts
-                // presenting is unreliable -- the search field isn't
-                // installed in the window yet, so the request gets
-                // dropped more often than not. A short wait past the
-                // presentation animation makes it land every time
-                // instead of intermittently.
+                // presenting is unreliable -- the field isn't installed
+                // in the window yet, so the request gets dropped more
+                // often than not. A short wait past the presentation
+                // animation makes it land every time instead of
+                // intermittently.
                 Task {
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     isSearchFieldFocused = true
                 }
             }
         }
+    }
+
+    /// Always-visible search bar, pinned above the list rather than using
+    /// `.searchable` -- see the "Search-first" doc note at the top of this
+    /// file for the why (short version: `.searchFocused` needs iOS 18).
+    /// Built to read sensibly by hand: the icon is decorative (hidden from
+    /// the accessibility tree), the field carries its own label and hint,
+    /// and the clear button is a separate reachable element with its own
+    /// label rather than folded silently into the field.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search agents", text: $searchText)
+                .focused($isSearchFieldFocused)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit { isSearchFieldFocused = false }
+                .accessibilityLabel("Search agents")
+                .accessibilityHint("Type a name to narrow the list below.")
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     private var list: some View {
