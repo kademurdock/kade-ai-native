@@ -105,7 +105,20 @@ final class AuthService: ObservableObject {
             let decoded = try decoder.decode(LoginResponse.self, from: data)
             persist(token: decoded.token, user: decoded.user)
             return decoded.user
-        case 401, 403, 422:
+        // 404 belongs here, not in the generic `default` branch below --
+        // confirmed against the fork's own source, not guessed: this route
+        // runs through Passport's local strategy (`requireLocalAuth.js`),
+        // which replies `res.status(404).send(info)` specifically when the
+        // email/password didn't match anything, and 422 for a couple of
+        // other rejection messages. Caught live 2026-07-19 (Kade's first
+        // real-device sign-in attempt, TestFlight build 105): a failed
+        // login surfaced as "The server returned an error (404). Try again
+        // in a moment" -- technically true but actively misleading, since
+        // it reads like an outage when it's really just a credentials
+        // mismatch. Whatever caused THAT particular attempt to fail
+        // (typo, autofill, a dropped special character) is unconfirmed --
+        // this fix is about the message being wrong regardless of cause.
+        case 401, 403, 404, 422:
             throw AuthError.badCredentials
         case 429:
             throw AuthError.rateLimited

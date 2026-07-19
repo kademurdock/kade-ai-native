@@ -42,11 +42,27 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Text("Kade-AI Native")
+                    // Deliberately not marked .isHeader: the nav bar's own
+                    // "Kade-AI" title already reads as the screen's heading,
+                    // and a second heading right after it (this used to say
+                    // "Kade-AI Native" -- internal build-track jargon a
+                    // tester has no reason to know) was confusing on a real
+                    // VoiceOver pass (Kade, TestFlight build 105, July 19
+                    // 2026: landed on "Kade-AI" then immediately another
+                    // heading "Kade-AI Native"). Kept as a plain welcoming
+                    // line instead of removing it outright, since sighted
+                    // testers still benefit from a real hero title.
+                    Text("Welcome to Kade-AI")
                         .font(.largeTitle.bold())
-                        .accessibilityAddTraits(.isHeader)
 
-                    Text("This is the native core app. Chat, voice, and notifications will live here; everything else stays on the web app.")
+                    // Same pass flagged this: "native app" / "web app" as if
+                    // they're two separate products is an internal framing
+                    // (this app vs. the Capacitor shell / kademurdock.com)
+                    // that means nothing to a tester who just has one app
+                    // called Kade-AI. Rewritten to describe what's HERE and
+                    // point at the actual button for what's not, instead of
+                    // narrating the rollout plan.
+                    Text("Sign in to chat with your Kade-AI companions. For games, Spotter, and everything else, use \"Open Kade-AI web\" below.")
                         .font(.body)
 
                     statusSection
