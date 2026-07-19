@@ -13,7 +13,7 @@ Nothing here is confirmed until it has a "verified" date.
 | /api/agents/chat/stream/:streamId | GET | Server-Sent Events, ends in a `final` frame | **2026-07-19** |
 | /api/agents/chat/abort | POST | abort an in-progress generation job | source-confirmed, not yet used by the app |
 | /api/convos/ (DELETE) | DELETE | delete a conversation, body `{arg:{conversationId}}` | **2026-07-19** (used to clean up a test convo) |
-| /api/agents | GET | agents list | not yet |
+| /api/agents | GET | agents/characters list, cursor-paginated | **2026-07-19** |
 
 ## POST /api/auth/login — verified 2026-07-18
 
@@ -263,3 +263,76 @@ Used live to clean up the test conversation from this session's protocol verific
   single static "`<agent>` is replying…" row while waiting, then moves accessibility focus to the
   real reply once `GET /api/messages` confirms it. A failed send leaves the optimistic message
   visible (it really was sent) and focuses a Retry control instead.
+
+
+## GET /api/agents — verified 2026-07-19 (Phase 4)
+
+Request: `GET /api/agents?limit=1000` (also accepts `cursor`, `category`, `search`, `promoted`).
+Requires `Authorization: Bearer <token>`. Returned data is scoped by ACL to what the signed-in
+user can VIEW (owned + shared + publicly-marketplace agents) — same access model as the web
+client's agent picker, nothing native-specific.
+
+Response `200`:
+
+```jsonc
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "agent_6llV0eMu4fmIaj8f2x1Sb",   // use this, not _id, as agent_id on sends
+      "_id": "6a3db74e36a602442fc0756a",
+      "name": "Kiana",
+      "description": "This is the default agent if you don't feel like creating one yourself. ...",
+      "author": "6a3cba4d0b0afa92194e42f7",
+      "category": "general",
+      "support_contact": { "name": "", "email": "" },
+      "is_promoted": false,
+      "updatedAt": "2026-07-18T16:03:42.989Z",
+      "avatar": { "filepath": "https://...(signed S3 URL)...", "source": "s3" }
+      // "isPublic": true  -- present on publicly-shared agents only
+    }
+    // ... 221 total on this account at verification time
+  ],
+  "first_id": "agent_...",
+  "last_id": "agent_...",
+  "has_more": false,
+  "after": null   // NOTE: the response's next-cursor field is called `after`, but it's sent
+                  // back as the `cursor` QUERY PARAM on the next request — the names don't match
+}
+```
+
+`limit` is capped server-side at 1000 (`Math.min(..., 1000)`) regardless of what's requested
+higher. 221 agents fit in one page at that cap; `AgentsService.swift` fetches once per sign-in
+with `limit=1000` and does not currently paginate further if an account ever exceeds that (see
+its own doc comment for the known-simplification note).
+
+`category` values seen live (221 agents, one account): `companions` (50), `roleplay` (36),
+`creative` (19), `expert` (18), `kids`/`lifestyle` (7 each), `education` (5), `Art`/`comedy`/
+`entertainment`/`food` (4 each), plus ~40 more with 1-3 agents each (`personal`, `general`,
+`tech`, `coding`, `finance`, `accessibility`, ...). No client-side grouping by category in Phase
+4's v1 — flat alphabetical list + `.searchable` text filter (name + description) was enough to
+navigate 221 rows by VoiceOver in testing; category grouping is a candidate follow-up if the
+picker ever feels too flat.
+
+## Agent switching is per-request, not per-conversation — verified live 2026-07-19 (Phase 4)
+
+The fork does **not** lock a conversation to whichever agent started it. `buildEndpointOption` /
+`parseCompactConvo` build the generation's `agent_id` fresh from EACH `POST
+/api/agents/chat/agents` request body — the conversation document's own stored `agent_id` field
+is not consulted to pick who answers.
+
+Proved this live rather than trusting it from source alone: started a fresh test conversation
+with agent A ("Kiana"), got a reply from Kiana; sent a SECOND message in the **same
+conversationId**, same `parentMessageId` chain, but with `agent_id` set to agent B ("Big Tom")
+instead — the reply came back with `"sender": "Big Tom"` and `"model": "agent_J3YsYW9yQ-13aXDyQrFwI"`,
+addressing the user directly, while the first turn's persisted message stayed attributed to
+Kiana. Test conversation deleted afterward via `DELETE /api/convos/`.
+
+**Implication for the client:** "switching agents" needs no dedicated endpoint and doesn't touch
+the conversation record at all — it's purely which `agent_id` `ConversationDetailView` hands to
+`MessageSendingService.send` for the NEXT turn. `AgentPickerView` + `ConversationDetailView`'s
+`selectedAgentId` (`@State`, seeded from `conversation.agentId` on open, not re-synced from the
+server afterward) implement exactly that. A conversation can freely have turns from different
+agents interleaved in its history — the app doesn't attempt to detect or badge that in the
+message list for v1 (each `MessageRow` already shows its own `speakerLabel` per message, which is
+enough to keep it readable).

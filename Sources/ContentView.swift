@@ -13,6 +13,7 @@ import SafariServices
 struct ContentView: View {
     @EnvironmentObject private var auth: AuthService
     @EnvironmentObject private var conversationsService: ConversationsService
+    @EnvironmentObject private var agentsService: AgentsService
     @State private var showingWeb = false
     @State private var email = ""
     @State private var password = ""
@@ -210,6 +211,7 @@ struct ContentView: View {
             // either way land VoiceOver straight on the email field instead
             // of leaving focus dangling on a control that just disappeared.
             conversationsService.reset()   // never show the last user's list to the next signed-in session
+            agentsService.reset()          // and never show a stale agent list either (Phase 4)
             a11yFocus = .email
         default:
             break
@@ -231,4 +233,5 @@ struct SafariView: UIViewControllerRepresentable {
     return ContentView()
         .environmentObject(AuthService(client: client))
         .environmentObject(ConversationsService(client: client))
+        .environmentObject(AgentsService(client: client))
 }

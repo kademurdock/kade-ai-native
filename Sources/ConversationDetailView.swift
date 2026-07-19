@@ -1,14 +1,17 @@
 import SwiftUI
 
 /// Phase 2 reads history; Phase 3 adds sending a follow-up and waiting for
-/// the agent's reply. Messages render in the order the server returns them
-/// (verified chronological / parent-chain-consistent against a real thread)
-/// — top-to-bottom oldest-to-newest, which is both the natural VoiceOver
+/// the agent's reply; Phase 4 adds switching which agent answers the next
+/// message (see `AgentPickerView` for why that's purely client-side state).
+/// Messages render in the order the server returns them (verified
+/// chronological / parent-chain-consistent against a real thread) —
+/// top-to-bottom oldest-to-newest, which is both the natural VoiceOver
 /// swipe order and the natural reading order.
 struct ConversationDetailView: View {
     let conversation: KadeConversation
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
+    @EnvironmentObject private var agentsService: AgentsService
 
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
@@ -16,6 +19,21 @@ struct ConversationDetailView: View {
 
     @State private var draftText: String = ""
     @State private var sendState: SendState = .idle
+
+    /// Which agent answers the NEXT send. Seeded from the conversation's
+    /// own `agent_id` (Phase 2 data) in `body`'s `.task` — not a custom
+    /// init, deliberately: this file has no compiler available to verify a
+    /// hand-written init assigns every `@State` property correctly (several
+    /// have inline defaults like `= []` that a custom init would silently
+    /// need to preserve), so seeding via a plain bare-Optional `@State` +
+    /// a `.task`-time assignment (same bare-Optional style already used by
+    /// `loadError` above) avoids that whole class of risk for one extra
+    /// `if` check. Tracked as local UI state from here on — the server has
+    /// no per-conversation "current agent" concept to sync back against; it
+    /// just reads whatever `agent_id` each send request carries (see
+    /// `AgentPickerView`'s doc comment).
+    @State private var selectedAgentId: String?
+    @State private var showingAgentPicker = false
 
     private enum SendState: Equatable {
         case idle
@@ -25,10 +43,12 @@ struct ConversationDetailView: View {
 
     /// VoiceOver focus targets. On a successful send, focus jumps to the
     /// new reply so the user hears it without hunting for it; on a failed
-    /// send, focus jumps to the error instead.
+    /// send, focus jumps to the error instead; after switching agents,
+    /// focus returns to the agent button so the new selection is announced.
     private enum A11yFocus: Hashable {
         case message(String)
         case composerError
+        case agentButton
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
 
@@ -52,12 +72,29 @@ struct ConversationDetailView: View {
                 }
             }
             if !isLoading && loadError == nil {
+                agentSection
                 composer
             }
         }
         .navigationTitle(conversation.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task {
+            // Seed the agent switcher from the conversation's own agent_id
+            // the first time this view appears (not a custom init — see
+            // "no custom init" note on `selectedAgentId`'s declaration).
+            if selectedAgentId == nil {
+                selectedAgentId = conversation.agentId
+            }
+            await load()
+            await agentsService.loadIfNeeded()
+        }
+        .sheet(isPresented: $showingAgentPicker) {
+            AgentPickerView(currentAgentId: selectedAgentId) { agent in
+                selectedAgentId = agent.id
+                a11yFocus = .agentButton
+            }
+            .environmentObject(agentsService)
+        }
     }
 
     // MARK: - History
@@ -134,6 +171,44 @@ struct ConversationDetailView: View {
         isLoading = false
     }
 
+    // MARK: - Agent switcher (Phase 4)
+
+    /// A single row above the composer showing who will answer next, with a
+    /// tap target to open `AgentPickerView`. Disabled while a send is in
+    /// flight — switching mid-wait wouldn't affect the reply already
+    /// requested, only the confusion of tapping something that visibly does
+    /// nothing to it.
+    private var agentSection: some View {
+        Button {
+            showingAgentPicker = true
+        } label: {
+            HStack {
+                Text(agentDisplayLabel)
+                    .font(.footnote)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isSending)
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Talking to \(agentDisplayLabel)")
+        .accessibilityHint("Opens the list of agents to switch who answers your next message.")
+        .accessibilityFocused($a11yFocus, equals: .agentButton)
+    }
+
+    private var agentDisplayLabel: String {
+        if let selectedAgentId, let name = agentsService.name(for: selectedAgentId) {
+            return name
+        }
+        if agentsService.isLoading { return "Loading…" }
+        return selectedAgentId == nil ? "No agent selected" : "Current agent"
+    }
+
     // MARK: - Composer (Phase 3)
 
     private var isSending: Bool {
@@ -199,7 +274,7 @@ struct ConversationDetailView: View {
                 text: trimmed,
                 conversationId: conversation.conversationId,
                 parentMessageId: parentId,
-                agentId: conversation.agentId
+                agentId: selectedAgentId
             )
             // Authoritative reload: replaces the optimistic placeholder with
             // whatever the server actually persisted (real ids, real content
