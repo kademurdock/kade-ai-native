@@ -52,9 +52,19 @@ import Foundation
 /// v1 scope also skips the web client's resumable/reconnect/sync machinery
 /// on purpose (built for a much more continuous, token-by-token UI than
 /// this app wants). If the connection drops mid-stream, the error just
-/// propagates and the caller offers a retry — safe, because retrying only
-/// re-reads whatever the server already saved rather than resending
-/// anything destructive.
+/// propagates and the caller offers a retry. **Correction (session 13):**
+/// this used to claim the caller's retry "safely re-reads whatever the
+/// server already saved rather than resending" -- that was never actually
+/// true of the shipped code (the caller's Retry called this same `send`
+/// again with a fresh POST) and, worse, the caller had a real bug that
+/// made Retry silently do nothing at all (see
+/// `ConversationDetailView.retry()`/`FailedAttempt`, fixed this session).
+/// The real, current behavior: Retry resends the identical text to the
+/// identical parent as a genuinely new attempt, which can create a
+/// duplicate turn in the rare case the original request actually reached
+/// the server and only the confirm-the-reply half failed -- accepted
+/// deliberately, since a visible duplicate is a far better failure mode
+/// than a Retry button that does nothing.
 @MainActor
 final class MessageSendingService: ObservableObject {
     enum SendError: Error {

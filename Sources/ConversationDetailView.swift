@@ -56,6 +56,24 @@ struct ConversationDetailView: View {
     /// whatever's currently last.
     @State private var sendParentOverride: String?
 
+    /// What a FAILED send was trying to do -- captured so "Retry" can
+    /// resend the identical (text, parent) pair directly. Added this
+    /// session fixing a real dead-button bug: Retry used to call `send()`,
+    /// which reads `draftText` -- but `draftText` is deliberately cleared
+    /// the INSTANT any send starts (the standard "message left the
+    /// composer" optimistic feel), so by the time a failure ever showed
+    /// the Retry button, `draftText` was already "". `send()`'s own
+    /// `guard !trimmed.isEmpty` then made every tap of Retry return
+    /// instantly and do nothing -- no error, no change, just silence,
+    /// which is a particularly bad failure mode for someone navigating by
+    /// ear with no visual cue that "nothing happened" is even what
+    /// happened. See `retry()` below.
+    private struct FailedAttempt {
+        let text: String
+        let parentId: String?
+    }
+    @State private var failedAttempt: FailedAttempt?
+
     /// Phase 5: when on, each new assistant reply is spoken aloud
     /// automatically after it lands (queued through `VoiceService`, same
     /// read-aloud concept as the web app's Spotter rooms). Off by default,
@@ -408,7 +426,7 @@ struct ConversationDetailView: View {
                         .foregroundStyle(.red)
                         .accessibilityFocused($a11yFocus, equals: .composerError)
                     Spacer()
-                    Button("Retry") { Task { await send() } }
+                    Button("Retry") { Task { await retry() } }
                         .font(.footnote.bold())
                 }
             }
@@ -618,6 +636,7 @@ struct ConversationDetailView: View {
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
     private func performSend(text: String, parentId: String?) async {
+        failedAttempt = nil
         let optimisticMessage = KadeMessage(
             messageId: "pending-\(UUID().uuidString)",
             conversationId: conversationId ?? "pending",
@@ -670,14 +689,39 @@ struct ConversationDetailView: View {
             } else {
                 sendState = .failed("Didn't get a reply. Check your connection and try again.")
             }
+            failedAttempt = FailedAttempt(text: text, parentId: parentId)
             a11yFocus = .composerError
         } catch {
             // The optimistic message stays visible on purpose: it really was
             // sent from the user's point of view, only the "did the reply
             // come back" half failed.
             sendState = .failed("Didn't get a reply. Check your connection and try again.")
+            failedAttempt = FailedAttempt(text: text, parentId: parentId)
             a11yFocus = .composerError
         }
+    }
+
+    /// Resends the EXACT (text, parent) pair a failed send was trying to
+    /// deliver -- see `failedAttempt`'s own doc comment for the dead-button
+    /// bug this replaces. Accepts a small, deliberate trade-off: if the
+    /// original attempt actually reached the server and only the
+    /// confirm-the-reply half failed (a real possibility --
+    /// `MessageSendingService`'s own type doc describes exactly this
+    /// class of failure), this creates a genuine duplicate turn rather
+    /// than silently recovering the original. That's judged the better
+    /// failure mode -- a visible, easy-to-ignore duplicate beats a Retry
+    /// button that does nothing and leaves no path forward except backing
+    /// out of the screen. A safer "just re-fetch and see if it already
+    /// landed" alternative was considered and rejected for now: with no
+    /// compiler and no reliable way to simulate a genuinely dropped
+    /// connection against the live server this session, a fetch-first
+    /// retry risks a worse bug -- silently REPLACING `messages` with the
+    /// server's list and dropping the still-visible optimistic bubble if
+    /// the original send in fact never went through at all.
+    private func retry() async {
+        guard let attempt = failedAttempt else { return }
+        failedAttempt = nil
+        await performSend(text: attempt.text, parentId: attempt.parentId)
     }
 
     // MARK: - Voice input (Phase 5)
