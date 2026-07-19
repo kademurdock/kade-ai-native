@@ -30,19 +30,39 @@ final class KadeAPIClient {
         self.session = URLSession(configuration: config)
     }
 
-    /// The one choke point every request goes through: enforce the pacing
-    /// gate, then send. Auth calls and data calls share the same clock.
+    /// The one choke point every buffered request goes through: enforce the
+    /// pacing gate, then send. Auth calls and data calls share the same
+    /// clock. See `streamBytes(_:)` for the long-lived-connection variant
+    /// that shares this same gate and session.
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let since = Date().timeIntervalSince(lastRequestAt)
-        if since < minGap {
-            try? await Task.sleep(nanoseconds: UInt64((minGap - since) * 1_000_000_000))
-        }
-        lastRequestAt = Date()
+        await waitForPacingGate()
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         return (data, http)
+    }
+
+    /// Same pacing gate and session as `send(_:)`, but for a long-lived
+    /// Server-Sent-Events connection where buffering the full body first
+    /// isn't an option — hands back the raw byte stream instead. Added for
+    /// Phase 3 (chat send + stream); every other call still goes through
+    /// `send(_:)`.
+    func streamBytes(_ request: URLRequest) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        await waitForPacingGate()
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return (bytes, http)
+    }
+
+    private func waitForPacingGate() async {
+        let since = Date().timeIntervalSince(lastRequestAt)
+        if since < minGap {
+            try? await Task.sleep(nanoseconds: UInt64((minGap - since) * 1_000_000_000))
+        }
+        lastRequestAt = Date()
     }
 
     /// Builds a request against kademurdock.com with the common headers set.

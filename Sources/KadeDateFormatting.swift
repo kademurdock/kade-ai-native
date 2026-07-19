@@ -35,4 +35,11 @@ enum KadeDateFormatting {
         f.timeStyle = .short
         return f.string(from: d)
     }
+
+    /// The current moment in the same shape as `date(from:)` expects back —
+    /// used to stamp an optimistic local message (Phase 3) before the
+    /// server's own timestamp comes back from a refetch.
+    static func isoNow() -> String {
+        isoWithFractional.string(from: Date())
+    }
 }

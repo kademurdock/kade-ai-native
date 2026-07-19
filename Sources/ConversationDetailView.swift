@@ -1,36 +1,66 @@
 import SwiftUI
 
-/// Phase 2: reads one conversation's history. Messages render in the order
-/// the server returns them (verified chronological / parent-chain-consistent
-/// against a real thread) — top-to-bottom oldest-to-newest, which is both
-/// the natural VoiceOver swipe order and the natural reading order.
+/// Phase 2 reads history; Phase 3 adds sending a follow-up and waiting for
+/// the agent's reply. Messages render in the order the server returns them
+/// (verified chronological / parent-chain-consistent against a real thread)
+/// — top-to-bottom oldest-to-newest, which is both the natural VoiceOver
+/// swipe order and the natural reading order.
 struct ConversationDetailView: View {
     let conversation: KadeConversation
     @EnvironmentObject private var conversationsService: ConversationsService
+    @EnvironmentObject private var messageSendingService: MessageSendingService
 
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
     @State private var loadError: String?
 
+    @State private var draftText: String = ""
+    @State private var sendState: SendState = .idle
+
+    private enum SendState: Equatable {
+        case idle
+        case sending
+        case failed(String)
+    }
+
+    /// VoiceOver focus targets. On a successful send, focus jumps to the
+    /// new reply so the user hears it without hunting for it; on a failed
+    /// send, focus jumps to the error instead.
+    private enum A11yFocus: Hashable {
+        case message(String)
+        case composerError
+    }
+    @AccessibilityFocusState private var a11yFocus: A11yFocus?
+
     var body: some View {
-        Group {
-            if isLoading {
-                ProgressView("Loading messages…")
-                    .accessibilityLabel("Loading messages")
-            } else if let loadError {
-                errorState(loadError)
-            } else if messages.isEmpty {
-                Text("No messages in this conversation.")
-                    .foregroundStyle(.secondary)
-                    .padding()
-            } else {
-                messageList
+        VStack(spacing: 0) {
+            Group {
+                if isLoading {
+                    ProgressView("Loading messages…")
+                        .accessibilityLabel("Loading messages")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let loadError {
+                    errorState(loadError)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if messages.isEmpty {
+                    Text("No messages in this conversation.")
+                        .foregroundStyle(.secondary)
+                        .padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    messageList
+                }
+            }
+            if !isLoading && loadError == nil {
+                composer
             }
         }
         .navigationTitle(conversation.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
+
+    // MARK: - History
 
     private var messageList: some View {
         ScrollViewReader { proxy in
@@ -39,23 +69,46 @@ struct ConversationDetailView: View {
                     ForEach(messages) { message in
                         MessageRow(message: message)
                             .id(message.id)
+                            .accessibilityFocused($a11yFocus, equals: .message(message.id))
+                    }
+                    if case .sending = sendState {
+                        replyingRow.id(Self.replyingRowId)
                     }
                 }
                 .padding()
             }
-            .onAppear {
-                // Land where a chat app normally lands: the most recent
-                // message. VoiceOver users can freely swipe backward through
-                // the full history from here — nothing is hidden, this only
-                // affects initial scroll position. Deferred a tick because
-                // scrollTo called synchronously in onAppear can silently
-                // no-op before LazyVStack has laid out the last row.
-                guard let lastId = messages.last?.id else { return }
-                Task {
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                    proxy.scrollTo(lastId, anchor: .bottom)
-                }
-            }
+            .onAppear { scrollToBottom(proxy) }
+            .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: sendState) { _, _ in scrollToBottom(proxy) }
+        }
+    }
+
+    private static let replyingRowId = "replying-indicator"
+
+    private var replyingRow: some View {
+        let who = messages.last(where: { !$0.isCreatedByUser })?.speakerLabel ?? "The assistant"
+        return HStack(spacing: 8) {
+            ProgressView()
+            Text("\(who) is replying…")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(who) is replying")
+    }
+
+    /// Deferred a tick because `scrollTo` called synchronously can silently
+    /// no-op before LazyVStack has laid out the newest row — same reasoning
+    /// as Phase 2's original onAppear scroll.
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        let target: String? = {
+            if case .sending = sendState { return Self.replyingRowId }
+            return messages.last?.id
+        }()
+        guard let target else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            proxy.scrollTo(target, anchor: .bottom)
         }
     }
 
@@ -79,6 +132,98 @@ struct ConversationDetailView: View {
             loadError = "Couldn't load this conversation. Check your connection and try again."
         }
         isLoading = false
+    }
+
+    // MARK: - Composer (Phase 3)
+
+    private var isSending: Bool {
+        if case .sending = sendState { return true }
+        return false
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if case .failed(let message) = sendState {
+                HStack(alignment: .top) {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("Retry") { Task { await send() } }
+                        .font(.footnote.bold())
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityFocused($a11yFocus, equals: .composerError)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Message", text: $draftText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...5)
+                    .disabled(isSending)
+                    .accessibilityLabel("Message")
+                Button {
+                    Task { await send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title)
+                }
+                .disabled(isSending || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel(isSending ? "Sending" : "Send message")
+                .accessibilityHint(isSending ? "" : "Sends your message to \(conversation.displayTitle).")
+            }
+        }
+        .padding()
+        .background(.bar)
+    }
+
+    private func send() async {
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isSending else { return }
+
+        let parentId = messages.last?.messageId
+        let optimisticMessage = KadeMessage(
+            messageId: "pending-\(UUID().uuidString)",
+            conversationId: conversation.conversationId,
+            createdAt: KadeDateFormatting.isoNow(),
+            isCreatedByUser: true,
+            sender: "User",
+            text: trimmed,
+            content: nil
+        )
+        messages.append(optimisticMessage)
+        draftText = ""
+        sendState = .sending
+
+        do {
+            try await messageSendingService.send(
+                text: trimmed,
+                conversationId: conversation.conversationId,
+                parentMessageId: parentId,
+                agentId: conversation.agentId
+            )
+            // Authoritative reload: replaces the optimistic placeholder with
+            // whatever the server actually persisted (real ids, real content
+            // shape) rather than trusting the SSE payload's exact field set
+            // — see MessageSendingService's type doc for why.
+            messages = try await conversationsService.fetchMessages(
+                conversationId: conversation.conversationId
+            )
+            sendState = .idle
+            a11yFocus = messages.last.map { .message($0.id) }
+        } catch let error as MessageSendingService.SendError {
+            if case .streamError(let message) = error {
+                sendState = .failed(message)
+            } else {
+                sendState = .failed("Didn't get a reply. Check your connection and try again.")
+            }
+            a11yFocus = .composerError
+        } catch {
+            // The optimistic message stays visible on purpose: it really was
+            // sent from the user's point of view, only the "did the reply
+            // come back" half failed.
+            sendState = .failed("Didn't get a reply. Check your connection and try again.")
+            a11yFocus = .composerError
+        }
     }
 }
 
