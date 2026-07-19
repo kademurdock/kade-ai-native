@@ -73,8 +73,15 @@ struct ContentView: View {
                     // called Kade-AI. Rewritten to describe what's HERE and
                     // point at the actual button for what's not, instead of
                     // narrating the rollout plan.
-                    Text("Sign in to chat with your Kade-AI companions. For games, Spotter, and everything else, use \"Open Kade-AI web\" below.")
-                        .font(.body)
+                    // Kade (build 108 testing, July 19 2026): this line
+                    // still made sense before sign-in, but reads oddly once
+                    // she's already signed in ("sign in to chat" when she's
+                    // mid-conversation makes no sense) -- now only shown
+                    // while there's actually a sign-in step ahead of her.
+                    if !isSignedIn {
+                        Text("Sign in to chat with your Kade-AI companions. For games, Spotter, and everything else, use \"Open Kade-AI web\" below.")
+                            .font(.body)
+                    }
 
                     statusSection
 
@@ -225,6 +232,11 @@ struct ContentView: View {
 
     private var isSigningIn: Bool {
         if case .signingIn = auth.state { return true }
+        return false
+    }
+
+    private var isSignedIn: Bool {
+        if case .signedIn = auth.state { return true }
         return false
     }
 
