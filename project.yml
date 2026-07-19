@@ -27,6 +27,7 @@ targets:
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: KadeAI.entitlements
       properties:
