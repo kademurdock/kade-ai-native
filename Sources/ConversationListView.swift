@@ -10,6 +10,10 @@ import SwiftUI
 ///   fetch that a screen-reader user can't see coming.
 struct ConversationListView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
+    // Session 11: drives navigation programmatically now instead of via
+    // NavigationLink(value:) -- see the row Button's doc comment in `list`
+    // for why.
+    @State private var selectedConversation: KadeConversation?
 
     var body: some View {
         Group {
@@ -36,20 +40,35 @@ struct ConversationListView: View {
     private var list: some View {
         List {
             ForEach(conversationsService.conversations) { convo in
-                NavigationLink(value: convo) {
+                Button {
+                    selectedConversation = convo
+                } label: {
                     row(for: convo)
                 }
-                // Accessibility modifiers live HERE, on the NavigationLink
-                // itself -- not nested inside its label (see row(for:)) --
-                // on purpose. Kade's first real pass on this screen (build
-                // 106, July 19 2026) found rows that VoiceOver could select
-                // and read but not ACTIVATE: wrapping a NavigationLink's
-                // label in its own .accessibilityElement(children:) creates
-                // a synthesized node VoiceOver focuses on that doesn't carry
-                // the link's own navigation action. Moving the grouping to
-                // the control itself (not its label subtree) is the fix;
-                // applies to every Button/NavigationLink row in this file.
-                .accessibilityElement(children: .combine)
+                .buttonStyle(.plain)
+                // Session 11 (Kade's first real report on this screen,
+                // build 110, after signing in successfully): rows could be
+                // VoiceOver-SELECTED (read aloud) but not ACTIVATED (double-
+                // tap did nothing). The build-107 fix moved
+                // .accessibilityElement(children: .combine) from the LABEL
+                // onto the NavigationLink(value:) control itself, matching
+                // the diagnosis at the time -- but that turned out to still
+                // be unreliable for carrying the link's own push action;
+                // nobody had actually re-confirmed it worked before three
+                // more phases shipped on top of it. Switched to the ONE
+                // pattern already proven safe elsewhere in this app
+                // (AgentPickerView.list): a plain Button -- whose native
+                // tap/VoiceOver-activate action is tied directly to its own
+                // `action` closure, not reconstructed through an
+                // accessibility-children modifier -- driving LOCAL selection
+                // state, paired with .navigationDestination(item:) instead
+                // of NavigationLink's own destination wiring. `.ignore` +
+                // an explicit accessibilityLabel (not `.combine`) reads the
+                // row as one clean stop without asking SwiftUI to merge an
+                // interactive control's action through the same modifier
+                // that assembles its label.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this conversation and reads its history.")
             }
             if conversationsService.hasMore {
@@ -58,9 +77,16 @@ struct ConversationListView: View {
         }
         .listStyle(.plain)
         .refreshable { await conversationsService.loadFirstPage() }
-        .navigationDestination(for: KadeConversation.self) { convo in
+        .navigationDestination(item: $selectedConversation) { convo in
             ConversationDetailView(conversation: convo)
         }
+    }
+
+    private func accessibleLabel(for convo: KadeConversation) -> String {
+        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
+            return "\(convo.displayTitle). \(relative)"
+        }
+        return convo.displayTitle
     }
 
     private func row(for convo: KadeConversation) -> some View {
