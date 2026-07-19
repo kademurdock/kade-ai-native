@@ -26,6 +26,26 @@ import SwiftUI
 /// followed by real category sections straight off the server's own
 /// `category` field. While searching, it collapses back to one flat
 /// filtered list, since search already does the narrowing.
+///
+/// Search-first (added 2026-07-19, same day, after live-testing the Recent
+/// + category layout above): Kade's follow-up was that heading navigation
+/// still means browsing, and with ~221 agents that's still a sprawl --
+/// "That's why I suggested a picker or something." Given a choice between
+/// narrowing the default list vs. making search the immediate landing
+/// point, she picked search-first. So the search field now grabs both
+/// keyboard and VoiceOver focus the instant this sheet appears (see the
+/// `.onAppear` below) -- open the picker, start typing, swipe to the one
+/// match. This uses `@FocusState` + `.searchFocused(_:)` rather than the
+/// `@AccessibilityFocusState` pattern used elsewhere in this app (Content-
+/// View, CallView, ConversationListView): those drive VoiceOver focus onto
+/// plain views that have no keyboard concept, while `.searchable`'s field
+/// is a system text input, so pulling it into first-responder status is
+/// the framework's own supported hook and (per standard UIKit behavior for
+/// text-entry controls) VoiceOver follows the responder chain, so one
+/// binding gets both keyboard and VoiceOver users to the same place.
+/// Recent/category browsing underneath is untouched -- this doesn't
+/// remove that path, it just stops making everyone walk through it to
+/// reach search.
 struct AgentPickerView: View {
     @EnvironmentObject private var agentsService: AgentsService
     let currentAgentId: String?
@@ -33,6 +53,7 @@ struct AgentPickerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+    @FocusState private var isSearchFieldFocused: Bool
 
     private var isSearching: Bool {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -105,12 +126,25 @@ struct AgentPickerView: View {
             .navigationTitle("Choose agent")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search agents")
+            .searchFocused($isSearchFieldFocused)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
             .task { await agentsService.loadIfNeeded() }
+            .onAppear {
+                // Grabbing focus in the same tick a sheet starts
+                // presenting is unreliable -- the search field isn't
+                // installed in the window yet, so the request gets
+                // dropped more often than not. A short wait past the
+                // presentation animation makes it land every time
+                // instead of intermittently.
+                Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    isSearchFieldFocused = true
+                }
+            }
         }
     }
 
