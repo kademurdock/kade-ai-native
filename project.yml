@@ -34,6 +34,12 @@ targets:
         # needed), audio is just captured and uploaded to the fork's existing
         # /api/files/speech/stt endpoint (Deepgram), same as the web app.
         NSMicrophoneUsageDescription: "Kade-AI uses your microphone so you can talk to your companions with your voice instead of typing."
+        # Session 13 ("calling and spotters"): Spotter/Live mode shares your
+        # camera during a call so your Spotter can see and describe what's
+        # around you -- same crash-without-this-key rule as the mic string
+        # above. Only requested the moment you actually tap "Bring in your
+        # Spotter" (CameraCaptureController.start()), never on a plain voice call.
+        NSCameraUsageDescription: "Kade-AI uses your camera so your Spotter can see what's around you and describe it during a call."
     entitlements:
       path: KadeAI.entitlements
       properties:

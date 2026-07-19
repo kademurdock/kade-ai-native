@@ -10,6 +10,14 @@ struct KadeAIApp: App {
     // presentation) -- see AppDelegate.swift's doc comment.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    // Held directly (not just captured into each service's init) so
+    // Phase 9's StreamingCallService -- constructed fresh per call, inside
+    // CallView rather than as a persistent app-level StateObject -- can
+    // reach the SAME shared client every other service uses, instead of
+    // standing up a second one and splitting the request-pacing clock this
+    // class's own doc comment specifically warns against.
+    private let client: KadeAPIClient
+
     @StateObject private var auth: AuthService
     @StateObject private var conversationsService: ConversationsService
     @StateObject private var messageSendingService: MessageSendingService
@@ -25,6 +33,7 @@ struct KadeAIApp: App {
         // Phase 5's speech endpoints) obey the same request-pacing
         // clock (see KadeAPIClient's doc comment).
         let client = KadeAPIClient()
+        self.client = client
         _auth = StateObject(wrappedValue: AuthService(client: client))
         _conversationsService = StateObject(wrappedValue: ConversationsService(client: client))
         _messageSendingService = StateObject(wrappedValue: MessageSendingService(client: client))
@@ -35,6 +44,7 @@ struct KadeAIApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(client)
                 .environmentObject(auth)
                 .environmentObject(conversationsService)
                 .environmentObject(messageSendingService)

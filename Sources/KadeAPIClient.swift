@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Shared HTTP plumbing for every call this app makes to kademurdock.com.
 ///
@@ -12,7 +13,7 @@ import Foundation
 /// tripped the abuse system once before per the project notes, so it's
 /// worth being strict about here.
 @MainActor
-final class KadeAPIClient {
+final class KadeAPIClient: ObservableObject {
     let baseURL = URL(string: "https://kademurdock.com")!
     private let session: URLSession
     private let minGap: TimeInterval = 1.5

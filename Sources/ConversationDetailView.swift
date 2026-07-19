@@ -26,6 +26,7 @@ struct ConversationDetailView: View {
     @EnvironmentObject private var messageSendingService: MessageSendingService
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
+    @EnvironmentObject private var apiClient: KadeAPIClient
 
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
@@ -55,6 +56,10 @@ struct ConversationDetailView: View {
     /// (see `beginEdit(_:)`). `nil` is the normal case -- reply to
     /// whatever's currently last.
     @State private var sendParentOverride: String?
+    // Session 13 ("calling and spotters"): real-time voice/Spotter call,
+    // presented full-screen so an accidental swipe-down can't drop the
+    // call the way dismissing a .sheet would.
+    @State private var showingCall = false
 
     /// What a FAILED send was trying to do -- captured so "Retry" can
     /// resend the identical (text, parent) pair directly. Added this
@@ -131,6 +136,18 @@ struct ConversationDetailView: View {
         }
         .navigationTitle(conversation?.displayTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingCall = true
+                } label: {
+                    Image(systemName: "phone.fill")
+                }
+                .disabled(selectedAgentId == nil)
+                .accessibilityLabel("Call \(agentDisplayLabel)")
+                .accessibilityHint("Starts a real-time voice call. You can bring in your Spotter once connected.")
+            }
+        }
         .task {
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
@@ -184,6 +201,9 @@ struct ConversationDetailView: View {
         // physically dead once `.playAndRecord` took over the audio session.
         .sensoryFeedback(trigger: voiceService.isRecording) { _, isNowRecording in
             isNowRecording ? .start : .stop
+        }
+        .fullScreenCover(isPresented: $showingCall) {
+            CallView(agentId: selectedAgentId, agentName: agentDisplayLabel, apiClient: apiClient)
         }
     }
 
