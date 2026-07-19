@@ -15,6 +15,17 @@ struct ContentView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var agentsService: AgentsService
     @State private var showingWeb = false
+    // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
+    // described as an "error image" -- unconfirmed whether that was
+    // specifically this button, but SFSafariViewController's own built-in
+    // load-failure page is system chrome this app has no control over and
+    // no guarantee is well-labeled for VoiceOver. Rather than leave that
+    // as the only possible outcome, SafariView now reports load failures
+    // back here via `loadFailed`, and a real .alert (guaranteed to be
+    // announced by VoiceOver) replaces whatever Safari's own error page
+    // would have shown.
+    @State private var webLoadFailed = false
+    @State private var showWebLoadAlert = false
     @State private var email = ""
     @State private var password = ""
 
@@ -87,8 +98,27 @@ struct ContentView: View {
             .navigationTitle("Kade-AI")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingWeb) {
-                SafariView(url: URL(string: "https://kademurdock.com")!)
+                SafariView(url: URL(string: "https://kademurdock.com")!, loadFailed: $webLoadFailed)
                     .ignoresSafeArea()
+            }
+            .onChange(of: webLoadFailed) { _, failed in
+                guard failed else { return }
+                showingWeb = false
+                webLoadFailed = false
+                // Small delay so the alert doesn't try to present while the
+                // sheet is still mid-dismiss -- same reasoning as the
+                // deliberate delay in ConversationDetailView's scroll-to-
+                // bottom, just applied to a presentation transition instead
+                // of a scroll.
+                Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    showWebLoadAlert = true
+                }
+            }
+            .alert("Couldn't load Kade-AI web", isPresented: $showWebLoadAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Check your connection and try again.")
             }
         }
         .onChange(of: authStateID) { _, _ in handleStateChange() }
@@ -236,12 +266,34 @@ struct ContentView: View {
 }
 
 /// SFSafariViewController wrapper — the "escape hatch" to the full web app.
+/// Reports a failed initial page load back to the caller via `loadFailed`
+/// (set true) rather than silently leaving Safari's own built-in error page
+/// on screen, which this app has no control over the accessibility of.
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
+    @Binding var loadFailed: Bool
+
     func makeUIViewController(context: Context) -> SFSafariViewController {
-        SFSafariViewController(url: url)
+        let controller = SFSafariViewController(url: url)
+        controller.delegate = context.coordinator
+        return controller
     }
     func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, SFSafariViewControllerDelegate {
+        let parent: SafariView
+        init(_ parent: SafariView) { self.parent = parent }
+
+        func safariViewController(
+            _ controller: SFSafariViewController,
+            didCompleteInitialLoad didLoadSuccessfully: Bool
+        ) {
+            if !didLoadSuccessfully {
+                parent.loadFailed = true
+            }
+        }
+    }
 }
 
 #Preview {
