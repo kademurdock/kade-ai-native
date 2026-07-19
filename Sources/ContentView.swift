@@ -74,8 +74,16 @@ struct ContentView: View {
                     // she's already signed in ("sign in to chat" when she's
                     // mid-conversation makes no sense) -- now only shown
                     // while there's actually a sign-in step ahead of her.
+                    // Session 13 (calling + Spotter/Live shipped natively,
+                    // commit 4b83b34): this line used to send Spotter
+                    // seekers straight to the web button, which stopped
+                    // being true the moment Spotter could be reached from
+                    // right here (call any agent, then "Bring in your
+                    // Spotter" mid-call) -- caught from the build's own CI
+                    // screenshot, not guessed. Games/Game Room genuinely
+                    // aren't ported, so that half of the line still holds.
                     if !isSignedIn {
-                        Text("Sign in to chat with your Kade-AI companions. For games, Spotter, and everything else, use \"Open Kade-AI web\" below.")
+                        Text("Sign in to chat with your Kade-AI companions and call your Spotter. For games and everything else, use \"Open Kade-AI web\" below.")
                             .font(.body)
                     }
 
