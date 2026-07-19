@@ -105,6 +105,18 @@ final class VoiceService: NSObject, ObservableObject {
             recordError = "Couldn't access the microphone. Try again."
             return false
         }
+        // Haptics (Phase B/Phase 7 -- ConversationDetailView's send/
+        // recording/reply feedback, added this session) can silently no-op
+        // once `.playAndRecord` has exclusive control of the audio hardware
+        // -- a real, documented iOS gotcha
+        // (IOS_NATIVE_ADVANCED_TECHNIQUES_2026-07-19.md), not hypothetical.
+        // This is the cheap, Apple-provided fix, applied once here since
+        // this is the one place in the app that ever puts the session into
+        // that category. Best-effort on purpose (`try?`, not folded into the
+        // `do` above): never blocks recording itself from starting if this
+        // one call fails for some reason -- the mic actually working matters
+        // far more than haptics degrading gracefully.
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("kade-voice-\(UUID().uuidString).m4a")

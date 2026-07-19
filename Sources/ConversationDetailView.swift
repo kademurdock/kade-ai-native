@@ -133,6 +133,32 @@ struct ConversationDetailView: View {
             }
             .environmentObject(agentsService)
         }
+        // Phase 7 (accessibility polish -- haptics, KADE_AI_iOS_ROADMAP_2026-
+        // 07-15.md Phase B item 6: "a light haptic on key moments -- send,
+        // recording start/stop, a reply landing"). One trigger (`sendState`,
+        // already Equatable) covers all three send-related moments in one
+        // place: a light tap-confirmation the instant Send is recognized, a
+        // stronger one when a reply actually lands, and a distinct one on
+        // failure -- non-visual, physical confirmation at each moment
+        // instead of only a visual/audio cue. `old`/`new` discrimination
+        // (rather than firing on every change) avoids a spurious buzz on,
+        // say, idle -> sending firing twice or landing double-counting.
+        .sensoryFeedback(trigger: sendState) { old, new in
+            if case .idle = old, case .sending = new { return .impact(weight: .light) }
+            if case .sending = old, case .idle = new { return .success }
+            if case .failed = new { return .error }
+            return nil
+        }
+        // Same Phase B ask, "recording start/stop" -- driven directly by
+        // VoiceService's own published `isRecording` so this can never drift
+        // from the mic button's own visual state. See VoiceService.
+        // startRecording()'s setAllowHapticsAndSystemSoundsDuringRecording
+        // fix, added alongside this -- without it, these two haptics
+        // specifically are the ones most likely to have silently gone
+        // physically dead once `.playAndRecord` took over the audio session.
+        .sensoryFeedback(trigger: voiceService.isRecording) { _, isNowRecording in
+            isNowRecording ? .start : .stop
+        }
     }
 
     // MARK: - History
@@ -155,6 +181,27 @@ struct ConversationDetailView: View {
             .onAppear { scrollToBottom(proxy) }
             .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: sendState) { _, _ in scrollToBottom(proxy) }
+            // Phase 7 (accessibility polish): two custom VoiceOver rotors so
+            // a long back-and-forth can be crossed by sender instead of
+            // swiping every row one at a time -- a genuinely useful shortcut
+            // once a conversation has many turns, per
+            // IOS_NATIVE_ADVANCED_TECHNIQUES_2026-07-19.md's
+            // accessibilityRotor writeup (which cites Apple's own docs +
+            // Swift with Majid's walkthrough). Each entry's `id` matches the
+            // SAME `message.id` the ForEach above already uses -- the
+            // documented-safe pattern that needs no separate Namespace /
+            // accessibilityRotorEntry wiring, since SwiftUI matches rotor
+            // entries to on-screen elements by that shared id.
+            .accessibilityRotor("Your messages") {
+                ForEach(messages.filter { $0.isCreatedByUser }) { message in
+                    AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
+                }
+            }
+            .accessibilityRotor("Replies") {
+                ForEach(messages.filter { !$0.isCreatedByUser }) { message in
+                    AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
+                }
+            }
         }
     }
 
@@ -185,6 +232,19 @@ struct ConversationDetailView: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
             proxy.scrollTo(target, anchor: .bottom)
         }
+    }
+
+    /// Short label for a custom-rotor entry (see `messageList`'s two
+    /// `accessibilityRotor`s) -- deliberately terser than `MessageRow`'s own
+    /// full accessibility label: the rotor you're already in ("Your
+    /// messages" vs "Replies") tells VoiceOver which voice it's about to
+    /// land on, so repeating "You said" / "X said" on every entry would
+    /// just be noise while dialing through the rotor.
+    private func rotorLabel(for message: KadeMessage) -> String {
+        let time = KadeDateFormatting.time(from: message.createdAt) ?? ""
+        let preview = message.displayText.isEmpty ? "…" : message.displayText
+        let truncated = preview.count > 60 ? String(preview.prefix(60)) + "…" : preview
+        return time.isEmpty ? truncated : "\(time): \(truncated)"
     }
 
     private func errorState(_ message: String) -> some View {
