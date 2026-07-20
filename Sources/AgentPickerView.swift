@@ -260,7 +260,6 @@ struct AgentPickerView: View {
                     Text(description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
                 }
             }
             Spacer()
@@ -276,43 +275,28 @@ struct AgentPickerView: View {
     private func accessibleLabel(for agent: KadeAgent, isSelected: Bool) -> String {
         var parts = [agent.name]
         if let description = agent.description, !description.isEmpty {
-            parts.append(shortDescription(description))
+            parts.append(description.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         if isSelected { parts.append("Currently selected") }
         return parts.joined(separator: ". ")
     }
 
-    /// Kade's original ask was "short explanatory labels" -- this is
-    /// separate from the visual `.lineLimit(2)` truncation on the row,
-    /// because VoiceOver reads the FULL accessibility label regardless of
-    /// how much text fits on screen. First shipped capping to one sentence
-    /// or ~90 characters (session 11); after actually using the picker with
-    /// real agents, Kade reported that cap was cutting off exactly the
-    /// information that decides whether to talk to someone -- her example,
-    /// "Bob like planting seeds in his garden he also..." trailing into
-    /// nothing. Widened (session 13) to roughly 2 sentences, or ~220
-    /// characters if the description doesn't break into short sentences --
-    /// still meaningfully shorter than a full bio per row while scanning
-    /// many agents, but no longer routinely lands mid-thought.
-    private func shortDescription(_ description: String) -> String {
-        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let limit = 220
-        let sentenceEnders: Set<Character> = [".", "!", "?"]
-        var enderCount = 0
-        for idx in trimmed.indices {
-            guard sentenceEnders.contains(trimmed[idx]) else { continue }
-            enderCount += 1
-            guard enderCount == 2 else { continue }
-            let cutIndex = trimmed.index(after: idx)
-            if trimmed.distance(from: trimmed.startIndex, to: cutIndex) <= limit {
-                return String(trimmed[..<cutIndex])
-            }
-            break
-        }
-        if trimmed.count <= limit { return trimmed }
-        let cutoff = trimmed.index(trimmed.startIndex, offsetBy: limit)
-        return String(trimmed[..<cutoff]) + "…"
-    }
+    /// Kade's original ask was "short explanatory labels" -- first shipped
+    /// capping to one sentence or ~90 characters (session 11); after actually
+    /// using the picker with real agents, Kade reported that cap was cutting
+    /// off exactly the information that decides whether to talk to someone --
+    /// her example, "Bob like planting seeds in his garden he also..."
+    /// trailing into nothing. Widened (session 13) to roughly 2 sentences, or
+    /// ~220 characters. Session 18: after living with the 220-character cap,
+    /// her ask was direct -- "show the whole description instead of cutting
+    /// off, or we need to make the description more short and descriptive."
+    /// Shortening the descriptions themselves means editing real agent data
+    /// (a content change, not a display fix, and not something to do
+    /// unsupervised against her live library) -- so this now shows the full
+    /// description, uncapped, both visually (row(for:) dropped its
+    /// `.lineLimit(2)`) and in the accessibility label below. A long bio
+    /// means a longer swipe-and-listen for that one row; that trade is what
+    /// she asked for, in preference to guessing at a THIRD cutoff number.
 
     private func errorState(_ message: String) -> some View {
         VStack(spacing: 12) {
