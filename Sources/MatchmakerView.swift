@@ -222,15 +222,15 @@ struct MatchmakerView: View {
 
     // MARK: - Results
 
-    private func resultsSection(_ results: [ScoredMatch]) -> some View {
+    private func resultsSection(_ matches: [ScoredMatch]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Your matches")
                 .font(.title3.bold())
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused($a11yFocus, equals: .results)
 
-            ForEach(results) { match in
-                matchCard(rank: (results.firstIndex(where: { $0.id == match.id }) ?? 0) + 1, match: match)
+            ForEach(Array(matches.enumerated()), id: \.element.id) { index, match in
+                matchCard(rank: index + 1, match: match)
             }
 
             HStack {
