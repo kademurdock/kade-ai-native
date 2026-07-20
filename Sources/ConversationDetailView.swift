@@ -48,7 +48,6 @@ struct ConversationDetailView: View {
     /// just reads whatever `agent_id` each send request carries (see
     /// `AgentPickerView`'s doc comment).
     @State private var selectedAgentId: String?
-    @State private var showingAgentPicker = false
 
     /// Non-nil only in the brief window between tapping "Edit and Resend"
     /// on the last user message (`MessageRow`'s actions menu) and the next
@@ -93,11 +92,19 @@ struct ConversationDetailView: View {
     // system-standard, fully VoiceOver-navigable way to reach "Save to
     // Files", AirDrop, Messages and everything else, so building a bespoke
     // download UI on top of it would be strictly worse and less familiar.
-    @State private var shareItem: ShareItem?
+    /// ONE sheet binding for this screen, not several. Chaining multiple
+    /// `.sheet` modifiers at the same level in the hierarchy is unreliable
+    /// in SwiftUI -- a later one can simply win and the earlier ones never
+    /// present -- and this view now has two things it may want to show
+    /// (a share sheet, and the transcript of a call that just ended). An
+    /// enum with a single binding is the standard, provably-unambiguous
+    /// shape, and it makes "what can this screen present?" answerable by
+    /// reading one type.
+    @State private var activeSheet: DetailSheet?
     @State private var preparingVoiceMessageId: String?
     @State private var deletingMessage: KadeMessage?
     @State private var showingSpeedPicker = false
-    @State private var transcriptConversation: KadeConversation?
+
     @State private var voiceInputError: String?
 
     private enum SendState: Equatable {
@@ -177,16 +184,9 @@ struct ConversationDetailView: View {
                 await load()
             } else {
                 isLoading = false
-                showingAgentPicker = true
+                activeSheet = .agentPicker
             }
             await agentsService.loadIfNeeded()
-        }
-        .sheet(isPresented: $showingAgentPicker) {
-            AgentPickerView(currentAgentId: selectedAgentId) { agent in
-                selectedAgentId = agent.id
-                a11yFocus = .agentButton
-            }
-            .environmentObject(agentsService)
         }
         // Phase 7 (accessibility polish -- haptics, KADE_AI_iOS_ROADMAP_2026-
         // 07-15.md Phase B item 6: "a light haptic on key moments -- send,
@@ -219,18 +219,57 @@ struct ConversationDetailView: View {
                 agentId: selectedAgentId,
                 agentName: agentDisplayLabel,
                 apiClient: apiClient,
-                onOpenTranscript: { convo in transcriptConversation = convo }
+                onOpenTranscript: { convo in
+                    activeSheet = .transcript(ChatTranscriptHandoff(conversation: convo))
+                }
             )
         }
         // Post-call handoff (Kade, session 14: "It doesn't drop you into
         // your current voice conversation via text after the call"). The
         // call screen resolves the minted conversation before it dismisses;
         // this is what actually puts her in it.
-        .navigationDestination(item: $transcriptConversation) { convo in
-            ConversationDetailView(conversation: convo)
-        }
-        .sheet(item: $shareItem) { item in
-            ShareSheet(item: item)
+        //
+        // PRESENTED AS A SHEET, NOT PUSHED, AND THAT IS THE WHOLE POINT.
+        // This is the fix for the regression Kade hit on build 121 ("once
+        // again, it's not letting me click on conversations").
+        // `.navigationDestination(item:)` registers its destination by the
+        // item's TYPE for the entire enclosing NavigationStack, and build
+        // 121 shipped three of them all bound to `KadeConversation?` -- this
+        // one, ContentView's Spotter handoff, and the conversation list's
+        // own row selection. SwiftUI honoured one and silently ignored the
+        // rest; the list's row taps were the casualty.
+        //
+        // ContentView's handoff is now its own type and stays a push (it is
+        // declared exactly once, at the root). THIS one can't safely be a
+        // push at any type, because `ConversationDetailView` is RECURSIVE --
+        // opening a transcript from a chat means a second instance of this
+        // very view in the same stack, re-declaring the same destination and
+        // re-creating the collision one level down. A sheet has no
+        // type-keyed registration at all, so the problem cannot come back,
+        // and it reads better anyway: the call transcript opens over the
+        // conversation you were in, and dismissing returns you exactly where
+        // you were rather than deeper in a stack you have to climb out of.
+        // The ONE sheet this screen presents. The agent picker used to have
+        // its own chained `.sheet` alongside this; folding it in is not
+        // tidiness for its own sake -- two `.sheet` modifiers at the same
+        // level in a SwiftUI hierarchy is genuinely unreliable, one can
+        // simply win and the other never present, and the picker is far too
+        // important to leave exposed to that.
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .agentPicker:
+                AgentPickerView(currentAgentId: selectedAgentId) { agent in
+                    selectedAgentId = agent.id
+                    a11yFocus = .agentButton
+                }
+                .environmentObject(agentsService)
+            case .transcript(let handoff):
+                NavigationStack {
+                    ConversationDetailView(conversation: handoff.conversation)
+                }
+            case .share(let item):
+                ShareSheet(item: item)
+            }
         }
         .alert(
             "Delete this message?",
@@ -314,7 +353,7 @@ struct ConversationDetailView: View {
             )
             return
         }
-        shareItem = ShareItem(fileURL: url)
+        activeSheet = .share(ShareItem(fileURL: url))
     }
 
     // MARK: - History
@@ -332,7 +371,7 @@ struct ConversationDetailView: View {
                             onEdit: { beginEdit(message) },
                             onRegenerate: { Task { await regenerate(message) } },
                             onSaveVoiceMessage: { Task { await saveVoiceMessage(message) } },
-                            onShare: { shareItem = ShareItem(text: message.readableText) },
+                            onShare: { activeSheet = .share(ShareItem(text: message.readableText)) },
                             onDelete: canDelete(message) ? { deletingMessage = message } : nil,
                             isPreparingVoiceMessage: preparingVoiceMessageId == message.id
                         )
@@ -450,7 +489,7 @@ struct ConversationDetailView: View {
     /// nothing to it.
     private var agentSection: some View {
         Button {
-            showingAgentPicker = true
+            activeSheet = .agentPicker
         } label: {
             HStack {
                 Text(agentDisplayLabel)
@@ -678,7 +717,7 @@ struct ConversationDetailView: View {
         // first time through, so require it instead of sending into the
         // void.
         if conversation == nil, selectedAgentId == nil {
-            showingAgentPicker = true
+            activeSheet = .agentPicker
             return
         }
 
@@ -1012,8 +1051,46 @@ private struct MessageRow: View {
             .frame(maxWidth: .infinity, alignment: message.isCreatedByUser ? .trailing : .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibleLabel)
+            // Kade, build 121: "there are action buttons by every message,
+            // which would be fine, but there are already actions in the
+            // rotor that do the same thing, so unless they're a visual
+            // thing, they should probably go. I like the actions."
+            //
+            // So: the actions now hang off the MESSAGE ITSELF as real,
+            // explicitly-declared VoiceOver actions (reachable with the
+            // Actions rotor on the message she's already focused on), and
+            // the separate button below is hidden from VoiceOver entirely
+            // -- it stays on screen because it IS a visual thing, the only
+            // way a sighted user reaches any of this. Net effect by ear:
+            // one swipe stop per message instead of two, with every action
+            // still one rotor flick away.
+            //
+            // `accessibilityActions` (the ViewBuilder form) rather than
+            // repeated `accessibilityAction(named:)` specifically because it
+            // supports `if` -- Edit/Regenerate/Delete are conditional, and
+            // VoiceOver must never announce an action this message can't
+            // actually perform.
+            .accessibilityActions {
+                Button("Copy text") {
+                    UIPasteboard.general.string = message.readableText
+                    UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
+                }
+                Button("Play as voice message") { onReadAloud() }
+                Button("Save voice message") { onSaveVoiceMessage() }
+                Button("Share text") { onShare() }
+                if canEdit {
+                    Button("Edit and resend") { onEdit() }
+                }
+                if canRegenerate {
+                    Button("Regenerate reply") { onRegenerate() }
+                }
+                if let onDelete {
+                    Button("Delete message") { onDelete() }
+                }
+            }
 
             actionsButton
+                .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: message.isCreatedByUser ? .trailing : .leading)
     }
@@ -1150,4 +1227,39 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// Wrapper so the post-call transcript push has its OWN destination type.
+///
+/// `.navigationDestination(item:)` registers by the item's TYPE across the
+/// entire enclosing `NavigationStack`. Build 121 shipped three of them all
+/// bound to `KadeConversation?` -- the conversation list's row selection,
+/// ContentView's Spotter-call handoff, and this one -- and SwiftUI resolved
+/// the ambiguity by honouring one and silently ignoring the rest. The
+/// visible symptom was Kade's: conversation rows stopped opening. Giving
+/// each non-list handoff its own single-purpose type makes the collision
+/// impossible to reintroduce by accident, and makes the reason legible at
+/// the declaration site rather than only in a commit message.
+///
+/// `KadeConversation` keeps sole ownership of the plain-list destination.
+struct ChatTranscriptHandoff: Identifiable, Hashable {
+    let conversation: KadeConversation
+    var id: String { conversation.conversationId }
+}
+
+/// Everything `ConversationDetailView` can present modally, behind one
+/// binding. See `activeSheet`'s doc comment for why this is an enum rather
+/// than several separate `.sheet` modifiers.
+enum DetailSheet: Identifiable {
+    case agentPicker
+    case share(ShareItem)
+    case transcript(ChatTranscriptHandoff)
+
+    var id: String {
+        switch self {
+        case .agentPicker: return "agent-picker"
+        case .share(let item): return "share-\(item.id.uuidString)"
+        case .transcript(let handoff): return "transcript-\(handoff.id)"
+        }
+    }
 }

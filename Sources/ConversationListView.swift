@@ -214,6 +214,25 @@ struct ConversationListView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this conversation and reads its history.")
+                // Kade, build 121, about the equivalent buttons on messages:
+                // "there are already actions in the rotor that do the same
+                // thing, so unless they're a visual thing, they should
+                // probably go. I like the actions." Applied here too, for
+                // the same reason and with the same shape: the actions hang
+                // off the ROW as real VoiceOver actions (one rotor flick
+                // from the row she's already on), and the swipe actions
+                // below stay as the purely visual affordance. This also
+                // returns the list to ONE row per conversation, which is the
+                // structure the session-11 activation fix was verified
+                // against -- build 120 had added a second row per
+                // conversation just to hold an actions button.
+                .accessibilityActions {
+                    Button("Rename") { beginRename(convo) }
+                    Button("Archive") {
+                        Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
+                    }
+                    Button("Delete") { deletingConversation = convo }
+                }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingConversation = convo
@@ -232,8 +251,6 @@ struct ConversationListView: View {
                     }
                 }
 
-                actionsMenu(for: convo)
-                    .listRowSeparator(.hidden)
             }
             if conversationsService.hasMore && searchText.isEmpty {
                 loadMoreRow
@@ -309,34 +326,6 @@ struct ConversationListView: View {
         }
         let noun = count == 1 ? "match" : "matches"
         return "\(count) \(noun) in the \(loaded) conversations loaded so far."
-    }
-
-    /// Per-row actions menu — its own sibling accessibility element, same
-    /// shape as the per-message actions menu in `ConversationDetailView`.
-    private func actionsMenu(for convo: KadeConversation) -> some View {
-        Menu {
-            Button {
-                beginRename(convo)
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            Button {
-                Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            Button(role: .destructive) {
-                deletingConversation = convo
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        } label: {
-            Label("Conversation actions", systemImage: "ellipsis.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .accessibilityLabel("Actions for \(convo.displayTitle)")
-        .accessibilityHint("Rename, archive, or delete this conversation.")
     }
 
     private func beginRename(_ convo: KadeConversation) {

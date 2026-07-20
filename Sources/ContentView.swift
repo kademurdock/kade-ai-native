@@ -30,7 +30,7 @@ struct ContentView: View {
     // the voice immediately either way, so which character nominally opened
     // the call is not something the caller ever hears.
     @State private var callingSpotter = false
-    @State private var spotterTranscript: KadeConversation?
+    @State private var spotterTranscript: SpotterTranscriptHandoff?
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -246,12 +246,19 @@ struct ContentView: View {
                     agentName: "Your Spotter",
                     apiClient: apiClient,
                     spotterDirect: true,
-                    onOpenTranscript: { convo in spotterTranscript = convo }
+                    onOpenTranscript: { convo in
+                        spotterTranscript = SpotterTranscriptHandoff(conversation: convo)
+                    }
                 )
             }
             // Post-call handoff for a Spotter call started from here.
-            .navigationDestination(item: $spotterTranscript) { convo in
-                ConversationDetailView(conversation: convo)
+            // Its OWN destination type, deliberately -- see
+            // `SpotterTranscriptHandoff` and the build-121 regression it
+            // fixes (three `navigationDestination(item:)` modifiers all
+            // keyed to `KadeConversation` in one stack, which broke the
+            // conversation list's row taps).
+            .navigationDestination(item: $spotterTranscript) { handoff in
+                ConversationDetailView(conversation: handoff.conversation)
             }
 
             NavigationLink {
@@ -369,4 +376,15 @@ struct SafariView: UIViewControllerRepresentable {
         .environmentObject(ConversationsService(client: client))
         .environmentObject(AgentsService(client: client))
         .environmentObject(VoiceService(client: client))
+}
+
+/// Home-screen Spotter call's post-call transcript push. Separate type from
+/// `ChatTranscriptHandoff` on purpose: both live inside the SAME
+/// NavigationStack, and `.navigationDestination(item:)` keys its destination
+/// by TYPE across that whole stack -- two handoffs sharing one type would
+/// re-create exactly the collision this pair exists to prevent. See
+/// `ChatTranscriptHandoff` for the full story.
+struct SpotterTranscriptHandoff: Identifiable, Hashable {
+    let conversation: KadeConversation
+    var id: String { conversation.conversationId }
 }
