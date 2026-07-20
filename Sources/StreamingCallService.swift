@@ -146,6 +146,13 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    /// Running playhead (on `playerNode`'s own sample-time timeline, at
+    /// `playerFormat.sampleRate`) the next scheduled buffer pins to. `nil`
+    /// means nothing is queued -- the next schedule starts a small lead
+    /// into the future. Reset to `nil` on flush and on any engine
+    /// (re)start, since both reset the node's timeline. Only ever touched
+    /// on the main actor (this whole class is `@MainActor`).
+    private var nextPlayheadSample: AVAudioFramePosition?
     /// Every incoming clip (WAV or raw LIVE PCM) is converted to this one
     /// fixed format before scheduling, so `playerNode` only ever sees one
     /// consistent format regardless of what arrives. 24kHz mono Float32:
@@ -881,13 +888,13 @@ final class StreamingCallService: NSObject, ObservableObject {
         if !audioEngine.isRunning {
             try? audioEngine.start()
             playerNode.play()
+            nextPlayheadSample = nil   // the restart reset the node's timeline
         }
         // Fast path: a clip already in the player's own format needs no
         // conversion at all, and skipping the converter removes one more
         // place a silent failure could hide.
         if sourceFormat == playerFormat {
-            playerNode.scheduleBuffer(buffer, completionHandler: nil)
-            clipsScheduled += 1
+            scheduleOnTimeline(buffer)
             return
         }
         guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else {
@@ -910,7 +917,40 @@ final class StreamingCallService: NSObject, ObservableObject {
             clipFailures += 1
             return
         }
-        playerNode.scheduleBuffer(outBuffer, completionHandler: nil)
+        scheduleOnTimeline(outBuffer)
+    }
+
+    /// Schedules a `playerFormat` buffer pinned to a running sample-time
+    /// playhead with a small lead, instead of a bare `scheduleBuffer` with
+    /// no `at:`. Mirrors the web client's proven live-lane scheduling
+    /// (`useStreamingCall.ts`: `start(max(ctx.currentTime + 0.03,
+    /// nextTime))`), which the native path had never matched. Bare
+    /// `scheduleBuffer` gives the render thread zero cushion, so the many
+    /// tiny back-to-back PCM chunks a Spotter/Live turn arrives in can
+    /// underrun between WebSocket frames and stutter -- heard as the reply
+    /// "skipping" or racing. The ~80ms lead adds slack; taking the max of
+    /// (now + lead) and the running playhead re-syncs forward if the
+    /// stream ever falls behind rather than letting drift pile up. Degrades
+    /// safely: a chunk that arrives so late its slot is already in the past
+    /// just plays right away (exactly the old behavior), never worse. WAV
+    /// clips ride the same one timeline as LIVE PCM here, matching the web
+    /// client, which shares one playhead across both lanes so they can
+    /// never overlap.
+    private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer) {
+        let rate = playerFormat.sampleRate
+        let lead = AVAudioFramePosition(rate * 0.08)  // ~80ms jitter cushion
+        let nowSample: AVAudioFramePosition
+        if let renderTime = playerNode.lastRenderTime,
+           let playerTime = playerNode.playerTime(forNodeTime: renderTime) {
+            nowSample = playerTime.sampleTime
+        } else {
+            nowSample = nextPlayheadSample ?? 0
+        }
+        let earliest = nowSample + lead
+        let startAt = max(earliest, nextPlayheadSample ?? earliest)
+        let when = AVAudioTime(sampleTime: startAt, atRate: rate)
+        playerNode.scheduleBuffer(buffer, at: when, options: [], completionHandler: nil)
+        nextPlayheadSample = startAt + AVAudioFramePosition(buffer.frameLength)
         clipsScheduled += 1
     }
 
@@ -923,6 +963,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         guard engineRunning else { return }
         playerNode.stop()
         playerNode.play()
+        nextPlayheadSample = nil   // stop() cleared the queue and reset the timeline
     }
 
     private func teardownAudio() {

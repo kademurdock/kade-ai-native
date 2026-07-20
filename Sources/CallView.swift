@@ -63,7 +63,20 @@ struct CallView: View {
                     wrapUpPanel
                 }
                 audioCheck
-                cameraButton
+                // The plain camera-describe lane belongs to the CURRENT
+                // conversation agent. Once Spotter/Live is on, the Spotter
+                // is who's actually holding the call and already owns the
+                // camera (liveOn auto-starts capture) -- so a second button
+                // reading "Let <original agent> see your camera" is both
+                // redundant AND misattributed to whoever you WERE talking to
+                // before the handoff, which is exactly the wrong-agent
+                // camera control Kade reported after a transfer. Hide it
+                // while Spotter is live; the Spotter's own camera controls
+                // (the preview + flashlight, both agent-agnostic) stay, and
+                // spotterButton is how you hand the call back.
+                if !callService.liveOn {
+                    cameraButton
+                }
                 spotterButton
                 controls
             }
