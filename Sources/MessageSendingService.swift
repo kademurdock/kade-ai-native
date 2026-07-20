@@ -76,6 +76,15 @@ final class MessageSendingService: ObservableObject {
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
 
+    /// The in-flight turn's `streamId` (== `conversationId`, confirmed in
+    /// `docs/ENDPOINTS.md`), published so `ConversationDetailView` can offer
+    /// a Stop button the moment there's something real to stop -- `nil`
+    /// before `startGeneration` has returned and again once `send` finishes,
+    /// however it finishes. Session 17: `POST /api/agents/chat/abort` sat in
+    /// `docs/ENDPOINTS.md` "source-confirmed... not yet wired into the app"
+    /// since Phase 3; this is that wiring.
+    @Published private(set) var activeStreamId: String?
+
     init(client: KadeAPIClient) {
         self.client = client
     }
@@ -101,8 +110,29 @@ final class MessageSendingService: ObservableObject {
             parentMessageId: parentMessageId,
             agentId: agentId
         )
+        activeStreamId = start.streamId
+        defer { activeStreamId = nil }
         try await waitForFinal(streamId: start.streamId)
         return start.conversationId
+    }
+
+    /// Stops the CURRENTLY in-flight turn server-side -- a no-op if nothing
+    /// is running. This is the half a cancelled local `Task` alone can't
+    /// do: cancelling `ConversationDetailView`'s `sendTask` stops the CLIENT
+    /// from listening, but the agent keeps generating (and metering) on the
+    /// server until something tells it to stop. Per `docs/ENDPOINTS.md`,
+    /// `/abort` "persists whatever partial content it had" -- fail-soft on
+    /// purpose (`try?`): if this one request doesn't land, the caller's
+    /// separate `sendTask.cancel()` still stops the client side, and a
+    /// short-lived job that finishes naturally a moment later is a far
+    /// smaller problem than a Stop button that hangs on a flaky network
+    /// call.
+    func abortActive() async {
+        guard let streamId = activeStreamId else { return }
+        var req = client.request(path: "api/agents/chat/abort", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["streamId": streamId])
+        _ = try? await client.send(req)
     }
 
     // MARK: - Phase A: kick off generation

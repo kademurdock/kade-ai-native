@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -34,6 +35,13 @@ struct ConversationDetailView: View {
 
     @State private var draftText: String = ""
     @State private var sendState: SendState = .idle
+    /// The currently in-flight `send()`/`retry()`/`regenerate()` Task, if
+    /// any -- session 17's Stop button cancels whichever one is actually
+    /// running rather than needing three separate stop paths, since all
+    /// three fund into the same `performSend` and set the same `sendState`.
+    /// Never awaited directly; only ever cancelled or silently overwritten
+    /// by the next send.
+    @State private var sendTask: Task<Void, Never>?
 
     /// Which agent answers the NEXT send. Seeded from the conversation's
     /// own `agent_id` (Phase 2 data) in `body`'s `.task` — not a custom
@@ -369,7 +377,7 @@ struct ConversationDetailView: View {
                             canRegenerate: canRegenerate(message),
                             onReadAloud: { readAloud(message) },
                             onEdit: { beginEdit(message) },
-                            onRegenerate: { Task { await regenerate(message) } },
+                            onRegenerate: { sendTask = Task { await regenerate(message) } },
                             onSaveVoiceMessage: { Task { await saveVoiceMessage(message) } },
                             onShare: { activeSheet = .share(ShareItem(text: message.readableText)) },
                             onDelete: canDelete(message) ? { deletingMessage = message } : nil,
@@ -628,7 +636,7 @@ struct ConversationDetailView: View {
                         .foregroundStyle(.red)
                         .accessibilityFocused($a11yFocus, equals: .composerError)
                     Spacer()
-                    Button("Retry") { Task { await retry() } }
+                    Button("Retry") { sendTask = Task { await retry() } }
                         .font(.footnote.bold())
                 }
             }
@@ -649,18 +657,33 @@ struct ConversationDetailView: View {
                     .accessibilityLabel("Message")
                     .accessibilityFocused($a11yFocus, equals: .composerField)
                 micButton
+                // Session 17: one button, two jobs, matching how `isSending`
+                // already gates it -- Send while idle, Stop while a reply is
+                // generating (`POST /api/agents/chat/abort` had sat
+                // "source-confirmed, not yet wired into the app" in
+                // docs/ENDPOINTS.md since Phase 3; see `stopGenerating()`
+                // and `MessageSendingService.abortActive()`). Recording/
+                // transcribing/empty-draft still block a SEND, but never
+                // block a STOP -- those three conditions describe whether
+                // there's anything sendABLE, which is irrelevant once
+                // something is already sending.
                 Button {
-                    Task { await send() }
+                    if isSending {
+                        stopGenerating()
+                    } else {
+                        sendTask = Task { await send() }
+                    }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.title)
                 }
                 .disabled(
-                    isSending || voiceService.isRecording || voiceService.isTranscribing
-                        || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    !isSending
+                        && (voiceService.isRecording || voiceService.isTranscribing
+                            || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 )
-                .accessibilityLabel(isSending ? "Sending" : "Send message")
-                .accessibilityHint(isSending ? "" : "Sends your message to \(conversationTitleForCopy).")
+                .accessibilityLabel(isSending ? "Stop" : "Send message")
+                .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
             }
         }
         .padding()
@@ -732,6 +755,29 @@ struct ConversationDetailView: View {
         sendParentOverride = nil
         draftText = ""
         await performSend(text: trimmed, parentId: parentId)
+    }
+
+    /// Session 17. Stops whatever `performSend` currently has in flight --
+    /// a plain send, a Retry, or a Regenerate, doesn't matter which,
+    /// they're indistinguishable once running. Order matters here: tell the
+    /// SERVER to stop first (`abortActive()`, which is what actually halts
+    /// the (metered) generation and persists whatever partial reply exists
+    /// per `docs/ENDPOINTS.md`), THEN cancel the local `sendTask` -- doing
+    /// it the other way round would let `performSend`'s catch-and-refetch
+    /// race ahead of the abort actually landing server-side, and she'd see
+    /// whatever was there a moment before her partial reply got saved
+    /// rather than the real thing. `performSend`'s `URLError(.cancelled)`
+    /// catch clause (not `CancellationError` -- confirmed via research,
+    /// URLSession's async APIs throw the former on Task cancellation, not
+    /// the latter) is what turns the resulting cancellation into a calm
+    /// "Stopped." instead of the ordinary failure/Retry path.
+    private func stopGenerating() {
+        guard isSending else { return }
+        UIAccessibility.post(notification: .announcement, argument: "Stopping.")
+        Task {
+            await messageSendingService.abortActive()
+            sendTask?.cancel()
+        }
     }
 
     // MARK: - Message actions (Copy / Read Aloud / Edit / Regenerate)
@@ -885,6 +931,25 @@ struct ConversationDetailView: View {
                 // instead of requiring a manual pull-to-refresh.
                 Task { await conversationsService.loadFirstPage() }
             }
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // A deliberate Stop (`stopGenerating()`), not a failure -- no
+            // red text, no Retry button, that's not what this is. By the
+            // time this fires, `abortActive()` has already told the server
+            // to stop AND persist whatever partial reply existed (see
+            // `stopGenerating()`'s doc comment for why that ordering
+            // matters), so a plain authoritative refetch picks it up the
+            // same way a normal completed turn would -- there may be a
+            // real, if short, assistant reply sitting right there.
+            sendState = .idle
+            if let resolvedId = conversationId {
+                messages = (try? await conversationsService.fetchMessages(conversationId: resolvedId)) ?? messages
+            }
+            // Same focus move the normal-completion path makes (jump to the
+            // newest message) -- if a partial reply made it through before
+            // the stop landed, she should hear it the same way she'd hear
+            // any other new reply, not have to go hunting for it.
+            a11yFocus = messages.last.map { .message($0.id) }
+            UIAccessibility.post(notification: .announcement, argument: "Stopped.")
         } catch let error as MessageSendingService.SendError {
             if case .streamError(let message) = error {
                 sendState = .failed(message)
