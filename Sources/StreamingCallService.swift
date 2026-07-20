@@ -935,21 +935,36 @@ final class StreamingCallService: NSObject, ObservableObject {
             liveTonePlayed = true
             playLiveStartTone()
         }
-        let liveFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true
-        )!
-        guard let liveBuffer = AVAudioPCMBuffer(pcmFormat: liveFormat, frameCapacity: AVAudioFrameCount(sampleCount)),
-              let channelData = liveBuffer.int16ChannelData else { return }
+        // ROOT-CAUSE FIX (session 21d, Kade: Spotter "all clips received,
+        // none played," while a NORMAL call's WAV voice plays fine and only
+        // the connect tone -- the other thing that isn't WAV -- is also
+        // silent). The WORKING WAV lane hands the player node a float32
+        // buffer (an AVAudioFile always decodes to float32, and a 24kHz clip
+        // matches `playerFormat` exactly, so it takes schedule()'s
+        // converter-free FAST PATH). The BROKEN live lane was the ONLY path
+        // that built an int16 buffer and leaned on `AVAudioConverter`
+        // (int16-interleaved -> float32-deinterleaved) -- the one thing the
+        // dead lane did that the working lane never does. Decode the 24kHz
+        // PCM16 straight into `playerFormat` (float32) here instead, so the
+        // live/Spotter lane rides the exact same proven, converter-free path
+        // the agent's WAV voice already does. int16 -> float is just a divide
+        // by 32768; it cannot fail the way the converter silently did
+        // (`outBuffer.frameLength == 0` -> counted as a clip failure, never
+        // scheduled, never heard).
+        guard let liveBuffer = AVAudioPCMBuffer(pcmFormat: playerFormat, frameCapacity: AVAudioFrameCount(sampleCount)),
+              let channelData = liveBuffer.floatChannelData else { return }
         liveBuffer.frameLength = AVAudioFrameCount(sampleCount)
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             let dst = channelData[0]
             for i in 0..<sampleCount {
                 let lo = UInt16(raw[4 + i * 2])
                 let hi = UInt16(raw[4 + i * 2 + 1])
-                dst[i] = Int16(bitPattern: lo | (hi << 8))
+                dst[i] = Float(Int16(bitPattern: lo | (hi << 8))) / 32768.0
             }
         }
-        schedule(liveBuffer, from: liveFormat)
+        // `from: playerFormat` -> schedule() takes its converter-free fast
+        // path, identical to a 24kHz WAV clip.
+        schedule(liveBuffer, from: playerFormat)
     }
 
     /// Converts any incoming buffer to the one fixed `playerFormat` and
