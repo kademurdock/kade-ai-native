@@ -493,14 +493,29 @@ final class StreamingCallService: NSObject, ObservableObject {
         // longer exists, and hearing half of it land after the reconnect
         // greeting would be worse than losing it.
         flushPlayback()
-        // Remember what was running so it can be put back, then clear the
-        // published flags: the new session starts with neither lane on, and
-        // leaving them true would leave the camera running against a socket
-        // that no longer exists.
+        // Remember what was running so it can be re-requested from the
+        // fresh session in `finishReconnect` -- but do NOT clear `liveOn`/
+        // `videoOn` here. An earlier version of this method did, on the
+        // theory that "the new session starts with neither lane on." That
+        // was wrong in a way that only showed up by tracing CallView's own
+        // onChange handlers, not by re-reading this function in isolation:
+        // flipping `videoOn` false (after `liveOn` had already gone false
+        // moments before) satisfies `if !callService.liveOn { camera.stop() }`
+        // in CallView's `onChange(of: callService.videoOn)`, which ALSO
+        // speaks "Camera off." -- a false announcement in the middle of a
+        // transient reconnect, plus a needless AVCaptureSession stop/
+        // restart, right as the caller is being told to "hold on." The
+        // camera hardware staying up during the gap is harmless: frames it
+        // keeps producing just get silently dropped by `sendJSON`'s own
+        // nil-`webSocketTask` guard until the socket is back, matching this
+        // service's fail-soft pattern everywhere else. So `liveOn`/
+        // `videoOn` now stay exactly as they were for the whole gap, the
+        // camera preview stays on screen (accurately -- it IS still
+        // running), and the status header keeps saying the Spotter's name
+        // through "Reconnecting..." rather than reverting to the original
+        // agent's only to flip back a moment later.
         let wasLive = liveOn
         let wasVideo = videoOn
-        liveOn = false
-        videoOn = false
         UIAccessibility.post(
             notification: .announcement,
             argument: attempt == 1

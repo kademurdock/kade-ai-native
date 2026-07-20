@@ -71,6 +71,10 @@ targets:
           - UIApplicationShortcutItemType: com.kademurdock.kadeai.conversations
             UIApplicationShortcutItemTitle: Your conversations
             UIApplicationShortcutItemIconSymbolName: bubble.left.and.bubble.right
+          - UIApplicationShortcutItemType: com.kademurdock.kadeai.describe
+            UIApplicationShortcutItemTitle: Describe
+            UIApplicationShortcutItemSubtitle: Photo or document
+            UIApplicationShortcutItemIconSymbolName: plus.viewfinder
     entitlements:
       path: KadeAI.entitlements
       properties:

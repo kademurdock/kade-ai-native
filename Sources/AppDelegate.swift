@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "com.kademurdock.kadeai.callSpotter": destination = .spotterCall
         case "com.kademurdock.kadeai.transcribe": destination = .transcribe
         case "com.kademurdock.kadeai.conversations": destination = .conversations
+        case "com.kademurdock.kadeai.describe": destination = .describe
         default: destination = nil
         }
         guard let destination else { return false }

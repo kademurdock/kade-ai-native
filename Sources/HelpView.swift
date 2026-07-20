@@ -185,6 +185,24 @@ struct HelpSection: Identifiable {
                 body: "Copy transcript puts it on the clipboard. Share transcript opens the share sheet, including Save to Files."
             ),
         ]),
+        HelpSection(title: "Describe", entries: [
+            HelpEntry(
+                title: "What it's for",
+                body: "Getting a photo, flyer, letter, screenshot, or document described to you, or read back word for word — a menu, a piece of mail, a photo someone sent you."
+            ),
+            HelpEntry(
+                title: "Adding something",
+                body: "Add a photo or document gives you three ways in: Take a photo with the camera right now, Choose a photo from your library, or Choose a file for a PDF, Word document, or text file from Files."
+            ),
+            HelpEntry(
+                title: "What you get back",
+                body: "A full spoken description — people, objects, colors, layout, and any text read word for word. For documents there's also Document text: the exact wording, separate from the description, for when you need it precise rather than summarized."
+            ),
+            HelpEntry(
+                title: "Dates it finds",
+                body: "If a document or photo has a future date on it — an appointment, a due date, an event — it shows up under Dates found with its own Save reminder button."
+            ),
+        ]),
         HelpSection(title: "Siri and Quick Actions", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",
@@ -192,7 +210,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "The other phrases",
-                body: "\"Hey Siri, transcribe with Kade-AI\" opens the transcriber ready to record. \"Hey Siri, open my Kade-AI conversations\" goes straight to your conversation list."
+                body: "\"Hey Siri, transcribe with Kade-AI\" opens the transcriber ready to record. \"Hey Siri, describe something with Kade-AI\" opens Describe. \"Hey Siri, open my Kade-AI conversations\" goes straight to your conversation list."
             ),
             HelpEntry(
                 title: "Renaming them",
@@ -200,7 +218,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Quick Actions on the app icon",
-                body: "Touch and hold the Kade-AI icon on your Home Screen for the same three shortcuts — Call your Spotter, Transcribe, and Your conversations — without needing to say anything out loud."
+                body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts — Call your Spotter, Transcribe, Describe, and Your conversations — without needing to say anything out loud."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [

@@ -165,6 +165,8 @@ struct ContentView: View {
                     HelpView()
                 case .conversations:
                     ConversationListView()
+                case .describe:
+                    DescribeView(apiClient: apiClient)
                 }
             }
         }
@@ -319,6 +321,17 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Records what you say and turns it into text you can edit, tidy up and share.")
 
+            // Session 16: photo/document description, the other half of
+            // "as much accessible native as possible" alongside Transcribe
+            // -- same shape (upload, get something back to read or hear),
+            // different sense.
+            Button { route = .describe } label: {
+                Label("Describe a photo or document", systemImage: "plus.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Take or choose a photo, or pick a document, and get it described or read back to you.")
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -394,6 +407,8 @@ struct ContentView: View {
             route = .transcribe
         case .conversations:
             route = .conversations
+        case .describe:
+            route = .describe
         }
     }
 
@@ -485,12 +500,14 @@ enum HomeRoute: Identifiable, Hashable {
     case transcribe
     case help
     case conversations
+    case describe
 
     var id: String {
         switch self {
         case .transcribe: return "transcribe"
         case .help: return "help"
         case .conversations: return "conversations"
+        case .describe: return "describe"
         }
     }
 }

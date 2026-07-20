@@ -55,6 +55,7 @@ final class IntentRouter: ObservableObject {
         case spotterCall
         case transcribe
         case conversations
+        case describe
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
@@ -115,6 +116,26 @@ struct TranscribeIntent: AppIntent {
     }
 }
 
+struct DescribeIntent: AppIntent {
+    static var title: LocalizedStringResource = "Describe a photo or document"
+    static var description = IntentDescription(
+        "Opens Describe so you can get a photo or document read to you or described out loud."
+    )
+    static var openAppWhenRun: Bool = true
+
+    /// Nonisolated, hopping to the main actor explicitly inside. Marking
+    /// `perform()` itself `@MainActor` would be an actor-isolation mismatch
+    /// against `AppIntent`'s own nonisolated requirement -- exactly the
+    /// class of "reads perfectly, only the compiler knows" problem that
+    /// cost a whole build cycle when `.searchFocused` turned out to be
+    /// iOS 18-only. Nothing crosses the boundary here but the enum case;
+    /// the singleton is reached from inside the hop.
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.describe) }
+        return .result()
+    }
+}
+
 struct OpenConversationsIntent: AppIntent {
     static var title: LocalizedStringResource = "Open your conversations"
     static var description = IntentDescription(
@@ -166,6 +187,15 @@ struct KadeAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Your conversations",
             systemImageName: "bubble.left.and.bubble.right"
+        )
+        AppShortcut(
+            intent: DescribeIntent(),
+            phrases: [
+                "Describe something with \(.applicationName)",
+                "Describe a photo with \(.applicationName)",
+            ],
+            shortTitle: "Describe",
+            systemImageName: "plus.viewfinder"
         )
     }
 }
