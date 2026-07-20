@@ -971,6 +971,17 @@ final class StreamingCallService: NSObject, ObservableObject {
             playerNode.play()
             nextPlayheadSample = nil   // the restart reset the node's timeline
         }
+        // Session 21: a RUNNING ENGINE is not the same as a PLAYING NODE. A
+        // prior `stop()` (barge-in / flush / a clear before the Spotter
+        // handoff) can leave the player node parked while the engine keeps
+        // running -- and a parked node silently swallows every
+        // `scheduleBuffer`, which is exactly the "N scheduled, 0 played"
+        // symptom Kade hit on Spotter (51 of 51 never played). Cheap to
+        // assert on every clip; `play()` on an already-playing node is a
+        // no-op.
+        if !playerNode.isPlaying {
+            playerNode.play()
+        }
         // Fast path: a clip already in the player's own format needs no
         // conversion at all, and skipping the converter removes one more
         // place a silent failure could hide.
@@ -1018,50 +1029,30 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// client, which shares one playhead across both lanes so they can
     /// never overlap.
     private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer) {
-        let rate = playerFormat.sampleRate
-        let lead = AVAudioFramePosition(rate * 0.08)  // ~80ms jitter cushion
         let confirmPlayed: () -> Void = { [weak self] in
             Task { @MainActor in
                 self?.clipsPlayed += 1
                 self?.updateAudioDiagnostic()
             }
         }
-        guard let renderTime = playerNode.lastRenderTime,
-              let playerTime = playerNode.playerTime(forNodeTime: renderTime) else {
-            // Session 17/18's own bug report (a Spotter reply that got
-            // scheduled -- clipsScheduled incremented -- but was never
-            // actually audible) traced to exactly this branch: `lastRenderTime`/
-            // `playerTime(forNodeTime:)` are nil right after the node (re)starts,
-            // before its first real render callback -- true at the very
-            // start of a fresh call, and plausibly again right after
-            // `flushPlayback()`'s stop()+play() cycle (a barge-in, or the
-            // clear() that can precede a Spotter/Live handoff). The
-            // PREVIOUS version of this code fabricated `nowSample = 0` here
-            // and pinned the buffer to a numeric sample-time built from
-            // that guess -- which has no reliable relationship to the
-            // node's REAL internal clock once it starts rendering, and a
-            // buffer pinned to a wrong/effectively-past `AVAudioTime` can
-            // be silently dropped by `AVAudioPlayerNode` rather than played
-            // -- worse than the jitter this whole mechanism exists to fix,
-            // and exactly the kind of silent failure `clipsScheduled` being
-            // mislabeled "played" was masking. Falling back to the OLD,
-            // proven-safe immediate scheduling (no `at:` time at all) for
-            // just this one buffer costs nothing but the jitter cushion on
-            // ONE clip; `nextPlayheadSample` stays nil so the NEXT buffer
-            // tries the real pinned timeline fresh once a render time
-            // actually exists, rather than building forward from a guess.
-            playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
-            nextPlayheadSample = nil
-            clipsScheduled += 1
-            return
-        }
-        let nowSample = playerTime.sampleTime
-        let earliest = nowSample + lead
-        let startAt = max(earliest, nextPlayheadSample ?? earliest)
-        let when = AVAudioTime(sampleTime: startAt, atRate: rate)
-        playerNode.scheduleBuffer(buffer, at: when, options: [], completionHandler: confirmPlayed)
-        nextPlayheadSample = startAt + AVAudioFramePosition(buffer.frameLength)
+        // Session 21: BARE, UNTIMED scheduling. The explicit-`AVAudioTime`
+        // timeline (added earlier to smooth Live/Spotter jitter) was leaving
+        // clips "scheduled, 0 played" -- 51 of 51 in Kade's Spotter sound
+        // check -- the classic failure of pinning `AVAudioPlayerNode` buffers
+        // to sample-times it then silently never renders (its own render
+        // clock and the time we computed can drift apart across the burst of
+        // tiny back-to-back PCM chunks a Spotter turn arrives in). A plain
+        // `scheduleBuffer` with no `at:` queues gaplessly behind whatever is
+        // already playing the instant the node reaches it -- the codebase's
+        // OWN proven-safe path (the connect tone and the old
+        // nil-render-time fallback both used it). Trading the ~80ms jitter
+        // cushion for audio that actually comes out is unambiguously right
+        // when the symptom is total silence; if Live stutter returns, that
+        // is a far better problem than no sound at all, and a real device is
+        // needed to tune it anyway.
+        playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
         clipsScheduled += 1
+        nextPlayheadSample = nil
     }
 
     /// Barge-in / `{type:'clear'}`: stop whatever's queued immediately.
