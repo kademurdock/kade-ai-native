@@ -133,6 +133,29 @@ struct CallView: View {
             }
         }
         .sensoryFeedback(.impact(weight: .light), trigger: callService.liveOn)
+        // Kade, session 17/18: "We need to add more cool stuff like
+        // haptics." A physical confirmation at the two moments this screen
+        // already announces to VoiceOver by voice alone -- "Call connected,
+        // listening." and "Call ended." -- same reasoning as the existing
+        // Spotter on/off haptic just above: a non-audio channel for a
+        // call-state transition that matters. Deliberately triggered off
+        // `didAnnounceConnected`, NOT the raw `callService.status` value,
+        // for "connected": `status` legitimately cycles back to `.listening`
+        // on every ordinary turn all call long (whenever it's her turn to
+        // talk again), which is exactly why the EXISTING voice announcement
+        // just above already needed a one-shot latch (`didAnnounceConnected`)
+        // instead of reacting to `.listening` directly -- binding the haptic
+        // to that same latch keeps it a true one-shot "call connected" cue
+        // instead of a buzz on every single turn. `.ended` has no such
+        // recurrence risk (a terminal state for this view's one call), so it
+        // stays a direct status trigger.
+        .sensoryFeedback(trigger: didAnnounceConnected) { old, new in
+            (!old && new) ? .success : nil
+        }
+        .sensoryFeedback(trigger: callService.status) { _, new in
+            if case .ended = new { return .impact(weight: .light) }
+            return nil
+        }
         .alert(
             "Spotter",
             isPresented: Binding(

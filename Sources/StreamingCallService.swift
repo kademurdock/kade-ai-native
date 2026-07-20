@@ -123,13 +123,23 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// the caller something she can actually READ OUT and report back, so
     /// the next attempt narrows the cause in one pass instead of three.
     /// Reports: clips received off the wire, clips actually scheduled for
-    /// playback, conversion failures, the live output route, and the system
-    /// output volume.
+    /// playback, clips CONFIRMED played (via the scheduler's own completion
+    /// handler -- session 17/18's own bug report, a Spotter reply that was
+    /// scheduled but genuinely never audible, is exactly why "scheduled"
+    /// and "played" are no longer conflated here), conversion failures, the
+    /// live output route, and the system output volume.
     @Published private(set) var audioDiagnostic: String = "No audio received yet."
 
     private var clipsReceived = 0
     private var clipsScheduled = 0
+    private var clipsPlayed = 0
     private var clipFailures = 0
+    /// Rearmed to `false` every time a FRESH Spotter/Live segment starts
+    /// (`liveOn` false -> true); flipped `true` the first time that
+    /// segment's own audio is actually scheduled, gating a one-shot
+    /// confirmation tone distinct from the whole-call connect tone -- see
+    /// `playLiveStartTone()`.
+    private var liveTonePlayed = false
     private var routeObserver: NSObjectProtocol?
     /// When this call started, used by the post-call handoff to make sure it
     /// opens THIS call's transcript rather than a stale one.
@@ -438,7 +448,13 @@ final class StreamingCallService: NSObject, ObservableObject {
         case "clear":
             flushPlayback()
         case "live-state":
+            let wasLive = liveOn
             liveOn = msg.on ?? false
+            // A fresh Spotter/Live segment starting (not just staying on
+            // across an unrelated live-state update) rearms the one-shot
+            // "Spotter's own audio is really flowing" tone -- see
+            // `playLiveStartTone()`.
+            if liveOn && !wasLive { liveTonePlayed = false }
             if let name = msg.spotterName { spotterName = name }
             liveMinutesLeft = msg.minutesLeft
             if let m = msg.message { liveNotice = m }
@@ -753,6 +769,39 @@ final class StreamingCallService: NSObject, ObservableObject {
         playerNode.scheduleBuffer(buffer, completionHandler: nil)
     }
 
+    /// Session 17/18 (Kade, after a Spotter call went silent: "Spotter
+    /// should prob beep like normal calls do"). The connect tone above
+    /// proves the ENGINE/OUTPUT PATH works at the moment a call starts --
+    /// it says nothing about whether Spotter/Live's own audio (a
+    /// completely separate lane, `enqueueLivePCM`, added/changed later in
+    /// the call) actually made it to the speaker. This is a second,
+    /// audibly DIFFERENT one-shot earcon (a single higher chirp, not the
+    /// two-note connect tone) fired the first time a fresh Spotter/Live
+    /// segment's own audio is actually handed to the player -- same
+    /// diagnostic value as the connect tone, scoped to the specific lane
+    /// this session's bug report was about. Uses the same bare
+    /// `scheduleBuffer` (no `at:` time) as the connect tone, deliberately
+    /// NOT `scheduleOnTimeline` -- this is a fixed, known-good utility
+    /// sound, not part of the jitter-sensitive reply stream, so there is no
+    /// reason to expose it to the same timing math this session's other
+    /// fix was about.
+    private func playLiveStartTone() {
+        let sampleRate = playerFormat.sampleRate
+        let total = Int(sampleRate * 0.09)
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: playerFormat, frameCapacity: AVAudioFrameCount(total)
+        ), let channel = buffer.floatChannelData else { return }
+        buffer.frameLength = AVAudioFrameCount(total)
+        let dst = channel[0]
+        let freq = 1567.98 // G6 -- clearly distinct from the connect tone's A5/D6 pair
+        for i in 0..<total {
+            let phase = 2.0 * Double.pi * freq * (Double(i) / sampleRate)
+            let fade = min(1.0, Double(min(i, total - i)) / (sampleRate * 0.01))
+            dst[i] = Float(sin(phase) * 0.22 * fade)
+        }
+        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
     /// Rebuilds the human-readable diagnostic string. Cheap, and only ever
     /// called on genuinely interesting transitions (engine start, a clip
     /// arriving, a route change), never per audio frame.
@@ -772,9 +821,18 @@ final class StreamingCallService: NSObject, ObservableObject {
         var parts = [
             "Playing through \(route).",
             "Volume \(volumePercent) percent.",
-            "\(clipsReceived) clips received, \(clipsScheduled) played."
+            "\(clipsReceived) clips received, \(clipsScheduled) scheduled, \(clipsPlayed) confirmed played."
         ]
         if clipFailures > 0 { parts.append("\(clipFailures) could not be decoded.") }
+        // A gap between "scheduled" and "confirmed played" that keeps
+        // growing (rather than just trailing behind by the last clip or
+        // two, which is normal -- playback confirmation lags scheduling
+        // slightly by design) is the exact signature of session 17/18's
+        // bug report: audio handed to the OS scheduler that never actually
+        // came out of the speaker.
+        if clipsScheduled - clipsPlayed > 2 {
+            parts.append("\(clipsScheduled - clipsPlayed) scheduled clips have not been confirmed played yet.")
+        }
         audioDiagnostic = parts.joined(separator: " ")
     }
 
@@ -854,6 +912,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     private func enqueueLivePCM(_ data: Data) {
         let sampleCount = (data.count - 4) / 2
         guard sampleCount > 0 else { return }
+        if liveOn, !liveTonePlayed {
+            liveTonePlayed = true
+            playLiveStartTone()
+        }
         let liveFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16, sampleRate: 24000, channels: 1, interleaved: true
         )!
@@ -939,17 +1001,46 @@ final class StreamingCallService: NSObject, ObservableObject {
     private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer) {
         let rate = playerFormat.sampleRate
         let lead = AVAudioFramePosition(rate * 0.08)  // ~80ms jitter cushion
-        let nowSample: AVAudioFramePosition
-        if let renderTime = playerNode.lastRenderTime,
-           let playerTime = playerNode.playerTime(forNodeTime: renderTime) {
-            nowSample = playerTime.sampleTime
-        } else {
-            nowSample = nextPlayheadSample ?? 0
+        let confirmPlayed: () -> Void = { [weak self] in
+            Task { @MainActor in
+                self?.clipsPlayed += 1
+                self?.updateAudioDiagnostic()
+            }
         }
+        guard let renderTime = playerNode.lastRenderTime,
+              let playerTime = playerNode.playerTime(forNodeTime: renderTime) else {
+            // Session 17/18's own bug report (a Spotter reply that got
+            // scheduled -- clipsScheduled incremented -- but was never
+            // actually audible) traced to exactly this branch: `lastRenderTime`/
+            // `playerTime(forNodeTime:)` are nil right after the node (re)starts,
+            // before its first real render callback -- true at the very
+            // start of a fresh call, and plausibly again right after
+            // `flushPlayback()`'s stop()+play() cycle (a barge-in, or the
+            // clear() that can precede a Spotter/Live handoff). The
+            // PREVIOUS version of this code fabricated `nowSample = 0` here
+            // and pinned the buffer to a numeric sample-time built from
+            // that guess -- which has no reliable relationship to the
+            // node's REAL internal clock once it starts rendering, and a
+            // buffer pinned to a wrong/effectively-past `AVAudioTime` can
+            // be silently dropped by `AVAudioPlayerNode` rather than played
+            // -- worse than the jitter this whole mechanism exists to fix,
+            // and exactly the kind of silent failure `clipsScheduled` being
+            // mislabeled "played" was masking. Falling back to the OLD,
+            // proven-safe immediate scheduling (no `at:` time at all) for
+            // just this one buffer costs nothing but the jitter cushion on
+            // ONE clip; `nextPlayheadSample` stays nil so the NEXT buffer
+            // tries the real pinned timeline fresh once a render time
+            // actually exists, rather than building forward from a guess.
+            playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
+            nextPlayheadSample = nil
+            clipsScheduled += 1
+            return
+        }
+        let nowSample = playerTime.sampleTime
         let earliest = nowSample + lead
         let startAt = max(earliest, nextPlayheadSample ?? earliest)
         let when = AVAudioTime(sampleTime: startAt, atRate: rate)
-        playerNode.scheduleBuffer(buffer, at: when, options: [], completionHandler: nil)
+        playerNode.scheduleBuffer(buffer, at: when, options: [], completionHandler: confirmPlayed)
         nextPlayheadSample = startAt + AVAudioFramePosition(buffer.frameLength)
         clipsScheduled += 1
     }
