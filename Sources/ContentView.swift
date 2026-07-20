@@ -108,6 +108,20 @@ struct ContentView: View {
                     // Spotter" mid-call) -- caught from the build's own CI
                     // screenshot, not guessed. Games/Game Room genuinely
                     // aren't ported, so that half of the line still holds.
+                    // Session 17/18: the Game Room leaderboard and the
+                    // Matchmaker are now native (see the two new buttons
+                    // below) -- but this line only ever shows BEFORE
+                    // sign-in, and both of those require signing in same
+                    // as everything else here, so the copy itself still
+                    // reads true for who actually sees it. Actually
+                    // PLAYING a game was never blocked either way, on web
+                    // or natively: it happens through ordinary chat ("deal
+                    // me in" to any companion), since the game engine
+                    // lives server-side and the web's own GameTable widget
+                    // is decorative/aria-hidden by design (see
+                    // GameRoomService's doc comment) -- there was never a
+                    // real gap there, just an unadvertised capability, now
+                    // written down in Help.
                     if !isSignedIn {
                         Text("Sign in to chat with your Kade-AI companions and call your Spotter. For games and everything else, use \"Open Kade-AI web\" below.")
                             .font(.body)
@@ -169,6 +183,10 @@ struct ContentView: View {
                     DescribeView(apiClient: apiClient)
                 case .quickDictate:
                     TranscribeView(apiClient: apiClient, quickMode: true)
+                case .matchmaker:
+                    MatchmakerView(apiClient: apiClient)
+                case .gameRoom:
+                    GameRoomView(apiClient: apiClient)
                 }
             }
         }
@@ -333,6 +351,28 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Take or choose a photo or video, or pick a document, and get it described or read back to you.")
+
+            // Session 17/18 (Kade: "match maker... game room... so many
+            // things"): native ports of two more web-only pages. Both are
+            // read/quiz-only, no live multi-turn state to manage -- see
+            // MatchmakerService/GameRoomService's doc comments for why
+            // these two specifically were tractable in one session while
+            // Debate Room, the full games catalog, and Agent Builder were
+            // deliberately left for a future one (see
+            // NEXT_SESSION_PASTE.md for the full scoping notes on each).
+            Button { route = .matchmaker } label: {
+                Label("Matchmaker", systemImage: "person.2.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Five quick questions, then three companions who might be a good fit.")
+
+            Button { route = .gameRoom } label: {
+                Label("Game Room", systemImage: "gamecontroller")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Family standings and recent results from games played in chat.")
 
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
@@ -506,6 +546,8 @@ enum HomeRoute: Identifiable, Hashable {
     case conversations
     case describe
     case quickDictate
+    case matchmaker
+    case gameRoom
 
     var id: String {
         switch self {
@@ -514,6 +556,8 @@ enum HomeRoute: Identifiable, Hashable {
         case .conversations: return "conversations"
         case .describe: return "describe"
         case .quickDictate: return "quickDictate"
+        case .matchmaker: return "matchmaker"
+        case .gameRoom: return "gameRoom"
         }
     }
 }

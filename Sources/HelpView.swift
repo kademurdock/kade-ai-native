@@ -207,6 +207,20 @@ struct HelpSection: Identifiable {
                 body: "If a document or photo has a future date on it — an appointment, a due date, an event — it shows up under Dates found with its own Save reminder button."
             ),
         ]),
+        HelpSection(title: "Games, Matchmaker, and Game Room", entries: [
+            HelpEntry(
+                title: "Playing a game",
+                body: "You don't need a special screen for this — just tell any companion \"deal me in\" in an ordinary chat, on a call, or by phone, and they'll deal you into Blackjack, Uno, Trivia, Hangman, and more. The game runs right in the conversation."
+            ),
+            HelpEntry(
+                title: "The Matchmaker",
+                body: "Five quick questions about what you're in the mood for, then three companions who might be a good match, each with why they were picked. Nothing you answer is saved, and you can retake it as many times as you like. A Start talking to button on each match takes you straight into a new conversation with them."
+            ),
+            HelpEntry(
+                title: "The Game Room",
+                body: "Family standings from every finished game — who's won the most, recent results, and a couple of highlights like the biggest Blackjack win. Walking away from a table mid-game doesn't count against you; only played-out games land here."
+            ),
+        ]),
         HelpSection(title: "Siri and Quick Actions", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",

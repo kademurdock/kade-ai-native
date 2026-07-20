@@ -22,6 +22,16 @@ import UIKit
 /// "NEW CONVERSATIONS" doc section for the exact server contract.
 struct ConversationDetailView: View {
     let conversation: KadeConversation?
+    /// Preselects who answers a brand-new conversation's first message --
+    /// used by `MatchmakerView`'s "Start talking to X" (session 17/18) so
+    /// picking a match doesn't dead-end at the ordinary agent-picker sheet
+    /// a plain new conversation shows. `nil` (every pre-existing call
+    /// site) is the ordinary, unchanged behavior. A plain stored `let`
+    /// with a default, not `@State` -- extends the same compiler-
+    /// synthesized memberwise init this file already relies on for
+    /// `conversation`, so it needs none of the hand-written-init care the
+    /// "no custom init" note on `selectedAgentId` below warns about.
+    let initialAgentId: String? = nil
     @State private var conversationId: String?
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
@@ -183,7 +193,7 @@ struct ConversationDetailView: View {
             // it nil and steer straight to the picker instead, since the
             // composer has nobody to send to otherwise.
             if selectedAgentId == nil {
-                selectedAgentId = conversation?.agentId
+                selectedAgentId = conversation?.agentId ?? initialAgentId
             }
             if conversationId == nil {
                 conversationId = conversation?.conversationId
@@ -192,7 +202,9 @@ struct ConversationDetailView: View {
                 await load()
             } else {
                 isLoading = false
-                activeSheet = .agentPicker
+                if selectedAgentId == nil {
+                    activeSheet = .agentPicker
+                }
             }
             await agentsService.loadIfNeeded()
         }
