@@ -437,6 +437,25 @@ final class StreamingCallService: NSObject, ObservableObject {
             // otherwise a call long enough to cross the Live cap three
             // times would run out of attempts and die on the fourth.
             reconnectAttempts = 0
+            // FIX (session 21, Kade: the home-screen "Call your Spotter"
+            // button "opens up a call, nobody responds"). A DIRECT Spotter
+            // call (spotterDirect + no agent) has nobody to talk to UNLESS
+            // the Spotter comes online -- and this client never actually
+            // asked for it, it only relied on the server auto-enabling live
+            // from the hello's `spotterDirect` flag. If that hasn't happened
+            // shortly after the socket is ready, ask explicitly, using the
+            // exact same request the reconnect path already uses to restore
+            // Spotter (setLive on/ack/direct). Guarded on `!liveOn` so if the
+            // server DID auto-enable, this is a no-op and can't double-toggle.
+            if callSpotterDirect {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    guard let self else { return }
+                    if !self.liveOn, self.webSocketTask != nil, !self.stopping {
+                        self.setLive(on: true, ack: true, direct: true)
+                    }
+                }
+            }
         case "state":
             switch msg.state {
             case "speaking": status = .speaking

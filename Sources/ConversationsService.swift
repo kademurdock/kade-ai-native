@@ -412,8 +412,17 @@ final class ConversationsService: ObservableObject {
                 guard let merged = $0.mergedConversationId, !merged.isEmpty else { return false }
                 guard let started = KadeDateFormatting.date(from: $0.startedAt) else { return false }
                 // 90s of slack: `startedAt` is stamped when the CALL began,
-                // which is necessarily before the moment we started waiting.
-                return started > startedAfter.addingTimeInterval(-90 * 60)
+                // which is a few seconds before this Date (also a call start),
+                // never more. FIX (session 21): this was `-90 * 60` -- 90
+                // MINUTES, not 90 seconds -- so an EMPTY call that minted no
+                // conversation of its own (a Spotter call nobody answered)
+                // would match an unrelated call from up to an hour and a half
+                // earlier that DID have a `mergedConversationId`, and drop the
+                // caller into THAT old conversation (the "it put me back in my
+                // last Kiana chat" bug). At a real 90s window an empty call
+                // resolves to nil and the call screen just dismisses home,
+                // which is the correct "nothing to show" behavior.
+                return started > startedAfter.addingTimeInterval(-90)
             }
             if let merged = fresh?.mergedConversationId,
                let convo = await fetchConversation(id: merged) {
