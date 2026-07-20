@@ -221,6 +221,24 @@ struct HelpSection: Identifiable {
                 body: "Family standings from every finished game — who's won the most, recent results, and a couple of highlights like the biggest Blackjack win. Walking away from a table mid-game doesn't count against you; only played-out games land here."
             ),
         ]),
+        HelpSection(title: "Debate Room and Conversation Hall", entries: [
+            HelpEntry(
+                title: "Starting a room",
+                body: "The plus button in Debate Room lets you set a topic or scene, add optional ground rules, and pick 2 to 6 companions to put in it together."
+            ),
+            HelpEntry(
+                title: "Running a room",
+                body: "Continue lets whoever's turn it is speak next. Choose who's next lets you pick a specific companion to jump in out of turn. You can type something yourself at any point — you don't have to wait for a turn."
+            ),
+            HelpEntry(
+                title: "Sharing to the Hall",
+                body: "The button in the top corner of a room lets you share it, with a title, to the Conversation Hall — where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
+            ),
+            HelpEntry(
+                title: "The Conversation Hall",
+                body: "Reached from Debate Room's Hall button. Every shared room, newest first — tap one to read the whole thing. Grown-up accounts only."
+            ),
+        ]),
         HelpSection(title: "Siri and Quick Actions", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",

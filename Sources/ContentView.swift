@@ -187,6 +187,8 @@ struct ContentView: View {
                     MatchmakerView(apiClient: apiClient)
                 case .gameRoom:
                     GameRoomView(apiClient: apiClient)
+                case .debateRoom:
+                    RoomListView(apiClient: apiClient)
                 }
             }
         }
@@ -374,6 +376,19 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Family standings and recent results from games played in chat.")
 
+            // Session 17/18, later the same night once Kade was back up:
+            // the biggest item researched-but-deferred earlier turned out
+            // more tractable on a full read of the route (475 lines, no
+            // WebSocket, plain request/response -- same risk shape as
+            // Matchmaker/Game Room, not the real-time-call shape). See
+            // RoomService.swift for the full contract.
+            Button { route = .debateRoom } label: {
+                Label("Debate Room", systemImage: "person.3.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.")
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -548,6 +563,7 @@ enum HomeRoute: Identifiable, Hashable {
     case quickDictate
     case matchmaker
     case gameRoom
+    case debateRoom
 
     var id: String {
         switch self {
@@ -558,6 +574,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .quickDictate: return "quickDictate"
         case .matchmaker: return "matchmaker"
         case .gameRoom: return "gameRoom"
+        case .debateRoom: return "debateRoom"
         }
     }
 }
