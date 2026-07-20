@@ -500,7 +500,7 @@ struct ConversationDetailView: View {
             // flight. Purely decorative -- KadePulseDot is accessibilityHidden
             // and collapses to a static dot under Reduce Motion, so VoiceOver
             // and motion-sensitive users are untouched.
-            KadePulseDot(color: .accentColor, diameter: 8, active: true)
+            KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
         }
@@ -994,10 +994,20 @@ struct ConversationDetailView: View {
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
             if readAloudEnabled, let reply = messages.last, !reply.isCreatedByUser {
+                // FIX (session 21, Kade: "Whit replies still come back as
+                // Kiana"). Attribute the spoken reply to whoever ACTUALLY
+                // authored it (`reply.agentId` / `reply.speakerLabel`), not to
+                // whichever agent is currently selected -- matching the
+                // per-message Read Aloud path above. `agentName` was hardcoded
+                // to `agentDisplayLabel` (the selected agent), so when the
+                // agent id was absent the voice fell back to the WRONG
+                // character's name-hash: a reply from Whit read out in Kiana's
+                // voice. `speakerLabel` is the server's own `sender` for that
+                // message, so this can never drift from the visible bubble.
                 voiceService.enqueueSpeak(
                     text: reply.displayText,
                     agentId: reply.agentId ?? selectedAgentId,
-                    agentName: agentDisplayLabel
+                    agentName: reply.speakerLabel
                 )
             }
             if wasNewConversation {

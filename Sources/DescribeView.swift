@@ -102,6 +102,17 @@ struct DescribeView: View {
         }
         .navigationTitle("Describe")
         .navigationBarTitleDisplayMode(.inline)
+        // Session 21: a description landing is the whole point of this
+        // screen and, for a blind user, a moment they otherwise learn about
+        // only by VoiceOver focus. Add a short earcon plus a success haptic
+        // the instant a result appears (errors set `errorMessage`, never
+        // `outcome`, so this only ever fires on real success).
+        .onChange(of: outcome != nil) { _, hasResult in
+            if hasResult { Earcons.shared.play(.actionDone) }
+        }
+        .sensoryFeedback(trigger: outcome != nil) { _, hasResult in
+            hasResult ? FeedbackPrefs.gate(.success) : nil
+        }
         .confirmationDialog("Add a photo, video, or document", isPresented: $showingSourceMenu) {
             Button("Take a photo") { showingCamera = true }
             Button("Choose a photo or video") { showingPhotosPicker = true }

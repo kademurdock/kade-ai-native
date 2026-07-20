@@ -227,9 +227,23 @@ struct KadePulseDot: View {
     /// Whether the pulse is "live" (animating). When false, or when reduced
     /// motion is on, it renders as a calm static dot.
     var active: Bool = true
+    /// Session 21 (Kade: "if something is pulsing visually, we could get a
+    /// matching little haptic that feels sensory cool. Nothing too
+    /// obnoxious"). Opt-in: a soft haptic "heartbeat" fired in time with the
+    /// visual pulse's expansion. Deliberately only turned on for SHORT-LIVED
+    /// pulses (the "replying" wait), never a whole-call indicator, so it can
+    /// never become a buzz-every-two-seconds-for-ten-minutes annoyance.
+    /// Honours the Haptics switch and both reduced-motion signals.
+    var haptic: Bool = false
+
+    /// The full pulse period: one grow + shrink of the 0.85s easeInOut
+    /// autoreversing animation below. The heartbeat fires once per period,
+    /// offset to land on the expansion, so touch and sight pulse together.
+    private let period: Double = 1.7
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var pulsing = false
+    @State private var beat: Task<Void, Never>? = nil
 
     var body: some View {
         let reduce = systemReduceMotion || FeedbackPrefs.shared.forceReduceMotion
@@ -244,8 +258,36 @@ struct KadePulseDot: View {
                     : .default,
                 value: pulsing
             )
-            .onAppear { if active && !reduce { pulsing = true } }
-            .onChange(of: active) { _, now in pulsing = now && !reduce }
+            .onAppear {
+                if active && !reduce { pulsing = true }
+                syncBeat(active: active, reduce: reduce)
+            }
+            .onChange(of: active) { _, now in
+                pulsing = now && !reduce
+                syncBeat(active: now, reduce: reduce)
+            }
+            .onDisappear { beat?.cancel(); beat = nil }
             .accessibilityHidden(true)
+    }
+
+    /// Start or stop the heartbeat to match the current pulse state. Only
+    /// runs when haptics are wanted here, the pulse is active, motion is
+    /// allowed, and the app-wide Haptics switch is on.
+    private func syncBeat(active: Bool, reduce: Bool) {
+        beat?.cancel(); beat = nil
+        guard haptic, active, !reduce,
+              UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
+        let period = self.period
+        beat = Task { @MainActor in
+            let generator = UIImpactFeedbackGenerator(style: .soft)
+            // Land the first beat on the pulse's peak (~half a period in),
+            // then one per period so touch tracks sight.
+            try? await Task.sleep(nanoseconds: UInt64(period / 2 * 1_000_000_000))
+            while !Task.isCancelled {
+                generator.prepare()
+                generator.impactOccurred(intensity: 0.55)
+                try? await Task.sleep(nanoseconds: UInt64(period * 1_000_000_000))
+            }
+        }
     }
 }

@@ -51,6 +51,20 @@ final class CameraCaptureController: ObservableObject {
     private var currentPosition: AVCaptureDevice.Position = .front
 
     init() {
+        // ROOT-CAUSE FIX (session 21, Kade: Spotter calls "can still hear me
+        // but I can't hear them," volume swinging with the last call's
+        // setting). An AVCaptureSession defaults
+        // `automaticallyConfiguresApplicationAudioSession = true`, so the
+        // instant the camera starts for Spotter it RECONFIGURES the shared
+        // AVAudioSession -- tearing down the `.playAndRecord`/`.voiceChat` +
+        // forced-speaker + Voice-Processing graph `StreamingCallService`
+        // carefully stood up, which drops the agent's OUTPUT (and lands the
+        // route in a different, persisted call-volume domain) while the mic
+        // INPUT survives. That is exactly "she hears me, I don't hear her,"
+        // and it only happens on Spotter because Spotter is the only thing
+        // that starts the camera. We own the audio session entirely, so tell
+        // capture to keep its hands off it.
+        session.automaticallyConfiguresApplicationAudioSession = false
         sampler.onEncodedFrame = { [weak self] jpeg in
             Task { @MainActor in self?.onFrame?(jpeg) }
         }

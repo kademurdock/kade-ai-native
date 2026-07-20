@@ -124,6 +124,17 @@ struct TranscribeView: View {
         }
         .navigationTitle(quickMode ? "Quick Dictate" : "Transcribe")
         .navigationBarTitleDisplayMode(.inline)
+        // Session 21: a non-visual "your words are ready" cue the moment a
+        // job (transcribe / import / tidy-up) finishes with real text and no
+        // error -- an earcon plus a success haptic, both honouring their
+        // switches. On this screen especially, a blind user otherwise has to
+        // keep probing the transcript to find out when it landed.
+        .onChange(of: isBusy) { was, now in
+            if was, !now, errorMessage == nil, hasText { Earcons.shared.play(.actionDone) }
+        }
+        .sensoryFeedback(trigger: isBusy) { was, now in
+            (was && !now && errorMessage == nil && hasText) ? FeedbackPrefs.gate(.success) : nil
+        }
         .task {
             // Auto-start exactly once, and only in quick mode -- an
             // ordinary visit to Transcribe (the home screen button) never
