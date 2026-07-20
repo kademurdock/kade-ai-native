@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "com.kademurdock.kadeai.transcribe": destination = .transcribe
         case "com.kademurdock.kadeai.conversations": destination = .conversations
         case "com.kademurdock.kadeai.describe": destination = .describe
+        case "com.kademurdock.kadeai.quickDictate": destination = .quickDictate
         default: destination = nil
         }
         guard let destination else { return false }

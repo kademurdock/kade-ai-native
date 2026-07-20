@@ -32,6 +32,21 @@ import UniformTypeIdentifiers
 ///   control that appears and disappears under your fingers is much harder
 ///   to navigate by touch than one that is consistently there and says it
 ///   is dimmed.
+///
+/// Session 16 ("Can we do an app keyboard like wispr flow?"): researched
+/// live before proposing anything, and it's genuinely not a small build --
+/// iOS does not let a keyboard extension touch the microphone at all, so
+/// EVERY voice keyboard (Wispr Flow's included, confirmed off their own
+/// support docs) has to hop out to its full app to record, then hop back,
+/// and as of iOS 26.4 that hop-back needs a manual swipe, not an automatic
+/// one. Asked her which way to go rather than guess; she picked the light
+/// option. `quickMode` is that: a way to LAND on this screen already
+/// listening (Siri, a Home Screen Quick Action, or an Action Button --
+/// `KadeAppShortcuts` makes this selectable as an Action Button target for
+/// free, no extra code) and have the clean transcript land on the
+/// clipboard the instant a take finishes, so the whole trip from "say
+/// something" to "paste it" is: trigger, talk, tap Stop, switch apps,
+/// paste. No keyboard extension, no App Group, no OS wall to fight.
 struct TranscribeView: View {
     @EnvironmentObject private var voiceService: VoiceService
     @StateObject private var service: TranscribeService
@@ -49,13 +64,28 @@ struct TranscribeView: View {
     private enum Focus: Hashable { case status, transcript }
     @AccessibilityFocusState private var a11yFocus: Focus?
 
-    init(apiClient: KadeAPIClient) {
+    /// `quickMode` is set only by the fast entry points (Siri "Quick
+    /// dictate," the Quick Action, an Action Button) -- the plain
+    /// "Transcribe a voice memo" home screen button always opens this at
+    /// `false`, unchanged from session 15's behavior: manual start, no
+    /// surprise clipboard writes while she's mid-way through building up a
+    /// longer note to organize.
+    let quickMode: Bool
+
+    init(apiClient: KadeAPIClient, quickMode: Bool = false) {
         _service = StateObject(wrappedValue: TranscribeService(client: apiClient))
+        self.quickMode = quickMode
     }
 
     private var isRecording: Bool { voiceService.isRecording }
     private var isBusy: Bool { service.isWorking || voiceService.isTranscribing }
     private var hasText: Bool { !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var introText: String {
+        quickMode
+            ? "Listening for a quick dictate. Say what you want, tap Stop when you're done, and it copies straight to your clipboard, ready to paste."
+            : "Record a thought, or import an audio file someone sent you, and get it back as text you can edit, tidy up, and share."
+    }
 
     /// Matches the web `/transcribe` page's own file input exactly:
     /// `accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.opus,.aac,.amr,.flac"`
@@ -80,7 +110,7 @@ struct TranscribeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Record a thought, or import an audio file someone sent you, and get it back as text you can edit, tidy up, and share.")
+                Text(introText)
                     .font(.body)
 
                 statusLine
@@ -92,8 +122,17 @@ struct TranscribeView: View {
             }
             .padding()
         }
-        .navigationTitle("Transcribe")
+        .navigationTitle(quickMode ? "Quick Dictate" : "Transcribe")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            // Auto-start exactly once, and only in quick mode -- an
+            // ordinary visit to Transcribe (the home screen button) never
+            // starts recording on its own. Guarded against `isRecording`
+            // so returning to an already-in-progress quick-dictate screen
+            // (e.g. after a transient view reload) can't double-start.
+            guard quickMode, !isRecording, !isBusy else { return }
+            await toggleRecording()
+        }
         // ONE sheet for this whole screen, behind one enum binding. Two
         // chained `.sheet` modifiers at the same level is genuinely
         // unreliable in SwiftUI — one can win and the other never present —
@@ -254,6 +293,16 @@ struct TranscribeView: View {
     private var shareButtons: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
+                voiceService.enqueueSpeak(text: transcript, agentId: nil, agentName: nil)
+            } label: {
+                Label("Read transcript aloud", systemImage: "speaker.wave.2")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText)
+            .accessibilityHint("Speaks the current transcript back to you -- the quickest way to confirm it came out right without reading the screen.")
+
+            Button {
                 UIPasteboard.general.string = transcript
                 UIAccessibility.post(notification: .announcement, argument: "Transcript copied.")
             } label: {
@@ -380,6 +429,17 @@ struct TranscribeView: View {
             transcript += "\n\n" + trimmed
         }
         a11yFocus = .transcript
+
+        // The whole point of quick mode: by the time she's done talking,
+        // the clean text is already sitting on the clipboard. Re-copies
+        // the FULL transcript (not just this take) after every completed
+        // take, not only the first, so a second dictate in the same
+        // session keeps the clipboard in sync with everything said so
+        // far -- never a stale partial copy of just the earlier piece.
+        if quickMode {
+            UIPasteboard.general.string = transcript
+            UIAccessibility.post(notification: .announcement, argument: "Transcript copied. Ready to paste.")
+        }
     }
 
     private func organize(_ style: TranscribeService.OrganizeStyle) async {

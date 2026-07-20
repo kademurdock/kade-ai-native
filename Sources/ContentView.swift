@@ -167,6 +167,8 @@ struct ContentView: View {
                     ConversationListView()
                 case .describe:
                     DescribeView(apiClient: apiClient)
+                case .quickDictate:
+                    TranscribeView(apiClient: apiClient, quickMode: true)
                 }
             }
         }
@@ -409,6 +411,8 @@ struct ContentView: View {
             route = .conversations
         case .describe:
             route = .describe
+        case .quickDictate:
+            route = .quickDictate
         }
     }
 
@@ -501,6 +505,7 @@ enum HomeRoute: Identifiable, Hashable {
     case help
     case conversations
     case describe
+    case quickDictate
 
     var id: String {
         switch self {
@@ -508,6 +513,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .help: return "help"
         case .conversations: return "conversations"
         case .describe: return "describe"
+        case .quickDictate: return "quickDictate"
         }
     }
 }

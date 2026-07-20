@@ -56,6 +56,7 @@ final class IntentRouter: ObservableObject {
         case transcribe
         case conversations
         case describe
+        case quickDictate
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
@@ -112,6 +113,22 @@ struct TranscribeIntent: AppIntent {
     /// the singleton is reached from inside the hop.
     func perform() async throws -> some IntentResult {
         await MainActor.run { IntentRouter.shared.request(.transcribe) }
+        return .result()
+    }
+}
+
+struct QuickDictateIntent: AppIntent {
+    static var title: LocalizedStringResource = "Quick dictate"
+    static var description = IntentDescription(
+        "Starts listening right away and copies the clean text to your clipboard the moment you stop, ready to paste anywhere."
+    )
+    static var openAppWhenRun: Bool = true
+
+    /// Nonisolated, hopping to the main actor explicitly inside -- see
+    /// every other intent in this file for why `perform()` itself is never
+    /// marked `@MainActor`.
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.quickDictate) }
         return .result()
     }
 }
@@ -196,6 +213,24 @@ struct KadeAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Describe",
             systemImageName: "plus.viewfinder"
+        )
+        // Session 16 ("an app keyboard like wispr flow?"): a real custom
+        // keyboard needs a whole new extension target and, per iOS's own
+        // hard block on microphone access inside keyboard extensions, an
+        // app-hop-to-record dance no different from this -- so this IS
+        // the fast path, not a placeholder for a bigger version later.
+        // Being a plain AppShortcut is also what makes it selectable as an
+        // iPhone 15 Pro+ Action Button target with zero extra code: the
+        // Action Button picks from any Shortcut/App Intent already on the
+        // phone, this one included, the moment it exists.
+        AppShortcut(
+            intent: QuickDictateIntent(),
+            phrases: [
+                "Quick dictate with \(.applicationName)",
+                "Dictate with \(.applicationName)",
+            ],
+            shortTitle: "Quick Dictate",
+            systemImageName: "mic.badge.plus"
         )
     }
 }

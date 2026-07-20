@@ -75,6 +75,10 @@ targets:
             UIApplicationShortcutItemTitle: Describe
             UIApplicationShortcutItemSubtitle: Photo or document
             UIApplicationShortcutItemIconSymbolName: plus.viewfinder
+          - UIApplicationShortcutItemType: com.kademurdock.kadeai.quickDictate
+            UIApplicationShortcutItemTitle: Quick Dictate
+            UIApplicationShortcutItemSubtitle: Copies to clipboard
+            UIApplicationShortcutItemIconSymbolName: mic.badge.plus
     entitlements:
       path: KadeAI.entitlements
       properties:

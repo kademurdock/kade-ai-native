@@ -177,6 +177,10 @@ struct HelpSection: Identifiable {
                 body: "Import audio file picks a recording someone sent you from Files, iCloud Drive, or another app — a voice memo, a video's audio, up to about two hours long — and adds its words to the transcript the same way a recorded take does."
             ),
             HelpEntry(
+                title: "Quick Dictate",
+                body: "Reachable by Siri (\"quick dictate with Kade-AI\"), a Home Screen Quick Action, or an Action Button — lands you here already listening. Tap Stop when you're done and the clean text is on your clipboard immediately, ready to paste into whatever you were doing. This is the fast way to get your voice into any app without a whole separate keyboard to install."
+            ),
+            HelpEntry(
                 title: "Tidying it up",
                 body: "Organize into notes gives you a title and bullet points. Clean up text keeps every word and just fixes the grammar, the filler words and the paragraphs. Undo puts back the version from before."
             ),
@@ -210,7 +214,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "The other phrases",
-                body: "\"Hey Siri, transcribe with Kade-AI\" opens the transcriber ready to record. \"Hey Siri, describe something with Kade-AI\" opens Describe. \"Hey Siri, open my Kade-AI conversations\" goes straight to your conversation list."
+                body: "\"Hey Siri, quick dictate with Kade-AI\" starts listening immediately and copies the result to your clipboard when you stop. \"Hey Siri, transcribe with Kade-AI\" opens the transcriber ready to record without auto-starting. \"Hey Siri, describe something with Kade-AI\" opens Describe. \"Hey Siri, open my Kade-AI conversations\" goes straight to your conversation list."
+            ),
+            HelpEntry(
+                title: "The Action Button",
+                body: "On phones that have one, open Settings, Action Button, choose Shortcut, and pick Quick Dictate (or any of the others) from Kade-AI. One press of the side button and it's listening, no unlocking to a home screen first."
             ),
             HelpEntry(
                 title: "Renaming them",
@@ -218,7 +226,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Quick Actions on the app icon",
-                body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts — Call your Spotter, Transcribe, Describe, and Your conversations — without needing to say anything out loud."
+                body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts — Call your Spotter, Transcribe, Describe, Quick Dictate, and Your conversations — without needing to say anything out loud."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [
