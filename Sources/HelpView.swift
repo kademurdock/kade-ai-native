@@ -173,6 +173,10 @@ struct HelpSection: Identifiable {
                 body: "Start recording, say your piece, stop. The text lands in the transcript. Record again and the next take is added on the end, so you can think in pieces without losing anything."
             ),
             HelpEntry(
+                title: "Importing a file",
+                body: "Import audio file picks a recording someone sent you from Files, iCloud Drive, or another app — a voice memo, a video's audio, up to about two hours long — and adds its words to the transcript the same way a recorded take does."
+            ),
+            HelpEntry(
                 title: "Tidying it up",
                 body: "Organize into notes gives you a title and bullet points. Clean up text keeps every word and just fixes the grammar, the filler words and the paragraphs. Undo puts back the version from before."
             ),
@@ -181,7 +185,7 @@ struct HelpSection: Identifiable {
                 body: "Copy transcript puts it on the clipboard. Share transcript opens the share sheet, including Save to Files."
             ),
         ]),
-        HelpSection(title: "Siri", entries: [
+        HelpSection(title: "Siri and Quick Actions", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",
                 body: "Say \"Hey Siri, call my Spotter with Kade-AI\" and the app opens straight into a Spotter call. You don't have to find the app or the button first."
@@ -193,6 +197,10 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Renaming them",
                 body: "If a phrase doesn't come naturally to you, open the Shortcuts app, find Kade-AI, and give any of these your own wording."
+            ),
+            HelpEntry(
+                title: "Quick Actions on the app icon",
+                body: "Touch and hold the Kade-AI icon on your Home Screen for the same three shortcuts — Call your Spotter, Transcribe, and Your conversations — without needing to say anything out loud."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [

@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// Voice-memo transcriber — the native port of the `/transcribe` web page.
 ///
@@ -43,6 +44,7 @@ struct TranscribeView: View {
     @State private var undoBuffer: String?
     @State private var activeSheet: TranscribeSheet?
     @State private var errorMessage: String?
+    @State private var showingFileImporter = false
 
     private enum Focus: Hashable { case status, transcript }
     @AccessibilityFocusState private var a11yFocus: Focus?
@@ -55,13 +57,34 @@ struct TranscribeView: View {
     private var isBusy: Bool { service.isWorking || voiceService.isTranscribing }
     private var hasText: Bool { !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    /// Matches the web `/transcribe` page's own file input exactly:
+    /// `accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.opus,.aac,.amr,.flac"`
+    /// (read off `kadeTranscribe.js`'s served HTML, not guessed). `.audio`
+    /// covers `audio/*` for any properly-tagged audio file, and
+    /// `.mpeg4Movie` covers `video/mp4` (a short video someone sends you —
+    /// Deepgram reads the audio track out of the container fine). The
+    /// per-extension lookups exist because several of these formats
+    /// (ogg, opus, amr, flac) have no dedicated named `UTType` constant in
+    /// the SDK; `UTType(filenameExtension:)` synthesizes a working dynamic
+    /// type from the extension even when the system has no built-in one,
+    /// which is what actually lets the picker recognize a `.opus` file
+    /// someone AirDropped over rather than silently graying it out.
+    private static let importTypes: [UTType] = {
+        var types: [UTType] = [.audio, .mpeg4Movie]
+        for ext in ["m4a", "mp3", "wav", "ogg", "opus", "aac", "amr", "flac"] {
+            if let type = UTType(filenameExtension: ext) { types.append(type) }
+        }
+        return types
+    }()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Record a thought or a voice memo and get it back as text you can edit, tidy up, and share.")
+                Text("Record a thought, or import an audio file someone sent you, and get it back as text you can edit, tidy up, and share.")
                     .font(.body)
 
                 statusLine
+                importButton
                 recordButton
                 transcriptEditor
                 organizeButtons
@@ -81,6 +104,18 @@ struct TranscribeView: View {
             case .share(let item):
                 ShareSheet(item: item)
             }
+        }
+        // A DIFFERENT presentation mechanism from `.sheet`/`.fullScreenCover`
+        // (backed by `UIDocumentPickerViewController`, driven by its own
+        // `isPresented` binding rather than an identifiable item) — doesn't
+        // compete with `activeSheet` for the "one presentation per view"
+        // rule the rest of this app follows, so it's safe alongside it.
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: Self.importTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            handleImportResult(result)
         }
         .alert(
             "Transcribe",
@@ -110,6 +145,25 @@ struct TranscribeView: View {
         if isRecording { return "Recording. Press Stop when you're done." }
         if voiceService.isTranscribing { return "Transcribing…" }
         return service.statusMessage
+    }
+
+    /// "Choose an audio file" on the web page — a friend's long voice
+    /// memo, something recorded in another app and saved to Files, an
+    /// attachment saved out of Mail or Messages. `UIDocumentPickerViewController`
+    /// under the hood (via `.fileImporter`), which already knows how to
+    /// reach iCloud Drive and any third-party file provider (Google Drive,
+    /// Dropbox, and so on) that's installed — this app doesn't have to know
+    /// about any of them individually.
+    private var importButton: some View {
+        Button {
+            showingFileImporter = true
+        } label: {
+            Label("Import audio file", systemImage: "square.and.arrow.down")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(isBusy)
+        .accessibilityHint("Pick a recording from Files or another app — up to about two hours long — and add its words to the transcript.")
     }
 
     private var recordButton: some View {
@@ -232,6 +286,56 @@ struct TranscribeView: View {
     }
 
     // MARK: - Actions
+
+    private func handleImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            Task { await importFile(url) }
+        }
+    }
+
+    /// Reads the picked file into memory and uploads it. Handles the two
+    /// things that are specific to "a file that isn't ours": the security-
+    /// scoped bookmark the system hands back for anything outside this
+    /// app's own sandbox (Files, iCloud Drive, another app's container) —
+    /// skipping `startAccessingSecurityScopedResource()` doesn't crash, it
+    /// just fails the subsequent read with a permission error, which is a
+    /// much more confusing thing to debug from a bug report than from
+    /// reading this comment — and a size check against the server's own
+    /// cap so a doomed upload fails immediately instead of after a long,
+    /// silent wait.
+    private func importFile(_ url: URL) async {
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
+
+        let name = url.lastPathComponent
+        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
+        let mimeType = resourceValues?.contentType?.preferredMIMEType
+        if let size = resourceValues?.fileSize, Int64(size) > TranscribeService.maxUploadBytes {
+            errorMessage = "\(name) is larger than 150 megabytes, which is more than this can transcribe. Try a shorter file."
+            return
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            errorMessage = "Couldn't read \(name). Try again."
+            return
+        }
+
+        UIAccessibility.post(notification: .announcement, argument: "Uploading \(name).")
+        do {
+            let text = try await service.transcribeUploaded(data: data, mimeType: mimeType)
+            append(text)
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Couldn't transcribe that file. Try again."
+        }
+    }
 
     private func toggleRecording() async {
         if isRecording {

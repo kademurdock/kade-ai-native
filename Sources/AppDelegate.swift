@@ -17,6 +17,23 @@ import UserNotifications
 /// `@MainActor` itself, and the one call that touches a `@MainActor` object
 /// (`pushService.setDeviceToken`) is dispatched explicitly via
 /// `Task { @MainActor in ... }` rather than assumed safe.
+///
+/// Session 16 also routes Home Screen Quick Actions (long-press the app
+/// icon) through here — the standard place for them on an app built with
+/// `@UIApplicationDelegateAdaptor` and no custom `UIWindowSceneDelegate`
+/// (this app has neither a `UIApplicationSceneManifest` entry nor a scene
+/// delegate class anywhere in the target, so UIKit delivers quick actions
+/// to the plain app-delegate callbacks below rather than to a scene
+/// delegate's `windowScene(_:performActionFor:)`, which this app doesn't
+/// implement). Worth being honest about, the same way the calling feature's
+/// own doc comment was: this specific delivery path is a real, common,
+/// documented pattern for SwiftUI-lifecycle apps, but it is exactly the
+/// class of "reads correct, only iOS actually knows" behavior this project
+/// has been burned by before (`.searchFocused` needing iOS 18) — and there
+/// is no device in this sandbox to confirm it fires. It is deliberately
+/// FAIL-SOFT if it somehow doesn't: `route(for:)` just returns `false` and
+/// the app opens normally, same as tapping the icon itself, rather than
+/// anything crashing or breaking.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var pushService: PushService?
 
@@ -25,6 +42,45 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // Cold launch (app wasn't already running) FROM a quick action
+        // hands the item over here instead of through
+        // `performActionFor:completionHandler:` below, which is only for
+        // a quick action tapped while already running. Both funnel into
+        // the same `route(for:)`.
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            Self.route(for: shortcutItem)
+        }
+        return true
+    }
+
+    /// Quick action tapped while the app was already running or suspended
+    /// in the background. `completionHandler` tells the system whether the
+    /// action was actually handled — used honestly here (`false` for an
+    /// unrecognized type) rather than always reporting success.
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(Self.route(for: shortcutItem))
+    }
+
+    /// Maps a quick action's type string (declared statically in
+    /// `project.yml`'s `UIApplicationShortcutItems`) onto the exact same
+    /// `IntentRouter` the Siri Shortcuts use — one piece of plumbing behind
+    /// two discovery paths, both consumed by `ContentView` once it is
+    /// signed in and ready.
+    @discardableResult
+    private static func route(for shortcutItem: UIApplicationShortcutItem) -> Bool {
+        let destination: IntentRouter.Destination?
+        switch shortcutItem.type {
+        case "com.kademurdock.kadeai.callSpotter": destination = .spotterCall
+        case "com.kademurdock.kadeai.transcribe": destination = .transcribe
+        case "com.kademurdock.kadeai.conversations": destination = .conversations
+        default: destination = nil
+        }
+        guard let destination else { return false }
+        Task { @MainActor in IntentRouter.shared.request(destination) }
         return true
     }
 

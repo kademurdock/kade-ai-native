@@ -37,6 +37,15 @@ import Foundation
 /// already carries the mic-permission handling, the
 /// `setAllowHapticsAndSystemSoundsDuringRecording` fix, and the AAC/m4a
 /// settings the server's byte-sniffer is known to accept.
+///
+/// Session 16 adds file import (Kade: "add a button to upload a file to the
+/// transcribe thing") — picking an existing recording from Files, iCloud
+/// Drive, or another app's share destination, matching the web page's own
+/// upload feature (`accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.opus,
+/// .aac,.amr,.flac"`, read straight off `kadeTranscribe.js`'s served HTML
+/// rather than assumed). `transcribeUploaded(data:mimeType:)` is the
+/// counterpart to `transcribe(fileURL:)` for that path — see its own doc
+/// comment for the one deliberate way it differs from a recorded take.
 @MainActor
 final class TranscribeService: ObservableObject {
     @Published private(set) var isWorking = false
@@ -46,6 +55,12 @@ final class TranscribeService: ObservableObject {
     @Published private(set) var statusMessage = "Ready."
 
     private let client: KadeAPIClient
+
+    /// Mirrors `kadeTranscribe.js`'s own `MAX_UPLOAD = '150mb'`. Checked
+    /// client-side before a big file is ever sent, so a doomed upload fails
+    /// in under a second with a plain-language reason instead of after a
+    /// long wait on someone's data plan.
+    static let maxUploadBytes: Int64 = 150 * 1024 * 1024
 
     init(client: KadeAPIClient) {
         self.client = client
@@ -57,48 +72,78 @@ final class TranscribeService: ObservableObject {
     }
 
     private struct ServerError: Decodable { let error: String? }
+    private struct TranscribeResponse: Decodable { let transcript: String; let seconds: Int? }
 
     /// Uploads one recorded take and returns its transcript. Deletes the
     /// temp file either way — same contract as `VoiceService.transcribe`,
     /// for the same reason: there is nothing useful to retry from a stale
-    /// recording, only from a fresh one.
+    /// recording, only from a fresh one. This file was CREATED by this app
+    /// (`VoiceService.startRecording`'s temp `.m4a`), which is what makes
+    /// deleting it the right call — contrast `transcribeUploaded`, which
+    /// never deletes anything because it never created anything.
     func transcribe(fileURL: URL) async throws -> String {
-        isWorking = true
-        statusMessage = "Transcribing…"
-        defer { isWorking = false }
-
         let audio: Data
         do {
             audio = try Data(contentsOf: fileURL)
         } catch {
-            statusMessage = "Ready."
             throw TranscribeError(message: "Couldn't read that recording. Try again.")
         }
         try? FileManager.default.removeItem(at: fileURL)
 
         guard !audio.isEmpty else {
-            statusMessage = "Ready."
             throw TranscribeError(message: "That recording came out empty. Try again.")
         }
+        return try await upload(audio, contentType: "audio/mp4", startMessage: "Transcribing…")
+    }
+
+    /// Uploads an already-in-memory file picked from Files, iCloud Drive, or
+    /// another app's share sheet, and returns its transcript.
+    ///
+    /// The one deliberate difference from the web page's own upload button:
+    /// the page REPLACES whatever text was already on screen
+    /// (`showResult(j, /* append */ false)` in `kadeTranscribe.js`'s served
+    /// script), because the page has nothing else going on. This app's
+    /// transcript can already hold earlier recorded takes or an organized
+    /// rewrite by the time someone imports a file, and this app's whole
+    /// design position — the Retry-button fix, the undo-clears-on-new-take
+    /// rule, the captured-state pattern generally — is that nothing here
+    /// silently throws away text she hasn't chosen to discard. So the
+    /// caller (`TranscribeView.importFile`) appends this result through the
+    /// exact same `append(_:)` a recorded take goes through, rather than
+    /// overwriting. Deliberately never deletes the source file: unlike a
+    /// recording this app made in its own temp directory, this file
+    /// belongs to her (or whoever sent it to her) and lives somewhere this
+    /// app doesn't own.
+    func transcribeUploaded(data: Data, mimeType: String?) async throws -> String {
+        guard !data.isEmpty else {
+            throw TranscribeError(message: "That file came out empty. Try a different one.")
+        }
+        return try await upload(
+            data,
+            contentType: mimeType ?? "application/octet-stream",
+            startMessage: "Uploading and transcribing…"
+        )
+    }
+
+    /// Shared by both transcribe paths above — one place that builds the
+    /// request, reads the response, and turns a non-200 into the server's
+    /// own `{error}` text rather than a generic failure message.
+    private func upload(_ body: Data, contentType: String, startMessage: String) async throws -> String {
+        isWorking = true
+        statusMessage = startMessage
+        defer { isWorking = false }
 
         var req = client.request(path: "api/kade/transcribe", method: "POST", authorized: true)
-        req.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
-        req.httpBody = audio
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
 
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
             let decoded = try? JSONDecoder().decode(ServerError.self, from: data)
             statusMessage = "Ready."
-            throw TranscribeError(
-                message: decoded?.error ?? "Couldn't transcribe that. Try again."
-            )
+            throw TranscribeError(message: decoded?.error ?? "Couldn't transcribe that. Try again.")
         }
-
-        struct Response: Decodable {
-            let transcript: String
-            let seconds: Int?
-        }
-        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else {
+        guard let decoded = try? JSONDecoder().decode(TranscribeResponse.self, from: data) else {
             statusMessage = "Ready."
             throw TranscribeError(message: "Couldn't read the transcript that came back. Try again.")
         }

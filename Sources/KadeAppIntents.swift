@@ -35,7 +35,8 @@ import SwiftUI
 /// requires the app name in every phrase, and a phrase without it is
 /// silently dropped rather than rejected loudly.
 
-/// Where a Siri phrase (or anything else that arrives from outside the UI)
+/// Where a Siri phrase (or anything else that arrives from outside the UI --
+/// session 16 adds Home Screen Quick Actions, see `AppDelegate.route(for:)`)
 /// parks what it wants done. `ContentView` observes this and acts on it
 /// once it actually has a hierarchy and a known sign-in state.
 ///

@@ -49,6 +49,28 @@ targets:
         # only; no location, no VoIP (this is deliberately NOT CallKit, see
         # StreamingCallService.startNowPlaying's doc comment).
         UIBackgroundModes: [audio]
+        # Session 16 -- Home Screen Quick Actions (long-press/3D-Touch the
+        # app icon). Declared STATICALLY here rather than set at runtime
+        # via `UIApplication.shared.shortcutItems`: a static entry is
+        # already there the moment the app is installed, before it has
+        # ever been launched once -- a dynamic one wouldn't exist until
+        # `didFinishLaunchingWithOptions` had run at least once to set it.
+        # Same three destinations as the Siri Shortcuts (KadeAppIntents.swift),
+        # same SF Symbols, routed through the exact same `IntentRouter` --
+        # two discovery paths into ONE piece of plumbing, not two features
+        # to maintain. See AppDelegate.swift for the handling half.
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.kademurdock.kadeai.callSpotter
+            UIApplicationShortcutItemTitle: Call your Spotter
+            UIApplicationShortcutItemSubtitle: Live visual companion
+            UIApplicationShortcutItemIconSymbolName: eye
+          - UIApplicationShortcutItemType: com.kademurdock.kadeai.transcribe
+            UIApplicationShortcutItemTitle: Transcribe
+            UIApplicationShortcutItemSubtitle: Record or import audio
+            UIApplicationShortcutItemIconSymbolName: waveform
+          - UIApplicationShortcutItemType: com.kademurdock.kadeai.conversations
+            UIApplicationShortcutItemTitle: Your conversations
+            UIApplicationShortcutItemIconSymbolName: bubble.left.and.bubble.right
     entitlements:
       path: KadeAI.entitlements
       properties:
