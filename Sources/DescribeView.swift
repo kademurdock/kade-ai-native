@@ -4,11 +4,20 @@ import CoreTransferable
 import UniformTypeIdentifiers
 import UIKit
 
-/// Photo and document description — see `DescribeService`'s doc comment for
-/// the server contract. This screen's job: get a photo or document into
-/// the app by whichever route makes sense (camera, photo library, or Files)
-/// through one entry point, then present the result so it's genuinely easy
-/// to use by ear, not just technically present.
+/// Photo, video, and document description — see `DescribeService`'s doc
+/// comment for the server contract. This screen's job: get a photo, video,
+/// or document into the app by whichever route makes sense (camera, photo
+/// library, or Files) through one entry point, then present the result so
+/// it's genuinely easy to use by ear, not just technically present.
+///
+/// Session 17 note on video specifically: `PhotosPickerItem.loadTransferable
+/// (type: Data.self)` -- the path this file already used for photos -- is
+/// documented as a fallback for video, not the reliable route; the
+/// established, Apple/community-precedent pattern is a small custom
+/// `Transferable` conforming type backed by `FileRepresentation`, which
+/// copies the picked asset to a real file this app owns rather than trying
+/// to pull the whole thing through as raw `Data` directly. See `PickedMovie`
+/// below.
 ///
 /// Accessibility notes specific to this screen, beyond the app-wide
 /// conventions (status line as one `.updatesFrequently` element, entries as
@@ -58,7 +67,14 @@ struct DescribeView: View {
     /// couple of named constants plus `UTType(filenameExtension:)` for
     /// formats (docx, rtf) with no guaranteed named constant in the SDK.
     private static let fileImportTypes: [UTType] = {
-        var types: [UTType] = [.pdf, .plainText, .image]
+        // Session 17: widened to include video containers someone might
+        // pick from Files rather than the Photos library (an AirDropped
+        // clip saved into Files, a video pulled out of Messages) -- .movie
+        // is the umbrella UTType (matches anything QuickTime/AVFoundation
+        // recognizes as playable video), .mpeg4Movie/.quickTimeMovie are
+        // named explicitly so the two most common containers are never
+        // left to chance.
+        var types: [UTType] = [.pdf, .plainText, .image, .movie, .mpeg4Movie, .quickTimeMovie]
         for ext in ["docx", "rtf", "md", "csv"] {
             if let type = UTType(filenameExtension: ext) { types.append(type) }
         }
@@ -68,7 +84,7 @@ struct DescribeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Get a photo, flyer, letter, or document described to you, or read back word for word.")
+                Text("Get a photo, video, flyer, letter, or document described to you, or read back word for word.")
                     .font(.body)
 
                 statusLine
@@ -86,9 +102,9 @@ struct DescribeView: View {
         }
         .navigationTitle("Describe")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Add a photo or document", isPresented: $showingSourceMenu) {
+        .confirmationDialog("Add a photo, video, or document", isPresented: $showingSourceMenu) {
             Button("Take a photo") { showingCamera = true }
-            Button("Choose a photo") { showingPhotosPicker = true }
+            Button("Choose a photo or video") { showingPhotosPicker = true }
             Button("Choose a file") { showingFileImporter = true }
             Button("Cancel", role: .cancel) {}
         }
@@ -99,11 +115,15 @@ struct DescribeView: View {
             )
             .ignoresSafeArea()
         }
-        .photosPicker(isPresented: $showingPhotosPicker, selection: $photoPickerItem, matching: .images)
+        // Session 17: widened from `.images` to also offer videos in the
+        // SAME library picker, matching the confirmation dialog's "Choose a
+        // photo or video" -- one control, one extra content kind, rather
+        // than a second picker to navigate past.
+        .photosPicker(isPresented: $showingPhotosPicker, selection: $photoPickerItem, matching: .any(of: [.images, .videos]))
         .onChange(of: photoPickerItem) { _, newItem in
             guard let newItem else { return }
             Task {
-                await loadPickedPhoto(newItem)
+                await loadPickedItem(newItem)
                 photoPickerItem = nil
             }
         }
@@ -151,12 +171,12 @@ struct DescribeView: View {
         Button {
             showingSourceMenu = true
         } label: {
-            Label("Add a photo or document", systemImage: "plus.viewfinder")
+            Label("Add a photo, video, or document", systemImage: "plus.viewfinder")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
         .disabled(isBusy)
-        .accessibilityHint("Take a photo, choose one from your library, or pick a file from Files.")
+        .accessibilityHint("Take a photo, choose a photo or video from your library, or pick a file from Files.")
     }
 
     private func resultSection(_ outcome: DescribeService.Outcome) -> some View {
@@ -249,6 +269,23 @@ struct DescribeView: View {
 
     // MARK: - Actions
 
+    /// Single entry point from the library picker's `onChange` -- decides
+    /// image vs. video from the item's OWN reported content types (no way
+    /// to know which the person picked until this point, since `.any(of:
+    /// [.images, .videos])` hands back one `PhotosPickerItem` either way)
+    /// and calls the loader built for that kind. Keeps the two loaders
+    /// genuinely separate rather than one function branching internally,
+    /// because they don't share a `Transferable` type -- see
+    /// `loadPickedVideo`'s doc comment for why video can't just reuse
+    /// `loadPickedPhoto`'s `Data.self` approach.
+    private func loadPickedItem(_ item: PhotosPickerItem) async {
+        if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+            await loadPickedVideo(item)
+        } else {
+            await loadPickedPhoto(item)
+        }
+    }
+
     private func loadPickedPhoto(_ item: PhotosPickerItem) async {
         let contentType = item.supportedContentTypes.first
         let mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
@@ -258,6 +295,44 @@ struct DescribeView: View {
             return
         }
         await upload(data: data, mimeType: mimeType, fileName: "photo.\(ext)")
+    }
+
+    /// `loadTransferable(type: Data.self)` -- what `loadPickedPhoto` above
+    /// uses -- is documented as a fallback for video specifically, not the
+    /// reliable path; video needs a real `Transferable` conformance backed
+    /// by `FileRepresentation`, which is what `PickedMovie` (bottom of this
+    /// file) provides. That import copies the asset to a temp file THIS APP
+    /// created, which is why -- unlike `importFile` below, which never
+    /// deletes a file it didn't create -- this one cleans up after itself.
+    ///
+    /// Checks size against `DescribeService.maxUploadBytes` (30MB, matches
+    /// the server's real `MAX_MEDIA_BYTES`) BEFORE reading the file into
+    /// memory, the same early-exit shape `TranscribeView.importFile` and
+    /// this file's own `importFile` use -- a video is far more likely than
+    /// a photo to actually hit that ceiling, so failing in under a second
+    /// off the file's own size attribute matters more here than it ever did
+    /// for a photo.
+    private func loadPickedVideo(_ item: PhotosPickerItem) async {
+        guard let movie = try? await item.loadTransferable(type: PickedMovie.self) else {
+            errorMessage = "Couldn't load that video. Try again."
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: movie.url) }
+
+        if let size = (try? movie.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+           Int64(size) > DescribeService.maxUploadBytes {
+            errorMessage = "That video is larger than 30 megabytes, which is more than this can describe. Try a shorter clip."
+            return
+        }
+
+        let contentType = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) }) ?? .movie
+        let mimeType = contentType.preferredMIMEType ?? "video/mp4"
+        let ext = contentType.preferredFilenameExtension ?? "mov"
+        guard let data = try? Data(contentsOf: movie.url) else {
+            errorMessage = "Couldn't read that video. Try again."
+            return
+        }
+        await upload(data: data, mimeType: mimeType, fileName: "video.\(ext)")
     }
 
     private func handleFileImportResult(_ result: Result<[URL], Error>) {
@@ -275,7 +350,17 @@ struct DescribeView: View {
         defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
 
         let name = url.lastPathComponent
-        let mimeType = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType?.preferredMIMEType
+        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
+        let mimeType = resourceValues?.contentType?.preferredMIMEType
+        // Session 17: this screen had NO size guard at all before now, for
+        // any file picked here -- a document or a video. Matches
+        // `TranscribeView.importFile`'s established shape: check the size
+        // attribute before reading bytes, so an oversized pick fails fast
+        // instead of after loading the whole thing into memory first.
+        if let size = resourceValues?.fileSize, Int64(size) > DescribeService.maxUploadBytes {
+            errorMessage = "\(name) is larger than 30 megabytes, which is more than this can describe. Try a smaller file."
+            return
+        }
         guard let data = try? Data(contentsOf: url) else {
             errorMessage = "Couldn't read \(name). Try again."
             return
@@ -321,6 +406,32 @@ enum DescribeSheet: Identifiable {
     var id: String {
         switch self {
         case .share(let item): return "share-\(item.id.uuidString)"
+        }
+    }
+}
+
+/// A video picked via `PhotosPicker`, imported the way Apple/community
+/// precedent actually recommends for video specifically (`Data.self` is a
+/// documented fallback, not the reliable path -- see `loadPickedVideo`'s
+/// doc comment). `FileRepresentation`'s `importing` closure hands back a
+/// short-lived file the system owns; this copies it to a UUID-named file in
+/// THIS app's own temporary directory (never `documentsDirectory` -- that's
+/// for a user's own documents, not a scratch copy this screen deletes the
+/// moment it's uploaded) so it survives long enough for `loadPickedVideo` to
+/// read and upload it, then clean it up.
+private struct PickedMovie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kade-describe-\(UUID().uuidString)")
+                .appendingPathExtension(ext)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return Self(url: copy)
         }
     }
 }

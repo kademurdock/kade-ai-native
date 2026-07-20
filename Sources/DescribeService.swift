@@ -1,11 +1,11 @@
 import Foundation
 
-/// Photo and document description — the native port of the web `/describe`
-/// page (Kade, session 16: "let's keep coding... mo betta stuff and
-/// feachas"). A blind-first accessibility feature in its own right, not
-/// just parity: point it at a photo, a flyer, a PDF, or a Word document and
-/// get back a full spoken description, or the verbatim text for anything
-/// that has real text in it.
+/// Photo, video, and document description — the native port of the web
+/// `/describe` page (Kade, session 16: "let's keep coding... mo betta stuff
+/// and feachas"). A blind-first accessibility feature in its own right, not
+/// just parity: point it at a photo, a video, a flyer, a PDF, or a Word
+/// document and get back a full spoken description, or the verbatim text
+/// for anything that has real text in it.
 ///
 /// Two server calls, contract read straight off `api/server/routes/
 /// kadeDescribe.js` and `api/server/services/kadeDescribe.js` before any
@@ -44,10 +44,19 @@ import Foundation
 ///                                    -> 200 { ok:true, key, when, label }
 ///                                    -> 400/401 { error }
 ///
-/// Deliberately excludes video this batch: the server supports it
-/// (`kind:"video"`, same upload/run pair), but a video-picking UI adds real
-/// scope for a rarer need — a blind caller wanting something described live
-/// already has Spotter for that. Easy, well-scoped follow-up if she asks.
+/// Session 17 adds video (was deliberately deferred in the batch above as
+/// "an easy, well-scoped follow-up if she asks" — Kade's "any new stuff you
+/// can build?" is close enough to an ask, and the server contract was
+/// already sitting there proven): `kind:"video"` uses the SAME upload/run
+/// pair as a photo, just with a `video/*` mime type. Server-side confirmed
+/// LIVE before writing any of this, not just read off source — a real
+/// 2-second test clip round-tripped through `/upload` then `/run` and came
+/// back `{"kind":"video","description":"<an accurate read of the actual
+/// video content>",...}`, same shape as an image result, cost $0.01252.
+/// `maxUploadBytes` below matches the server's own `MAX_MEDIA_BYTES` (also
+/// read from source, not guessed) — video files reach that ceiling far more
+/// easily than a photo ever would, which is why this app never had a
+/// client-side size guard worth naming until now.
 @MainActor
 final class DescribeService: ObservableObject {
     @Published private(set) var isWorking = false
@@ -63,6 +72,16 @@ final class DescribeService: ObservableObject {
         let message: String
         var errorDescription: String? { message }
     }
+
+    /// Mirrors `kadeDescribe.js`'s own `MAX_MEDIA_BYTES = 30 * 1024 * 1024`
+    /// (confirmed live, not assumed — see the class doc comment above).
+    /// `DescribeView` checks this early where it has a file URL to inspect
+    /// (a video picked via Photos or Files) so an oversized pick fails in
+    /// under a second rather than after loading the whole thing into
+    /// memory; `describe(data:mimeType:fileName:)` below checks it again as
+    /// a backstop so no entry point — including a future one nobody's
+    /// written yet — can skip the guard by accident.
+    static let maxUploadBytes: Int64 = 30 * 1024 * 1024
 
     private struct ServerError: Decodable { let error: String? }
 
@@ -97,6 +116,9 @@ final class DescribeService: ObservableObject {
     func describe(data: Data, mimeType: String, fileName: String) async throws -> Outcome {
         guard !data.isEmpty else {
             throw DescribeError(message: "That came through empty. Try again.")
+        }
+        guard data.count <= Self.maxUploadBytes else {
+            throw DescribeError(message: "\(fileName) is larger than 30 megabytes, which is more than this can describe. Try a smaller file or a shorter video.")
         }
 
         isWorking = true

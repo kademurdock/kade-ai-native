@@ -192,15 +192,15 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Describe", entries: [
             HelpEntry(
                 title: "What it's for",
-                body: "Getting a photo, flyer, letter, screenshot, or document described to you, or read back word for word — a menu, a piece of mail, a photo someone sent you."
+                body: "Getting a photo, video, flyer, letter, screenshot, or document described to you, or read back word for word — a menu, a piece of mail, a photo or video someone sent you."
             ),
             HelpEntry(
                 title: "Adding something",
-                body: "Add a photo or document gives you three ways in: Take a photo with the camera right now, Choose a photo from your library, or Choose a file for a PDF, Word document, or text file from Files."
+                body: "Add a photo, video, or document gives you three ways in: Take a photo with the camera right now, Choose a photo or video from your library, or Choose a file for a PDF, Word document, text file, or video from Files. Videos top out at 30 megabytes — a clip of a few minutes, not a whole movie."
             ),
             HelpEntry(
                 title: "What you get back",
-                body: "A full spoken description — people, objects, colors, layout, and any text read word for word. For documents there's also Document text: the exact wording, separate from the description, for when you need it precise rather than summarized."
+                body: "A full spoken description — people, objects, colors, layout, and any text read word for word. For a video, the description covers what happens over the course of the clip, not just a single frame. For documents there's also Document text: the exact wording, separate from the description, for when you need it precise rather than summarized."
             ),
             HelpEntry(
                 title: "Dates it finds",

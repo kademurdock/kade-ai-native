@@ -328,11 +328,11 @@ struct ContentView: View {
             // -- same shape (upload, get something back to read or hear),
             // different sense.
             Button { route = .describe } label: {
-                Label("Describe a photo or document", systemImage: "plus.viewfinder")
+                Label("Describe a photo, video, or document", systemImage: "plus.viewfinder")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .accessibilityHint("Take or choose a photo, or pick a document, and get it described or read back to you.")
+            .accessibilityHint("Take or choose a photo or video, or pick a document, and get it described or read back to you.")
 
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)

@@ -136,7 +136,7 @@ struct QuickDictateIntent: AppIntent {
 struct DescribeIntent: AppIntent {
     static var title: LocalizedStringResource = "Describe a photo or document"
     static var description = IntentDescription(
-        "Opens Describe so you can get a photo or document read to you or described out loud."
+        "Opens Describe so you can get a photo, video, or document read to you or described out loud."
     )
     static var openAppWhenRun: Bool = true
 
