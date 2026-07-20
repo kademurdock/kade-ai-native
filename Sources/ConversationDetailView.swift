@@ -31,7 +31,15 @@ struct ConversationDetailView: View {
     /// synthesized memberwise init this file already relies on for
     /// `conversation`, so it needs none of the hand-written-init care the
     /// "no custom init" note on `selectedAgentId` below warns about.
-    let initialAgentId: String? = nil
+    /// Deliberately `var`, not `let`: a `let` WITH a default value is
+    /// excluded from the synthesized memberwise init entirely (it's
+    /// already initialized and immutable, so the init cannot set it) --
+    /// which made `ConversationDetailView(conversation:, initialAgentId:)`
+    /// fail to compile with "extra argument." A `var` with a default is
+    /// included as a defaulted parameter, which is exactly what's wanted:
+    /// every existing call site omits it (gets nil), Matchmaker passes it.
+    /// Never actually mutated after init.
+    var initialAgentId: String? = nil
     @State private var conversationId: String?
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
