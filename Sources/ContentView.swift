@@ -189,6 +189,8 @@ struct ContentView: View {
                     GameRoomView(apiClient: apiClient)
                 case .debateRoom:
                     RoomListView(apiClient: apiClient)
+                case .agentBuilder:
+                    AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
                 }
             }
         }
@@ -389,6 +391,19 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.")
 
+            // Session 17/18: "Go head with agent builder" -- Phase 1 only
+            // (name, description, persona, category, provider/model), her
+            // explicit choice after being told how big the FULL LibreChat
+            // builder really is (tools/actions, subagent handoffs,
+            // knowledge files, version history). See
+            // AgentBuilderService.swift's doc comment for the phased plan.
+            Button { route = .agentBuilder } label: {
+                Label("Agent Builder", systemImage: "person.crop.circle.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Create or edit your own companions.")
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -430,6 +445,16 @@ struct ContentView: View {
     private var isSignedIn: Bool {
         if case .signedIn = auth.state { return true }
         return false
+    }
+
+    /// For `AgentManagerView`, which needs to filter `GET /api/agents` down
+    /// to the ones SHE authored. Empty string is a safe, fail-soft default
+    /// (agentBuilder's route button only exists inside `signedInSection`,
+    /// so this should never actually be read while signed out) rather than
+    /// an implicitly-unwrapped assumption.
+    private var currentUserIdOrEmpty: String {
+        if case .signedIn(let user) = auth.state { return user.id }
+        return ""
     }
 
     /// A cheap identity for the current state so onChange fires on transitions.
@@ -564,6 +589,7 @@ enum HomeRoute: Identifiable, Hashable {
     case matchmaker
     case gameRoom
     case debateRoom
+    case agentBuilder
 
     var id: String {
         switch self {
@@ -575,6 +601,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .matchmaker: return "matchmaker"
         case .gameRoom: return "gameRoom"
         case .debateRoom: return "debateRoom"
+        case .agentBuilder: return "agentBuilder"
         }
     }
 }

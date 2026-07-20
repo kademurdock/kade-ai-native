@@ -239,6 +239,20 @@ struct HelpSection: Identifiable {
                 body: "Reached from Debate Room's Hall button. Every shared room, newest first — tap one to read the whole thing. Grown-up accounts only."
             ),
         ]),
+        HelpSection(title: "Agent Builder", entries: [
+            HelpEntry(
+                title: "Creating an agent",
+                body: "The plus button in Agent Builder lets you build a new companion from scratch: a name, a short description, their persona and instructions, a category, and which model powers them."
+            ),
+            HelpEntry(
+                title: "Editing or deleting one",
+                body: "Tap any agent in your list to open and change it. Swipe it, or use the Actions rotor, for Delete. Deleting an agent doesn't touch conversations you already had with them."
+            ),
+            HelpEntry(
+                title: "What's not here yet",
+                body: "This covers a companion's core identity. Custom tools, connecting other agents, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
+            ),
+        ]),
         HelpSection(title: "Siri and Quick Actions", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",
