@@ -84,7 +84,21 @@ struct CallView: View {
             .navigationTitle(agentName)
             .navigationBarTitleDisplayMode(.inline)
         }
-        .task { await beginCall() }
+        .task {
+            // FIX (session 21e, Kade: "I don't think she can actually see my
+            // camera... she might be hallucinating"). The camera captured
+            // frames the whole time, but nothing ever wired `onFrame` to the
+            // call -- every JPEG went to a nil handler, so the Spotter received
+            // ZERO images and described whatever the model imagined ("package",
+            // "bottle"). Wire it BEFORE beginCall so frames flow the instant
+            // Spotter/Live turns the camera on. sendFrame ships one JSON frame
+            // the bridge forwards to the live vision model (verified against
+            // voice-stream.js `type:'frame'` -> forwardFrame).
+            camera.onFrame = { jpeg in
+                callService.sendFrame(jpegData: jpeg)
+            }
+            await beginCall()
+        }
         .onDisappear {
             wrapUpTask?.cancel()
             callService.stop()
@@ -92,7 +106,7 @@ struct CallView: View {
         }
         .onChange(of: callService.liveOn) { _, on in
             if on {
-                Task { await camera.start() }
+                Task { await camera.start(facing: .back) }
                 UIAccessibility.post(
                     notification: .announcement,
                     argument: "\(callService.spotterName ?? "Your Spotter") is on the line."
@@ -107,7 +121,7 @@ struct CallView: View {
         }
         .onChange(of: callService.videoOn) { _, on in
             if on {
-                Task { await camera.start() }
+                Task { await camera.start(facing: .back) }
                 UIAccessibility.post(
                     notification: .announcement,
                     argument: "\(agentName) can see your camera now."
