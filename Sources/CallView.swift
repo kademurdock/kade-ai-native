@@ -132,7 +132,9 @@ struct CallView: View {
                 UIAccessibility.post(notification: .announcement, argument: message)
             }
         }
-        .sensoryFeedback(.impact(weight: .light), trigger: callService.liveOn)
+        .sensoryFeedback(trigger: callService.liveOn) { _, _ in
+            FeedbackPrefs.gate(.impact(weight: .light))
+        }
         // Kade, session 17/18: "We need to add more cool stuff like
         // haptics." A physical confirmation at the two moments this screen
         // already announces to VoiceOver by voice alone -- "Call connected,
@@ -150,10 +152,10 @@ struct CallView: View {
         // recurrence risk (a terminal state for this view's one call), so it
         // stays a direct status trigger.
         .sensoryFeedback(trigger: didAnnounceConnected) { old, new in
-            (!old && new) ? .success : nil
+            FeedbackPrefs.gate((!old && new) ? .success : nil)
         }
         .sensoryFeedback(trigger: callService.status) { _, new in
-            if case .ended = new { return .impact(weight: .light) }
+            if case .ended = new { return FeedbackPrefs.gate(.impact(weight: .light)) }
             return nil
         }
         .alert(
@@ -205,9 +207,17 @@ struct CallView: View {
         VStack(spacing: 6) {
             Text(currentSpeakerName)
                 .font(.title2.bold())
-            Text(statusText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            // Session 20 visual flair: a live pulse once the call is
+            // connected. Decorative only -- the whole header is
+            // accessibilityElement(children: .ignore), so VoiceOver reads just
+            // the label below and never sees this; it also goes static under
+            // Reduce Motion (KadePulseDot).
+            HStack(spacing: 7) {
+                KadePulseDot(color: .green, diameter: 8, active: didAnnounceConnected)
+                Text(statusText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.top, 12)
         .accessibilityElement(children: .ignore)

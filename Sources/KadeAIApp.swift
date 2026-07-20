@@ -32,6 +32,9 @@ struct KadeAIApp: App {
     @StateObject private var appearance = AppearancePreferences()
 
     init() {
+        // Session 20: register feedback defaults (sound/haptics on) BEFORE
+        // anything reads FeedbackPrefs.shared, so first run is opt-out.
+        FeedbackPrefs.registerDefaults()
         // One shared client so auth calls and data calls (and, as of
         // Phase 3, the chat send/stream calls, Phase 4's agent list, and
         // Phase 5's speech endpoints) obey the same request-pacing
@@ -56,6 +59,7 @@ struct KadeAIApp: App {
                 .environmentObject(voiceService)
                 .environmentObject(pushService)
                 .environmentObject(appearance)
+                .environmentObject(FeedbackPrefs.shared)
                 // High contrast forces dark mode app-wide -- colorScheme is
                 // an environment value the system (and this app's own
                 // semantic-color-only styling, never a hardcoded Color())
@@ -70,6 +74,9 @@ struct KadeAIApp: App {
                     // already ran by the time this .task body starts, but a
                     // real token from Apple can arrive at any point after).
                     appDelegate.pushService = pushService
+                    // Synthesize the earcons once up front so the first real
+                    // one (a message send) is never a synthesis hitch.
+                    Earcons.shared.prewarm()
                     await auth.restore()   // restore a saved session at launch
                     requestPushAuthorization()
                 }

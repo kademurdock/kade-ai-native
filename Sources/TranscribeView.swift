@@ -226,7 +226,9 @@ struct TranscribeView: View {
         )
         // Start and stop feel different by design — the same distinct
         // recording feedback the composer's mic button uses.
-        .sensoryFeedback(.impact(weight: .medium), trigger: isRecording)
+        .sensoryFeedback(trigger: isRecording) { _, _ in
+            FeedbackPrefs.gate(.impact(weight: .medium))
+        }
     }
 
     private var transcriptEditor: some View {

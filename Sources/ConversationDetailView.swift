@@ -266,10 +266,19 @@ struct ConversationDetailView: View {
         // (rather than firing on every change) avoids a spurious buzz on,
         // say, idle -> sending firing twice or landing double-counting.
         .sensoryFeedback(trigger: sendState) { old, new in
-            if case .idle = old, case .sending = new { return .impact(weight: .light) }
-            if case .sending = old, case .idle = new { return .success }
-            if case .failed = new { return .error }
+            // Session 20: haptics gated through the app-wide Haptics switch.
+            if case .idle = old, case .sending = new { return FeedbackPrefs.gate(.impact(weight: .light)) }
+            if case .sending = old, case .idle = new { return FeedbackPrefs.gate(.success) }
+            if case .failed = new { return FeedbackPrefs.gate(.error) }
             return nil
+        }
+        // Session 20 earcons: the same three send moments get a short,
+        // gentle non-speech sound (honouring the Sound effects switch),
+        // COMPLEMENTING -- never replacing -- VoiceOver's own spoken cue.
+        .onChange(of: sendState) { old, new in
+            if case .idle = old, case .sending = new { Earcons.shared.play(.messageSent) }
+            else if case .sending = old, case .idle = new { Earcons.shared.play(.messageReceived) }
+            else if case .failed = new { Earcons.shared.play(.error) }
         }
         // Same Phase B ask, "recording start/stop" -- driven directly by
         // VoiceService's own published `isRecording` so this can never drift
@@ -279,7 +288,7 @@ struct ConversationDetailView: View {
         // specifically are the ones most likely to have silently gone
         // physically dead once `.playAndRecord` took over the audio session.
         .sensoryFeedback(trigger: voiceService.isRecording) { _, isNowRecording in
-            isNowRecording ? .start : .stop
+            FeedbackPrefs.gate(isNowRecording ? .start : .stop)
         }
         .fullScreenCover(isPresented: $showingCall) {
             CallView(
@@ -487,6 +496,11 @@ struct ConversationDetailView: View {
         let who = messages.last(where: { !$0.isCreatedByUser })?.speakerLabel ?? "The assistant"
         return HStack(spacing: 8) {
             ProgressView()
+            // Session 20 visual flair: a soft pulsing dot while a reply is in
+            // flight. Purely decorative -- KadePulseDot is accessibilityHidden
+            // and collapses to a static dot under Reduce Motion, so VoiceOver
+            // and motion-sensitive users are untouched.
+            KadePulseDot(color: .accentColor, diameter: 8, active: true)
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
         }

@@ -32,6 +32,7 @@ struct SettingsView: View {
 
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var appearance: AppearancePreferences
+    @EnvironmentObject private var feedback: FeedbackPrefs
 
     @State private var showingSpeedPicker = false
     /// Bool-based (not a `NavigationLink`, matching this app's own house
@@ -92,6 +93,41 @@ struct SettingsView: View {
             } footer: {
                 Text("Text size isn't a separate setting here -- your iPhone's own Display & Text Size setting (Settings app, Accessibility, Display & Text Size, Larger Text) already resizes everything in this app. High contrast applies everywhere already; font and line spacing above currently apply to conversation message text, with more screens on the list.")
             }
+
+            // Session 20 (Kade: "Auditory flare by doing haptics and sounds?
+            // Earcons, nothing crazy obnoxious"). One home for every non-speech
+            // cue in the app, all opt-out (default on). These are on-device
+            // only, same as everything else on this screen.
+            Section {
+                Toggle(isOn: $feedback.soundEffects) {
+                    Text("Sound effects")
+                }
+                .accessibilityHint("Short sounds when a message sends, a reply lands, or something goes wrong. They play alongside VoiceOver, never over it.")
+
+                Toggle(isOn: $feedback.haptics) {
+                    Text("Haptics")
+                }
+                .accessibilityHint("Gentle taps at key moments -- sending, a reply landing, recording start and stop, a call connecting or ending.")
+
+                Toggle(isOn: $feedback.forceReduceMotion) {
+                    Text("Reduce motion")
+                }
+                .accessibilityHint("Turns off the app's decorative animations even if your iPhone's own Reduce Motion setting is off. Your system Reduce Motion setting is always honored on top of this.")
+
+                Button {
+                    Earcons.shared.play(.messageReceived)
+                    UIAccessibility.post(notification: .announcement, argument: "Test sound played.")
+                } label: {
+                    Label("Play a test sound", systemImage: "speaker.wave.2")
+                }
+                .buttonStyle(.plain)
+                .disabled(!feedback.soundEffects)
+                .accessibilityHint("Plays the reply sound so you can hear how loud the effects are.")
+            } header: {
+                Text("Feedback")
+            } footer: {
+                Text("Sound effects and haptics are on by default. Sounds are brief and quiet, and always play alongside VoiceOver rather than interrupting it.")
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -142,4 +178,5 @@ struct SettingsView: View {
     }
     .environmentObject(AppearancePreferences())
     .environmentObject(VoiceService(client: KadeAPIClient()))
+    .environmentObject(FeedbackPrefs.shared)
 }
