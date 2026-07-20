@@ -40,12 +40,30 @@ struct ConversationDetailView: View {
     /// every existing call site omits it (gets nil), Matchmaker passes it.
     /// Never actually mutated after init.
     var initialAgentId: String? = nil
+    /// True only for the ONE call site below that presents a fresh
+    /// instance of this very view as the ROOT of its own sheet-hosted
+    /// `NavigationStack` (the post-call transcript handoff). That instance
+    /// has nothing beneath it on its stack, so SwiftUI shows no back
+    /// chevron at all -- and with no other dismiss control, a VoiceOver
+    /// user lands on a screen with a title, then straight into message
+    /// content, with no way out except an undiscoverable two-finger
+    /// scrub gesture (Kade, session 17: "there's no way for voiceover to
+    /// get out of that screen"). This flag adds an explicit, accessible
+    /// "Close" button in that one case only; every other call site omits
+    /// it (defaults to `false`) and keeps relying on the real back button
+    /// a normal push provides. `var` with a default, not `let`, for the
+    /// same memberwise-init reason documented on `initialAgentId` above.
+    var isStandalonePresentation: Bool = false
     @State private var conversationId: String?
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var messageSendingService: MessageSendingService
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var apiClient: KadeAPIClient
+    /// Only actually dismisses anything when this view is the root of a
+    /// sheet-presented `NavigationStack` (see `isStandalonePresentation`
+    /// above) -- harmless to declare unconditionally otherwise.
+    @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
@@ -182,6 +200,19 @@ struct ConversationDetailView: View {
         .navigationTitle(conversation?.displayTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Session 17 VoiceOver-trap fix: the post-call transcript sheet
+            // (see `isStandalonePresentation` above) is the root of its own
+            // NavigationStack, so there is no back chevron to fall back on
+            // here -- this button is the ONLY accessible way out of that
+            // specific presentation. Every other call site leaves the flag
+            // `false` and this item simply never appears, so the ordinary
+            // pushed screens are unchanged.
+            if isStandalonePresentation {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") { dismiss() }
+                        .accessibilityHint("Closes this transcript and returns to your call.")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingCall = true
@@ -293,7 +324,10 @@ struct ConversationDetailView: View {
                 .environmentObject(agentsService)
             case .transcript(let handoff):
                 NavigationStack {
-                    ConversationDetailView(conversation: handoff.conversation)
+                    ConversationDetailView(
+                        conversation: handoff.conversation,
+                        isStandalonePresentation: true
+                    )
                 }
             case .share(let item):
                 ShareSheet(item: item)

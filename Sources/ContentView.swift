@@ -191,6 +191,8 @@ struct ContentView: View {
                     RoomListView(apiClient: apiClient)
                 case .agentBuilder:
                     AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
+                case .pronunciationDictionary:
+                    PronunciationDictionaryView(apiClient: apiClient)
                 }
             }
         }
@@ -404,6 +406,18 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Create or edit your own companions.")
 
+            // Session 17, later still (Kade: "I know my name Kade is
+            // pronounced Katie... what if everyone had a dictionary").
+            // Lives here on the home screen for now, same as everything
+            // above -- see PronunciationDictionaryView's doc comment for
+            // why, and the still-open tabs decision this'd move under.
+            Button { route = .pronunciationDictionary } label: {
+                Label("Pronunciation Dictionary", systemImage: "textformat.abc")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Teach Kade-AI how to recognize and say names or words you use.")
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -590,6 +604,7 @@ enum HomeRoute: Identifiable, Hashable {
     case gameRoom
     case debateRoom
     case agentBuilder
+    case pronunciationDictionary
 
     var id: String {
         switch self {
@@ -602,6 +617,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .gameRoom: return "gameRoom"
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
+        case .pronunciationDictionary: return "pronunciationDictionary"
         }
     }
 }

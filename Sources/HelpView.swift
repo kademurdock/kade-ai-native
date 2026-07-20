@@ -160,7 +160,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "After you hang up",
-                body: "Every call is written up as a normal conversation you can read and carry on in text. Hanging up waits a moment and opens it for you, and there's a Skip button if you'd rather not wait."
+                body: "Every call is written up as a normal conversation you can read and carry on in text. Hanging up waits a moment and opens it for you, and there's a Skip button if you'd rather not wait. That written-up call opens over your original conversation — there's a Close button, top left, to get back to it."
             ),
         ]),
         HelpSection(title: "Transcribe", entries: [
@@ -251,6 +251,20 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "What's not here yet",
                 body: "This covers a companion's core identity. Custom tools, connecting other agents, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
+            ),
+        ]),
+        HelpSection(title: "Pronunciation Dictionary", entries: [
+            HelpEntry(
+                title: "What it's for",
+                body: "A name or word Kade-AI mishears or says wrong — add it here once, spelled the way it sounds, and it's used everywhere: recognizing your voice on calls and in Transcribe, and reading it back correctly in voice messages and Spotter calls."
+            ),
+            HelpEntry(
+                title: "Adding a word",
+                body: "The plus button adds one entry: the word as it's normally spelled, and a respelling for how it should sound — for example, Kade spelled out as Katie."
+            ),
+            HelpEntry(
+                title: "Changing or removing one",
+                body: "Tap an entry to change its pronunciation. The word itself can't be edited in place — swipe it away (or use the Actions rotor) and add a fresh entry if the word was wrong, not just how it sounds."
             ),
         ]),
         HelpSection(title: "Siri and Quick Actions", entries: [
