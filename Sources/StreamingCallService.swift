@@ -141,6 +141,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// `playLiveStartTone()`.
     private var liveTonePlayed = false
     private var routeObserver: NSObjectProtocol?
+    private var engineConfigObserver: NSObjectProtocol?
     /// When this call started, used by the post-call handoff to make sure it
     /// opens THIS call's transcript rather than a stale one.
     private(set) var startedAt: Date = Date()
@@ -751,17 +752,70 @@ final class StreamingCallService: NSObject, ObservableObject {
             object: AVAudioSession.sharedInstance(),
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.engineRunning else { return }
-                let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-                let onHeadset = outputs.contains {
-                    $0.portType == .headphones || $0.portType == .bluetoothA2DP
-                        || $0.portType == .bluetoothHFP || $0.portType == .bluetoothLE
-                        || $0.portType == .usbAudio
-                }
-                if !onHeadset { self.forceSpeakerRoute() }
-                self.updateAudioDiagnostic()
-            }
+            Task { @MainActor in self?.recoverEngineAfterReconfig() }
+        }
+        // FIX (session 21f, Kade: after the camera fix Spotter went silent
+        // again -- "clips received, unplayed, volume good"). AVAudioEngine
+        // STOPS ITSELF whenever its configuration changes, and starting the
+        // Spotter's camera (especially the BACK camera, which audio worked
+        // WITHOUT) changes the shared audio session's route/format enough to
+        // trigger exactly that. Nothing was listening, so the engine stayed
+        // stopped and every clip after it scheduled but never rendered.
+        // Recover the same way a route change does: restart the engine and
+        // re-arm the player node. This is AVAudioEngine's own documented
+        // contract for a configuration change.
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.recoverEngineAfterReconfig() }
+        }
+    }
+
+    /// Bring playback back after the engine was reconfigured out from under the
+    /// call (camera start, headset plug, route change). Idempotent and cheap:
+    /// restarts the engine only if it actually stopped, re-arms the node only
+    /// if it stopped playing, and re-forces the speaker only when not on a
+    /// headset -- so a burst of notifications can't thrash or loop.
+    private func recoverEngineAfterReconfig() {
+        guard engineRunning, !stopping else { return }
+        if !audioEngine.isRunning {
+            // A bare start() after a configuration change throws silently
+            // (the render path's formats went inconsistent) -- which is why
+            // schedule()'s existing restart never brought Spotter back. REBUILD
+            // the player->mixer edge at the fixed playerFormat first, then
+            // restart; that re-evaluates mixer->output against the new hardware
+            // format too. Only runs while stopped, so it can't loop with the
+            // configuration-change notification it's reacting to.
+            rebuildRenderPathAndStart()
+            nextPlayheadSample = nil
+        }
+        if !playerNode.isPlaying {
+            playerNode.play()
+        }
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        let onHeadset = outputs.contains {
+            $0.portType == .headphones || $0.portType == .bluetoothA2DP
+                || $0.portType == .bluetoothHFP || $0.portType == .bluetoothLE
+                || $0.portType == .usbAudio
+        }
+        if !onHeadset { forceSpeakerRoute() }
+        updateAudioDiagnostic()
+    }
+
+    /// Reconnect the player node to the mixer at the fixed `playerFormat` and
+    /// restart the engine. Shared by the config-change/route recovery and the
+    /// per-clip restart in schedule(), so both paths recover the same robust
+    /// way rather than the old bare start() that silently threw.
+    private func rebuildRenderPathAndStart() {
+        audioEngine.disconnectNodeOutput(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+        } catch {
+            NSLog("Kade-AI: engine restart after reconfig failed: \(error.localizedDescription)")
         }
     }
 
@@ -982,7 +1036,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         // one. Another candidate cause of build 119's silence: enabling
         // voice processing can itself provoke a configuration change.
         if !audioEngine.isRunning {
-            try? audioEngine.start()
+            rebuildRenderPathAndStart()
             playerNode.play()
             nextPlayheadSample = nil   // the restart reset the node's timeline
         }
@@ -1086,6 +1140,10 @@ final class StreamingCallService: NSObject, ObservableObject {
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
+        }
+        if let engineConfigObserver {
+            NotificationCenter.default.removeObserver(engineConfigObserver)
+            self.engineConfigObserver = nil
         }
         stopNowPlaying()
         guard engineRunning else { return }
