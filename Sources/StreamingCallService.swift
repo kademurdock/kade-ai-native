@@ -1,6 +1,10 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+// UIAccessibility (spoken reconnect announcements, session 15). MediaPlayer
+// pulls UIKit in transitively on iOS, but this file depends on it directly
+// now, so it says so directly.
+import UIKit
 
 /// Real-time voice (and, once the caller enables Spotter, video) calling —
 /// the native port of the fork's `useStreamingCall.ts` + `video-live.js`
@@ -83,6 +87,12 @@ final class StreamingCallService: NSObject, ObservableObject {
         case speaking
         case ended(graceful: Bool)
         case failed(String)
+        /// The call socket dropped without anyone hanging up, and the
+        /// service is putting it back together. Distinct from `.connecting`
+        /// on purpose: the caller is already IN a call and needs to be told
+        /// what happened, not shown a fresh "starting" state as though
+        /// nothing had. See `beginReconnect()`.
+        case reconnecting
     }
 
     @Published private(set) var status: Status = .idle
@@ -153,6 +163,31 @@ final class StreamingCallService: NSObject, ObservableObject {
     private var byeSent = false
     private var receiveLoopTask: Task<Void, Never>?
 
+    // MARK: Reconnect state (session 15)
+    //
+    // Google's Live API closes an audio+video session at roughly 10 minutes
+    // no matter what -- documented, not a bug, and not liftable without
+    // session resumption on the SERVER side (researched, unbuilt). Before
+    // this, a long Spotter call simply went dead: the socket closed, the
+    // status flipped to "Call disconnected," and someone who cannot see the
+    // screen was left holding a silent phone with no idea whether to keep
+    // talking. Reconnecting automatically is not a workaround for the cap
+    // so much as the honest handling of it -- the caller never asked to
+    // hang up, so the app shouldn't act as though she did.
+    private var callAgentId: String?
+    private var callSpotterDirect = false
+    private var reconnectAttempts = 0
+    private var reconnectTask: Task<Void, Never>?
+    /// Deliberately small. An unreachable server should surface as a real
+    /// ended call quickly rather than an endless, silent retry loop that
+    /// looks identical to a working call to someone listening rather than
+    /// looking -- and each attempt on a LIVE/Spotter leg starts a fresh
+    /// metered session server-side, so this is a cost ceiling too, not just
+    /// a patience one. Reset to zero every time a reconnect actually
+    /// succeeds (see `handleControl`'s "ready"), so a two-hour call can
+    /// cross the ten-minute boundary as many times as it needs to.
+    private static let maxReconnectAttempts = 3
+
     /// Set right before a deliberate `stop()` so the receive-loop's own
     /// "socket closed" handling knows not to report it as a dropped call.
     private var stopping = false
@@ -173,6 +208,9 @@ final class StreamingCallService: NSObject, ObservableObject {
     func start(agentId: String?, displayName: String, spotterDirect: Bool) async throws {
         guard webSocketTask == nil else { return }
         agentName = displayName
+        callAgentId = agentId
+        callSpotterDirect = spotterDirect
+        reconnectAttempts = 0
         status = .connecting
         errorMessage = nil
         byeSent = false
@@ -188,12 +226,24 @@ final class StreamingCallService: NSObject, ObservableObject {
             throw error
         }
 
-        guard let url = URL(string: wsUrl) else {
+        do {
+            try openSocket(ticket: ticket, wsUrl: wsUrl)
+        } catch {
             teardownAudio()
             status = .failed("Couldn't reach the call service.")
-            throw URLError(.badURL)
+            throw error
         }
+    }
 
+    /// Opens the call socket and says hello. Split out of `start()` so the
+    /// reconnect path can reuse it WITHOUT touching the audio engine: the
+    /// mic, the player node, the speaker route override and the mic
+    /// permission are all still perfectly good after a socket drop, and
+    /// tearing them down and rebuilding them would risk re-negotiating the
+    /// output route mid-call -- the exact class of bug that made calls
+    /// silent for four builds.
+    private func openSocket(ticket: String, wsUrl: String) throws {
+        guard let url = URL(string: wsUrl) else { throw URLError(.badURL) }
         let task = socketSession.webSocketTask(with: url)
         // Default is 1 MiB. A single Inworld WAV clip for a long sentence
         // can approach that, and URLSession's failure mode when a frame
@@ -203,7 +253,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         task.maximumMessageSize = 16 * 1024 * 1024
         webSocketTask = task
         task.resume()
-        sendJSON(["type": "hello", "ticket": ticket, "spotterDirect": spotterDirect])
+        sendJSON(["type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect])
         startReceiveLoop()
     }
 
@@ -212,6 +262,8 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// error, where the socket may already be gone).
     func stop(graceful: Bool = true) {
         stopping = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
         if graceful, let task = webSocketTask, !byeSent {
             byeSent = true
             sendJSON(["type": "bye"])
@@ -363,6 +415,11 @@ final class StreamingCallService: NSObject, ObservableObject {
         switch msg.type {
         case "ready":
             status = .listening
+            // A reconnect that got all the way to "ready" is a genuinely
+            // healthy call again, so give it a full retry budget back --
+            // otherwise a call long enough to cross the Live cap three
+            // times would run out of attempts and die on the fourth.
+            reconnectAttempts = 0
         case "state":
             switch msg.state {
             case "speaking": status = .speaking
@@ -401,9 +458,93 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     private func handleSocketClosed() {
         webSocketTask = nil
-        teardownAudio()
-        if case .failed = status { return }
-        status = .ended(graceful: byeSent)
+        if case .failed = status {
+            teardownAudio()
+            return
+        }
+        // A close we asked for (hang up) is just the end of the call.
+        if byeSent || stopping {
+            teardownAudio()
+            status = .ended(graceful: byeSent)
+            return
+        }
+        // Nobody hung up -- the socket went away on its own. Most likely
+        // the ~10 minute Live/Spotter session cap, otherwise ordinary
+        // network flakiness. Either way the caller is still on the phone.
+        guard reconnectAttempts < Self.maxReconnectAttempts else {
+            teardownAudio()
+            status = .ended(graceful: false)
+            errorMessage = "The call dropped and couldn't reconnect. Call again when you're ready."
+            return
+        }
+        beginReconnect()
+    }
+
+    /// Schedules one reconnect attempt, with a short escalating gap so a
+    /// server that is genuinely down isn't hammered. Announces itself out
+    /// loud, because on this screen there is nothing else that would tell
+    /// a blind caller the line went quiet on purpose rather than by
+    /// accident -- silence and "reconnecting" sound identical otherwise.
+    private func beginReconnect() {
+        reconnectAttempts += 1
+        let attempt = reconnectAttempts
+        status = .reconnecting
+        // Drop whatever was mid-sentence. It belongs to a session that no
+        // longer exists, and hearing half of it land after the reconnect
+        // greeting would be worse than losing it.
+        flushPlayback()
+        // Remember what was running so it can be put back, then clear the
+        // published flags: the new session starts with neither lane on, and
+        // leaving them true would leave the camera running against a socket
+        // that no longer exists.
+        let wasLive = liveOn
+        let wasVideo = videoOn
+        liveOn = false
+        videoOn = false
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: attempt == 1
+                ? "The call dropped. Reconnecting, hold on."
+                : "Still reconnecting, attempt \(attempt)."
+        )
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_200_000_000)
+            guard let self, !Task.isCancelled else { return }
+            await self.finishReconnect(restoreLive: wasLive, restoreVideo: wasVideo)
+        }
+    }
+
+    private func finishReconnect(restoreLive: Bool, restoreVideo: Bool) async {
+        guard !stopping else { return }
+        do {
+            let (ticket, wsUrl) = try await fetchTicket(agentId: callAgentId)
+            guard !stopping else { return }
+            byeSent = false
+            try openSocket(ticket: ticket, wsUrl: wsUrl)
+            status = .listening
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Reconnected. Go ahead."
+            )
+            // Consent for the metered lanes was already given earlier in
+            // THIS call, so ack straight through rather than making someone
+            // re-approve the same cost notice every ten minutes. The server
+            // re-sends the notice until `ack` is true (`video-live.js`'s
+            // `handleLiveMsg`), so passing it here is what keeps a long
+            // Spotter call from turning into a consent prompt treadmill.
+            if restoreLive { setLive(on: true, ack: true, direct: callSpotterDirect) }
+            if restoreVideo { setVideo(on: true, ack: true) }
+        } catch {
+            guard !stopping else { return }
+            if reconnectAttempts < Self.maxReconnectAttempts {
+                beginReconnect()
+            } else {
+                teardownAudio()
+                status = .ended(graceful: false)
+                errorMessage = "The call dropped and couldn't reconnect. Call again when you're ready."
+            }
+        }
     }
 
     // MARK: - Audio engine (mic capture)

@@ -19,6 +19,21 @@ final class CameraCaptureController: ObservableObject {
     @Published private(set) var torchOn = false
     @Published var permissionDenied = false
 
+    /// Session 15 -- auto-flash in the dark, matching the web client's own
+    /// brightness probe. The reason this matters more here than it looks:
+    /// a sighted person points a camera at something dark, sees a black
+    /// preview, and reaches for the torch. Someone using a Spotter has no
+    /// black preview to see -- the only symptom of a dark room is a
+    /// companion who keeps saying she can't make anything out, which is
+    /// indistinguishable from the feature being broken. So the app has to
+    /// notice instead.
+    ///
+    /// `true` once the caller has touched the torch button herself, after
+    /// which the automatic behaviour stops entirely for the rest of the
+    /// session. A control that keeps overriding a deliberate choice is
+    /// worse than no automation at all.
+    private var torchManuallySet = false
+
     /// Exposed so `CallView` can wrap it in a `UIViewRepresentable` preview
     /// layer -- this app has no prior camera UI to follow a precedent from,
     /// so this is a fresh, deliberately minimal surface.
@@ -38,6 +53,33 @@ final class CameraCaptureController: ObservableObject {
     init() {
         sampler.onEncodedFrame = { [weak self] jpeg in
             Task { @MainActor in self?.onFrame?(jpeg) }
+        }
+        sampler.onBrightness = { [weak self] level in
+            Task { @MainActor in self?.considerAutoTorch(brightness: level) }
+        }
+    }
+
+    /// Called once per sampled frame with that frame's mean luminance
+    /// (0 = black, 1 = white). Two separate thresholds on purpose: turning
+    /// the torch ON at 0.10 and only back OFF above 0.22 means a scene
+    /// hovering right at the line can't strobe the light on and off every
+    /// two seconds, which would be both useless and alarming. Only ever
+    /// acts while a camera lane is genuinely running, and never after the
+    /// caller has worked the torch button herself.
+    private func considerAutoTorch(brightness: Double) {
+        guard isRunning, torchAvailable, !torchManuallySet else { return }
+        // The front camera has no torch on any iPhone; `torchAvailable` is
+        // already false there, but this makes the intent explicit for
+        // anyone reading later.
+        guard currentPosition == .back else { return }
+        if !torchOn, brightness < 0.10 {
+            applyTorch(true)
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "It's dark. Flashlight on."
+            )
+        } else if torchOn, brightness > 0.22 {
+            applyTorch(false)
         }
     }
 
@@ -92,7 +134,8 @@ final class CameraCaptureController: ObservableObject {
         }
         session.commitConfiguration()
         torchAvailable = device.hasTorch
-        setTorch(false)
+        torchManuallySet = false
+        applyTorch(false)
         let s = session
         queue.async { [weak self] in
             s.startRunning()
@@ -104,10 +147,18 @@ final class CameraCaptureController: ObservableObject {
         let s = session
         queue.async { s.stopRunning() }
         isRunning = false
-        setTorch(false)
+        torchManuallySet = false
+        applyTorch(false)
     }
 
+    /// The caller tapped the torch button. Turns the automatic behaviour
+    /// off for the rest of this camera session -- see `torchManuallySet`.
     func setTorch(_ on: Bool) {
+        torchManuallySet = true
+        applyTorch(on)
+    }
+
+    private func applyTorch(_ on: Bool) {
         guard let device = currentDevice, device.hasTorch, device.isTorchModeSupported(on ? .on : .off) else { return }
         do {
             try device.lockForConfiguration()
@@ -133,6 +184,12 @@ final class CameraCaptureController: ObservableObject {
 /// reasoning.
 private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onEncodedFrame: ((Data) -> Void)?
+    /// Mean luminance of the frame that was just encoded, 0...1. Reported
+    /// on the SAME 2-second cadence as the frames themselves rather than
+    /// per raw camera frame: this is a "is the room dark" question, not a
+    /// light meter, and running a reduction filter 30 times a second to
+    /// answer it would burn battery on a call that is already expensive.
+    var onBrightness: ((Double) -> Void)?
     private var lastSentAt: Date = .distantPast
     private let minInterval: TimeInterval = 2.0 // matches ConversationMode.tsx's setInterval(...,2000)
     private let targetWidth: CGFloat = 768 // matches the web client's canvas width
@@ -152,5 +209,39 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
         guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.65) else { return }
         lastSentAt = now
         onEncodedFrame?(jpeg)
+        if let brightness = meanLuminance(of: ciImage) {
+            onBrightness?(brightness)
+        }
+    }
+
+    /// Mean luminance via `CIAreaAverage`, which reduces the whole image to
+    /// a single pixel on the GPU -- far cheaper than walking the buffer in
+    /// Swift, and the standard way to do this. Returns nil rather than a
+    /// guessed value if anything about the reduction fails, so a failure
+    /// reads as "no opinion" and never as "it's pitch dark, flash on."
+    private func meanLuminance(of image: CIImage) -> Double? {
+        let extent = CIVector(
+            x: image.extent.origin.x, y: image.extent.origin.y,
+            z: image.extent.size.width, w: image.extent.size.height
+        )
+        guard let filter = CIFilter(
+            name: "CIAreaAverage",
+            parameters: [kCIInputImageKey: image, kCIInputExtentKey: extent]
+        ), let output = filter.outputImage else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        ciContext.render(
+            output,
+            toBitmap: &pixel,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        // Rec. 601 luma -- the same weighting the web client's canvas probe
+        // uses, so "dark" means the same thing on both platforms.
+        let r = Double(pixel[0]) / 255.0
+        let g = Double(pixel[1]) / 255.0
+        let b = Double(pixel[2]) / 255.0
+        return 0.299 * r + 0.587 * g + 0.114 * b
     }
 }

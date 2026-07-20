@@ -1,0 +1,326 @@
+import SwiftUI
+import UIKit
+
+/// Voice-memo transcriber — the native port of the `/transcribe` web page.
+///
+/// Kade's ask, session 15: "consider the transcriber app and similar apps
+/// like that. They need to go native as well. As much accessible native as
+/// possible." The web page works, but reaching it meant leaving the app
+/// into a web view, and a web view is exactly where this app's careful
+/// VoiceOver work stops applying — focus order, rotor headings, spoken
+/// status and the Actions rotor are all whatever the page happens to give.
+///
+/// What it does, matching the page feature for feature:
+/// - Press to record a take, press again to stop. Each take is transcribed
+///   and APPENDED to what's already there, so a long thought can be
+///   recorded in pieces without losing the earlier pieces.
+/// - The transcript is editable text, not a read-only result.
+/// - "Organize into notes" (bold title + bullets) and "Clean up text"
+///   (smooth prose, nothing dropped) run it through the server's organizer,
+///   with Undo that puts the previous version straight back.
+/// - Copy and Share.
+///
+/// Accessibility notes that are load-bearing rather than decoration:
+/// - The status line is a single `.updatesFrequently` element, the same job
+///   the page's `aria-live` region does — it is how you find out a take
+///   landed without hunting for it.
+/// - Every state change that has no natural focus target announces itself
+///   through `UIAccessibility.post`. Focus moves to the transcript only
+///   when there is genuinely new text in it to read.
+/// - Buttons that can't do anything yet are `disabled`, not hidden: a
+///   control that appears and disappears under your fingers is much harder
+///   to navigate by touch than one that is consistently there and says it
+///   is dimmed.
+struct TranscribeView: View {
+    @EnvironmentObject private var voiceService: VoiceService
+    @StateObject private var service: TranscribeService
+
+    @State private var transcript = ""
+    /// The version of the transcript from before the last organize run.
+    /// `nil` means there is nothing to undo — organizing is the only thing
+    /// that ever sets it, and using it clears it, so Undo can never walk
+    /// back further than one step and surprise someone.
+    @State private var undoBuffer: String?
+    @State private var activeSheet: TranscribeSheet?
+    @State private var errorMessage: String?
+
+    private enum Focus: Hashable { case status, transcript }
+    @AccessibilityFocusState private var a11yFocus: Focus?
+
+    init(apiClient: KadeAPIClient) {
+        _service = StateObject(wrappedValue: TranscribeService(client: apiClient))
+    }
+
+    private var isRecording: Bool { voiceService.isRecording }
+    private var isBusy: Bool { service.isWorking || voiceService.isTranscribing }
+    private var hasText: Bool { !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Record a thought or a voice memo and get it back as text you can edit, tidy up, and share.")
+                    .font(.body)
+
+                statusLine
+                recordButton
+                transcriptEditor
+                organizeButtons
+                shareButtons
+            }
+            .padding()
+        }
+        .navigationTitle("Transcribe")
+        .navigationBarTitleDisplayMode(.inline)
+        // ONE sheet for this whole screen, behind one enum binding. Two
+        // chained `.sheet` modifiers at the same level is genuinely
+        // unreliable in SwiftUI — one can win and the other never present —
+        // and this app has already been bitten by it once (build 121,
+        // ConversationDetailView). See `DetailSheet` for the same pattern.
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .share(let item):
+                ShareSheet(item: item)
+            }
+        }
+        .alert(
+            "Transcribe",
+            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }),
+            presenting: errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: { message in
+            Text(message)
+        }
+    }
+
+    // MARK: - Pieces
+
+    private var statusLine: some View {
+        Text(statusText)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Status. \(statusText)")
+            .accessibilityAddTraits(.updatesFrequently)
+            .accessibilityFocused($a11yFocus, equals: .status)
+    }
+
+    private var statusText: String {
+        if isRecording { return "Recording. Press Stop when you're done." }
+        if voiceService.isTranscribing { return "Transcribing…" }
+        return service.statusMessage
+    }
+
+    private var recordButton: some View {
+        Button {
+            Task { await toggleRecording() }
+        } label: {
+            Label(
+                isRecording ? "Stop recording" : "Start recording",
+                systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill"
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(isRecording ? .red : .accentColor)
+        .disabled(isBusy)
+        .accessibilityLabel(isRecording ? "Stop recording" : "Start recording")
+        .accessibilityHint(
+            isRecording
+                ? "Stops recording and turns what you said into text."
+                : "Records what you say. You can record as many takes as you like; each one is added on the end."
+        )
+        // Start and stop feel different by design — the same distinct
+        // recording feedback the composer's mic button uses.
+        .sensoryFeedback(.impact(weight: .medium), trigger: isRecording)
+    }
+
+    private var transcriptEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Transcript")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            TextEditor(text: $transcript)
+                .frame(minHeight: 220)
+                .padding(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                )
+                .accessibilityLabel("Transcript")
+                .accessibilityHint("Editable. Everything you record lands here.")
+                .accessibilityFocused($a11yFocus, equals: .transcript)
+            if !hasText {
+                Text("Nothing recorded yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var organizeButtons: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tidy it up")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            Button {
+                Task { await organize(.notes) }
+            } label: {
+                Label("Organize into notes", systemImage: "list.bullet")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText || isBusy)
+            .accessibilityHint("Rewrites what you said as a title and bullet points, without adding anything you didn't say.")
+
+            Button {
+                Task { await organize(.prose) }
+            } label: {
+                Label("Clean up text", systemImage: "text.alignleft")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText || isBusy)
+            .accessibilityHint("Fixes grammar and filler words and keeps everything you said, as paragraphs.")
+
+            Button {
+                undo()
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(undoBuffer == nil)
+            .accessibilityHint("Puts the transcript back the way it was before the last tidy-up.")
+        }
+    }
+
+    private var shareButtons: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                UIPasteboard.general.string = transcript
+                UIAccessibility.post(notification: .announcement, argument: "Transcript copied.")
+            } label: {
+                Label("Copy transcript", systemImage: "doc.on.doc")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText)
+
+            Button {
+                activeSheet = .share(ShareItem(text: transcript))
+            } label: {
+                Label("Share transcript", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText)
+            .accessibilityHint("Opens the share sheet, where you can send it or save it to Files.")
+
+            Button(role: .destructive) {
+                clearAll()
+            } label: {
+                Label("Clear transcript", systemImage: "trash")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasText)
+            .accessibilityHint("Deletes everything in the transcript and starts over.")
+        }
+    }
+
+    // MARK: - Actions
+
+    private func toggleRecording() async {
+        if isRecording {
+            guard let url = voiceService.stopRecording() else { return }
+            UIAccessibility.post(notification: .announcement, argument: "Stopped. Transcribing.")
+            do {
+                let text = try await service.transcribe(fileURL: url)
+                append(text)
+            } catch {
+                errorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "Couldn't transcribe that. Try again."
+            }
+        } else {
+            service.resetStatus()
+            let started = await voiceService.startRecording()
+            if started {
+                UIAccessibility.post(notification: .announcement, argument: "Recording.")
+            } else {
+                errorMessage = voiceService.recordError ?? "Couldn't start recording. Try again."
+            }
+        }
+    }
+
+    /// Appends a take rather than replacing, matching the web page ("appends
+    /// takes"). A blank line between takes so the paragraph structure the
+    /// organizer sees actually reflects where she stopped and started.
+    private func append(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            UIAccessibility.post(notification: .announcement, argument: "No speech found in that take.")
+            return
+        }
+        // A take that lands INVALIDATES the undo buffer: undo means "put
+        // back the text from before the last tidy-up," and that text no
+        // longer includes what was just recorded, so restoring it would
+        // silently throw away a whole take. Better to lose the undo than
+        // the recording.
+        undoBuffer = nil
+        if transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            transcript = trimmed
+        } else {
+            transcript += "\n\n" + trimmed
+        }
+        a11yFocus = .transcript
+    }
+
+    private func organize(_ style: TranscribeService.OrganizeStyle) async {
+        let before = transcript
+        do {
+            let result = try await service.organize(text: transcript, style: style)
+            undoBuffer = before
+            transcript = result
+            a11yFocus = .transcript
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: style == .notes ? "Organized into notes." : "Text cleaned up."
+            )
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Couldn't organize that. Try again."
+        }
+    }
+
+    private func undo() {
+        guard let previous = undoBuffer else { return }
+        transcript = previous
+        undoBuffer = nil
+        service.resetStatus()
+        a11yFocus = .transcript
+        UIAccessibility.post(notification: .announcement, argument: "Undone.")
+    }
+
+    private func clearAll() {
+        transcript = ""
+        undoBuffer = nil
+        service.resetStatus()
+        a11yFocus = .status
+        UIAccessibility.post(notification: .announcement, argument: "Transcript cleared.")
+    }
+}
+
+/// Everything this screen can present modally, behind one binding — same
+/// single-sheet rule as `DetailSheet`.
+enum TranscribeSheet: Identifiable {
+    case share(ShareItem)
+
+    var id: String {
+        switch self {
+        case .share(let item): return "share-\(item.id.uuidString)"
+        }
+    }
+}

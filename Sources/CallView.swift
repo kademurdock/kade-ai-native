@@ -197,6 +197,7 @@ struct CallView: View {
         case .speaking: return "Speaking"
         case .ended(let graceful): return graceful ? "Call ended" : "Call disconnected"
         case .failed: return "Call failed"
+        case .reconnecting: return "Reconnecting…"
         }
     }
 
@@ -325,6 +326,7 @@ struct CallView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .disabled(callService.status == .reconnecting)
             .accessibilityHint("Interrupts what \(currentSpeakerName) is saying so you can talk.")
 
             Button(role: .destructive) {

@@ -46,6 +46,16 @@ struct ContentView: View {
     @State private var email = ""
     @State private var password = ""
 
+    /// Siri Shortcuts park what they want here (see `KadeAppIntents.swift`).
+    /// Observed rather than owned: it's a singleton that outlives any view.
+    @ObservedObject private var router = IntentRouter.shared
+    /// Programmatic navigation for the two new home-screen destinations AND
+    /// for anything Siri asks for. ONE `navigationDestination(item:)`, ONE
+    /// brand-new type, declared exactly once at the root of this stack --
+    /// the invariant build 122 exists to protect. `KadeConversation` still
+    /// has exactly one destination in the whole app, and it is not this one.
+    @State private var route: HomeRoute?
+
     // Focus targets for VoiceOver.
     private enum Focus: Hashable { case status, error, email }
     @AccessibilityFocusState private var a11yFocus: Focus?
@@ -147,8 +157,27 @@ struct ContentView: View {
             } message: {
                 Text("Check your connection and try again.")
             }
+            .navigationDestination(item: $route) { destination in
+                switch destination {
+                case .transcribe:
+                    TranscribeView(apiClient: apiClient)
+                case .help:
+                    HelpView()
+                case .conversations:
+                    ConversationListView()
+                }
+            }
         }
-        .onChange(of: authStateID) { _, _ in handleStateChange() }
+        .onChange(of: authStateID) { _, _ in
+            handleStateChange()
+            // A Siri phrase can easily land before a saved session has
+            // finished restoring, or while she's still signed out. Rather
+            // than drop it, it waits here and runs the moment there's an
+            // account to run it against.
+            handlePendingIntent()
+        }
+        .onChange(of: router.pending) { _, _ in handlePendingIntent() }
+        .onAppear { handlePendingIntent() }
     }
 
     // MARK: - Sections
@@ -261,14 +290,34 @@ struct ContentView: View {
                 ConversationDetailView(conversation: handoff.conversation)
             }
 
-            NavigationLink {
-                ConversationListView()
-            } label: {
+            // Deliberately a `route` push rather than the `NavigationLink`
+            // this used to be, and the reason is load-bearing rather than
+            // stylistic: Siri's "open my conversations" can fire at ANY
+            // moment, including while a conversation list is already on the
+            // stack. Two `ConversationListView`s in one stack would each
+            // re-declare `.navigationDestination(item:)` for
+            // `KadeConversation` -- precisely the collision that stopped
+            // conversation rows opening in build 121. Routing both the
+            // button and the Siri phrase through one optional `HomeRoute`
+            // makes a second copy structurally impossible: one optional can
+            // only hold one destination at a time.
+            Button { route = .conversations } label: {
                 Label("Your conversations", systemImage: "bubble.left.and.bubble.right")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Opens your conversation list.")
+
+            // Session 15 (Kade: "consider the transcriber app and similar
+            // apps like that. They need to go native as well"). This used
+            // to be reachable only by leaving the app into the web view,
+            // where none of this app's VoiceOver work applies.
+            Button { route = .transcribe } label: {
+                Label("Transcribe a voice memo", systemImage: "waveform")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Records what you say and turns it into text you can edit, tidy up and share.")
 
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
@@ -279,12 +328,26 @@ struct ContentView: View {
     }
 
     private var webButton: some View {
-        Button { showingWeb = true } label: {
-            Label("Open Kade-AI web", systemImage: "safari")
-                .frame(maxWidth: .infinity)
+        VStack(spacing: 12) {
+            // Session 15: help finally lives INSIDE the app. It sits above
+            // the web button on purpose -- "how do I do this" should be
+            // answerable without leaving for a browser, and someone looking
+            // for help is exactly the person least well served by being
+            // handed a web view.
+            Button { route = .help } label: {
+                Label("Help", systemImage: "questionmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("How everything in the app works, section by section.")
+
+            Button { showingWeb = true } label: {
+                Label("Open Kade-AI web", systemImage: "safari")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
         }
-        .buttonStyle(.bordered)
-        .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
     }
 
     // MARK: - State glue
@@ -314,6 +377,24 @@ struct ContentView: View {
         guard !isSigningIn else { return }
         let e = email, p = password
         Task { await auth.signIn(email: e, password: p) }
+    }
+
+    /// Runs whatever a Siri phrase asked for, but only once there is
+    /// actually an account to run it against -- otherwise the request stays
+    /// parked in `IntentRouter` and this gets called again on sign-in.
+    private func handlePendingIntent() {
+        guard router.pending != nil, isSignedIn else { return }
+        guard let destination = router.consume() else { return }
+        switch destination {
+        case .spotterCall:
+            // Straight into the call, no intermediate screen. This is the
+            // whole point of the phrase.
+            callingSpotter = true
+        case .transcribe:
+            route = .transcribe
+        case .conversations:
+            route = .conversations
+        }
     }
 
     private func handleStateChange() {
@@ -387,4 +468,29 @@ struct SafariView: UIViewControllerRepresentable {
 struct SpotterTranscriptHandoff: Identifiable, Hashable {
     let conversation: KadeConversation
     var id: String { conversation.conversationId }
+}
+
+/// The home screen's own programmatic destinations. Its own dedicated type,
+/// declared in exactly one `navigationDestination(item:)` at the root of the
+/// home stack.
+///
+/// The rule this obeys, and the reason it is written down here rather than
+/// only in a commit message: `.navigationDestination(item:)` registers by
+/// the item's TYPE for the entire enclosing `NavigationStack`, not for the
+/// view it is written on. Two modifiers bound to the same type in one stack
+/// means SwiftUI honours one and silently ignores the rest -- no crash, no
+/// warning, just a screen that reads correctly and does nothing when you
+/// activate it. That shipped once (build 121) and cost a build to find.
+enum HomeRoute: Identifiable, Hashable {
+    case transcribe
+    case help
+    case conversations
+
+    var id: String {
+        switch self {
+        case .transcribe: return "transcribe"
+        case .help: return "help"
+        case .conversations: return "conversations"
+        }
+    }
 }
