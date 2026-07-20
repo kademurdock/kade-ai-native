@@ -253,6 +253,20 @@ struct HelpSection: Identifiable {
                 body: "This covers a companion's core identity. Custom tools, connecting other agents, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
             ),
         ]),
+        HelpSection(title: "Settings", entries: [
+            HelpEntry(
+                title: "Finding it",
+                body: "The Settings button on the home screen holds Speech and Accessibility together in one place, including the Pronunciation Dictionary."
+            ),
+            HelpEntry(
+                title: "Speech",
+                body: "Turn voice messages on by default for every new conversation, set how fast voice messages and Spotter calls play back, and open the Pronunciation Dictionary."
+            ),
+            HelpEntry(
+                title: "Accessibility",
+                body: "High contrast switches the whole app to a true-black dark appearance. Easy-read font and line spacing currently change how conversation messages look — Lexend and OpenDyslexic are both included. Text size isn't set here: your iPhone's own Display & Text Size setting under Settings, Accessibility already resizes everything in this app."
+            ),
+        ]),
         HelpSection(title: "Pronunciation Dictionary", entries: [
             HelpEntry(
                 title: "What it's for",

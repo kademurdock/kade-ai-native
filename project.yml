@@ -59,6 +59,20 @@ targets:
         # same SF Symbols, routed through the exact same `IntentRouter` --
         # two discovery paths into ONE piece of plumbing, not two features
         # to maintain. See AppDelegate.swift for the handling half.
+        # Session 17 (Kade: "a native way to access settings like speech
+        # and whatnot. Accessability low vision stuff like that.") -- the
+        # two easy-read font choices in Settings > Accessibility need
+        # their font files actually registered with the system before
+        # `Font.custom(...)` can find them by name. Both fonts are SIL
+        # Open Font License 1.1 (Lexend: Google Fonts; OpenDyslexic:
+        # antijingoist/opendyslexic) -- license text bundled alongside
+        # them in Sources/Fonts/ for attribution. PostScript names (what
+        # `Font.custom` actually looks up), confirmed via fontTools:
+        # "Lexend-Regular", "OpenDyslexic-Regular", "OpenDyslexic-Bold".
+        UIAppFonts:
+          - Fonts/Lexend.ttf
+          - Fonts/OpenDyslexic-Regular.otf
+          - Fonts/OpenDyslexic-Bold.otf
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: com.kademurdock.kadeai.callSpotter
             UIApplicationShortcutItemTitle: Call your Spotter

@@ -26,6 +26,10 @@ struct KadeAIApp: App {
     // Phase 6: no KadeAPIClient dependency (a different host, see its own
     // doc comment), so a plain default-initialized StateObject is enough.
     @StateObject private var pushService = PushService()
+    // Session 17 (Kade: "a native way to access settings like speech and
+    // whatnot. Accessability low vision stuff like that.") -- on-device
+    // only, no server dependency either, same reasoning as pushService.
+    @StateObject private var appearance = AppearancePreferences()
 
     init() {
         // One shared client so auth calls and data calls (and, as of
@@ -51,6 +55,15 @@ struct KadeAIApp: App {
                 .environmentObject(agentsService)
                 .environmentObject(voiceService)
                 .environmentObject(pushService)
+                .environmentObject(appearance)
+                // High contrast forces dark mode app-wide -- colorScheme is
+                // an environment value the system (and this app's own
+                // semantic-color-only styling, never a hardcoded Color())
+                // already respects everywhere, unlike a font family. `nil`
+                // (not `.light`) when off, so it defers to whatever the
+                // SYSTEM appearance setting already is rather than pinning
+                // light mode on someone who has their phone set to dark.
+                .preferredColorScheme(appearance.highContrast ? .dark : nil)
                 .task {
                     // Hand the delegate its PushService reference before
                     // anything can race a device token in (didFinishLaunching

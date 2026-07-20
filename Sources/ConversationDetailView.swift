@@ -225,6 +225,14 @@ struct ConversationDetailView: View {
             }
         }
         .task {
+            // Session 17 (Kade: "a native way to access settings like
+            // speech and whatnot"): seed this view's own "Voice messages"
+            // toggle from the persisted app-wide default the FIRST time
+            // this instance appears -- every ConversationDetailView
+            // instance started this at a hardcoded `false` before this,
+            // so there is no existing per-conversation choice this could
+            // ever clobber; it only changes what the starting point is.
+            readAloudEnabled = voiceService.defaultReadAloudOn
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
             // "no custom init" note on `selectedAgentId`'s declaration).
@@ -1118,6 +1126,14 @@ struct ConversationDetailView: View {
 /// different job (fast navigation across many turns) than this (acting on
 /// one already-focused message).
 private struct MessageRow: View {
+    // Session 17: message text is this app's single highest-value reading
+    // surface -- see AppearancePreferences.swift's own doc comment for why
+    // the easy-read font/line-spacing choices apply HERE specifically
+    // rather than everywhere. Available via the environment (injected once
+    // at the app root in KadeAIApp.swift), not passed in as a parameter --
+    // one more property on every call site for a cross-cutting display
+    // preference would be pure noise.
+    @EnvironmentObject private var appearance: AppearancePreferences
     let message: KadeMessage
     /// Only the last user message gets an Edit action; see
     /// `ConversationDetailView.canEdit(_:)`.
@@ -1159,7 +1175,8 @@ private struct MessageRow: View {
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
                 Text(bodyText)
-                    .font(.body)
+                    .font(appearance.messageFont())
+                    .lineSpacing(appearance.lineSpacing.extraPoints)
                     .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
                 if !timeLabel.isEmpty {
                     Text(timeLabel)

@@ -90,6 +90,21 @@ final class VoiceService: NSObject, ObservableObject {
         return (stored >= 0.5 && stored <= 2.0) ? stored : 1.0
     }
 
+    /// Session 17 (Kade: "a native way to access settings like speech and
+    /// whatnot"): the default "Voice messages" starting state for a FRESH
+    /// `ConversationDetailView` -- that screen's own `readAloudEnabled` is
+    /// plain per-view `@State` (always started `false` before this),
+    /// seeded from this published, persisted value in its `.task` instead.
+    /// Lives here rather than in a separate prefs object because it is
+    /// conceptually the same kind of setting as `playbackRate` right
+    /// above -- one more small, non-sensitive speech preference, same
+    /// persistence pattern, same home.
+    @Published var defaultReadAloudOn: Bool = UserDefaults.standard.bool(forKey: "kade.voiceMessage.defaultReadAloudOn") {
+        didSet {
+            UserDefaults.standard.set(defaultReadAloudOn, forKey: "kade.voiceMessage.defaultReadAloudOn")
+        }
+    }
+
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
 

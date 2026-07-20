@@ -191,8 +191,8 @@ struct ContentView: View {
                     RoomListView(apiClient: apiClient)
                 case .agentBuilder:
                     AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
-                case .pronunciationDictionary:
-                    PronunciationDictionaryView(apiClient: apiClient)
+                case .settings:
+                    SettingsView(apiClient: apiClient)
                 }
             }
         }
@@ -406,17 +406,18 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Create or edit your own companions.")
 
-            // Session 17, later still (Kade: "I know my name Kade is
-            // pronounced Katie... what if everyone had a dictionary").
-            // Lives here on the home screen for now, same as everything
-            // above -- see PronunciationDictionaryView's doc comment for
-            // why, and the still-open tabs decision this'd move under.
-            Button { route = .pronunciationDictionary } label: {
-                Label("Pronunciation Dictionary", systemImage: "textformat.abc")
+            // Session 17, later still (Kade: "We also need a native way
+            // to access settings like speech and whatnot. Accessability
+            // low vision stuff like that."). Pronunciation Dictionary
+            // moved under here too -- see SettingsView's doc comment; this
+            // resolves the "still-open tabs decision" its own previous
+            // doc comment had flagged.
+            Button { route = .settings } label: {
+                Label("Settings", systemImage: "gearshape")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .accessibilityHint("Teach Kade-AI how to recognize and say names or words you use.")
+            .accessibilityHint("Speech, accessibility, and pronunciation dictionary settings.")
 
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
@@ -570,6 +571,8 @@ struct SafariView: UIViewControllerRepresentable {
         .environmentObject(ConversationsService(client: client))
         .environmentObject(AgentsService(client: client))
         .environmentObject(VoiceService(client: client))
+        // Session 17: MessageRow now reads this via the environment too.
+        .environmentObject(AppearancePreferences())
 }
 
 /// Home-screen Spotter call's post-call transcript push. Separate type from
@@ -604,7 +607,7 @@ enum HomeRoute: Identifiable, Hashable {
     case gameRoom
     case debateRoom
     case agentBuilder
-    case pronunciationDictionary
+    case settings
 
     var id: String {
         switch self {
@@ -617,7 +620,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .gameRoom: return "gameRoom"
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
-        case .pronunciationDictionary: return "pronunciationDictionary"
+        case .settings: return "settings"
         }
     }
 }
