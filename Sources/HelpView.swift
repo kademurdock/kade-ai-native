@@ -79,15 +79,15 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "The home screen is grouped into sections now: Talk, Tools, then Settings and help. Use the Headings rotor to jump between them. New Alerts button under Talk shows your last 15 reminders and check-ins, how each arrived, plus delivery choices and a test button. Agent Builder grew three screens on every agent you edit: Knowledge files, so an agent can search documents you give it. Connections, so an agent can hand a conversation off to another companion. And Actions, to review or remove outside services. Siri now opens Matchmaker, Game Room, Debate Room, Agent Builder, and Settings by voice. And family without accounts can now sign up entirely by phone: call the Kade-AI number and say, sign me up."
+                body: "A fresh coat of paint that changes nothing for VoiceOver: home screen buttons now carry colorful icon tiles, and Call your Spotter stands out as one big button. More sounds and gentle taps: saves, deletes, debate lines, matchmaker results, and alert tests now confirm by ear and by touch, all controlled by the Feedback switches in Settings. New animations for sighted family: a little waveform while you record, debate lines easing in, results fading in. They hold still whenever Reduce Motion is on, either your iPhone's own switch or the one in this app's Settings. And Quick Dictate's transcript-copied announcement is now guaranteed to be heard, even while VoiceOver is busy reading the transcript back."
             ),
             HelpEntry(
-                title: "Two builds before",
-                body: "Agent Builder arrived: create and edit your own companions, including their voice, conversation starters, tools, a photo, duplicating, and version history with restore. Settings gained Usage and Balance. Spotter calls got their audio fixed, a chirp when Spotter audio starts flowing, and a gentle tap when calls connect and end."
+                title: "The build before",
+                body: "The home screen grouped into sections: Talk, Tools, then Settings and help, each a Headings rotor stop. Alerts under Talk shows your last 15 reminders and check-ins plus delivery choices and a test button. Agent Builder grew Knowledge files, Connections, and Actions on every agent you edit. Siri opens Matchmaker, Game Room, Debate Room, Agent Builder, and Settings by voice. And family without accounts can sign up entirely by phone: call the Kade-AI number and say, sign me up."
             ),
             HelpEntry(
                 title: "Earlier",
-                body: "Describe for photos, videos, and documents. Stop a reply while it's still writing. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. Settings with speech and low-vision options, plus the Pronunciation Dictionary. Quick Dictate to the clipboard. Transcribe with file import. Calls got auto-reconnect, lock-screen controls, and Siri phrases."
+                body: "Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
             ),
         ]),
         HelpSection(title: "Getting around", entries: [

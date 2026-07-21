@@ -222,6 +222,27 @@ final class Earcons {
     }
 }
 
+// MARK: - KadeAnnounce
+//
+// Session 22, fixing the exact soft-flag session 17 wrote down: in Quick
+// Dictate, the focus move to the transcript and the "Transcript copied."
+// announcement fire back to back, and default-priority announcements can be
+// stepped on by the focus move's own readback -- so the one piece of
+// information that matters right then (it's on the clipboard, go paste it)
+// could get cut off. A HIGH-priority announcement interrupts the readback
+// and cannot itself be interrupted. Use sparingly, only for short
+// confirmations whose moment is NOW; default announcements stay the right
+// tool everywhere else.
+
+@MainActor
+enum KadeAnnounce {
+    static func high(_ text: String) {
+        var attributed = AttributedString(text)
+        attributed.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(attributed).post()
+    }
+}
+
 // MARK: - Reduced motion helper
 
 extension View {

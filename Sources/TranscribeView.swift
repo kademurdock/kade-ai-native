@@ -458,7 +458,11 @@ struct TranscribeView: View {
         // far -- never a stale partial copy of just the earlier piece.
         if quickMode {
             UIPasteboard.general.string = transcript
-            UIAccessibility.post(notification: .announcement, argument: "Transcript copied. Ready to paste.")
+            // High priority: must be heard even though the focus move above
+            // is about to start VoiceOver reading the transcript itself --
+            // she just SAID these words, the readback is skippable, the
+            // "it's on your clipboard" confirmation is not. See KadeAnnounce.
+            KadeAnnounce.high("Transcript copied. Ready to paste.")
         }
     }
 
