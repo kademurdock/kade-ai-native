@@ -14,6 +14,8 @@ Nothing here is confirmed until it has a "verified" date.
 | /api/agents/chat/abort | POST | abort an in-progress generation job | source-confirmed, not yet used by the app |
 | /api/convos/ (DELETE) | DELETE | delete a conversation, body `{arg:{conversationId}}` | **2026-07-19** (used to clean up a test convo) |
 | /api/agents | GET | agents/characters list, cursor-paginated | **2026-07-19** |
+| /api/agents/:id/duplicate | POST | server-side clone (agent + actions minus secrets), answers `201 {agent, actions}` — decode the `agent` wrapper, not a bare agent | source-confirmed 2026-07-21, wired in AgentManagerView |
+| /api/agents/:agent_id/avatar/ | POST | multipart, field name `file` (read off the web client's AgentPanel upload — nothing server-side documents it); server resizes | source-confirmed 2026-07-21, wired in AgentEditorView |
 
 ## POST /api/auth/login — verified 2026-07-18
 
@@ -406,3 +408,14 @@ Not documented above because `KadeMessage` didn't decode it before this session 
 reply in the voice that agent actually used.
 
 Test conversation deleted afterward via `DELETE /api/convos/` (`deletedCount` messages: 4).
+
+## Agent editor body fields (POST /api/agents, PATCH /api/agents/:id) — 2026-07-21
+
+`conversation_starters` is a plain string array on the same create/update body the
+Phase 1 editor already sends (name/description/instructions/category/provider/model,
+plus `tts.voiceId`). The editor ALWAYS sends it — an empty array deliberately clears
+starters server-side, so deleting the last one in the UI really deletes it. Cap of 4
+matches the web builder's own limit. Read back from `GET /api/agents/:id/expanded`
+as the same `conversation_starters` key (the app's decoder uses exact key names — no
+snake-case conversion — so the Swift property is spelled `conversation_starters` on
+purpose).
