@@ -551,6 +551,16 @@ struct ContentView: View {
             route = .describe
         case .quickDictate:
             route = .quickDictate
+        case .matchmaker:
+            route = .matchmaker
+        case .gameRoom:
+            route = .gameRoom
+        case .debateRoom:
+            route = .debateRoom
+        case .agentBuilder:
+            route = .agentBuilder
+        case .settings:
+            route = .settings
         }
     }
 

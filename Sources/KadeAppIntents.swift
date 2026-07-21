@@ -57,6 +57,15 @@ final class IntentRouter: ObservableObject {
         case conversations
         case describe
         case quickDictate
+        // Session 18: the five screens shipped across sessions 17/18 gain
+        // voice entry points too. Every switch over this enum is exhaustive
+        // (no default) ON PURPOSE -- adding a case here must break the build
+        // anywhere a handler forgot about it, not silently no-op.
+        case matchmaker
+        case gameRoom
+        case debateRoom
+        case agentBuilder
+        case settings
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
@@ -232,5 +241,127 @@ struct KadeAppShortcuts: AppShortcutsProvider {
             shortTitle: "Quick Dictate",
             systemImageName: "mic.badge.plus"
         )
+        // Session 18: five more destinations. NOTE -- Apple caps
+        // AppShortcutsProvider at 10 AppShortcuts per app, and this makes
+        // exactly 10. The NEXT destination that wants a Siri phrase has to
+        // evict one of these, not just append (an 11th is silently dropped).
+        // Home Screen Quick Actions (project.yml) deliberately NOT extended:
+        // iOS shows at most 4 on long-press and 5 are already declared.
+        AppShortcut(
+            intent: OpenMatchmakerIntent(),
+            phrases: [
+                "Find me a match with \(.applicationName)",
+                "Open the \(.applicationName) Matchmaker",
+            ],
+            shortTitle: "Matchmaker",
+            systemImageName: "person.2.fill"
+        )
+        AppShortcut(
+            intent: OpenGameRoomIntent(),
+            phrases: [
+                "Open the \(.applicationName) Game Room",
+                "Show the \(.applicationName) leaderboard",
+            ],
+            shortTitle: "Game Room",
+            systemImageName: "gamecontroller"
+        )
+        AppShortcut(
+            intent: OpenDebateRoomIntent(),
+            phrases: [
+                "Open the \(.applicationName) Debate Room",
+                "Start a debate in \(.applicationName)",
+            ],
+            shortTitle: "Debate Room",
+            systemImageName: "person.3.fill"
+        )
+        AppShortcut(
+            intent: OpenAgentBuilderIntent(),
+            phrases: [
+                "Open the \(.applicationName) Agent Builder",
+                "Build an agent in \(.applicationName)",
+            ],
+            shortTitle: "Agent Builder",
+            systemImageName: "person.crop.circle.badge.plus"
+        )
+        AppShortcut(
+            intent: OpenSettingsIntent(),
+            phrases: [
+                "Open my \(.applicationName) settings",
+                "\(.applicationName) settings",
+            ],
+            shortTitle: "Settings",
+            systemImageName: "gearshape"
+        )
+    }
+}
+
+// ── Session 18 intents ──────────────────────────────────────────────────────
+// Same shape as every intent above: parameterless, openAppWhenRun, perform()
+// deliberately NOT @MainActor (see CallSpotterIntent's doc comment for the
+// isolation-mismatch lesson), routed through IntentRouter and consumed by
+// ContentView once signed in and ready.
+
+struct OpenMatchmakerIntent: AppIntent {
+    static var title: LocalizedStringResource = "Matchmaker"
+    static var description = IntentDescription(
+        "Opens the Matchmaker: five quick questions, then three companions who might be a good fit."
+    )
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.matchmaker) }
+        return .result()
+    }
+}
+
+struct OpenGameRoomIntent: AppIntent {
+    static var title: LocalizedStringResource = "Game Room"
+    static var description = IntentDescription(
+        "Opens the Game Room: family standings and recent results from games played in chat."
+    )
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.gameRoom) }
+        return .result()
+    }
+}
+
+struct OpenDebateRoomIntent: AppIntent {
+    static var title: LocalizedStringResource = "Debate Room"
+    static var description = IntentDescription(
+        "Opens the Debate Room, where you set a topic and let your companions go back and forth."
+    )
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.debateRoom) }
+        return .result()
+    }
+}
+
+struct OpenAgentBuilderIntent: AppIntent {
+    static var title: LocalizedStringResource = "Agent Builder"
+    static var description = IntentDescription(
+        "Opens the Agent Builder so you can create or edit your own companions."
+    )
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.agentBuilder) }
+        return .result()
+    }
+}
+
+struct OpenSettingsIntent: AppIntent {
+    static var title: LocalizedStringResource = "Settings"
+    static var description = IntentDescription(
+        "Opens Kade-AI's speech and accessibility settings."
+    )
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.settings) }
+        return .result()
     }
 }
