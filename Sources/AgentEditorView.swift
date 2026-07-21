@@ -156,7 +156,14 @@ struct AgentEditorView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityElement(children: .ignore)
+                        // NO .accessibilityElement(children: .ignore) here: that
+                        // combo strips the button trait + double-tap activation
+                        // on rows inside a FORM specifically (Kade, on-device,
+                        // build 135: "it says voice but it isn't a pressable
+                        // button") — while the identical pattern in Lists
+                        // (agent rows, room rows, dictionary rows) works fine.
+                        // An explicit label keeps the reading clean; the native
+                        // element keeps it a real button.
                         .accessibilityLabel("Voice")
                         .accessibilityValue(voice.isEmpty ? "Default" : voice)
                         .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
@@ -242,7 +249,7 @@ struct AgentEditorView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .accessibilityElement(children: .ignore)
+                            // Same Form-row rule as the Voice button above.
                             .accessibilityLabel("Version history")
                             .accessibilityValue(loadedVersions.isEmpty ? "No earlier versions yet" : "\(loadedVersions.count) earlier version\(loadedVersions.count == 1 ? "" : "s")")
                             .accessibilityHint("Every save keeps the version it replaced. Open to restore any earlier one.")
