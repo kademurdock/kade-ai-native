@@ -38,6 +38,14 @@ struct MatchmakerView: View {
     @State private var results: [ScoredMatch]?
     @State private var luckyPick: MatchmakerAgent?
     @State private var startHandoff: MatchmakerStartHandoff?
+    // Session 22: results fade in for sighted eyes; VoiceOver focus (which
+    // already jumps to the results heading onAppear) is unaffected. Gated on
+    // both reduce-motion signals like every other animation in the app.
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var resultsAnimation: Animation? {
+        (systemReduceMotion || FeedbackPrefs.shared.forceReduceMotion)
+            ? nil : .easeOut(duration: 0.3)
+    }
 
     private enum Focus: Hashable { case status, results }
     @AccessibilityFocusState private var a11yFocus: Focus?
@@ -58,8 +66,10 @@ struct MatchmakerView: View {
                         .accessibilityLabel("Loading the character roster")
                 } else if let results {
                     resultsSection(results)
+                        .transition(.opacity)
                 } else if let luckyPick {
                     luckySection(luckyPick)
+                        .transition(.opacity)
                 } else {
                     intro
                     quiz
@@ -188,8 +198,10 @@ struct MatchmakerView: View {
                 return ScoredMatch(agent: agent, score: score + Double.random(in: 0..<0.5), hits: hits)
             }
             .sorted { $0.score > $1.score }
-        luckyPick = nil
-        results = Array(scored.prefix(3))
+        withAnimation(resultsAnimation) {
+            luckyPick = nil
+            results = Array(scored.prefix(3))
+        }
     }
 
     private struct Picks {
@@ -234,7 +246,7 @@ struct MatchmakerView: View {
             }
 
             HStack {
-                Button("Retake the quiz") { results = nil }
+                Button("Retake the quiz") { withAnimation(resultsAnimation) { results = nil } }
                     .buttonStyle(.bordered)
                 Button("Surprise me") { surpriseMe() }
                     .buttonStyle(.bordered)
@@ -253,7 +265,7 @@ struct MatchmakerView: View {
             HStack {
                 Button("Spin again") { surpriseMe() }
                     .buttonStyle(.bordered)
-                Button("Take the quiz instead") { luckyPick = nil }
+                Button("Take the quiz instead") { withAnimation(resultsAnimation) { luckyPick = nil } }
                     .buttonStyle(.bordered)
             }
         }
@@ -262,8 +274,10 @@ struct MatchmakerView: View {
 
     private func surpriseMe() {
         guard !roster.isEmpty else { return }
-        results = nil
-        luckyPick = roster.randomElement()
+        withAnimation(resultsAnimation) {
+            results = nil
+            luckyPick = roster.randomElement()
+        }
     }
 
     private func matchCard(rank: Int?, match: ScoredMatch) -> some View {

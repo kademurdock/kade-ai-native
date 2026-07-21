@@ -116,6 +116,13 @@ struct TranscribeView: View {
                 statusLine
                 importButton
                 recordButton
+                // Session 22 flair: a purely decorative waveform while the
+                // mic is live -- accessibilityHidden, self-stilling under
+                // reduced motion (see KadeVisualStyle.swift).
+                if isRecording {
+                    KadeWaveformBars(active: true)
+                        .frame(maxWidth: .infinity)
+                }
                 transcriptEditor
                 organizeButtons
                 shareButtons

@@ -35,6 +35,12 @@ struct RoomDetailView: View {
     @AccessibilityFocusState private var focusedLineIndex: Int?
     private enum Focus: Hashable { case status }
     @AccessibilityFocusState private var a11yFocus: Focus?
+    // Session 22: decorative-only motion, gated the same way as every other
+    // animation in the app (system Reduce Motion OR the in-app override).
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var motionAllowed: Bool {
+        !(systemReduceMotion || FeedbackPrefs.shared.forceReduceMotion)
+    }
 
     private var transcript: [RoomLine] { room.transcript ?? [] }
 
@@ -61,6 +67,12 @@ struct RoomDetailView: View {
                                 lineView(line)
                                     .id(index)
                                     .accessibilityFocused($focusedLineIndex, equals: index)
+                                    // Visual-only: new debate lines ease in for
+                                    // sighted watchers; VoiceOver focus still
+                                    // jumps to the line the instant it lands.
+                                    .transition(motionAllowed
+                                        ? .opacity.combined(with: .move(edge: .bottom))
+                                        : .identity)
                             }
                             if let actionError {
                                 Text(actionError)
@@ -69,6 +81,8 @@ struct RoomDetailView: View {
                             }
                         }
                         .padding()
+                        .animation(motionAllowed ? .spring(response: 0.35, dampingFraction: 0.8) : nil,
+                                   value: transcript.count)
                     }
                     .onChange(of: focusedLineIndex) { _, newValue in
                         guard let newValue else { return }
