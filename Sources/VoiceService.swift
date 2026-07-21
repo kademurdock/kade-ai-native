@@ -107,6 +107,10 @@ final class VoiceService: NSObject, ObservableObject {
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
+    /// The signed-in user's OWN per-agent voice picks ({agentId: voice}),
+    /// which override the agent's builder default. Loaded once from
+    /// `GET /api/kade/voice-prefs`; nil until first load.
+    private var userVoicePrefs: [String: String]?
 
     struct VoiceError: Error {
         let message: String
@@ -126,6 +130,7 @@ final class VoiceService: NSObject, ObservableObject {
         }
         voicesListCache = nil
         agentVoiceCache.removeAll()
+        userVoicePrefs = nil
         recordError = nil
     }
 
@@ -478,20 +483,69 @@ final class VoiceService: NSObject, ObservableObject {
     /// session -- an agent's assigned voice isn't expected to change
     /// mid-conversation, and re-fetching per reply would burn the shared
     /// pacing budget for no benefit.
+    // MARK: - Per-user voice overrides
+    //
+    // Session 21g (Kade: the agent maker sets a voice, "but then the user can
+    // change it once they get it"). Backed by the fork's per-user, per-agent
+    // `GET/POST /api/kade/voice-prefs`, so a pick follows the account across
+    // read-aloud, calls, and (pending) phone -- same store the web app uses.
+
+    private func loadUserVoicePrefsIfNeeded() async {
+        if userVoicePrefs != nil { return }
+        struct PrefsResponse: Decodable { let prefs: [String: String]? }
+        let req = client.request(path: "api/kade/voice-prefs", authorized: true)
+        if let (data, http) = try? await client.send(req), http.statusCode == 200,
+           let decoded = try? JSONDecoder().decode(PrefsResponse.self, from: data) {
+            userVoicePrefs = decoded.prefs ?? [:]
+        } else {
+            userVoicePrefs = [:]   // don't hammer a failed load every reply
+        }
+    }
+
+    /// The user's saved voice override for an agent, if any. Loads the prefs
+    /// first if they haven't been fetched yet.
+    func voiceOverride(forAgent agentId: String) async -> String? {
+        await loadUserVoicePrefsIfNeeded()
+        guard let v = userVoicePrefs?[agentId], !v.isEmpty else { return nil }
+        return v
+    }
+
+    /// Save (empty clears) the user's own voice pick for an agent. Updates the
+    /// local caches so the very next spoken reply uses it, no relaunch needed.
+    func setUserVoiceOverride(agentId: String, voice: String?) async {
+        await loadUserVoicePrefsIfNeeded()
+        let v = (voice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized: String? = v.isEmpty ? nil : v
+        if userVoicePrefs?[agentId] == normalized { return }   // no change
+        var req = client.request(path: "api/kade/voice-prefs", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["agentId": agentId, "voice": v])
+        guard let (_, http) = try? await client.send(req), http.statusCode == 200 else { return }
+        if userVoicePrefs == nil { userVoicePrefs = [:] }
+        userVoicePrefs?[agentId] = normalized
+        agentVoiceCache[agentId] = nil   // force a re-resolve with the new pick
+    }
+
     private func resolveVoice(agentId: String?, agentName: String?) async -> (voice: String?, speed: Double?) {
         if let agentId, let cached = agentVoiceCache[agentId] {
             return cached
         }
+        await loadUserVoicePrefsIfNeeded()
 
         var resolvedVoice: String?
         var resolvedSpeed: Double?
 
         if let agentId {
+            // The user's OWN pick (Settings/in-conversation) wins over the
+            // agent's builder default -- "my Kiana sounds like Voice 27."
+            if let pref = userVoicePrefs?[agentId], !pref.isEmpty {
+                resolvedVoice = pref
+            }
             let req = client.request(path: "api/agents/\(agentId)", authorized: true)
             if let (data, http) = try? await client.send(req),
                http.statusCode == 200,
                let detail = try? JSONDecoder().decode(AgentTTSDetail.self, from: data) {
-                resolvedVoice = detail.tts?.voiceId
+                if resolvedVoice == nil { resolvedVoice = detail.tts?.voiceId }
                 resolvedSpeed = detail.tts?.speakingRate
             }
         }

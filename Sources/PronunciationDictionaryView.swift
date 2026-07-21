@@ -117,6 +117,13 @@ struct PronunciationDictionaryView: View {
                 .multilineTextAlignment(.center)
             Button("Add a word") { activeSheet = .new }
                 .buttonStyle(.borderedProminent)
+                // Session 21g (Kade: "the button thing is apparent... in the
+                // dictionary, add a word button"). The toolbar "+" is ALSO
+                // labeled "Add a word" and is always present, so VoiceOver
+                // heard "Add a word" at the head AND here at the foot. Keep
+                // this as the prominent VISUAL empty-state call to action but
+                // hide it from VoiceOver, which still has the toolbar "+".
+                .accessibilityHidden(true)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

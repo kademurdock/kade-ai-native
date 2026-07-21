@@ -145,6 +145,7 @@ struct ConversationDetailView: View {
     /// shape, and it makes "what can this screen present?" answerable by
     /// reading one type.
     @State private var activeSheet: DetailSheet?
+    @State private var voiceOverride = ""
     @State private var preparingVoiceMessageId: String?
     @State private var deletingMessage: KadeMessage?
     @State private var showingSpeedPicker = false
@@ -212,6 +213,23 @@ struct ConversationDetailView: View {
                     Button("Close") { dismiss() }
                         .accessibilityHint("Closes this transcript and returns to your call.")
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                // Session 21g: change the voice THIS agent speaks in, per the
+                // "agent maker sets it, user changes it once they get it"
+                // model. The pick is saved per-user, per-agent, so it follows
+                // the account everywhere -- read-aloud here, and calls.
+                Button {
+                    activeSheet = .voicePicker
+                    if let id = selectedAgentId {
+                        Task { voiceOverride = (await voiceService.voiceOverride(forAgent: id)) ?? "" }
+                    }
+                } label: {
+                    Image(systemName: "waveform")
+                }
+                .disabled(selectedAgentId == nil)
+                .accessibilityLabel("Voice")
+                .accessibilityHint("Browse, preview, and change the voice \(agentDisplayLabel) speaks in. Your pick follows this companion.")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -348,6 +366,20 @@ struct ConversationDetailView: View {
                 }
             case .share(let item):
                 ShareSheet(item: item)
+            case .voicePicker:
+                VoicePickerView(apiClient: apiClient, selection: $voiceOverride)
+            }
+        }
+        // Save the user's voice pick for the current agent whenever it
+        // changes in the picker. Idempotent: setUserVoiceOverride no-ops if
+        // the value hasn't actually changed (e.g. the seed on open).
+        .onChange(of: voiceOverride) { _, v in
+            guard let id = selectedAgentId else { return }
+            Task {
+                await voiceService.setUserVoiceOverride(agentId: id, voice: v.isEmpty ? nil : v)
+                if !v.isEmpty {
+                    UIAccessibility.post(notification: .announcement, argument: "\(agentDisplayLabel) will now speak in \(v).")
+                }
             }
         }
         .alert(
@@ -1414,12 +1446,14 @@ enum DetailSheet: Identifiable {
     case agentPicker
     case share(ShareItem)
     case transcript(ChatTranscriptHandoff)
+    case voicePicker
 
     var id: String {
         switch self {
         case .agentPicker: return "agent-picker"
         case .share(let item): return "share-\(item.id.uuidString)"
         case .transcript(let handoff): return "transcript-\(handoff.id)"
+        case .voicePicker: return "voice-picker"
         }
     }
 }
