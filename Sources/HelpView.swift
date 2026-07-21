@@ -71,10 +71,29 @@ struct HelpSection: Identifiable {
     var id: String { title }
 
     static let all: [HelpSection] = [
+        // Session 18 (Kade's pick): a spoken changelog. Each build batch gets
+        // a plain-language entry here -- newest first, what changed and what
+        // to try -- so she hears it in-app instead of digging through chat
+        // history. KEEP THIS CURRENT: every future batch should rewrite the
+        // newest entry before the build fires, and collapse older ones.
+        HelpSection(title: "What's new", entries: [
+            HelpEntry(
+                title: "Newest build",
+                body: "The home screen is grouped into sections now: Talk, Tools, then Settings and help. Use the Headings rotor to jump between them. New Alerts button under Talk shows your last 15 reminders and check-ins, how each arrived, plus delivery choices and a test button. Agent Builder grew three screens on every agent you edit: Knowledge files, so an agent can search documents you give it. Connections, so an agent can hand a conversation off to another companion. And Actions, to review or remove outside services. Siri now opens Matchmaker, Game Room, Debate Room, Agent Builder, and Settings by voice. And family without accounts can now sign up entirely by phone: call the Kade-AI number and say, sign me up."
+            ),
+            HelpEntry(
+                title: "Two builds before",
+                body: "Agent Builder arrived: create and edit your own companions, including their voice, conversation starters, tools, a photo, duplicating, and version history with restore. Settings gained Usage and Balance. Spotter calls got their audio fixed, a chirp when Spotter audio starts flowing, and a gentle tap when calls connect and end."
+            ),
+            HelpEntry(
+                title: "Earlier",
+                body: "Describe for photos, videos, and documents. Stop a reply while it's still writing. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. Settings with speech and low-vision options, plus the Pronunciation Dictionary. Quick Dictate to the clipboard. Transcribe with file import. Calls got auto-reconnect, lock-screen controls, and Siri phrases."
+            ),
+        ]),
         HelpSection(title: "Getting around", entries: [
             HelpEntry(
                 title: "The home screen",
-                body: "Sign in once and the app remembers you. From here you can call your Spotter, open your conversations, transcribe a voice memo, read this help, open the full web app, or sign out."
+                body: "Sign in once and the app remembers you. Everything is grouped in three sections you can jump between with the Headings rotor: Talk holds Call your Spotter, Your conversations, and Alerts. Tools holds Transcribe, Describe, Matchmaker, Game Room, Debate Room, and Agent Builder. Settings and help holds Settings, this help, the full web app, and Sign out."
             ),
             HelpEntry(
                 title: "Your conversations",
@@ -322,7 +341,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Notifications and account", entries: [
             HelpEntry(
                 title: "Notifications",
-                body: "The app asks once, at first launch. Notifications go to whoever is signed in on this device, and signing out unlinks it so nothing lands for the wrong account."
+                body: "The app asks once, at first launch. Notifications go to whoever is signed in on this device, and signing out unlinks it so nothing lands for the wrong account. The Alerts button on the home screen keeps the history: your last 15 reminders and check-ins, how each one arrived, and your delivery choices, with a test button to prove the whole path works."
             ),
             HelpEntry(
                 title: "Signing out",
@@ -330,7 +349,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "What's still on the web",
-                body: "Games and the Game Room aren't in the app yet. Open Kade-AI web from the home screen for those."
+                body: "Nearly everything is native now. The web app remains the place to top up the server fund, create an agent's custom actions, and fine-tune a connection's handoff wording -- and it stays available any time as a backup."
             ),
         ]),
     ]
