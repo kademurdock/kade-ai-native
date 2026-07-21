@@ -33,8 +33,15 @@ struct UsageView: View {
                 Section {
                     row("Total", u.monthToDate.totalUSD, prominent: true)
                     row("Chat and thinking", u.monthToDate.llmUSD)
+                    // July 21 2026, Kade's pick: voice is included free with
+                    // her Inworld plan and no longer draws from balances --
+                    // the dollar figure here will read $0.00 going forward
+                    // (any nonzero remainder is history from before the
+                    // switch), so the detail line carries the real story.
                     row("Voices read aloud", u.monthToDate.ttsUSD,
-                        detail: quantity(u.monthToDate.tts_chars, "characters spoken"))
+                        detail: quantity(u.monthToDate.tts_chars, "characters spoken").map {
+                            $0 + " — included free with Kade's voice plan"
+                        })
                     row("Pictures made", u.monthToDate.fluxUSD,
                         detail: quantity(u.monthToDate.flux_images, "images"))
                     row("Phone calls", u.monthToDate.phoneUSD,
