@@ -200,6 +200,8 @@ struct ContentView: View {
                     AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
                 case .settings:
                     SettingsView(apiClient: apiClient)
+                case .alerts:
+                    AlertsView(apiClient: apiClient)
                 }
             }
         }
@@ -354,6 +356,19 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Opens your conversation list.")
+
+            // Session 18: native notification history — the one genuinely
+            // missing piece of the web's four tabs per the session-17/18
+            // tabs writeup. Lives in Talk (it is things Kade-AI SAID to
+            // you), not Tools. No Siri phrase (the provider sits at
+            // Apple's 10-shortcut cap — see KadeAppIntents) and no Quick
+            // Action (iOS shows 4; five are already declared).
+            Button { route = .alerts } label: {
+                Label("Alerts", systemImage: "bell")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Your recent reminders and check-ins, and how they reach you.")
 
             Text("Tools")
                 .font(.headline)
@@ -661,6 +676,7 @@ enum HomeRoute: Identifiable, Hashable {
     case debateRoom
     case agentBuilder
     case settings
+    case alerts
 
     var id: String {
         switch self {
@@ -674,6 +690,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
         case .settings: return "settings"
+        case .alerts: return "alerts"
         }
     }
 }
