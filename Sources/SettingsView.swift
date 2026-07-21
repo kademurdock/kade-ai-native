@@ -131,6 +131,19 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 .disabled(!feedback.soundEffects)
                 .accessibilityHint("Plays the reply sound so you can hear how loud the effects are.")
+
+                // Session 22: the haptic counterpart to the test sound, so
+                // the Haptics switch can be judged by feel the same way the
+                // Sound switch can be judged by ear.
+                Button {
+                    KadeHaptics.success()
+                    UIAccessibility.post(notification: .announcement, argument: "Test tap played.")
+                } label: {
+                    Label("Feel a test tap", systemImage: "hand.tap")
+                }
+                .buttonStyle(.plain)
+                .disabled(!feedback.haptics)
+                .accessibilityHint("Fires the success tap so you can feel how strong haptics are.")
             } header: {
                 Text("Feedback")
             } footer: {
