@@ -45,6 +45,8 @@ struct SettingsView: View {
     /// (see `ConversationDetailView`'s `isStandalonePresentation` doc
     /// comment) was about.
     @State private var showingPronunciationDictionary = false
+    /// Same Bool-push house pattern as the dictionary above.
+    @State private var showingUsage = false
 
     var body: some View {
         List {
@@ -128,11 +130,25 @@ struct SettingsView: View {
             } footer: {
                 Text("Sound effects and haptics are on by default. Sounds are brief and quiet, and always play alongside VoiceOver rather than interrupting it.")
             }
+            Section {
+                Button {
+                    showingUsage = true
+                } label: {
+                    Label("Usage & Balance", systemImage: "dollarsign.circle")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Shows what this account has spent this month and overall, and your balance. Read-only -- nothing is charged from inside the app.")
+            } header: {
+                Text("Account")
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showingPronunciationDictionary) {
             PronunciationDictionaryView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingUsage) {
+            UsageView(apiClient: apiClient)
         }
         .confirmationDialog(
             "Voice message speed",

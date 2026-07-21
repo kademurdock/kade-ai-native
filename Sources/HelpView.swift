@@ -242,21 +242,33 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Agent Builder", entries: [
             HelpEntry(
                 title: "Creating an agent",
-                body: "The plus button in Agent Builder lets you build a new companion from scratch: a name, a short description, their persona and instructions, a category, and which model powers them."
+                body: "The plus button in Agent Builder lets you build a new companion from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to four conversation starters — tappable opening lines people see when they start a chat."
             ),
             HelpEntry(
-                title: "Editing or deleting one",
-                body: "Tap any agent in your list to open and change it. Swipe it, or use the Actions rotor, for Delete. Deleting an agent doesn't touch conversations you already had with them."
+                title: "Editing, duplicating, or deleting one",
+                body: "Tap any agent in your list to open and change it. Swipe it, or use the Actions rotor, for Delete and Duplicate — Duplicate makes a full copy, announces it, and drops it in your list ready to rename. Deleting an agent doesn't touch conversations you already had with them."
+            ),
+            HelpEntry(
+                title: "Tools",
+                body: "The Tools group in the editor lists real abilities you can switch on for an agent — making pictures, sending phone notifications, placing calls, checking weather, and more. The count in the group's label tells you how many are on. Anything this app doesn't recognize stays exactly as it was, so editing here never quietly unplugs something set up on the web."
+            ),
+            HelpEntry(
+                title: "Avatar photo",
+                body: "While editing an existing agent, the Avatar section picks a photo from your library to be that agent's picture. It uploads when you press Save. The picture shows on the web version today; native list rows don't draw pictures yet."
             ),
             HelpEntry(
                 title: "What's not here yet",
-                body: "This covers a companion's core identity. Custom tools, connecting other agents, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
+                body: "Custom actions, connecting other agents together, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
             ),
         ]),
         HelpSection(title: "Settings", entries: [
             HelpEntry(
                 title: "Finding it",
-                body: "The Settings button on the home screen holds Speech and Accessibility together in one place, including the Pronunciation Dictionary."
+                body: "The Settings button on the home screen holds Speech, Accessibility, Feedback, and Account together in one place, including the Pronunciation Dictionary and Usage & Balance."
+            ),
+            HelpEntry(
+                title: "Usage & Balance",
+                body: "Under Account, Usage & Balance shows what this account has spent this month and overall — chat, voices, pictures, phone calls — plus your balance. It's read-only: the one link opens the chip-in page in your browser, and nothing is ever charged from inside the app."
             ),
             HelpEntry(
                 title: "Speech",

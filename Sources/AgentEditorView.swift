@@ -48,6 +48,15 @@ struct AgentEditorView: View {
     @State private var voice = ""
     @State private var showingVoicePicker = false
     @State private var starters: [String] = []
+    @State private var availableTools: [AvailableTool] = []
+    @State private var selectedTools: Set<String> = []
+    /// Tool strings on the agent that aren't in the available-tools list
+    /// (MCP entries, capabilities, anything newer than this build) ride
+    /// along untouched on save — the editor only ever changes what it can
+    /// actually display. If the lookup list itself failed to load, save
+    /// sends nil and the server's tools stay exactly as they were.
+    @State private var preservedUnknownTools: [String] = []
+    @State private var toolsListLoaded = false
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAvatarJpeg: Data?
     @State private var avatarNote: String?
@@ -169,6 +178,33 @@ struct AgentEditorView: View {
                     } footer: {
                         Text("Up to \(Self.maxStarters) tappable opening lines people see when they start a chat with this agent.")
                     }
+                    if !availableTools.isEmpty {
+                        Section {
+                            DisclosureGroup {
+                                ForEach(availableTools) { tool in
+                                    Toggle(isOn: toolBinding(tool.pluginKey)) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(tool.name)
+                                            if let d = tool.description, !d.isEmpty {
+                                                Text(d)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(3)
+                                            }
+                                        }
+                                    }
+                                    .accessibilityLabel(tool.name)
+                                    .accessibilityHint(tool.description ?? "")
+                                }
+                            } label: {
+                                Text("Tools")
+                                    .accessibilityLabel("Tools. \(selectedTools.count) turned on.")
+                                    .accessibilityHint("Expands the list of abilities this agent can use, like making pictures or sending phone notifications.")
+                            }
+                        } footer: {
+                            Text("\(selectedTools.count) of \(availableTools.count) tools turned on. Tools give this agent real abilities — a picture maker, a phone-call placer, and so on.")
+                        }
+                    }
                     if existingId != nil {
                         Section {
                             PhotosPicker(selection: $avatarPickerItem, matching: .images) {
@@ -233,8 +269,11 @@ struct AgentEditorView: View {
 
                 async let cats = service.loadCategories()
                 async let models = service.loadModelsConfig()
+                async let tools = service.loadAvailableTools()
                 categories = await cats
                 modelsConfig = await models
+                availableTools = await tools
+                toolsListLoaded = !availableTools.isEmpty
                 if provider.isEmpty, let firstProvider = modelsConfig.keys.sorted().first {
                     provider = firstProvider
                     model = modelsConfig[firstProvider]?.first ?? ""
@@ -252,6 +291,10 @@ struct AgentEditorView: View {
                     if let m = detail.model, !m.isEmpty { model = m }
                     voice = detail.tts?.voiceId ?? ""
                     starters = detail.conversation_starters ?? []
+                    let agentTools = detail.tools ?? []
+                    let known = Set(availableTools.map { $0.pluginKey })
+                    selectedTools = Set(agentTools.filter { known.contains($0) })
+                    preservedUnknownTools = agentTools.filter { !known.contains($0) }
                 } catch {
                     loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
                 }
@@ -275,7 +318,10 @@ struct AgentEditorView: View {
             voice: voice,
             starters: starters
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+                .filter { !$0.isEmpty },
+            tools: toolsListLoaded
+                ? preservedUnknownTools + availableTools.map(\.pluginKey).filter { selectedTools.contains($0) }
+                : nil
         )
         do {
             if let existingId {
@@ -296,6 +342,15 @@ struct AgentEditorView: View {
     }
 
     private static let maxStarters = 4
+
+    private func toolBinding(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedTools.contains(key) },
+            set: { on in
+                if on { selectedTools.insert(key) } else { selectedTools.remove(key) }
+            }
+        )
+    }
 
     /// Index-guarded binding — a starter row can be deleted out from under
     /// an in-flight keyboard commit, and an unguarded `$starters[i]` is an

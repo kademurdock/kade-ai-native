@@ -106,6 +106,25 @@ final class AgentBuilderService: ObservableObject {
 
     // MARK: - Agents
 
+    /// GET /api/agents/tools — the platform's available tools (TPlugin[]).
+    /// Live-probed July 21 2026: 16 entries of {pluginKey, name, description,
+    /// icon, isAuthRequired, authConfig}. Only the display fields matter here;
+    /// server-side env supplies any credentials, so isAuthRequired is shown
+    /// as a hint, never a blocker. Explicit Accept header: this route sits
+    /// behind the anti-abuse layer and answers an SSE-style error to
+    /// requests that don't look like a browser asking for JSON.
+    func loadAvailableTools() async -> [AvailableTool] {
+        do {
+            var req = client.request(path: "api/agents/tools", method: "GET", authorized: true)
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return [] }
+            return try decoder.decode([AvailableTool].self, from: data)
+        } catch {
+            return []
+        }
+    }
+
     private struct AgentsPage: Decodable { let data: [AgentSummary] }
 
     /// Only agents `authoredByUserId` actually authored -- everyone else's
@@ -159,6 +178,12 @@ final class AgentBuilderService: ObservableObject {
         /// this agent. Always sent (an empty array deliberately clears
         /// them server-side, so deleting the last starter really deletes it).
         var starters: [String]
+        /// The agent's full tools array — the editor's known toggles PLUS
+        /// any strings it didn't recognize, preserved verbatim (see
+        /// AgentEditorView's preservation note). nil = this save should not
+        /// touch tools at all (the lookup list failed to load, so the
+        /// editor can't know what it would be overwriting).
+        var tools: [String]?
     }
 
     private func bodyJSON(_ fields: AgentFields) -> [String: Any] {
@@ -173,6 +198,7 @@ final class AgentBuilderService: ObservableObject {
         let v = fields.voice.trimmingCharacters(in: .whitespacesAndNewlines)
         if !v.isEmpty { body["tts"] = ["voiceId": v] }
         body["conversation_starters"] = fields.starters
+        if let tools = fields.tools { body["tools"] = tools }
         return body
     }
 
@@ -286,4 +312,16 @@ struct AgentDetail: Decodable, Identifiable, Hashable {
     let tts: TTSInfo?
     /// Tappable opening lines, editable in Phase 2.
     let conversation_starters: [String]?
+    /// The agent's enabled tool keys (kade_notify, flux, ...), editable in
+    /// Phase 2. Unknown entries are preserved by the editor, never dropped.
+    let tools: [String]?
+}
+
+/// One entry from `GET /api/agents/tools` — see loadAvailableTools.
+struct AvailableTool: Decodable, Identifiable, Hashable {
+    let pluginKey: String
+    let name: String
+    let description: String?
+    let isAuthRequired: Bool?
+    var id: String { pluginKey }
 }
