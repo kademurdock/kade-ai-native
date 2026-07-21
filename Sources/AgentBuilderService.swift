@@ -265,6 +265,21 @@ final class AgentBuilderService: ObservableObject {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't upload the photo."))
         }
     }
+
+    /// POST /api/agents/:id/revert {version_index} — restores that snapshot
+    /// (0-based index into `versions`, oldest first) and answers the updated
+    /// agent. The restore itself becomes a new save, so nothing is ever lost:
+    /// restoring is always undoable by restoring the state before it.
+    func revertAgent(id: String, versionIndex: Int) async throws -> AgentDetail {
+        var req = client.request(path: "api/agents/\(id)/revert", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["version_index": versionIndex])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't restore that version."))
+        }
+        return try decoder.decode(AgentDetail.self, from: data)
+    }
 }
 
 /// One category from `GET /api/agents/categories`. `count`/`description`
@@ -315,6 +330,20 @@ struct AgentDetail: Decodable, Identifiable, Hashable {
     /// The agent's enabled tool keys (kade_notify, flux, ...), editable in
     /// Phase 2. Unknown entries are preserved by the editor, never dropped.
     let tools: [String]?
+    /// Prior saved states, oldest first — every save pushes the pre-save
+    /// snapshot here server-side. Lenient subset: a snapshot carries the
+    /// full agent document, but only these fields are needed to label a
+    /// history row and pick one to restore.
+    let versions: [AgentVersion]?
+}
+
+/// One entry of an agent's `versions` array (a full prior snapshot,
+/// decoded leniently — every field optional on purpose).
+struct AgentVersion: Decodable, Hashable {
+    let name: String?
+    let description: String?
+    let model: String?
+    let updatedAt: String?
 }
 
 /// One entry from `GET /api/agents/tools` — see loadAvailableTools.

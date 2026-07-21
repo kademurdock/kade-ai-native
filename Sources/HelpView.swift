@@ -257,8 +257,12 @@ struct HelpSection: Identifiable {
                 body: "While editing an existing agent, the Avatar section picks a photo from your library to be that agent's picture. It uploads when you press Save. The picture shows on the web version today; native list rows don't draw pictures yet."
             ),
             HelpEntry(
+                title: "Version history",
+                body: "While editing an existing agent, Version history lists every setup you've saved over. Tap one to restore it — the setup you're replacing is kept as the newest entry first, so restoring is always undoable."
+            ),
+            HelpEntry(
                 title: "What's not here yet",
-                body: "Custom actions, connecting other agents together, attaching knowledge files, and version history all exist on the web version and are still on the list for native."
+                body: "Custom actions, connecting other agents together, and attaching knowledge files exist on the web version and are still on the list for native."
             ),
         ]),
         HelpSection(title: "Settings", entries: [

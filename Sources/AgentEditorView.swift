@@ -57,6 +57,8 @@ struct AgentEditorView: View {
     /// sends nil and the server's tools stay exactly as they were.
     @State private var preservedUnknownTools: [String] = []
     @State private var toolsListLoaded = false
+    @State private var showingVersionHistory = false
+    @State private var loadedVersions: [AgentVersion] = []
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAvatarJpeg: Data?
     @State private var avatarNote: String?
@@ -227,6 +229,24 @@ struct AgentEditorView: View {
                         } header: {
                             Text("Avatar")
                         }
+                        Section {
+                            Button {
+                                showingVersionHistory = true
+                            } label: {
+                                HStack {
+                                    Text("Version history")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    Text(loadedVersions.isEmpty ? "None yet" : "\(loadedVersions.count)")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Version history")
+                            .accessibilityValue(loadedVersions.isEmpty ? "No earlier versions yet" : "\(loadedVersions.count) earlier version\(loadedVersions.count == 1 ? "" : "s")")
+                            .accessibilityHint("Every save keeps the version it replaced. Open to restore any earlier one.")
+                        }
                     }
                     if let saveError {
                         Section { Text(saveError).foregroundStyle(.red) }
@@ -237,6 +257,18 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .navigationDestination(isPresented: $showingVersionHistory) {
+                if let existingId {
+                    AgentVersionHistoryView(
+                        apiClient: apiClient,
+                        agentId: existingId,
+                        versions: loadedVersions,
+                        onReverted: {
+                            Task { await loadExisting(existingId) }
+                        }
+                    )
+                }
             }
             .onChange(of: avatarPickerItem) { _, newItem in
                 guard let newItem else { return }
@@ -280,25 +312,7 @@ struct AgentEditorView: View {
                 }
 
                 guard let existingId else { return }
-                isLoadingDetail = true
-                do {
-                    let detail = try await service.loadDetail(id: existingId)
-                    name = detail.name ?? ""
-                    description = detail.description ?? ""
-                    instructions = detail.instructions ?? ""
-                    category = detail.category ?? ""
-                    if let p = detail.provider, !p.isEmpty { provider = p }
-                    if let m = detail.model, !m.isEmpty { model = m }
-                    voice = detail.tts?.voiceId ?? ""
-                    starters = detail.conversation_starters ?? []
-                    let agentTools = detail.tools ?? []
-                    let known = Set(availableTools.map { $0.pluginKey })
-                    selectedTools = Set(agentTools.filter { known.contains($0) })
-                    preservedUnknownTools = agentTools.filter { !known.contains($0) }
-                } catch {
-                    loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
-                }
-                isLoadingDetail = false
+                await loadExisting(existingId)
             }
         }
     }
@@ -339,6 +353,31 @@ struct AgentEditorView: View {
         } catch {
             saveError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't save. Try again."
         }
+    }
+
+    /// Loads (or after a version restore, RE-loads) the agent into the form.
+    private func loadExisting(_ id: String) async {
+        isLoadingDetail = true
+        do {
+            let detail = try await service.loadDetail(id: id)
+            name = detail.name ?? ""
+            description = detail.description ?? ""
+            instructions = detail.instructions ?? ""
+            category = detail.category ?? ""
+            if let p = detail.provider, !p.isEmpty { provider = p }
+            if let m = detail.model, !m.isEmpty { model = m }
+            voice = detail.tts?.voiceId ?? ""
+            starters = detail.conversation_starters ?? []
+            let agentTools = detail.tools ?? []
+            let known = Set(availableTools.map { $0.pluginKey })
+            selectedTools = Set(agentTools.filter { known.contains($0) })
+            preservedUnknownTools = agentTools.filter { !known.contains($0) }
+            loadedVersions = detail.versions ?? []
+            loadError = nil
+        } catch {
+            loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
+        }
+        isLoadingDetail = false
     }
 
     private static let maxStarters = 4
