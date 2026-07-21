@@ -145,9 +145,6 @@ struct PronunciationDictionaryView: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(entry.term), pronounced \(entry.pronunciation)")
                     .accessibilityHint("Opens this word to change its pronunciation.")
-                    .accessibilityActions {
-                        Button("Delete") { deletingEntry = entry }
-                    }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
                             deletingEntry = entry

@@ -214,25 +214,16 @@ struct ConversationListView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this conversation and reads its history.")
-                // Kade, build 121, about the equivalent buttons on messages:
-                // "there are already actions in the rotor that do the same
-                // thing, so unless they're a visual thing, they should
-                // probably go. I like the actions." Applied here too, for
-                // the same reason and with the same shape: the actions hang
-                // off the ROW as real VoiceOver actions (one rotor flick
-                // from the row she's already on), and the swipe actions
-                // below stay as the purely visual affordance. This also
-                // returns the list to ONE row per conversation, which is the
-                // structure the session-11 activation fix was verified
-                // against -- build 120 had added a second row per
-                // conversation just to hold an actions button.
-                .accessibilityActions {
-                    Button("Rename") { beginRename(convo) }
-                    Button("Archive") {
-                        Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
-                    }
-                    Button("Delete") { deletingConversation = convo }
-                }
+                // Rename/Archive/Delete live ONLY on `.swipeActions` below.
+                // Session 21g: they used to ALSO be declared as explicit
+                // `.accessibilityActions`, but `.swipeActions` already
+                // surface as VoiceOver custom actions on their own, so every
+                // action got announced TWICE in the Actions rotor (Kade:
+                // "delete and share... listed twice"). Removing the explicit
+                // set leaves exactly one, still one rotor flick from the row,
+                // with the swipe kept as the sighted affordance. Do NOT
+                // re-add `.accessibilityActions` alongside the swipe -- that
+                // is exactly what caused the duplication.
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingConversation = convo

@@ -145,9 +145,6 @@ struct RoomListView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: room))
                 .accessibilityHint("Opens this room.")
-                .accessibilityActions {
-                    Button("Delete") { deletingRoom = room }
-                }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingRoom = room

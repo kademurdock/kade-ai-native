@@ -139,9 +139,6 @@ struct AgentManagerView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: agent))
                 .accessibilityHint("Opens this agent to edit it.")
-                .accessibilityActions {
-                    Button("Delete") { deletingAgent = agent }
-                }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingAgent = agent

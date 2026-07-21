@@ -41,6 +41,8 @@ struct AgentEditorView: View {
     @State private var category = ""
     @State private var provider = ""
     @State private var model = ""
+    @State private var voice = ""
+    @State private var showingVoicePicker = false
 
     @State private var isSaving = false
     @State private var saveError: String?
@@ -122,6 +124,24 @@ struct AgentEditorView: View {
                             }
                         }
                     }
+                    Section("Voice") {
+                        Button {
+                            showingVoicePicker = true
+                        } label: {
+                            HStack {
+                                Text("Voice")
+                                    .foregroundStyle(Color.primary)
+                                Spacer()
+                                Text(voice.isEmpty ? "Default" : voice)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Voice")
+                        .accessibilityValue(voice.isEmpty ? "Default" : voice)
+                        .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
+                    }
                     if let saveError {
                         Section { Text(saveError).foregroundStyle(.red) }
                     }
@@ -129,6 +149,9 @@ struct AgentEditorView: View {
             }
             .navigationTitle(existingId == nil ? "New agent" : "Edit agent")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingVoicePicker) {
+                VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -163,6 +186,7 @@ struct AgentEditorView: View {
                     category = detail.category ?? ""
                     if let p = detail.provider, !p.isEmpty { provider = p }
                     if let m = detail.model, !m.isEmpty { model = m }
+                    voice = detail.tts?.voiceId ?? ""
                 } catch {
                     loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
                 }
@@ -182,7 +206,8 @@ struct AgentEditorView: View {
             instructions: instructions.trimmingCharacters(in: .whitespacesAndNewlines),
             category: category,
             provider: provider,
-            model: model
+            model: model,
+            voice: voice
         )
         do {
             if let existingId {

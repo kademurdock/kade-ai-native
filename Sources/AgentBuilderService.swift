@@ -151,10 +151,14 @@ final class AgentBuilderService: ObservableObject {
         var category: String
         var provider: String
         var model: String
+        /// TTS voice id ("Voice 42"), or empty to leave the agent on its
+        /// name-hash default. Sent as `tts.voiceId`, the same shape
+        /// `VoiceService` reads back.
+        var voice: String
     }
 
     private func bodyJSON(_ fields: AgentFields) -> [String: Any] {
-        [
+        var body: [String: Any] = [
             "name": fields.name,
             "description": fields.description,
             "instructions": fields.instructions,
@@ -162,6 +166,9 @@ final class AgentBuilderService: ObservableObject {
             "provider": fields.provider,
             "model": fields.model,
         ]
+        let v = fields.voice.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !v.isEmpty { body["tts"] = ["voiceId": v] }
+        return body
     }
 
     func createAgent(_ fields: AgentFields) async throws -> AgentDetail {
@@ -225,6 +232,7 @@ struct AgentSummary: Decodable, Identifiable, Hashable {
 /// silently ignored, same treatment `KadeAgent`'s own doc comment
 /// describes for the marketplace list.
 struct AgentDetail: Decodable, Identifiable, Hashable {
+    struct TTSInfo: Decodable, Hashable { let voiceId: String? }
     let id: String
     let name: String?
     let description: String?
@@ -233,4 +241,8 @@ struct AgentDetail: Decodable, Identifiable, Hashable {
     let provider: String?
     let model: String?
     let author: String?
+    /// The agent's configured TTS voice, if any (same `tts.voiceId` shape
+    /// `VoiceService.resolveVoice` reads). Lets the editor show and keep the
+    /// current voice instead of silently resetting it on save.
+    let tts: TTSInfo?
 }

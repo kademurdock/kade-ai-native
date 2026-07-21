@@ -291,6 +291,24 @@ final class VoiceService: NSObject, ObservableObject {
         isPumping = false
     }
 
+    /// The full TTS voice catalog ("Voice 1"..."Voice 326"), cached for the
+    /// session. Public so the Agent Builder's voice picker can browse it.
+    func availableVoices() async -> [String] {
+        await fetchVoicesList()
+    }
+
+    /// Audition one voice: synthesize a short sample line in `voiceId` and
+    /// play it, so a voice can be heard before it's assigned. Independent of
+    /// the read-aloud queue; stops any current playback first so rapid
+    /// previews never stack up.
+    func previewVoice(_ voiceId: String, sample: String = "Hi there. This is how I sound.") async {
+        stopSpeaking()
+        let fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
+        let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { return }
+        await playAudio(data)
+    }
+
     private func pumpSpeakQueue() async {
         isPumping = true
         isSpeaking = true
