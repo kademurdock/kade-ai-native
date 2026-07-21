@@ -415,6 +415,44 @@ final class AgentBuilderService: ObservableObject {
         }
     }
 
+    // MARK: - Custom actions (Phase 3, session 18)
+    //
+    // Read off api/server/routes/agents/actions.js at fork rev 6ab48f1:
+    //   GET    /api/agents/actions                    JWT -> 200 [Action] --
+    //          every action across all agents she can EDIT, each
+    //          {action_id, agent_id, metadata: {domain, ...}, ...} with
+    //          api_key/oauth secrets stripped server-side.
+    //   DELETE /api/agents/actions/:agent_id/:action_id -> 200 {message} --
+    //          also removes the action's tools from the agent and bumps its
+    //          version.
+    //
+    // CREATE is deliberately NOT native: POST requires the CLIENT to parse
+    // an OpenAPI spec into a functions[] array (the web uses
+    // validateAndParseOpenAPISpec from librechat-data-provider, a real
+    // parser), and hand-porting an OpenAPI parser to Swift is exactly the
+    // kind of large, silently-wrong-prone surface this project ships as its
+    // own reviewed feature or not at all. The native screen lists, removes,
+    // and points at the web builder for creation.
+
+    func loadActions(agentId: String) async throws -> [[String: Any]] {
+        let req = client.request(path: "api/agents/actions", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200,
+              let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load the actions."))
+        }
+        return arr.filter { ($0["agent_id"] as? String) == agentId }
+    }
+
+    func deleteAction(agentId: String, actionId: String) async throws {
+        let req = client.request(path: "api/agents/actions/\(agentId)/\(actionId)", method: "DELETE", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            // This route answers errors as {message}, same as uploads.
+            throw AgentBuilderError(message: uploadErrorMessage(from: data))
+        }
+    }
+
     func deleteKnowledgeFile(agentId: String, rawFile: [String: Any], toolResource: String) async throws {
         var req = client.request(path: "api/files", method: "DELETE", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

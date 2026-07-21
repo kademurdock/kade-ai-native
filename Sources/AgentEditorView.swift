@@ -60,6 +60,7 @@ struct AgentEditorView: View {
     @State private var showingVersionHistory = false
     @State private var showingKnowledge = false
     @State private var showingConnections = false
+    @State private var showingActions = false
     @State private var loadedVersions: [AgentVersion] = []
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAvatarJpeg: Data?
@@ -273,8 +274,24 @@ struct AgentEditorView: View {
                             // Same Form-row rule as the Voice button above.
                             .accessibilityLabel("Connections")
                             .accessibilityHint("Companions this agent can hand a conversation off to mid-chat.")
+
+                            Button {
+                                showingActions = true
+                            } label: {
+                                HStack {
+                                    Text("Actions")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    Text("Open")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            // Same Form-row rule as the Voice button above.
+                            .accessibilityLabel("Actions")
+                            .accessibilityHint("Outside services this agent can call. Review and remove here; new ones are created on the web.")
                         } header: {
-                            Text("Knowledge and connections")
+                            Text("Knowledge, connections, and actions")
                         }
                         Section {
                             Button {
@@ -304,6 +321,15 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .navigationDestination(isPresented: $showingActions) {
+                if let existingId {
+                    AgentActionsView(
+                        apiClient: apiClient,
+                        agentId: existingId,
+                        agentName: name.isEmpty ? "This agent" : name
+                    )
+                }
             }
             .navigationDestination(isPresented: $showingConnections) {
                 if let existingId {
