@@ -140,7 +140,14 @@ struct ContentView: View {
                         }
                     }
 
-                    webButton
+                    // Session 18 (grouped sections): while signed IN, Help and
+                    // Open web live inside the "Settings and help" section
+                    // above -- rendering this block too would put two
+                    // identical Help buttons on one screen. Signed out it
+                    // stays, so Help is reachable before signing in.
+                    if !isSignedIn {
+                        webButton
+                    }
 
                     Spacer(minLength: 0)
                 }
@@ -288,6 +295,18 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            // Session 18 (Kade's pick via AskUserQuestion: "grouped sections"
+            // over real bottom tabs): the home screen had grown to 13 buttons
+            // in one flat run. Three labeled section headers -- Talk, Tools,
+            // Settings and help -- each a real VoiceOver heading, so the
+            // Headings rotor jumps between groups instead of swiping the
+            // whole list. Spotter deliberately stays the FIRST button in the
+            // first section: "keep it one-tap, always" is her standing rule.
+            Text("Talk")
+                .font(.headline)
+                .padding(.top, 8)
+                .accessibilityAddTraits(.isHeader)
+
             Button {
                 callingSpotter = true
             } label: {
@@ -335,6 +354,11 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Opens your conversation list.")
+
+            Text("Tools")
+                .font(.headline)
+                .padding(.top, 8)
+                .accessibilityAddTraits(.isHeader)
 
             // Session 15 (Kade: "consider the transcriber app and similar
             // apps like that. They need to go native as well"). This used
@@ -406,6 +430,11 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Create or edit your own companions.")
 
+            Text("Settings and help")
+                .font(.headline)
+                .padding(.top, 8)
+                .accessibilityAddTraits(.isHeader)
+
             // Session 17, later still (Kade: "We also need a native way
             // to access settings like speech and whatnot. Accessability
             // low vision stuff like that."). Pronunciation Dictionary
@@ -418,6 +447,20 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Speech, accessibility, and pronunciation dictionary settings.")
+
+            Button { route = .help } label: {
+                Label("Help", systemImage: "questionmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("How everything in the app works, section by section.")
+
+            Button { showingWeb = true } label: {
+                Label("Open Kade-AI web", systemImage: "safari")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
 
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
