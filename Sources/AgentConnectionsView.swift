@@ -101,15 +101,15 @@ struct AgentConnectionsView: View {
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("Hands off to \(row.targetLabel).\(row.detail.map { " " + $0 } ?? "")")
-                        .swipeActions(edge: .trailing) {
+                        // swipeActions ONLY — see ConversationListView's
+                        // rule; an explicit .accessibilityAction would
+                        // double the rotor entry.
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
                                 Task { await remove(at: row.index) }
                             } label: {
-                                Text("Remove")
+                                Label("Remove", systemImage: "trash")
                             }
-                        }
-                        .accessibilityAction(named: "Remove") {
-                            Task { await remove(at: row.index) }
                         }
                     }
                 }

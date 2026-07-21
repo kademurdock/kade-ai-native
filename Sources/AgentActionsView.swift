@@ -63,15 +63,15 @@ struct AgentActionsView: View {
                         Text(row.domain)
                             .font(.body)
                             .accessibilityLabel("Action for \(row.domain)")
-                            .swipeActions(edge: .trailing) {
+                            // swipeActions ONLY — see ConversationListView's
+                            // rule; an explicit .accessibilityAction would
+                            // double the rotor entry.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     Task { await remove(row) }
                                 } label: {
-                                    Text("Remove")
+                                    Label("Remove", systemImage: "trash")
                                 }
-                            }
-                            .accessibilityAction(named: "Remove") {
-                                Task { await remove(row) }
                             }
                     }
                 }

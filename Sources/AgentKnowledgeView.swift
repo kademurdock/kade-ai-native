@@ -90,15 +90,17 @@ struct AgentKnowledgeView: View {
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(row.filename), \(Self.sizeLabel(row.bytes))")
-                        .swipeActions(edge: .trailing) {
+                        // swipeActions ONLY — VoiceOver's Actions rotor
+                        // surfaces these by itself; an explicit
+                        // .accessibilityAction on top would double the
+                        // Remove entry (the build-122 duplicate-actions
+                        // bug, rule recorded in ConversationListView).
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
                                 Task { await remove(row) }
                             } label: {
-                                Text("Remove")
+                                Label("Remove", systemImage: "trash")
                             }
-                        }
-                        .accessibilityAction(named: "Remove") {
-                            Task { await remove(row) }
                         }
                     }
                 }
