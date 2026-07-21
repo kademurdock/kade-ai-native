@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-/// Agent Builder, Phase 1 — your own agents: list, create, edit, delete.
+/// Agent Builder — your own agents: list, create, edit, delete, duplicate.
 /// See `AgentBuilderService` for the server contract and exactly what's
 /// deliberately not wired up yet. VoiceOver notes mirror
 /// `ConversationListView`/`RoomListView`'s proven row pattern: a plain
@@ -28,6 +29,7 @@ struct AgentManagerView: View {
     @State private var activeSheet: AgentSheet?
     @State private var deletingAgent: AgentSummary?
     @State private var isDeleting = false
+    @State private var isDuplicating = false
 
     private enum AgentSheet: Identifiable {
         case new
@@ -145,6 +147,12 @@ struct AgentManagerView: View {
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
+                    Button {
+                        Task { await duplicate(agent) }
+                    } label: {
+                        Label("Duplicate", systemImage: "plus.square.on.square")
+                    }
+                    .tint(.blue)
                 }
             }
         }
@@ -171,6 +179,26 @@ struct AgentManagerView: View {
     private func reload() async {
         agents = await service.loadMyAgents(authoredByUserId: currentUserId)
         hasLoaded = true
+    }
+
+    /// Server-side clone (`POST /:id/duplicate`) — the copy lands in the
+    /// list with a timestamped name, ready to rename and edit. Spoken
+    /// confirmation because the only visual change is a new row appearing.
+    private func duplicate(_ agent: AgentSummary) async {
+        guard !isDuplicating else { return }
+        isDuplicating = true
+        defer { isDuplicating = false }
+        do {
+            let copy = try await service.duplicateAgent(id: agent.id)
+            await reload()
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Duplicated. \(copy.name ?? agent.name) is in your list, ready to edit."
+            )
+        } catch {
+            let message = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't duplicate that agent."
+            UIAccessibility.post(notification: .announcement, argument: message)
+        }
     }
 
     private func confirmDelete(_ agent: AgentSummary) async {

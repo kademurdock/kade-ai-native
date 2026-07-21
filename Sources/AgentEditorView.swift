@@ -1,10 +1,14 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 /// Create or edit one agent's core identity — see `AgentBuilderService`
-/// for the server contract and the Phase 1 scope note (name, description,
-/// persona/instructions, category, provider, model; tools/actions,
-/// subagent edges, knowledge files, TTS voice, conversation starters, and
-/// version history are real but deliberately not here yet).
+/// for the server contract. Phase 1 shipped name, description,
+/// persona/instructions, category, provider, model; Phase 2 added the TTS
+/// voice picker, conversation starters, and an avatar photo (edit mode
+/// only — the upload route needs an agent id to exist first). Tools/
+/// actions, subagent edges, knowledge files, and version history are real
+/// server capabilities deliberately not here yet.
 ///
 /// One view handles both create and edit, matching this app's existing
 /// shared-form precedent (`RoomListView`'s `NewRoomSheet` mirrors this same
@@ -43,6 +47,10 @@ struct AgentEditorView: View {
     @State private var model = ""
     @State private var voice = ""
     @State private var showingVoicePicker = false
+    @State private var starters: [String] = []
+    @State private var avatarPickerItem: PhotosPickerItem?
+    @State private var pendingAvatarJpeg: Data?
+    @State private var avatarNote: String?
 
     @State private var isSaving = false
     @State private var saveError: String?
@@ -142,6 +150,48 @@ struct AgentEditorView: View {
                         .accessibilityValue(voice.isEmpty ? "Default" : voice)
                         .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
                     }
+                    Section {
+                        ForEach(starters.indices, id: \.self) { i in
+                            TextField("Starter \(i + 1)", text: starterBinding(at: i), axis: .vertical)
+                                .accessibilityLabel("Conversation starter \(i + 1)")
+                        }
+                        .onDelete { starters.remove(atOffsets: $0) }
+                        if starters.count < Self.maxStarters {
+                            Button {
+                                starters.append("")
+                            } label: {
+                                Label("Add a starter", systemImage: "plus")
+                            }
+                            .accessibilityHint("Adds another suggested opening line. Swipe up or down on a starter for its delete action.")
+                        }
+                    } header: {
+                        Text("Conversation starters")
+                    } footer: {
+                        Text("Up to \(Self.maxStarters) tappable opening lines people see when they start a chat with this agent.")
+                    }
+                    if existingId != nil {
+                        Section {
+                            PhotosPicker(selection: $avatarPickerItem, matching: .images) {
+                                HStack {
+                                    Text("Avatar photo")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    Text(pendingAvatarJpeg == nil ? "Choose…" : "Ready to save")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityLabel("Avatar photo")
+                            .accessibilityValue(pendingAvatarJpeg == nil ? "None chosen yet" : "Photo chosen, uploads when you save")
+                            .accessibilityHint("Picks a photo from your library to use as this agent's picture.")
+                            if let avatarNote {
+                                Text(avatarNote)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } header: {
+                            Text("Avatar")
+                        }
+                    }
                     if let saveError {
                         Section { Text(saveError).foregroundStyle(.red) }
                     }
@@ -151,6 +201,20 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .onChange(of: avatarPickerItem) { _, newItem in
+                guard let newItem else { return }
+                Task {
+                    guard let raw = try? await newItem.loadTransferable(type: Data.self),
+                          let image = UIImage(data: raw) else {
+                        avatarNote = "Couldn't read that photo. Try a different one."
+                        return
+                    }
+                    pendingAvatarJpeg = Self.avatarJpeg(from: image)
+                    avatarNote = pendingAvatarJpeg == nil
+                        ? "Couldn't prepare that photo. Try a different one."
+                        : "Photo ready — it uploads when you press Save."
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -187,6 +251,7 @@ struct AgentEditorView: View {
                     if let p = detail.provider, !p.isEmpty { provider = p }
                     if let m = detail.model, !m.isEmpty { model = m }
                     voice = detail.tts?.voiceId ?? ""
+                    starters = detail.conversation_starters ?? []
                 } catch {
                     loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
                 }
@@ -207,11 +272,19 @@ struct AgentEditorView: View {
             category: category,
             provider: provider,
             model: model,
-            voice: voice
+            voice: voice,
+            starters: starters
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         )
         do {
             if let existingId {
                 _ = try await service.updateAgent(id: existingId, fields: fields)
+                // Fields are saved server-side at this point even if the
+                // photo below fails — a retry just re-saves the same values.
+                if let jpeg = pendingAvatarJpeg {
+                    try await service.uploadAvatar(id: existingId, jpegData: jpeg)
+                }
             } else {
                 _ = try await service.createAgent(fields)
             }
@@ -220,5 +293,32 @@ struct AgentEditorView: View {
         } catch {
             saveError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't save. Try again."
         }
+    }
+
+    private static let maxStarters = 4
+
+    /// Index-guarded binding — a starter row can be deleted out from under
+    /// an in-flight keyboard commit, and an unguarded `$starters[i]` is an
+    /// index-out-of-range crash waiting for exactly that moment.
+    private func starterBinding(at index: Int) -> Binding<String> {
+        Binding(
+            get: { index < starters.count ? starters[index] : "" },
+            set: { newValue in
+                if index < starters.count { starters[index] = newValue }
+            }
+        )
+    }
+
+    /// Downscale to a sane avatar size and re-encode as JPEG — camera-roll
+    /// photos can arrive as multi-megabyte HEIC, and JPEG at ~1024px is
+    /// both universally parseable server-side and plenty for an avatar.
+    private static func avatarJpeg(from image: UIImage, maxEdge: CGFloat = 1024) -> Data? {
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, maxEdge / longest)
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let scaled = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        return scaled.jpegData(compressionQuality: 0.85)
     }
 }

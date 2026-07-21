@@ -155,6 +155,10 @@ final class AgentBuilderService: ObservableObject {
         /// name-hash default. Sent as `tts.voiceId`, the same shape
         /// `VoiceService` reads back.
         var voice: String
+        /// Tappable opening lines shown when someone starts a chat with
+        /// this agent. Always sent (an empty array deliberately clears
+        /// them server-side, so deleting the last starter really deletes it).
+        var starters: [String]
     }
 
     private func bodyJSON(_ fields: AgentFields) -> [String: Any] {
@@ -168,6 +172,7 @@ final class AgentBuilderService: ObservableObject {
         ]
         let v = fields.voice.trimmingCharacters(in: .whitespacesAndNewlines)
         if !v.isEmpty { body["tts"] = ["voiceId": v] }
+        body["conversation_starters"] = fields.starters
         return body
     }
 
@@ -198,6 +203,40 @@ final class AgentBuilderService: ObservableObject {
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't delete that agent."))
+        }
+    }
+
+    /// POST /api/agents/:id/duplicate — the server clones the agent (name
+    /// gains a timestamped suffix) plus its actions, minus stored secrets,
+    /// and answers 201 `{ agent, actions }`. Only the agent half matters here.
+    func duplicateAgent(id: String) async throws -> AgentDetail {
+        let req = client.request(path: "api/agents/\(id)/duplicate", method: "POST", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 201 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't duplicate that agent."))
+        }
+        struct DuplicateResponse: Decodable { let agent: AgentDetail }
+        return try decoder.decode(DuplicateResponse.self, from: data).agent
+    }
+
+    /// POST /api/agents/:agent_id/avatar/ — multipart, field name "file"
+    /// (read off the web client's own upload code, the ground truth for
+    /// this contract). The server resizes on its side; this app still
+    /// pre-scales to JPEG so a 12-megapixel camera-roll photo isn't
+    /// shipped raw over her cell connection.
+    func uploadAvatar(id: String, jpegData: Data) async throws {
+        let req = client.multipartRequest(
+            path: "api/agents/\(id)/avatar/",
+            authorized: true,
+            fields: [],
+            fileField: "file",
+            fileData: jpegData,
+            fileName: "avatar.jpg",
+            fileMimeType: "image/jpeg"
+        )
+        let (data, http) = try await client.send(req)
+        guard (200...299).contains(http.statusCode) else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't upload the photo."))
         }
     }
 }
@@ -245,4 +284,6 @@ struct AgentDetail: Decodable, Identifiable, Hashable {
     /// `VoiceService.resolveVoice` reads). Lets the editor show and keep the
     /// current voice instead of silently resetting it on save.
     let tts: TTSInfo?
+    /// Tappable opening lines, editable in Phase 2.
+    let conversation_starters: [String]?
 }
