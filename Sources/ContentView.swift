@@ -315,7 +315,7 @@ struct ContentView: View {
                 Label("Call your Spotter", systemImage: "eye")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(KadeHeroButtonStyle())
             .accessibilityLabel("Call your Spotter")
             .accessibilityHint("Starts a live call with your visual companion straight away, without picking anyone first.")
             .fullScreenCover(isPresented: $callingSpotter) {
@@ -354,7 +354,8 @@ struct ContentView: View {
                 Label("Your conversations", systemImage: "bubble.left.and.bubble.right")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityHint("Opens your conversation list.")
 
             // Session 18: native notification history — the one genuinely
@@ -367,7 +368,8 @@ struct ContentView: View {
                 Label("Alerts", systemImage: "bell")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .orange))
             .accessibilityHint("Your recent reminders and check-ins, and how they reach you.")
 
             Text("Tools")
@@ -383,7 +385,8 @@ struct ContentView: View {
                 Label("Transcribe a voice memo", systemImage: "waveform")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .purple))
             .accessibilityHint("Records what you say and turns it into text you can edit, tidy up and share.")
 
             // Session 16: photo/document description, the other half of
@@ -394,7 +397,8 @@ struct ContentView: View {
                 Label("Describe a photo, video, or document", systemImage: "plus.viewfinder")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .teal))
             .accessibilityHint("Take or choose a photo or video, or pick a document, and get it described or read back to you.")
 
             // Session 17/18 (Kade: "match maker... game room... so many
@@ -409,14 +413,16 @@ struct ContentView: View {
                 Label("Matchmaker", systemImage: "person.2.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .pink))
             .accessibilityHint("Five quick questions, then three companions who might be a good fit.")
 
             Button { route = .gameRoom } label: {
                 Label("Game Room", systemImage: "gamecontroller")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .green))
             .accessibilityHint("Family standings and recent results from games played in chat.")
 
             // Session 17/18, later the same night once Kade was back up:
@@ -429,7 +435,8 @@ struct ContentView: View {
                 Label("Debate Room", systemImage: "person.3.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .indigo))
             .accessibilityHint("Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.")
 
             // Session 17/18: "Go head with agent builder" -- Phase 1 only
@@ -442,7 +449,8 @@ struct ContentView: View {
                 Label("Agent Builder", systemImage: "person.crop.circle.badge.plus")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .cyan))
             .accessibilityHint("Create or edit your own companions.")
 
             Text("Settings and help")
@@ -460,21 +468,24 @@ struct ContentView: View {
                 Label("Settings", systemImage: "gearshape")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .gray))
             .accessibilityHint("Speech, accessibility, and pronunciation dictionary settings.")
 
             Button { route = .help } label: {
                 Label("Help", systemImage: "questionmark.circle")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .mint))
             .accessibilityHint("How everything in the app works, section by section.")
 
             Button { showingWeb = true } label: {
                 Label("Open Kade-AI web", systemImage: "safari")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
 
             Button(role: .destructive, action: auth.signOut) {
@@ -496,14 +507,16 @@ struct ContentView: View {
                 Label("Help", systemImage: "questionmark.circle")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .mint))
             .accessibilityHint("How everything in the app works, section by section.")
 
             Button { showingWeb = true } label: {
                 Label("Open Kade-AI web", systemImage: "safari")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
         }
     }
