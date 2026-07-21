@@ -59,6 +59,7 @@ struct AgentEditorView: View {
     @State private var toolsListLoaded = false
     @State private var showingVersionHistory = false
     @State private var showingKnowledge = false
+    @State private var showingConnections = false
     @State private var loadedVersions: [AgentVersion] = []
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAvatarJpeg: Data?
@@ -256,8 +257,24 @@ struct AgentEditorView: View {
                             // button for VoiceOver (build 135 lesson).
                             .accessibilityLabel("Knowledge files")
                             .accessibilityHint("Documents this agent can search and answer from. Add PDFs, Word files, or text.")
+
+                            Button {
+                                showingConnections = true
+                            } label: {
+                                HStack {
+                                    Text("Connections")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    Text("Open")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            // Same Form-row rule as the Voice button above.
+                            .accessibilityLabel("Connections")
+                            .accessibilityHint("Companions this agent can hand a conversation off to mid-chat.")
                         } header: {
-                            Text("Knowledge")
+                            Text("Knowledge and connections")
                         }
                         Section {
                             Button {
@@ -287,6 +304,15 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .navigationDestination(isPresented: $showingConnections) {
+                if let existingId {
+                    AgentConnectionsView(
+                        apiClient: apiClient,
+                        agentId: existingId,
+                        agentName: name.isEmpty ? "This agent" : name
+                    )
+                }
             }
             .navigationDestination(isPresented: $showingKnowledge) {
                 if let existingId {

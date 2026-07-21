@@ -374,6 +374,47 @@ final class AgentBuilderService: ObservableObject {
             ?? errorMessage(from: data, fallback: "Couldn't add that file.")
     }
 
+    // MARK: - Connections / handoff edges (Phase 3, session 18)
+    //
+    // The web's own authoring shape, read off AgentHandoffs.tsx at fork rev
+    // 6ab48f1 -- an edge is exactly {from: currentAgentId, to: targetAgentId,
+    // edgeType: "handoff"}, appended to the agent's `edges` array and saved
+    // through the ordinary agent update; optional description/prompt/
+    // promptKey fields refine it. MAX 10 edges per agent (MAX_HANDOFFS),
+    // enforced client-side there and mirrored here. Edges round-trip as RAW
+    // JSON, same preservation rule as knowledge files: existing entries are
+    // never re-built from a partial decode, only appended to or removed.
+
+    /// Every agent she can use (NOT filtered to her own) — handoff targets
+    /// are anyone in the marketplace, matching the web's own picker.
+    func loadAllAgents() async -> [AgentSummary] {
+        do {
+            let req = client.request(
+                path: "api/agents",
+                authorized: true,
+                queryItems: [URLQueryItem(name: "limit", value: "1000")]
+            )
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return [] }
+            let page = try decoder.decode(AgentsPage.self, from: data)
+            return page.data.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        } catch {
+            return []
+        }
+    }
+
+    /// PATCH just the edges array — the server merges partial updates, so
+    /// nothing else on the agent is touched.
+    func updateEdges(id: String, edges: [[String: Any]]) async throws {
+        var req = client.request(path: "api/agents/\(id)", method: "PATCH", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["edges": edges])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't save the connection."))
+        }
+    }
+
     func deleteKnowledgeFile(agentId: String, rawFile: [String: Any], toolResource: String) async throws {
         var req = client.request(path: "api/files", method: "DELETE", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
