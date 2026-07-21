@@ -58,6 +58,7 @@ struct AgentEditorView: View {
     @State private var preservedUnknownTools: [String] = []
     @State private var toolsListLoaded = false
     @State private var showingVersionHistory = false
+    @State private var showingKnowledge = false
     @State private var loadedVersions: [AgentVersion] = []
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAvatarJpeg: Data?
@@ -238,6 +239,28 @@ struct AgentEditorView: View {
                         }
                         Section {
                             Button {
+                                showingKnowledge = true
+                            } label: {
+                                HStack {
+                                    Text("Knowledge files")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    Text("Open")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            // Same Form-row rule as the Voice button above:
+                            // no .accessibilityElement(children: .ignore) on
+                            // a Form row or it stops being a pressable
+                            // button for VoiceOver (build 135 lesson).
+                            .accessibilityLabel("Knowledge files")
+                            .accessibilityHint("Documents this agent can search and answer from. Add PDFs, Word files, or text.")
+                        } header: {
+                            Text("Knowledge")
+                        }
+                        Section {
+                            Button {
                                 showingVersionHistory = true
                             } label: {
                                 HStack {
@@ -264,6 +287,15 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .navigationDestination(isPresented: $showingKnowledge) {
+                if let existingId {
+                    AgentKnowledgeView(
+                        apiClient: apiClient,
+                        agentId: existingId,
+                        agentName: name.isEmpty ? "This agent" : name
+                    )
+                }
             }
             .navigationDestination(isPresented: $showingVersionHistory) {
                 if let existingId {

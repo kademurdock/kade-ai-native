@@ -280,6 +280,113 @@ final class AgentBuilderService: ObservableObject {
         }
         return try decoder.decode(AgentDetail.self, from: data)
     }
+
+    // MARK: - Knowledge files (Phase 3, session 18)
+    //
+    // Server contract read at fork rev 6ab48f1:
+    //   GET  /api/files/agent/:agent_id  JWT, EDIT permission (non-authors
+    //                                    get []) -> 200 [TFile] — every file
+    //                                    attached to the agent across ALL of
+    //                                    its tool_resources buckets, without
+    //                                    saying which bucket each came from.
+    //   POST /api/files                  JWT, multipart field "file" plus
+    //                                    text fields {file_id (client
+    //                                    UUID), endpoint: "agents",
+    //                                    agent_id, tool_resource} ->
+    //                                    processAgentFileUpload attaches the
+    //                                    file id to that resource bucket.
+    //   DELETE /api/files                JWT, JSON {files: [TFile], agent_id,
+    //                                    tool_resource} — detaches AND
+    //                                    deletes.
+    //
+    // Two deliberate shapes here, both born of documented gotchas:
+    // - Raw-JSON round-trip: file objects are kept as [String: Any] and sent
+    //   BACK verbatim on delete, never re-built from a partial Decodable
+    //   (the "a write's echo is not the read's shape" rule — and TFile has
+    //   storage fields like filepath/source this app should not pretend to
+    //   know the full list of).
+    // - Which bucket a file belongs to comes from the agent's OWN expanded
+    //   document (tool_resources), so delete names the right resource
+    //   instead of guessing "file_search" for files the web attached
+    //   elsewhere.
+
+    /// The agent's expanded document as raw JSON — for reading fields this
+    /// app's `AgentDetail` deliberately doesn't model (tool_resources here;
+    /// the connections editor reads `edges` the same way).
+    func loadExpandedRaw(id: String) async throws -> [String: Any] {
+        let req = client.request(path: "api/agents/\(id)/expanded", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200,
+              let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load that agent."))
+        }
+        return obj
+    }
+
+    /// file_id -> tool_resource bucket name, read off the expanded document.
+    static func resourceByFileId(fromExpanded expanded: [String: Any]) -> [String: String] {
+        var map: [String: String] = [:]
+        guard let resources = expanded["tool_resources"] as? [String: Any] else { return map }
+        for (bucket, value) in resources {
+            guard let dict = value as? [String: Any],
+                  let ids = dict["file_ids"] as? [String] else { continue }
+            for fid in ids { map[fid] = bucket }
+        }
+        return map
+    }
+
+    func loadKnowledgeFiles(agentId: String) async throws -> [[String: Any]] {
+        let req = client.request(path: "api/files/agent/\(agentId)", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200,
+              let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load the knowledge files."))
+        }
+        return arr
+    }
+
+    func uploadKnowledgeFile(agentId: String, data fileData: Data, fileName: String, mimeType: String) async throws {
+        let req = client.multipartRequest(
+            path: "api/files",
+            authorized: true,
+            fields: [
+                ("file_id", UUID().uuidString),
+                ("endpoint", "agents"),
+                ("agent_id", agentId),
+                ("tool_resource", "file_search"),
+            ],
+            fileField: "file",
+            fileData: fileData,
+            fileName: fileName,
+            fileMimeType: mimeType
+        )
+        let (data, http) = try await client.send(req)
+        guard (200...299).contains(http.statusCode) else {
+            throw AgentBuilderError(message: uploadErrorMessage(from: data))
+        }
+    }
+
+    /// The upload route answers errors as {message}; the shared helper reads
+    /// {error}/{userMessage}, so this one route gets its own reader.
+    private func uploadErrorMessage(from data: Data) -> String {
+        struct UploadError: Decodable { let message: String? }
+        return (try? decoder.decode(UploadError.self, from: data))?.message
+            ?? errorMessage(from: data, fallback: "Couldn't add that file.")
+    }
+
+    func deleteKnowledgeFile(agentId: String, rawFile: [String: Any], toolResource: String) async throws {
+        var req = client.request(path: "api/files", method: "DELETE", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "files": [rawFile],
+            "agent_id": agentId,
+            "tool_resource": toolResource,
+        ])
+        let (data, http) = try await client.send(req)
+        guard (200...299).contains(http.statusCode) else {
+            throw AgentBuilderError(message: uploadErrorMessage(from: data))
+        }
+    }
 }
 
 /// One category from `GET /api/agents/categories`. `count`/`description`
