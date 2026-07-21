@@ -189,9 +189,14 @@ struct PronunciationDictionaryView: View {
         do {
             try await service.deleteEntry(id: entry.id)
             entries.removeAll { $0.id == entry.id }
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.warning()
         } catch {
             // Fail-soft, matching AgentManagerView's delete: the row
-            // stays, she can try the swipe/rotor action again.
+            // stays, she can try the swipe/rotor action again -- but say
+            // by ear that nothing happened.
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
         deletingEntry = nil
     }
@@ -289,9 +294,13 @@ private struct PronunciationEntryEditor: View {
                 term.trimmingCharacters(in: .whitespaces),
                 pronunciation.trimmingCharacters(in: .whitespaces)
             )
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
             dismiss()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Couldn't save. Try again."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
     }
 }

@@ -83,6 +83,9 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityHint("Changes the font used for message text.")
+                .sensoryFeedback(trigger: appearance.fontFamily) { _, _ in
+                    FeedbackPrefs.gate(.selection)
+                }
 
                 Picker("Line spacing", selection: $appearance.lineSpacing) {
                     ForEach(AppearancePreferences.LineSpacingLevel.allCases) { level in
@@ -90,6 +93,9 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityHint("Changes the space between lines of message text.")
+                .sensoryFeedback(trigger: appearance.lineSpacing) { _, _ in
+                    FeedbackPrefs.gate(.selection)
+                }
             } header: {
                 Text("Accessibility")
             } footer: {

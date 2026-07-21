@@ -224,8 +224,13 @@ struct RoomDetailView: View {
             draftText = ""
             await reload()
             focusedLineIndex = transcript.indices.last
+            // Session 22: same send vocabulary as ordinary chat.
+            Earcons.shared.play(.messageSent)
+            KadeHaptics.tap()
         } catch {
             actionError = (error as? RoomService.RoomError)?.message ?? "Couldn't post your message. Try again."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
     }
 
@@ -238,8 +243,13 @@ struct RoomDetailView: View {
             _ = try await service.nextTurn(roomId: room.id, forcedAgentId: forcedAgentId)
             await reload()
             focusedLineIndex = transcript.indices.last
+            // Session 22: a companion's line landing = the reply earcon.
+            Earcons.shared.play(.messageReceived)
+            KadeHaptics.success()
         } catch {
             actionError = (error as? RoomService.RoomError)?.message ?? "That turn failed — give it another try."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
     }
 }

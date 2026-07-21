@@ -200,8 +200,12 @@ struct AlertsView: View {
                 phone: phone.trimmingCharacters(in: .whitespaces)
             )
             statusText = "Saved."
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
         } catch {
             statusText = (error as? AlertsService.AlertsError)?.message ?? "Couldn't save. Try again."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
         statusFocused = true
     }
@@ -214,8 +218,12 @@ struct AlertsView: View {
             statusText = channel == "chat"
                 ? "Test sent — it rides along in your next chat."
                 : "Test sent as a \(AlertsService.channelLabel(channel).lowercased())."
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
         } catch {
             statusText = (error as? AlertsService.AlertsError)?.message ?? "Couldn't send a test. Try again."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
         statusFocused = true
     }

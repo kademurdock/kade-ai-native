@@ -80,6 +80,26 @@ final class FeedbackPrefs: ObservableObject {
     }
 }
 
+// MARK: - KadeHaptics
+//
+// Session 22: imperative haptics for async completion points (a save
+// finishing, a delete landing, a test alert going out) where a
+// `.sensoryFeedback` trigger would need a synthetic @State just to fire
+// once. Same UserDefaults gate as FeedbackPrefs.gate, so the Haptics
+// switch controls these too.
+
+@MainActor
+enum KadeHaptics {
+    static func success() { fire { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
+    static func warning() { fire { UINotificationFeedbackGenerator().notificationOccurred(.warning) } }
+    static func error()   { fire { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
+    static func tap()     { fire { UIImpactFeedbackGenerator(style: .light).impactOccurred() } }
+    private static func fire(_ body: () -> Void) {
+        guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
+        body()
+    }
+}
+
 // MARK: - Earcon
 //
 // Short, synthesized non-speech sounds -- no bundled audio files, generated

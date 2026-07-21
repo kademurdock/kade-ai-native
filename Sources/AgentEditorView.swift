@@ -439,10 +439,16 @@ struct AgentEditorView: View {
             } else {
                 _ = try await service.createAgent(fields)
             }
+            // Session 22: an agent save is exactly the "action done" moment
+            // the earcon vocabulary exists for.
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
             dismiss()
             onSaved()
         } catch {
             saveError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't save. Try again."
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
     }
 

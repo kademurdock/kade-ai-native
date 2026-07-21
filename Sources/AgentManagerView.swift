@@ -208,9 +208,16 @@ struct AgentManagerView: View {
         do {
             try await service.deleteAgent(id: agent.id)
             agents.removeAll { $0.id == agent.id }
+            // Session 22: deletes confirm by ear and touch too -- warning
+            // haptic (destructive), done earcon (it worked).
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.warning()
         } catch {
             // Fail-soft, matching RoomListView's delete: the row stays,
-            // she can try the swipe/rotor action again.
+            // she can try the swipe/rotor action again -- but say by ear
+            // that nothing happened.
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
         }
         deletingAgent = nil
     }

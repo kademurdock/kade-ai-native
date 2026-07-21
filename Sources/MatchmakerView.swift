@@ -202,6 +202,9 @@ struct MatchmakerView: View {
             luckyPick = nil
             results = Array(scored.prefix(3))
         }
+        // Session 22: matches arriving is a small "done" moment.
+        Earcons.shared.play(.actionDone)
+        KadeHaptics.success()
     }
 
     private struct Picks {
@@ -278,6 +281,8 @@ struct MatchmakerView: View {
             results = nil
             luckyPick = roster.randomElement()
         }
+        Earcons.shared.play(.actionDone)
+        KadeHaptics.success()
     }
 
     private func matchCard(rank: Int?, match: ScoredMatch) -> some View {
