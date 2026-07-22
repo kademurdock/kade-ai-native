@@ -187,6 +187,16 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingMainAgentPicker) {
+            AgentPickerView(currentAgentId: DefaultAgentStore.storedId) { agent in
+                DefaultAgentStore.set(agent)
+                mainAgentName = agent.name
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "\(agent.name) is now your main agent."
+                )
+            }
+        }
         .navigationDestination(isPresented: $showingPronunciationDictionary) {
             PronunciationDictionaryView(apiClient: apiClient)
         }
@@ -227,7 +237,9 @@ struct SettingsView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
+        // Session 26, the Amber rule (build 139 / df915e2): no
+        // children:.ignore on a Button — this was the exact construction
+        // that killed Amber's conversation rows. Label/value/hint stay.
         .accessibilityLabel("Voice message speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
         .accessibilityHint("Double-tap to change how fast voice messages and Spotter calls play back.")

@@ -180,6 +180,18 @@ struct ContentView: View {
             }
             .navigationDestination(item: $route) { destination in
                 switch destination {
+                case .mainChat:
+                    // The launch chat: seeded with the stored main agent
+                    // (or Kiana once the roster loads — see
+                    // DefaultAgentStore.resolveId and the seeding block in
+                    // ConversationDetailView), with the Spotter shortcut in
+                    // its toolbar so the opening screen keeps Spotter one
+                    // tap away (her standing rule).
+                    ConversationDetailView(
+                        conversation: nil,
+                        initialAgentId: DefaultAgentStore.resolveId(in: agentsService.agents),
+                        showSpotterShortcut: true
+                    )
                 case .transcribe:
                     TranscribeView(apiClient: apiClient)
                 case .help:
@@ -597,6 +609,14 @@ struct ContentView: View {
         case .signedIn:
             password = ""
             a11yFocus = .status          // "Signed in as …" gets spoken
+            // Session 26 chat-first launch: the moment a session lands
+            // (cold-start restore or a fresh sign-in), open the main-agent
+            // chat — unless a Siri intent is already waiting (it routes
+            // right after this and must win) or something is already
+            // pushed. Home remains one Back away underneath.
+            if route == nil && router.pending == nil {
+                route = .mainChat
+            }
         case .failed:
             a11yFocus = .error           // error gets spoken
         case .signedOut:
@@ -679,6 +699,12 @@ struct SpotterTranscriptHandoff: Identifiable, Hashable {
 /// warning, just a screen that reads correctly and does nothing when you
 /// activate it. That shipped once (build 121) and cost a build to find.
 enum HomeRoute: Identifiable, Hashable {
+    /// Session 26 (her call: "the first thing people should do when they
+    /// open the app is land in a chat with an agent... What if I'm rushing
+    /// and need to say something quick to my main agent?"): the launch
+    /// destination — a fresh chat pointed at the main agent, pushed the
+    /// moment sign-in lands. Home stays one Back away underneath it.
+    case mainChat
     case transcribe
     case help
     case conversations
@@ -696,6 +722,7 @@ enum HomeRoute: Identifiable, Hashable {
 
     var id: String {
         switch self {
+        case .mainChat: return "mainChat"
         case .transcribe: return "transcribe"
         case .help: return "help"
         case .conversations: return "conversations"

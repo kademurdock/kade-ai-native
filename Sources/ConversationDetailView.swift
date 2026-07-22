@@ -42,6 +42,15 @@ struct ConversationDetailView: View {
     /// every existing call site omits it (gets nil), Matchmaker passes it.
     /// Never actually mutated after init.
     var initialAgentId: String? = nil
+    /// Session 26 (chat-first launch, her pick via AskUserQuestion:
+    /// "Chat-first + Spotter in toolbar"): only the LAUNCH-opened instance
+    /// of this screen shows a Spotter button in its toolbar — the app's
+    /// opening screen must keep Spotter one tap away (her standing rule),
+    /// while ordinary pushed chats keep the deliberately calm two-icon bar
+    /// (see the session-25 note on the toolbar). Defaulted so every
+    /// existing call site is untouched (same memberwise-init reasoning as
+    /// `initialAgentId` above).
+    var showSpotterShortcut: Bool = false
     /// True only for the ONE call site below that presents a fresh
     /// instance of this very view as the ROOT of its own sheet-hosted
     /// `NavigationStack` (the post-call transcript handoff). That instance
@@ -194,6 +203,8 @@ struct ConversationDetailView: View {
     /// shape, and it makes "what can this screen present?" answerable by
     /// reading one type.
     @State private var activeSheet: DetailSheet?
+    /// Session 26: launch-instance Spotter call — see `showSpotterShortcut`.
+    @State private var showingSpotterCall = false
     @State private var voiceOverride = ""
     @State private var preparingVoiceMessageId: String?
     @State private var deletingMessage: KadeMessage?
@@ -267,6 +278,24 @@ struct ConversationDetailView: View {
                         .accessibilityHint("Closes this transcript and returns to your call.")
                 }
             }
+            // Session 26 (chat-first launch): the launch-opened chat is now
+            // the app's opening screen, and Kade's standing Spotter rule
+            // ("keep it one-tap, always") travels with it — an eye button
+            // in the bar, launch instance ONLY (`showSpotterShortcut`), so
+            // ordinary pushed chats keep the calm two-icon bar the
+            // session-25 pass established.
+            if showSpotterShortcut {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        KadeHaptics.press()
+                        showingSpotterCall = true
+                    } label: {
+                        Image(systemName: "eye")
+                    }
+                    .accessibilityLabel("Call your Spotter")
+                    .accessibilityHint("Starts a live call with your visual companion straight away, without picking anyone first.")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     if messageSearchActive {
@@ -326,6 +355,23 @@ struct ConversationDetailView: View {
                 await load()
             } else {
                 isLoading = false
+                // Session 26 (her ask, verbatim: "They might not all vibe
+                // with Kiana, but they at least have her to start with"):
+                // a brand-new chat now starts pointed at the user's MAIN
+                // agent instead of opening with an interrogation. The
+                // stored pick wins instantly; otherwise Kiana by name once
+                // the roster loads. The picker sheet remains only as the
+                // true last resort (no stored pick AND no Kiana in the
+                // roster — e.g. first run, offline). Switching who answers
+                // stays one tap away on the "Talking to" row, unchanged.
+                if selectedAgentId == nil {
+                    if let stored = DefaultAgentStore.storedId {
+                        selectedAgentId = stored
+                    } else {
+                        await agentsService.loadIfNeeded()
+                        selectedAgentId = DefaultAgentStore.resolveId(in: agentsService.agents)
+                    }
+                }
                 if selectedAgentId == nil {
                     activeSheet = .agentPicker
                 }
@@ -366,6 +412,25 @@ struct ConversationDetailView: View {
         // physically dead once `.playAndRecord` took over the audio session.
         .sensoryFeedback(trigger: voiceService.isRecording) { _, isNowRecording in
             FeedbackPrefs.gate(isNowRecording ? .start : .stop)
+        }
+        .fullScreenCover(isPresented: $showingSpotterCall) {
+            // Session 26: Spotter from the launch chat. Mirrors the home
+            // screen's construction (agentId nil + spotterDirect) — but the
+            // post-call transcript hands off through the SAME sheet enum the
+            // phone button uses (`.transcript`), NOT a navigationDestination:
+            // this screen sits pushed in the home stack, and a second
+            // `SpotterTranscriptHandoff` destination declaration in one
+            // stack is exactly the build-121 collision class the home
+            // screen's doc comment warns about.
+            CallView(
+                agentId: nil,
+                agentName: "Your Spotter",
+                apiClient: apiClient,
+                spotterDirect: true,
+                onOpenTranscript: { convo in
+                    activeSheet = .transcript(ChatTranscriptHandoff(conversation: convo))
+                }
+            )
         }
         .fullScreenCover(isPresented: $showingCall) {
             CallView(
