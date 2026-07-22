@@ -1,6 +1,8 @@
 import Foundation
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// Phase 2 reads history; Phase 3 adds sending a follow-up and waiting for
 /// the agent's reply; Phase 4 adds switching which agent answers the next
@@ -114,6 +116,17 @@ struct ConversationDetailView: View {
     // onDismiss runs, so the id is stashed separately at open time).
     @State private var readingMessage: KadeMessage?
     @State private var readingReturnId: String?
+    // Session 26 (leftovers item 1, in-chat attachments -- see
+    // ChatAttachment.swift for the full wire contract). One attachment
+    // rides the NEXT send; uploaded at pick time exactly like the web, so
+    // Send itself stays instant. Kept across a FAILED send on purpose --
+    // Retry re-spends the same file_id.
+    @State private var pendingAttachment: ChatAttachment?
+    @State private var attachmentUploading = false
+    @State private var showingAttachMenu = false
+    @State private var showingAttachPhotos = false
+    @State private var attachPhotoItem: PhotosPickerItem?
+    @State private var showingAttachImporter = false
     // Session 24 (leftovers item 2): search WITHIN this conversation.
     // Client-side filter over the messages already in hand, same deliberate
     // choice (and same reasons) as the conversation list's search: instant,
@@ -937,6 +950,142 @@ struct ConversationDetailView: View {
         return false
     }
 
+    /// Session 26: paperclip at the start of the composer row. All of its
+    /// picker plumbing (menu, photo library, file importer) hangs off THIS
+    /// button so the feature stays self-contained -- the proven Describe
+    /// patterns, one surface over.
+    private var attachButton: some View {
+        Button {
+            showingAttachMenu = true
+        } label: {
+            Image(systemName: "paperclip")
+                .font(.title3)
+        }
+        .disabled(isSending || attachmentUploading || pendingAttachment != nil)
+        .accessibilityLabel(pendingAttachment == nil ? "Attach a photo or file" : "Attachment added")
+        .accessibilityHint(pendingAttachment == nil
+            ? "Sends a photo or document along with your next message so \(agentDisplayLabel) can look at it."
+            : "One attachment per message. Remove the current one first to attach something else.")
+        .confirmationDialog("Attach to your next message", isPresented: $showingAttachMenu) {
+            Button("Choose a photo") { showingAttachPhotos = true }
+            Button("Choose a file") { showingAttachImporter = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(isPresented: $showingAttachPhotos, selection: $attachPhotoItem, matching: .images)
+        .onChange(of: attachPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                await loadAttachmentPhoto(newItem)
+                attachPhotoItem = nil
+            }
+        }
+        .fileImporter(
+            isPresented: $showingAttachImporter,
+            allowedContentTypes: Self.attachmentImportTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                Task { await importAttachmentFile(url) }
+            }
+        }
+    }
+
+    /// The "something is attached" chip above the composer: status text and
+    /// the remove control as true siblings (the Amber rule -- never a
+    /// control inside another element's label).
+    private var attachmentChipRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperclip")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(attachmentUploading ? "Attaching…" : "Attached: \(pendingAttachment?.displayName ?? "")")
+                .font(.footnote)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityLabel(attachmentUploading
+                    ? "Attaching your file. Hold on."
+                    : "Attached: \(pendingAttachment?.displayName ?? ""). It goes out with your next message.")
+            Spacer()
+            if attachmentUploading {
+                ProgressView()
+                    .accessibilityHidden(true)
+            } else {
+                Button {
+                    pendingAttachment = nil
+                    UIAccessibility.post(notification: .announcement, argument: "Attachment removed.")
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Remove attachment")
+                .accessibilityHint("Takes the attachment off your next message. The file itself isn't deleted.")
+            }
+        }
+    }
+
+    private static let attachmentImportTypes: [UTType] = [.pdf, .plainText, .image, .data]
+
+    private func loadAttachmentPhoto(_ item: PhotosPickerItem) async {
+        let contentType = item.supportedContentTypes.first
+        let mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
+        let ext = contentType?.preferredFilenameExtension ?? "jpg"
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            attachmentFailed("Couldn't load that photo. Try again.")
+            return
+        }
+        await uploadAttachment(data: data, mimeType: mimeType, fileName: "photo.\(ext)")
+    }
+
+    private func importAttachmentFile(_ url: URL) async {
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
+        let name = url.lastPathComponent
+        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
+        if let size = resourceValues?.fileSize, Int64(size) > ChatAttachment.maxUploadBytes {
+            attachmentFailed("\(name) is larger than 30 megabytes. Try a smaller file.")
+            return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            attachmentFailed("Couldn't read \(name). Try again.")
+            return
+        }
+        await uploadAttachment(
+            data: data,
+            mimeType: resourceValues?.contentType?.preferredMIMEType ?? "application/octet-stream",
+            fileName: name
+        )
+    }
+
+    private func uploadAttachment(data: Data, mimeType: String, fileName: String) async {
+        attachmentUploading = true
+        UIAccessibility.post(notification: .announcement, argument: "Attaching \(fileName).")
+        defer { attachmentUploading = false }
+        do {
+            let uploaded = try await ChatAttachment.upload(
+                client: apiClient,
+                data: data,
+                mimeType: mimeType,
+                fileName: fileName,
+                conversationId: conversationId,
+                agentId: selectedAgentId
+            )
+            pendingAttachment = uploaded
+            KadeHaptics.success()
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Attached \(fileName). It goes out with your next message."
+            )
+        } catch {
+            attachmentFailed("Couldn't attach \(fileName). Check your connection and try again.")
+        }
+    }
+
+    private func attachmentFailed(_ message: String) {
+        KadeHaptics.error()
+        UIAccessibility.post(notification: .announcement, argument: message)
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if case .failed(let message) = sendState {
@@ -966,7 +1115,11 @@ struct ConversationDetailView: View {
                     .foregroundStyle(.red)
                     .accessibilityFocused($a11yFocus, equals: .voiceError)
             }
+            if attachmentUploading || pendingAttachment != nil {
+                attachmentChipRow
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                attachButton
                 deepThinkButton
                 TextField("Message", text: $draftText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -1248,13 +1401,13 @@ struct ConversationDetailView: View {
               let promptingUser = messages.first(where: { $0.messageId == parentId }) else {
             return
         }
-        await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId)
+        await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId, includeAttachment: false)
     }
 
     /// The shared guts of every send -- a plain Send tap (via `send()`
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
-    private func performSend(text: String, parentId: String?) async {
+    private func performSend(text: String, parentId: String?, includeAttachment: Bool = true) async {
         failedAttempt = nil
         let optimisticMessage = KadeMessage(
             messageId: "pending-\(UUID().uuidString)",
@@ -1272,11 +1425,17 @@ struct ConversationDetailView: View {
 
         do {
             let wasNewConversation = conversationId == nil
+            // Session 26: a pending attachment rides this send (uploaded
+            // already, at pick time). Regenerate passes
+            // includeAttachment:false -- a re-ask of an OLD question must
+            // never quietly consume a file meant for the NEXT message.
+            let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
                 parentMessageId: parentId,
-                agentId: selectedAgentId
+                agentId: selectedAgentId,
+                files: files
             )
             conversationId = resolvedConversationId
             // Authoritative reload: replaces the optimistic placeholder with
@@ -1287,6 +1446,10 @@ struct ConversationDetailView: View {
                 conversationId: resolvedConversationId
             )
             sendState = .idle
+            if files != nil {
+                // Spent successfully -- the server owns it now.
+                pendingAttachment = nil
+            }
             a11yFocus = messages.last.map { .message($0.id) }
             if wasNewConversation {
                 // Session 24 (Kade: new chats "all say new chat"): now that

@@ -102,13 +102,15 @@ final class MessageSendingService: ObservableObject {
         text: String,
         conversationId: String?,
         parentMessageId: String?,
-        agentId: String?
+        agentId: String?,
+        files: [[String: Any]]? = nil
     ) async throws -> String {
         let start = try await startGeneration(
             text: text,
             conversationId: conversationId,
             parentMessageId: parentMessageId,
-            agentId: agentId
+            agentId: agentId,
+            files: files
         )
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
@@ -146,7 +148,8 @@ final class MessageSendingService: ObservableObject {
         text: String,
         conversationId: String?,
         parentMessageId: String?,
-        agentId: String?
+        agentId: String?,
+        files: [[String: Any]]? = nil
     ) async throws -> StartResponse {
         var body: [String: Any] = [
             "text": text,
@@ -184,6 +187,12 @@ final class MessageSendingService: ObservableObject {
         }
         if let agentId {
             body["agent_id"] = agentId
+        }
+        // Session 26 (in-chat attachments): the exact array shape the web
+        // composer sends (useChatFunctions.ts) -- the server attaches these
+        // to the user message and hands them to the agent as context.
+        if let files, !files.isEmpty {
+            body["files"] = files
         }
 
         var req = client.request(path: "api/agents/chat/agents", method: "POST", authorized: true)
