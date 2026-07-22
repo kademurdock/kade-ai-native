@@ -68,6 +68,11 @@ struct ConversationDetailView: View {
     @State private var messages: [KadeMessage] = []
     @State private var isLoading = true
     @State private var loadError: String?
+    /// The server-generated name of a conversation BORN in this view
+    /// (`conversation == nil` case), once the background pickup in
+    /// `performSend` retrieves it -- lets the nav title stop saying
+    /// "New conversation" the moment the server has named the chat.
+    @State private var generatedTitle: String?
 
     @State private var draftText: String = ""
     @State private var sendState: SendState = .idle
@@ -215,7 +220,7 @@ struct ConversationDetailView: View {
                 composer
             }
         }
-        .navigationTitle(conversation?.displayTitle ?? "New conversation")
+        .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // Session 17 VoiceOver-trap fix: the post-call transcript sheet
@@ -1134,6 +1139,24 @@ struct ConversationDetailView: View {
             )
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
+            if wasNewConversation {
+                // Session 24 (Kade: new chats "all say new chat"): now that
+                // the first send carries the NO_PARENT sentinel (see
+                // MessageSendingService.startGeneration), the server names
+                // the newborn conversation in parallel with this first
+                // reply. Pick the name up in the background -- gen_title
+                // long-polls server-side until it lands -- then refresh the
+                // list quietly, so by the time she backs out the row reads
+                // as its real name instead of "New Chat." Fail-soft: a
+                // missed title costs a name, never a message.
+                let newId = resolvedConversationId
+                Task {
+                    if let title = await conversationsService.fetchGeneratedTitle(conversationId: newId) {
+                        generatedTitle = title
+                    }
+                    await conversationsService.loadFirstPage()
+                }
+            }
             // Session 23 hardening (Kade: "When deep think is on, it
             // doesn't auto read the message as a voice message"): the
             // stored deep-reply SHAPE was pulled and proven fine (think

@@ -73,6 +73,13 @@ struct KadeMessage: Codable, Identifiable {
 
     var id: String { messageId }
 
+    /// The all-zero "no parent" sentinel (the fork's `Constants.NO_PARENT`)
+    /// -- stored on every conversation's first message, and REQUIRED on the
+    /// wire when SENDING that first message (see
+    /// MessageSendingService.startGeneration for the live bug that proved
+    /// omission is not equivalent to sending it).
+    static let noParent = "00000000-0000-0000-0000-000000000000"
+
     /// Assistant replies often carry their real content in `content` (text /
     /// think / tool_call blocks) with `text` left empty; user messages use
     /// `text` directly. Prefer `content`'s text blocks, fall back to `text`,
@@ -380,6 +387,20 @@ final class ConversationsService: ObservableObject {
         let req = client.request(path: "api/convos/\(id)", authorized: true)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200 else { return nil }
         return try? decoder.decode(KadeConversation.self, from: data)
+    }
+
+    /// The title the server generated for a BRAND-NEW conversation's first
+    /// exchange. GET /api/convos/gen_title/:id -- the route long-polls its
+    /// own title cache (backoff, ~15s max) and 404s if generation never
+    /// happened, so nil here simply means "no name yet." Reading it also
+    /// consumes the cache entry -- harmless: the title itself is persisted
+    /// onto the conversation independently; the cache is only the
+    /// "it's ready" notification channel the web client uses too.
+    func fetchGeneratedTitle(conversationId: String) async -> String? {
+        struct GenTitle: Codable { let title: String? }
+        let req = client.request(path: "api/convos/gen_title/\(conversationId)", authorized: true)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200 else { return nil }
+        return (try? decoder.decode(GenTitle.self, from: data))?.title
     }
 
     /// Polls the calls history for the conversation the just-finished call

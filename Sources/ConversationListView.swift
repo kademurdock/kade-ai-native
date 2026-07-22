@@ -116,7 +116,23 @@ struct ConversationListView: View {
             if was && !isNow {
                 Task {
                     await conversationsService.loadFirstPage()
-                    focusedConversationID = conversationsService.conversations.first?.id
+                    // Session 24 LIVE BUG (Kade: her newborn "New Chat"
+                    // rows "can't be opened with VoiceOver"): this refetch
+                    // waits behind KadeAPIClient's pacing gate, so it can
+                    // finish SECONDS after the pop -- and if a row has
+                    // already been double-tapped into by then (fast, and
+                    // natural, for a screen-reader user who knows the
+                    // list), the assignment below used to fire UNDER the
+                    // pushed conversation, yanking VoiceOver focus onto a
+                    // covered list row. From the chair that reads as "the
+                    // chat never opened": you hear the row's name again and
+                    // every swipe walks the covered list. RULE, same class
+                    // as the never-do rules in PROJECT_STATUS: never move
+                    // list focus while another screen sits pushed on top of
+                    // the list.
+                    if selectedConversation == nil && !startingNewConversation {
+                        focusedConversationID = conversationsService.conversations.first?.id
+                    }
                 }
             }
         }
@@ -124,7 +140,14 @@ struct ConversationListView: View {
             // A deleted/archived row disappearing must not strand VoiceOver
             // focus on an element that no longer exists -- move it to
             // whatever is now first rather than letting the system pick.
-            if let current = focusedConversationID,
+            // Session 24: same covered-screen rule as the refetch guard
+            // above -- the list can now also refresh from INSIDE a pushed
+            // conversation (the newborn-title pickup in
+            // ConversationDetailView), so only steer focus when this list
+            // is actually the screen on top. Delete/archive (this guard's
+            // real audience) always happen with the list on top anyway.
+            if selectedConversation == nil, !startingNewConversation,
+               let current = focusedConversationID,
                !conversationsService.conversations.contains(where: { $0.id == current }) {
                 focusedConversationID = conversationsService.conversations.first?.id
             }

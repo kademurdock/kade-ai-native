@@ -160,15 +160,27 @@ final class MessageSendingService: ObservableObject {
         if let conversationId {
             body["conversationId"] = conversationId
         }
-        // Omit the key entirely rather than send an explicit JSON null: the
-        // server destructures `parentMessageId = null` from the body, and
-        // that default only fires on a genuinely MISSING key anyway — a
-        // present-but-null value would resolve to the same `null` either
-        // way, so leaving the key out sidesteps needing an NSNull sentinel
-        // (and the awkward String/NSNull-in-an-Any-dictionary typing that
-        // comes with one) for no behavior difference.
+        // A PRESENT parentMessageId passes through untouched. For the FIRST
+        // message of a brand-new conversation (no conversationId, no
+        // parent), the fork's NO_PARENT sentinel is sent EXPLICITLY --
+        // exactly what the web composer does (useChatFunctions.ts:
+        // `parentMessageId = Constants.NO_PARENT`). This used to say
+        // omitting the key made "no behavior difference" -- WRONG, found
+        // fixing a real live bug (July 22): the server's AUTOMATIC TITLE
+        // GENERATION is gated on the RAW request body carrying exactly this
+        // sentinel (`titleEligible`, api/server/controllers/agents/
+        // request.js) -- a missing key destructures to null, silently fails
+        // that check, and every conversation born in THIS app stayed
+        // literally "New Chat" forever while web-born ones got real names.
+        // The STORED chain was never wrong (the server normalizes the
+        // persisted parent to the sentinel), which is why nothing else
+        // misbehaved and the gap hid this long. An explicit JSON null would
+        // fail the gate the same way -- the sentinel string is the one
+        // spelling that works.
         if let parentMessageId {
             body["parentMessageId"] = parentMessageId
+        } else if conversationId == nil {
+            body["parentMessageId"] = KadeMessage.noParent
         }
         if let agentId {
             body["agent_id"] = agentId
