@@ -129,6 +129,22 @@ struct ConversationDetailView: View {
     /// opt-in rather than ambient -- a blind user shouldn't get surprise
     /// audio the first time they open a conversation.
     @State private var readAloudEnabled = false
+    /// Session 23 (Kade: "no deepthink switch on native iOS. That's not
+    /// good at all."): parity with the web composer's sticky Deep Think
+    /// toggle (DeepThinkToggle.tsx). While armed, every FRESH send gets an
+    /// invisible, freshly-timestamped "[DEEP THINK <ms>]" marker appended;
+    /// reframe-proxy runs those turns at reasoning-effort high, and
+    /// deliberately ignores STALE timestamps -- which is why the marker is
+    /// stamped at send time and never re-sent from history (regenerate and
+    /// edit-resend go through displayText, which MessageTextSanitizer
+    /// already strips). Sticky for the app RUN via the static below,
+    /// mirroring the web's per-tab stickiness rather than persisting
+    /// across launches -- "why is she slow today" days later would be the
+    /// wrong kind of surprise. Display side needs nothing new: the
+    /// sanitizer has stripped [DEEP THINK] markers since the web feature
+    /// shipped.
+    @MainActor private static var deepThinkArmedGlobal = false
+    @State private var deepThinkArmed = false
 
     // Session 14 additions. `ShareItem` wraps either plain text or a
     // prepared audio file so ONE share sheet serves both "Share Text" and
@@ -251,6 +267,7 @@ struct ConversationDetailView: View {
             // so there is no existing per-conversation choice this could
             // ever clobber; it only changes what the starting point is.
             readAloudEnabled = voiceService.defaultReadAloudOn
+            deepThinkArmed = Self.deepThinkArmedGlobal
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
             // "no custom init" note on `selectedAgentId`'s declaration).
@@ -765,6 +782,7 @@ struct ConversationDetailView: View {
                     .accessibilityFocused($a11yFocus, equals: .voiceError)
             }
             HStack(alignment: .bottom, spacing: 8) {
+                deepThinkButton
                 TextField("Message", text: $draftText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
@@ -803,6 +821,43 @@ struct ConversationDetailView: View {
         }
         .padding()
         .background(.bar)
+    }
+
+    /// Session 23: the Deep Think toggle. Built to the Amber rule from
+    /// this same session: a plain Button carrying its OWN accessibility --
+    /// no children:.ignore, nothing interactive nested inside -- so
+    /// VoiceOver activation is direct and layout-independent at any text
+    /// size. Announces its flip like the web toggle does (aria-live there,
+    /// an announcement here), because the visual state change is silent.
+    private var deepThinkButton: some View {
+        Button {
+            deepThinkArmed.toggle()
+            Self.deepThinkArmedGlobal = deepThinkArmed
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: deepThinkArmed ? "Deep think on." : "Deep think off."
+            )
+        } label: {
+            Image(systemName: "brain.head.profile")
+                .font(.title3)
+                .foregroundStyle(deepThinkArmed ? Color.accentColor : Color.secondary)
+                .padding(6)
+                .background(
+                    Circle().strokeBorder(
+                        deepThinkArmed ? Color.accentColor : Color.secondary.opacity(0.4),
+                        lineWidth: deepThinkArmed ? 2 : 1
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSending)
+        .accessibilityLabel("Deep think")
+        .accessibilityValue(deepThinkArmed ? "On" : "Off")
+        .accessibilityHint("Slower, more careful answers for hard questions. Stays on for every message until you turn it off.")
+        .accessibilityAddTraits(.isToggle)
+        .sensoryFeedback(trigger: deepThinkArmed) { _, _ in
+            FeedbackPrefs.gate(.selection)
+        }
     }
 
     /// Phase 5: tap to start recording, tap again to stop -- deliberately
@@ -869,7 +924,18 @@ struct ConversationDetailView: View {
         let parentId = sendParentOverride ?? messages.last?.messageId
         sendParentOverride = nil
         draftText = ""
-        await performSend(text: trimmed, parentId: parentId)
+        // Session 23: while Deep Think is armed, stamp this send with a
+        // FRESH epoch-ms marker -- the exact string the web composer
+        // appends (useSubmitMessage: `[DEEP THINK ${Date.now()}]`).
+        // reframe-proxy only honors a fresh timestamp, so nothing replayed
+        // from history can re-trigger deep reasoning by accident. Applies
+        // to plain sends and edit-and-resend alike (both are human-authored
+        // composer sends); regenerate deliberately not -- it reuses the
+        // already-stripped displayText of an old message.
+        let stamped = deepThinkArmed
+            ? trimmed + " [DEEP THINK \(Int(Date().timeIntervalSince1970 * 1000))]"
+            : trimmed
+        await performSend(text: stamped, parentId: parentId)
     }
 
     /// Session 17. Stops whatever `performSend` currently has in flight --
