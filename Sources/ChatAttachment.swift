@@ -58,6 +58,12 @@ struct ChatAttachment: Identifiable, Equatable {
 
     /// Uploads one file and returns the attachment handle the next send
     /// spends. Throws on any failure -- the caller owns the spoken error.
+    /// @MainActor because `KadeAPIClient` is a main-actor class (its pacing
+    /// clock is main-actor state) -- building the request is isolated even
+    /// though the network await itself hops off. Caught by the first
+    /// Codemagic attempt of this batch: a nonisolated static calling
+    /// `multipartRequest` is a compile error, not a warning.
+    @MainActor
     static func upload(
         client: KadeAPIClient,
         data: Data,
