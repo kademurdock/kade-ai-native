@@ -75,7 +75,8 @@ struct ConversationHallView: View {
                     row(for: item)
                 }
                 .buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
+                // Session 26, the Amber rule (build 139 / df915e2): no
+                // children:.ignore on a Button. Label + hint stay.
                 .accessibilityLabel(accessibleLabel(for: item))
                 .accessibilityHint("Reads this shared room.")
             }

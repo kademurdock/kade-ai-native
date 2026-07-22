@@ -142,7 +142,8 @@ struct RoomListView: View {
                     row(for: room)
                 }
                 .buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
+                // Session 26, the Amber rule (build 139 / df915e2): no
+                // children:.ignore on a Button. Label + hint stay.
                 .accessibilityLabel(accessibleLabel(for: room))
                 .accessibilityHint("Opens this room.")
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -299,7 +300,7 @@ private struct NewRoomSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
+        // Session 26, the Amber rule — same as the room row above.
         .accessibilityLabel(agent.description.isEmpty ? agent.name : "\(agent.name). \(agent.description)")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityHint("Toggles this character in the cast.")

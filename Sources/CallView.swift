@@ -363,7 +363,8 @@ struct CallView: View {
             )
         }
         .buttonStyle(.bordered)
-        .accessibilityElement(children: .ignore)
+        // Session 26, the Amber rule: no children:.ignore on a Button
+        // (see AgentPickerView's row). Label/value/hint stay.
         .accessibilityLabel("Camera")
         .accessibilityValue(callService.videoOn ? "On" : "Off")
         .accessibilityHint(
@@ -384,7 +385,7 @@ struct CallView: View {
             Label(callService.liveOn ? "Spotter is on the line" : "Bring in your Spotter", systemImage: "eye")
         }
         .buttonStyle(.bordered)
-        .accessibilityElement(children: .ignore)
+        // Session 26, the Amber rule — same as the camera button above.
         .accessibilityLabel("Spotter")
         .accessibilityValue(callService.liveOn ? "On" : "Off")
         .accessibilityHint(
@@ -419,7 +420,7 @@ struct CallView: View {
             }
             .buttonStyle(.bordered)
             .tint(callService.micMuted ? .red : nil)
-            .accessibilityElement(children: .ignore)
+            // Session 26, the Amber rule — same as the camera/Spotter buttons.
             .accessibilityLabel("Mute microphone")
             .accessibilityValue(callService.micMuted ? "Muted" : "On")
             .accessibilityHint(

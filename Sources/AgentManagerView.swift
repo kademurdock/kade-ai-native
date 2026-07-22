@@ -138,7 +138,9 @@ struct AgentManagerView: View {
                     row(for: agent)
                 }
                 .buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
+                // Session 26, the Amber rule (build 139 / df915e2): no
+                // children:.ignore on a Button — see AgentPickerView's row
+                // for the full story. Label + hint stay; native flatten.
                 .accessibilityLabel(accessibleLabel(for: agent))
                 .accessibilityHint("Opens this agent to edit it.")
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {

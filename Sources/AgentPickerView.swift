@@ -82,6 +82,28 @@ struct AgentPickerView: View {
         return RecentAgents.ids.compactMap { byId[$0] }
     }
 
+    /// Session 26 (Kade on the marketplace: "almost a hundred pages of
+    /// scrolling categorical posts... a tiny bit overwhelming" — her pick
+    /// via AskUserQuestion: build the Starters shelf): a short hand-curated
+    /// shelf shown FIRST when browsing. At ~117 published characters across
+    /// 40-odd category sections, equal billing is billing for no one; eight
+    /// deliberate picks across the platform's main lanes (companion,
+    /// accessibility, advice, food, quiet support, creative, practical,
+    /// pure fun) give a newcomer somewhere to start without wading. Name-
+    /// matched against the live roster so an unpublished pick simply drops
+    /// off the shelf instead of rendering a dead row. Search-first behavior
+    /// is untouched — this only exists in the browse layout underneath.
+    private static let starterNames = [
+        "Kiana", "Vista", "Dr. Nora", "Chef Marcel",
+        "Silas", "Ariadne", "Mac", "Doug",
+    ]
+
+    private var starterAgents: [KadeAgent] {
+        Self.starterNames.compactMap { name in
+            agentsService.agents.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        }
+    }
+
     /// Groups the full agent list by their server-provided `category`
     /// (companions, roleplay, personal, expert, creative, ...), sorted
     /// alphabetically with an "Other" bucket last for anything missing a
@@ -201,6 +223,18 @@ struct AgentPickerView: View {
                     rowButton(for: agent)
                 }
             } else {
+                if !starterAgents.isEmpty {
+                    Section {
+                        ForEach(starterAgents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text("Starters")
+                            .accessibilityAddTraits(.isHeader)
+                    } footer: {
+                        Text("A few good first hellos, hand-picked. Everyone else is below, by category -- or just type a name in search.")
+                    }
+                }
                 if !recentAgents.isEmpty {
                     Section {
                         ForEach(recentAgents) { agent in
@@ -239,12 +273,15 @@ struct AgentPickerView: View {
             row(for: agent)
         }
         .buttonStyle(.plain)
-        // Grouping lives on the Button itself, not nested inside its
-        // label (row(for:)) -- the same fix applied across
-        // ConversationListView this session after Kade's first real
-        // pass found rows that select but don't activate when the
-        // wrapping is on the label subtree instead of the control.
-        .accessibilityElement(children: .ignore)
+        // Session 26, the Amber rule (build 139 / the df915e2 sweep):
+        // NO .accessibilityElement(children:.ignore) on a Button — it
+        // costs the row direct VoiceOver activation (double-tap degrades
+        // to a synthesized tap at a layout-dependent point; that is
+        // exactly how Amber's "New Chat" row died in the conversation
+        // list). The proven shape is what remains: plain Button, its own
+        // explicit label, native flatten. This row was missed by the
+        // df915e2 pass — its old comment even cited the broken
+        // construction as the fix.
         .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
         .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
         .accessibilityHint("Switches to this agent for your next message.")

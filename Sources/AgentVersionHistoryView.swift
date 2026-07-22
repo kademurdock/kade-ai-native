@@ -57,7 +57,9 @@ struct AgentVersionHistoryView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isReverting)
-                        .accessibilityElement(children: .ignore)
+                        // Session 26, the Amber rule (build 139 / df915e2): no
+                        // children:.ignore on a Button — costs direct VoiceOver
+                        // activation. Label + hint stay; native flatten.
                         .accessibilityLabel(accessibleLabel(index: index, version: version))
                         .accessibilityHint("Restores this version. Your current setup becomes a new history entry, so nothing is lost.")
                     }

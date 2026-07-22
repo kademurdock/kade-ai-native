@@ -179,7 +179,8 @@ struct MatchmakerView: View {
                 .buttonStyle(.plain)
                 .padding(10)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityElement(children: .ignore)
+                // Session 26, the Amber rule (build 139 / df915e2): no
+                // children:.ignore on a Button. Label + traits + hint stay.
                 .accessibilityLabel(option.label)
                 .accessibilityAddTraits(isSelected ? [.isSelected] : [])
                 .accessibilityHint(multi ? "Toggles this choice." : "Selects this choice.")
