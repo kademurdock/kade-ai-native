@@ -34,6 +34,16 @@ final class VoiceService: NSObject, ObservableObject {
 
     private let client: KadeAPIClient
     private var recorder: AVAudioRecorder?
+    /// Session 23 (Kade: "I don't think I want an auto stop if you mean a
+    /// limit to how long you can record. But if you mean between recording
+    /// and silence, that's fine."): the old hard 60-second cap is GONE.
+    /// Recordings now run as long as she's talking; the only auto-stop is
+    /// silence-based -- an abandoned mic (VoiceOver focus wandered off, a
+    /// call came in, the phone went in a pocket) is by definition a SILENT
+    /// one, so this catches exactly the accident the old cap existed for
+    /// without ever cutting off a real, long thought.
+    private var silenceWatch: Task<Void, Never>?
+    private var onSilenceAutoStop: (@MainActor () -> Void)?
     private var recordingURL: URL?
 
     private var currentPlayer: AVAudioPlayer?
@@ -142,7 +152,11 @@ final class VoiceService: NSObject, ObservableObject {
     /// `false` return as "nothing started," not throw a generic error, since
     /// the specific reason (denied vs. hardware failure) is already in
     /// `recordError` for VoiceOver to read.
-    func startRecording() async -> Bool {
+    func startRecording(
+        silenceStopAfter: TimeInterval? = nil,
+        onSilenceAutoStop: (@MainActor () -> Void)? = nil
+    ) async -> Bool {
+        self.onSilenceAutoStop = onSilenceAutoStop
         guard !isRecording else { return false }
         recordError = nil
 
@@ -202,6 +216,7 @@ final class VoiceService: NSObject, ObservableObject {
 
         do {
             let newRecorder = try AVAudioRecorder(url: url, settings: settings)
+            newRecorder.isMeteringEnabled = true
             guard newRecorder.record() else {
                 recordError = "Couldn't start recording. Try again."
                 return false
@@ -209,10 +224,43 @@ final class VoiceService: NSObject, ObservableObject {
             recorder = newRecorder
             recordingURL = url
             isRecording = true
+            if let window = silenceStopAfter { startSilenceWatch(window: window) }
             return true
         } catch {
             recordError = "Couldn't start recording. Try again."
             return false
+        }
+    }
+
+    /// Polls the recorder's average power a few times a second and calls
+    /// `onSilenceAutoStop` once `window` seconds pass with nothing louder
+    /// than the threshold. Any real sound resets the clock, so a long
+    /// recording full of talking never trips this -- only a mic left
+    /// running with nobody speaking does. -44 dBFS sits comfortably below
+    /// conversational speech at arm's length while staying above most
+    /// room hiss; the poll interval keeps the cost negligible.
+    private func startSilenceWatch(window: TimeInterval) {
+        silenceWatch?.cancel()
+        let interval: TimeInterval = 0.4
+        silenceWatch = Task { [weak self] in
+            // Inherits this class's MainActor context; each tick is a few
+            // property reads and one updateMeters() -- negligible on main.
+            var silentFor: TimeInterval = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard let self, self.isRecording, let rec = self.recorder else { return }
+                rec.updateMeters()
+                let power = rec.averagePower(forChannel: 0)
+                if power > -44 {
+                    silentFor = 0
+                } else {
+                    silentFor += interval
+                    if silentFor >= window {
+                        self.onSilenceAutoStop?()
+                        return
+                    }
+                }
+            }
         }
     }
 
@@ -222,6 +270,9 @@ final class VoiceService: NSObject, ObservableObject {
     /// either way.
     func stopRecording() -> URL? {
         guard isRecording else { return nil }
+        silenceWatch?.cancel()
+        silenceWatch = nil
+        onSilenceAutoStop = nil
         recorder?.stop()
         recorder = nil
         isRecording = false

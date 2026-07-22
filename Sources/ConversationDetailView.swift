@@ -1193,31 +1193,24 @@ struct ConversationDetailView: View {
             return
         }
         voiceInputError = nil
-        let started = await voiceService.startRecording()
+        // Session 23 (Kade's call): NO hard length cap -- "I don't think I
+        // want an auto stop if you mean a limit to how long you can
+        // record." The only auto-stop is silence-based: ten quiet seconds
+        // means the mic was abandoned (the exact accident the old 60s cap
+        // guarded against), while a long real thought keeps recording as
+        // long as she keeps talking.
+        let started = await voiceService.startRecording(silenceStopAfter: 10) {
+            KadeHaptics.warning()
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Recording stopped after a long silence. Turning what you said into text."
+            )
+            Task { await finishRecording() }
+        }
         guard started else {
             voiceInputError = voiceService.recordError ?? "Couldn't start recording. Try again."
             a11yFocus = .voiceError
             return
-        }
-        // Safety net: auto-stop after 60s so an accidental open-ended
-        // recording (VoiceOver focus moving elsewhere before a second tap
-        // lands, a call coming in, etc.) doesn't run forever.
-        // `VoiceService.stopRecording()` guards on `isRecording` itself, so
-        // this can never double-finish a recording the user already
-        // stopped manually -- calling it again here is always safe.
-        Task {
-            try? await Task.sleep(nanoseconds: 60_000_000_000)
-            if voiceService.isRecording {
-                // Session 23 garnish: the auto-stop used to be silent --
-                // indistinguishable from a manual stop. A warning tap plus
-                // a spoken line says WHY the mic just went quiet.
-                KadeHaptics.warning()
-                UIAccessibility.post(
-                    notification: .announcement,
-                    argument: "Recording stopped at the one-minute limit. Turning what you said into text."
-                )
-                await finishRecording()
-            }
         }
     }
 
