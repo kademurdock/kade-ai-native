@@ -790,7 +790,6 @@ struct ConversationDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled(isSending)
-            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Talking to \(agentDisplayLabel)")
             .accessibilityHint("Opens the list of agents to switch who answers your next message.")
             .accessibilityFocused($a11yFocus, equals: .agentButton)
@@ -959,7 +958,6 @@ struct ConversationDetailView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary.opacity(0.5)))
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Voice message speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
         .accessibilityHint("Double-tap to change how fast voice messages play.")
@@ -1885,7 +1883,6 @@ private struct MessageRow: View {
                 .foregroundStyle(.secondary)
                 .padding(8)
         }
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Message actions")
         .accessibilityHint(actionsHint)
     }

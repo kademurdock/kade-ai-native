@@ -250,28 +250,24 @@ struct ConversationListView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityFocused($focusedConversationID, equals: convo.id)
-                // Session 11 (Kade's first real report on this screen,
-                // build 110, after signing in successfully): rows could be
-                // VoiceOver-SELECTED (read aloud) but not ACTIVATED (double-
-                // tap did nothing). The build-107 fix moved
-                // .accessibilityElement(children: .combine) from the LABEL
-                // onto the NavigationLink(value:) control itself, matching
-                // the diagnosis at the time -- but that turned out to still
-                // be unreliable for carrying the link's own push action;
-                // nobody had actually re-confirmed it worked before three
-                // more phases shipped on top of it. Switched to the ONE
-                // pattern already proven safe elsewhere in this app
-                // (AgentPickerView.list): a plain Button -- whose native
-                // tap/VoiceOver-activate action is tied directly to its own
-                // `action` closure, not reconstructed through an
-                // accessibility-children modifier -- driving LOCAL selection
-                // state, paired with .navigationDestination(item:) instead
-                // of NavigationLink's own destination wiring. `.ignore` +
-                // an explicit accessibilityLabel (not `.combine`) reads the
-                // row as one clean stop without asking SwiftUI to merge an
-                // interactive control's action through the same modifier
-                // that assembles its label.
-                .accessibilityElement(children: .ignore)
+                // Session 11 history: rows could be VoiceOver-SELECTED but
+                // not ACTIVATED; the fix landed on a plain Button driving
+                // local selection + .navigationDestination(item:), with
+                // children:.ignore + an explicit label -- and that .ignore
+                // half survived until today.
+                // Session 22 (Amber A, build 146): her "New Chat" row read
+                // fine but double-tap did NOTHING, while her longer-titled
+                // voice-chat row in the SAME list opened -- the exact
+                // layout-dependent signature of the build-139 Amber rule.
+                // children:.ignore on a Button costs it direct VoiceOver
+                // activation; double-tap degrades to a synthesized tap at a
+                // layout-dependent point that can miss per row shape and
+                // text size (server, data, and the strict decode were all
+                // live-exonerated first -- the failure had to be this row).
+                // A Button flattens its label natively and the explicit
+                // accessibilityLabel below still overrides the reading, so
+                // dropping .ignore is byte-identical to VoiceOver. Same fix
+                // 1bd0ccb applied to the admin + archived rows.
                 .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this conversation.")
                 // Rename/Archive/Delete live ONLY on `.swipeActions` below.
