@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import CoreHaptics
 
 // MARK: - FeedbackPrefs
 //
@@ -104,22 +105,96 @@ final class FeedbackPrefs: ObservableObject {
 
 @MainActor
 enum KadeHaptics {
-    static func success() { fire { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
-    static func warning() { fire { UINotificationFeedbackGenerator().notificationOccurred(.warning) } }
-    static func error()   { fire { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
-    static func tap()     { fire { UIImpactFeedbackGenerator(style: .light).impactOccurred() } }
-    /// The exact soft beat KadePulseDot's heartbeat uses (style .soft,
-    /// intensity 0.55) -- exists so the Settings audition list can let
-    /// someone FEEL the pulse rhythm's single beat before deciding whether
-    /// to keep "Pulse with the visuals" on.
-    static func pulseBeat() { fire { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55) } }
-    /// Medium impact for the app's one deliberately big action (starting a
-    /// Spotter call). Everything else stays light -- "lots of hapteks"
-    /// per Kade, but graded, never uniform thumping.
-    static func press()   { fire { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
-    private static func fire(_ body: () -> Void) {
+    // Session 23 (Kade: "Your hapteks need to be a lot longer and harder.
+    // We like bass... you're dealing with people that would turn music
+    // hapteks for deaf people on just for the sensory experience"): the
+    // polite one-shot UIKit taps became real CoreHaptics PATTERNS -- hard
+    // transients plus low-sharpness continuous rumbles that read as bass
+    // in the hand and run a few tenths of a second instead of a blink.
+    // Devices without a Taptic Engine (or if the engine fails) fall back
+    // to the old UIKit one-shots, so nothing ever goes silent-by-crash.
+    // Same single gate as always: the Haptics switch.
+    static func success()   { play(pattern: .success)   { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
+    static func warning()   { play(pattern: .warning)   { UINotificationFeedbackGenerator().notificationOccurred(.warning) } }
+    static func error()     { play(pattern: .error)     { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
+    static func tap()       { play(pattern: .tap)       { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() } }
+    /// The heartbeat's single LUB-DUB -- the same two-thump pattern
+    /// KadePulseDot fires in rhythm with its visual pulse, exposed so the
+    /// Settings audition list can play one beat on demand.
+    static func pulseBeat() { play(pattern: .pulseBeat) { UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8) } }
+    /// The thud-plus-rumble for the app's one deliberately big action
+    /// (starting a Spotter call).
+    static func press()     { play(pattern: .press)     { UIImpactFeedbackGenerator(style: .heavy).impactOccurred() } }
+
+    private enum Pattern { case success, warning, error, tap, pulseBeat, press }
+
+    private static func play(pattern: Pattern, fallback: () -> Void) {
         guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
-        body()
+        if KadeHapticEngine.shared.play(events: events(for: pattern)) { return }
+        fallback()
+    }
+
+    /// (relativeTime, duration, intensity, sharpness) -- duration 0 means a
+    /// transient knock; anything longer is a continuous rumble. Low
+    /// sharpness = the bassy, chesty end of the Taptic Engine's range.
+    private static func events(for pattern: Pattern) -> [(TimeInterval, TimeInterval, Float, Float)] {
+        switch pattern {
+        case .tap:
+            return [(0, 0, 1.0, 0.6)]
+        case .press:
+            return [(0, 0, 1.0, 0.5), (0.02, 0.34, 0.9, 0.1)]
+        case .success:
+            return [(0, 0, 0.85, 0.35), (0.09, 0, 1.0, 0.55), (0.16, 0.24, 0.75, 0.1)]
+        case .warning:
+            return [(0, 0.42, 1.0, 0.1), (0.44, 0, 1.0, 0.7)]
+        case .error:
+            return [(0, 0, 1.0, 0.7), (0.11, 0, 0.95, 0.4), (0.22, 0, 0.9, 0.2), (0.3, 0.4, 0.95, 0.05)]
+        case .pulseBeat:
+            return [(0, 0, 0.95, 0.25), (0.13, 0, 0.7, 0.15)]
+        }
+    }
+}
+
+/// Owns the one CHHapticEngine. Lazily started, restarted after the system
+/// stops it (audio-session churn from calls/recording does this), and
+/// honest about failure: `play` returns false so callers fall back to the
+/// UIKit generators instead of dropping the moment silently.
+@MainActor
+final class KadeHapticEngine {
+    static let shared = KadeHapticEngine()
+    private var engine: CHHapticEngine?
+    private let supported = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+    private init() {}
+
+    func play(events specs: [(TimeInterval, TimeInterval, Float, Float)]) -> Bool {
+        guard supported else { return false }
+        do {
+            if engine == nil {
+                let fresh = try CHHapticEngine()
+                fresh.resetHandler = { [weak self] in Task { @MainActor in self?.engine = nil } }
+                try fresh.start()
+                engine = fresh
+            }
+            guard let engine else { return false }
+            let events: [CHHapticEvent] = specs.map { (time, duration, intensity, sharpness) in
+                let params = [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness),
+                ]
+                if duration > 0 {
+                    return CHHapticEvent(eventType: .hapticContinuous, parameters: params,
+                                         relativeTime: time, duration: duration)
+                }
+                return CHHapticEvent(eventType: .hapticTransient, parameters: params, relativeTime: time)
+            }
+            let player = try engine.makePlayer(with: try CHHapticPattern(events: events, parameters: []))
+            try engine.start()
+            try player.start(atTime: CHHapticTimeImmediate)
+            return true
+        } catch {
+            engine = nil
+            return false
+        }
     }
 }
 
@@ -139,22 +214,29 @@ enum Earcon: CaseIterable {
     case actionDone
     case error
 
-    /// (frequencyHz, durationSeconds) note sequence. Kept short and gentle --
-    /// rising pairs read as "good/forward", a falling pair reads as "problem".
-    fileprivate var notes: [(Double, Double)] {
+    /// Session 23 (Kade: "for the you sent a message, a fun tone sliding
+    /// up, and for agent sent, the reverse maybe? It would be cool if you
+    /// could make them sound like bubbles"): fixed beeps became GLIDES --
+    /// (startHz, endHz, durationSeconds) segments rendered with a
+    /// continuous exponential pitch bend, a soft second harmonic, and a
+    /// per-segment decay envelope, which together read as watery little
+    /// bloops rather than pager beeps. Sent slides UP, the reply slides
+    /// DOWN -- her exact spec -- and everything else keeps the family
+    /// resemblance (up-ish = good, falling = problem).
+    fileprivate var segments: [(Double, Double, Double)] {
         switch self {
-        case .messageSent:     return [(659.25, 0.055)]                    // E5 tick up
-        case .messageReceived: return [(880.0, 0.070), (1318.51, 0.090)]  // A5 -> E6, reply landed
-        case .actionStart:     return [(392.0, 0.060)]                    // G4, quiet "working"
-        case .actionDone:      return [(587.33, 0.070), (880.0, 0.090)]   // D5 -> A5, done
-        case .error:           return [(440.0, 0.100), (349.23, 0.130)]   // A4 -> F4, gentle fall
+        case .messageSent:     return [(280, 720, 0.10), (720, 980, 0.06)]   // bubble UP
+        case .messageReceived: return [(900, 520, 0.10), (520, 330, 0.08)]   // bubble DOWN
+        case .actionStart:     return [(350, 520, 0.06)]                      // tiny up-blip
+        case .actionDone:      return [(420, 840, 0.09), (840, 700, 0.05)]   // plip!
+        case .error:           return [(520, 300, 0.16), (330, 240, 0.14)]   // sinking wobble
         }
     }
 
     fileprivate var amplitude: Float {
         switch self {
-        case .error: return 0.18
-        default:     return 0.22
+        case .error: return 0.30
+        default:     return 0.28
         }
     }
 }
@@ -174,7 +256,7 @@ final class Earcons {
     /// first real play() is never a synthesis hitch. Called at launch.
     func prewarm() {
         for e in Earcon.allCases where cache[e] == nil {
-            cache[e] = Self.renderWAV(notes: e.notes, amplitude: e.amplitude, sampleRate: sampleRate)
+            cache[e] = Self.renderWAV(segments: e.segments, amplitude: e.amplitude, sampleRate: sampleRate)
         }
     }
 
@@ -186,7 +268,7 @@ final class Earcons {
         if let cached = cache[earcon] {
             data = cached
         } else {
-            let rendered = Self.renderWAV(notes: earcon.notes, amplitude: earcon.amplitude, sampleRate: sampleRate)
+            let rendered = Self.renderWAV(segments: earcon.segments, amplitude: earcon.amplitude, sampleRate: sampleRate)
             cache[earcon] = rendered
             data = rendered
         }
@@ -208,19 +290,36 @@ final class Earcons {
 
     // MARK: WAV synthesis (16-bit PCM mono)
 
-    private static func renderWAV(notes: [(Double, Double)], amplitude: Float, sampleRate: Double) -> Data {
+    /// Glide renderer: exponential pitch bend per segment with PHASE carried
+    /// across the whole sound (no clicks at segment joins), a quiet second
+    /// harmonic for watery warmth, and a gentle per-segment decay so each
+    /// bloop rounds off like a bubble surfacing rather than cutting out.
+    private static func renderWAV(segments: [(Double, Double, Double)], amplitude: Float, sampleRate: Double) -> Data {
         var samples: [Int16] = []
-        let fadeSeconds = 0.008
+        let fadeSeconds = 0.006
         let fadeLen = Int(sampleRate * fadeSeconds)
-        for (freq, dur) in notes {
+        var phase = 0.0
+        var phase2 = 0.0
+        let totalCount = segments.reduce(0) { $0 + max(1, Int(sampleRate * $1.2)) }
+        var produced = 0
+        for (f0, f1, dur) in segments {
             let count = max(1, Int(sampleRate * dur))
+            let ratio = f1 / max(1.0, f0)
             for i in 0..<count {
-                let t = Double(i) / sampleRate
-                let raw = sin(2.0 * Double.pi * freq * t)
-                // Short linear fade in/out so blips don't click.
-                let fade = Double(min(min(i, count - i), fadeLen)) / Double(max(1, fadeLen))
-                let v = Float(raw) * amplitude * Float(min(1.0, fade))
+                let u = Double(i) / Double(count)
+                let f = f0 * pow(ratio, u)
+                phase += 2.0 * Double.pi * f / sampleRate
+                phase2 += 2.0 * Double.pi * (f * 2.0) / sampleRate
+                // Fundamental + a soft octave-up harmonic = rounder, more
+                // liquid than a bare sine.
+                let raw = sin(phase) + 0.28 * sin(phase2)
+                // Per-segment decay (each bloop softens toward its end).
+                let decay = 1.0 - 0.35 * u
+                // Whole-sound edge fades so nothing ever clicks.
+                let edge = Double(min(min(produced, totalCount - produced), fadeLen)) / Double(max(1, fadeLen))
+                let v = Float(raw) * amplitude * Float(decay * min(1.0, edge)) / 1.28
                 samples.append(Int16(max(-1.0, min(1.0, v)) * 32767.0))
+                produced += 1
             }
         }
         return encodeWAV(samples: samples, sampleRate: Int(sampleRate))
@@ -346,13 +445,14 @@ struct KadePulseDot: View {
               UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
         let period = self.period
         beat = Task { @MainActor in
-            let generator = UIImpactFeedbackGenerator(style: .soft)
-            // Land the first beat on the pulse's peak (~half a period in),
-            // then one per period so touch tracks sight.
+            // Session 23: the beat grew up -- a real two-thump LUB-DUB
+            // (KadeHaptics.pulseBeat, CoreHaptics with UIKit fallback)
+            // once per visual period, landing on the pulse's peak. Touch
+            // and sight breathe together, and it finally has the bass
+            // Kade asked for.
             try? await Task.sleep(nanoseconds: UInt64(period / 2 * 1_000_000_000))
             while !Task.isCancelled {
-                generator.prepare()
-                generator.impactOccurred(intensity: 0.55)
+                KadeHaptics.pulseBeat()
                 try? await Task.sleep(nanoseconds: UInt64(period * 1_000_000_000))
             }
         }

@@ -147,11 +147,12 @@ struct SettingsView: View {
                 .accessibilityHint("Opens a list of every sound the app makes, each with a play button.")
 
                 DisclosureGroup("Feel every tap") {
-                    auditionTapRow("Light tap") { KadeHaptics.tap() }
+                    auditionTapRow("Tap") { KadeHaptics.tap() }
                     auditionTapRow("Success") { KadeHaptics.success() }
                     auditionTapRow("Warning") { KadeHaptics.warning() }
                     auditionTapRow("Error") { KadeHaptics.error() }
-                    auditionTapRow("Pulse beat") { KadeHaptics.pulseBeat() }
+                    auditionTapRow("Heartbeat") { KadeHaptics.pulseBeat() }
+                    auditionTapRow("Big press") { KadeHaptics.press() }
                 }
                 .disabled(!feedback.haptics)
                 .accessibilityHint("Opens a list of every haptic the app uses, each with a button that fires it once.")
