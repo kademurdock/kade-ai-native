@@ -125,7 +125,6 @@ struct ArchivedConversationsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityFocused($focusedRowID, equals: convo.id)
-                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
                 .accessibilityHint("Opens this archived conversation.")
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {

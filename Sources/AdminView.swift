@@ -512,8 +512,7 @@ struct AdminFeedbackView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityFocused($focusedReportID, equals: item.id)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(rowTitle(item)). \(rowSubtitle(item))")
+                                .accessibilityLabel("\(rowTitle(item)). \(rowSubtitle(item))")
                         .accessibilityHint("Opens the full report, where you can mark it handled.")
                     }
                 } footer: {
@@ -697,8 +696,7 @@ struct AdminLogsUsersView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(user.name). \(subtitle(user))")
+                                .accessibilityLabel("\(user.name). \(subtitle(user))")
                         .accessibilityHint("Opens this person's conversation list.")
                     }
                 }
@@ -778,8 +776,7 @@ struct AdminLogsConvosView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(rowLabel(convo))
+                                .accessibilityLabel(rowLabel(convo))
                         .accessibilityHint("Opens this conversation's log, read-only.")
                     }
                 }
