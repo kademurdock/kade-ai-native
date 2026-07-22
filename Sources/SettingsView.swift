@@ -48,9 +48,38 @@ struct SettingsView: View {
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
     @State private var showingAccountSecurity = false
+    /// Session 26 (her ask: "put a box to check or something, where people
+    /// can choose their default agent"): sheet flag for the main-agent
+    /// picker, plus a mirror of the stored name so the row re-renders the
+    /// moment a new pick lands (UserDefaults itself isn't observed).
+    @State private var showingMainAgentPicker = false
+    @State private var mainAgentName = DefaultAgentStore.displayName
 
     var body: some View {
         List {
+            // Session 26: the headline personal setting — who the app opens
+            // with and who new chats start pointed at. Reuses the same
+            // search-first picker as everywhere else; picking from it here
+            // changes the DEFAULT only, never any existing conversation.
+            Section {
+                Button {
+                    showingMainAgentPicker = true
+                } label: {
+                    LabeledContent {
+                        Text(mainAgentName)
+                    } label: {
+                        Label("Your main agent", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Your main agent: \(mainAgentName)")
+                .accessibilityHint("Opens the agent picker. Your main agent answers when the app opens into a chat, and every new chat starts with them.")
+            } header: {
+                Text("Main agent")
+            } footer: {
+                Text("The app opens into a chat with your main agent, and new chats start with them. Pick anyone -- a Kade-AI character or one of your own. You can still switch who answers inside any single conversation.")
+            }
+
             Section {
                 Button {
                     showingPronunciationDictionary = true
