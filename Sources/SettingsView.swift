@@ -47,6 +47,7 @@ struct SettingsView: View {
     @State private var showingPronunciationDictionary = false
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
+    @State private var showingAccountSecurity = false
 
     var body: some View {
         List {
@@ -169,6 +170,17 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Shows what this account has spent this month and overall, and your balance. Read-only -- nothing is charged from inside the app.")
+
+                // Session 26, leftovers item 7: change password (the whole
+                // reset flow runs in-app -- see AccountSecurityView's doc
+                // comment) and delete account, double-confirmed.
+                Button {
+                    showingAccountSecurity = true
+                } label: {
+                    Label("Password & Account", systemImage: "key")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Change your password, or permanently delete this account.")
             } header: {
                 Text("Account")
             }
@@ -180,6 +192,9 @@ struct SettingsView: View {
         }
         .navigationDestination(isPresented: $showingUsage) {
             UsageView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingAccountSecurity) {
+            AccountSecurityView(apiClient: apiClient)
         }
         .confirmationDialog(
             "Voice message speed",
