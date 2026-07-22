@@ -435,6 +435,33 @@ final class ConversationsService: ObservableObject {
         return try? decoder.decode(KadeConversation.self, from: data)
     }
 
+    /// Share-link trio, contracts read off the fork's share.js (session 26,
+    /// leftovers item 9). GET link/:id answers success:false for
+    /// never-shared; POST :id mints; DELETE :shareId revokes with cleanup.
+    func existingShare(conversationId: String) async -> String? {
+        struct R: Decodable { let success: Bool?; let shareId: String? }
+        let req = client.request(path: "api/share/link/\(conversationId)", authorized: true)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+              let r = try? decoder.decode(R.self, from: data), r.success == true else { return nil }
+        return r.shareId
+    }
+
+    func createShare(conversationId: String) async -> String? {
+        struct R: Decodable { let shareId: String? }
+        var req = client.request(path: "api/share/\(conversationId)", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [:])
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+              let r = try? decoder.decode(R.self, from: data) else { return nil }
+        return r.shareId
+    }
+
+    func revokeShare(shareId: String) async -> Bool {
+        let req = client.request(path: "api/share/\(shareId)", method: "DELETE", authorized: true)
+        guard let (_, http) = try? await client.send(req), http.statusCode == 200 else { return false }
+        return true
+    }
+
     /// The title the server generated for a BRAND-NEW conversation's first
     /// exchange. GET /api/convos/gen_title/:id -- the route long-polls its
     /// own title cache (backoff, ~15s max) and 404s if generation never

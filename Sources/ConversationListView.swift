@@ -57,6 +57,10 @@ struct ConversationListView: View {
     @State private var renamingConversation: KadeConversation?
     @State private var renameText: String = ""
     @State private var deletingConversation: KadeConversation?
+    /// Session 26 (leftovers item 9): which conversation's share/export
+    /// sheet is open. A SHEET, not a push -- no navigationDestination type
+    /// registered, so the one-KadeConversation-per-stack rule is untouched.
+    @State private var sharingConversation: KadeConversation?
     // Local, case- and diacritic-insensitive filter over the conversations
     // already loaded. Deliberately NOT the server's own `?search=` parameter:
     // that path runs through Meilisearch on the fork, which this deployment
@@ -296,6 +300,11 @@ struct ConversationListView: View {
                     } label: {
                         Label("Archive", systemImage: "archivebox")
                     }
+                    Button {
+                        sharingConversation = convo
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
                 }
 
             }
@@ -311,6 +320,9 @@ struct ConversationListView: View {
         }
         .navigationDestination(item: $selectedConversation) { convo in
             ConversationDetailView(conversation: convo)
+        }
+        .sheet(item: $sharingConversation) { convo in
+            ShareExportView(conversation: convo)
         }
         .alert(
             "Delete conversation?",
