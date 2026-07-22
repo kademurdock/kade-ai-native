@@ -388,6 +388,12 @@ final class VoiceService: NSObject, ObservableObject {
 
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {
+            // Session 23: a failed synth used to be PURE silence --
+            // indistinguishable from read-aloud never firing at all (the
+            // exact ambiguity that made Kade's deep-think report
+            // undiagnosable at a distance). The error boop (gated by the
+            // Sound switch) makes "no voice" say which half died.
+            Earcons.shared.play(.error)
             return
         }
         await playAudio(data)

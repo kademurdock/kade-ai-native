@@ -210,6 +210,7 @@ struct ConversationDetailView: View {
             }
             if !isLoading && loadError == nil {
                 agentSection
+                contextMeter
                 readAloudToggle
                 composer
             }
@@ -667,6 +668,38 @@ struct ConversationDetailView: View {
     /// conversation. Turning it off mid-speech stops whatever's currently
     /// playing and drops anything still queued -- see
     /// `VoiceService.stopSpeaking()`.
+    /// Session 23 (Kade: "we need something in chat like that context
+    /// window box on the web"). The essence of the web gauge, native: sum
+    /// of the server's own per-message tokenCount over what's loaded,
+    /// against the fleet's EFFECTIVE window -- 120,000 tokens, pinned in
+    /// librechat.yaml (k2.6 itself takes 256K; the yaml caps it, so the
+    /// cap is the truth users live under). Labeled "about" because this is
+    /// the same client-side estimate the web shows between authoritative
+    /// snapshots: system-prompt/tool overhead isn't counted. One plain
+    /// accessibility element, no controls inside. If the yaml's cap ever
+    /// changes, update the constant with it.
+    private static let effectiveContextTokens = 120_000
+
+    @ViewBuilder
+    private var contextMeter: some View {
+        let used = messages.reduce(0) { $0 + ($1.tokenCount ?? 0) }
+        if used > 0 {
+            let percent = min(100, Int((Double(used) / Double(Self.effectiveContextTokens) * 100).rounded()))
+            HStack(spacing: 6) {
+                Image(systemName: "gauge.with.needle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Context: about \(used.formatted()) of \(Self.effectiveContextTokens.formatted()) tokens — \(percent)%")
+                    .font(.caption2)
+                    .foregroundStyle(percent >= 85 ? Color.orange : Color.secondary)
+            }
+            .padding(.horizontal)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Context window about \(percent) percent full. Roughly \(used.formatted()) of \(Self.effectiveContextTokens.formatted()) tokens used.")
+        }
+    }
+
     private var readAloudToggle: some View {
         // Session 22 LIVE BUG (Amber A, first-day tester: "can't get the
         // voice message auto play button to toggle with voiceover"): this
@@ -1101,7 +1134,19 @@ struct ConversationDetailView: View {
             )
             sendState = .idle
             a11yFocus = messages.last.map { .message($0.id) }
-            if readAloudEnabled, let reply = messages.last, !reply.isCreatedByUser {
+            // Session 23 hardening (Kade: "When deep think is on, it
+            // doesn't auto read the message as a voice message"): the
+            // stored deep-reply SHAPE was pulled and proven fine (think
+            // part first, text part present, displayText extracts it), so
+            // the data side is clean -- the failure is runtime-side and
+            // unreproducible from here. Two defenses: (1) the reply is now
+            // the last ASSISTANT message, not blindly `messages.last`, so
+            // any extra trailing doc a reasoning turn might persist can't
+            // silently break the trigger; (2) TTS failures are now audible
+            // (see VoiceService.speakOne) instead of indistinguishable
+            // from "never fired." If her next deep turn stays silent, an
+            // error boop = TTS half; pure silence = trigger half.
+            if readAloudEnabled, let reply = messages.last(where: { !$0.isCreatedByUser }) {
                 // FIX (session 21, Kade: "Whit replies still come back as
                 // Kiana"). Attribute the spoken reply to whoever ACTUALLY
                 // authored it (`reply.agentId` / `reply.speakerLabel`), not to

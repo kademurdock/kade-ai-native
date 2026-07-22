@@ -40,6 +40,11 @@ struct KadeMessage: Codable, Identifiable {
     let sender: String?
     let text: String?
     let content: [ContentBlock]?
+    /// Server-counted tokens for this message (confirmed live 2026-07-22:
+    /// every /api/messages doc carries it). Powers the native context
+    /// meter -- summing these is exactly the web gauge's own client-side
+    /// estimate path (useTokenUsage's isEstimate branch).
+    var tokenCount: Int? = nil
     /// Which message this branches from. The all-zero UUID sentinel
     /// ("00000000-0000-0000-0000-000000000000") marks the first turn in a
     /// conversation (confirmed live 2026-07-19, see docs/ENDPOINTS.md).
@@ -62,6 +67,7 @@ struct KadeMessage: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case messageId, conversationId, createdAt, isCreatedByUser, sender, text, content
         case parentMessageId
+        case tokenCount
         case agentId = "model"
     }
 
