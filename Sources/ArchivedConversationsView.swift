@@ -19,6 +19,18 @@ import UIKit
 /// - explicit "Load more" button, no silent infinite scroll;
 /// - every action outcome is spoken via `ConversationsService.actionMessage`
 ///   -- announced by THIS view, see the `.onChange` note below.
+/// Dedicated push type for opening an archived conversation -- NOT a bare
+/// `KadeConversation`, and that's load-bearing: this screen is pushed from
+/// `ConversationListView`, whose stack ALREADY registers a
+/// `.navigationDestination(item:)` keyed to `KadeConversation`. Two
+/// registrations for one type in one stack is exactly the build-121
+/// regression (row taps silently die) that `SpotterTranscriptHandoff` and
+/// `ChatTranscriptHandoff` exist to prevent. Same cure here.
+struct ArchivedConversationOpen: Identifiable, Hashable {
+    let conversation: KadeConversation
+    var id: String { conversation.conversationId }
+}
+
 struct ArchivedConversationsView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
 
@@ -27,7 +39,7 @@ struct ArchivedConversationsView: View {
     @State private var isLoading = true
     @State private var isLoadingMore = false
     @State private var loadError: String?
-    @State private var selectedConversation: KadeConversation?
+    @State private var selectedConversation: ArchivedConversationOpen?
     @State private var deletingConversation: KadeConversation?
     @AccessibilityFocusState private var focusedRowID: String?
 
@@ -95,7 +107,7 @@ struct ArchivedConversationsView: View {
         List {
             ForEach(rows) { convo in
                 Button {
-                    selectedConversation = convo
+                    selectedConversation = ArchivedConversationOpen(conversation: convo)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(convo.displayTitle)
@@ -145,8 +157,8 @@ struct ArchivedConversationsView: View {
             await loadFirstPage()
             KadeHaptics.tap()
         }
-        .navigationDestination(item: $selectedConversation) { convo in
-            ConversationDetailView(conversation: convo)
+        .navigationDestination(item: $selectedConversation) { open in
+            ConversationDetailView(conversation: open.conversation)
         }
         .alert(
             "Delete conversation?",
