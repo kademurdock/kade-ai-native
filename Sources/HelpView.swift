@@ -79,11 +79,11 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "A fresh coat of paint that changes nothing for VoiceOver: home screen buttons now carry colorful icon tiles, and Call your Spotter stands out as one big button. More sounds and gentle taps: saves, deletes, debate lines, matchmaker results, and alert tests now confirm by ear and by touch, all controlled by the Feedback switches in Settings. New animations for sighted family: a little waveform while you record, debate lines easing in, results fading in. They hold still whenever Reduce Motion is on, either your iPhone's own switch or the one in this app's Settings. And Quick Dictate's transcript-copied announcement is now guaranteed to be heard, even while VoiceOver is busy reading the transcript back."
+                body: "Two fixes from real family testing: the voice messages toggle in a chat now flips reliably with VoiceOver at any text size, with the speed control as its own separate stop right after it. And backing out of a brand-new chat now refreshes your conversation list and puts your focus right on that chat, so you can get straight back in. Also new: Pulse with the visuals, in Settings under Feedback. When something on screen is gently pulsing, like the thinking dot while a companion writes back or a Debate Room turn cooks, a soft tap pulses in time with it. On by default, off with one switch, and the Haptics switch rules over it."
             ),
             HelpEntry(
                 title: "The build before",
-                body: "The home screen grouped into sections: Talk, Tools, then Settings and help, each a Headings rotor stop. Alerts under Talk shows your last 15 reminders and check-ins plus delivery choices and a test button. Agent Builder grew Knowledge files, Connections, and Actions on every agent you edit. Siri opens Matchmaker, Game Room, Debate Room, Agent Builder, and Settings by voice. And family without accounts can sign up entirely by phone: call the Kade-AI number and say, sign me up."
+                body: "A fresh coat of paint that changes nothing for VoiceOver: home screen buttons carry colorful icon tiles, and Call your Spotter stands out as one big button. More sounds and gentle taps: saves, deletes, debate lines, matchmaker results, and alert tests confirm by ear and by touch, all controlled by the Feedback switches in Settings. New animations for sighted family that hold still whenever Reduce Motion is on. And Quick Dictate's transcript-copied announcement is guaranteed to be heard."
             ),
             HelpEntry(
                 title: "Earlier",

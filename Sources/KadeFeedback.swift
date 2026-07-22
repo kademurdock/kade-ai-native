@@ -29,6 +29,7 @@ final class FeedbackPrefs: ObservableObject {
         static let sound = "kade.feedback.sound"
         static let haptics = "kade.feedback.haptics"
         static let reduceMotion = "kade.feedback.reduceMotion"
+        static let sensorySync = "kade.feedback.sensorySync"
     }
 
     /// Register first-run defaults (all ON). Must run before `shared` first
@@ -37,7 +38,8 @@ final class FeedbackPrefs: ObservableObject {
         UserDefaults.standard.register(defaults: [
             Keys.sound: true,
             Keys.haptics: true,
-            Keys.reduceMotion: false
+            Keys.reduceMotion: false,
+            Keys.sensorySync: true
         ])
     }
 
@@ -53,12 +55,24 @@ final class FeedbackPrefs: ObservableObject {
     @Published var forceReduceMotion: Bool {
         didSet { UserDefaults.standard.set(forceReduceMotion, forKey: Keys.reduceMotion) }
     }
+    /// Session 23 (Kade: "make them pulse with the visuals? Some of us neuro
+    /// divergent nerd types like that and you could always turn it off").
+    /// Gates the soft heartbeat that KadePulseDot fires in time with its
+    /// visual pulse -- touch and sight moving together. A SUB-switch under
+    /// Haptics: the master switch off silences everything regardless; this
+    /// one lets someone keep single-moment haptics (sent, landed, error)
+    /// while turning off only the rhythmic kind. Default on, per her
+    /// framing.
+    @Published var sensorySync: Bool {
+        didSet { UserDefaults.standard.set(sensorySync, forKey: Keys.sensorySync) }
+    }
 
     private init() {
         let d = UserDefaults.standard
         soundEffects = d.bool(forKey: Keys.sound)
         haptics = d.bool(forKey: Keys.haptics)
         forceReduceMotion = d.bool(forKey: Keys.reduceMotion)
+        sensorySync = d.bool(forKey: Keys.sensorySync)
     }
 
     /// Gate a SwiftUI `SensoryFeedback` through the Haptics switch. Returns
@@ -316,8 +330,11 @@ struct KadePulseDot: View {
     /// allowed, and the app-wide Haptics switch is on.
     private func syncBeat(active: Bool, reduce: Bool) {
         beat?.cancel(); beat = nil
+        // Session 23: rhythmic beats are gated by BOTH the Haptics master
+        // switch and the new "Pulse with the visuals" sub-switch.
         guard haptic, active, !reduce,
-              UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
+              UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
+              UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
         let period = self.period
         beat = Task { @MainActor in
             let generator = UIImpactFeedbackGenerator(style: .soft)

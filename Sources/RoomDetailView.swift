@@ -153,6 +153,13 @@ struct RoomDetailView: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
+                // Session 23: same touch-with-sight pulse the chat's
+                // "replying" dot has -- short-lived (one turn's wait),
+                // VoiceOver never sees it, and it stills under reduced
+                // motion or either haptic switch like everywhere else.
+                if isGeneratingTurn {
+                    KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
+                }
                 Button {
                     Task { await advance(forcedAgentId: nil) }
                 } label: {

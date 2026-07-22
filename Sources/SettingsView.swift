@@ -117,6 +117,14 @@ struct SettingsView: View {
                 }
                 .accessibilityHint("Gentle taps at key moments -- sending, a reply landing, recording start and stop, a call connecting or ending.")
 
+                // Session 23 (Kade: "make them pulse with the visuals...
+                // you could always turn it off").
+                Toggle(isOn: $feedback.sensorySync) {
+                    Text("Pulse with the visuals")
+                }
+                .disabled(!feedback.haptics)
+                .accessibilityHint("When something on screen is gently pulsing, like the dot while a companion is thinking, a soft tap pulses in time with it. Haptics must be on.")
+
                 Toggle(isOn: $feedback.forceReduceMotion) {
                     Text("Reduce motion")
                 }
