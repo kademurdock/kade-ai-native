@@ -105,7 +105,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "Deep think comes to the app: a brain button at the start of the message row. Turn it on and every message you send gets slower, more careful reasoning, until you turn it off — same as the web's brain button, and it announces on and off as you flip it. Two fixes from real family testing: the voice messages toggle in a chat now flips reliably with VoiceOver at any text size, with the speed control as its own separate stop right after it. And backing out of a brand-new chat now refreshes your conversation list and puts your focus right on that chat, so you can get straight back in. Also new: Pulse with the visuals, in Settings under Feedback. When something on screen is gently pulsing, like the thinking dot while a companion writes back or a Debate Room turn cooks, a soft tap pulses in time with it. On by default, off with one switch, and the Haptics switch rules over it."
+                body: "My Creations and the Wall of Fame went native: play, save, and share everything you and the family have made, right from the home screen. Recording no longer cuts off at one minute — it runs as long as you're talking and only stops itself after ten silent seconds, with a warning tap and a spoken line. Report a problem from the top of this Help screen — it goes straight to Kade with your name on it. Settings grew an audition list to hear every sound and feel every tap. Deep think comes to the app: a brain button at the start of the message row. Turn it on and every message you send gets slower, more careful reasoning, until you turn it off — same as the web's brain button, and it announces on and off as you flip it. Two fixes from real family testing: the voice messages toggle in a chat now flips reliably with VoiceOver at any text size, with the speed control as its own separate stop right after it. And backing out of a brand-new chat now refreshes your conversation list and puts your focus right on that chat, so you can get straight back in. Also new: Pulse with the visuals, in Settings under Feedback. When something on screen is gently pulsing, like the thinking dot while a companion writes back or a Debate Room turn cooks, a soft tap pulses in time with it. On by default, off with one switch, and the Haptics switch rules over it."
             ),
             HelpEntry(
                 title: "The build before",
@@ -250,6 +250,16 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Dates it finds",
                 body: "If a document or photo has a future date on it — an appointment, a due date, an event — it shows up under Dates found with its own Save reminder button."
+            ),
+        ]),
+        HelpSection(title: "My Creations and the Wall of Fame", entries: [
+            HelpEntry(
+                title: "My Creations",
+                body: "Every picture, video, and song you've made with your companions, newest first. Each one reads its description in a single swipe, then Play for videos and songs, Save or share to put it in your Photos through the share sheet, and a Wall of Fame switch to share it with the family or take it back off."
+            ),
+            HelpEntry(
+                title: "Wall of Fame",
+                body: "Creations the whole family chose to share, with who made them. You can play or save anything on the Wall; only the person who made something can take it down."
             ),
         ]),
         HelpSection(title: "Games, Matchmaker, and Game Room", entries: [

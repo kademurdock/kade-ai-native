@@ -202,6 +202,10 @@ struct ContentView: View {
                     SettingsView(apiClient: apiClient)
                 case .alerts:
                     AlertsView(apiClient: apiClient)
+                case .myCreations:
+                    MyCreationsView(apiClient: apiClient)
+                case .wallOfFame:
+                    WallOfFameView(apiClient: apiClient)
                 }
             }
         }
@@ -456,6 +460,27 @@ struct ContentView: View {
             .labelStyle(KadeTileLabelStyle(tint: .cyan))
             .accessibilityHint("Create or edit your own companions.")
 
+            // Session 23 ("It would be dope if we did most if not all the
+            // native port lol"): the last two user-facing web-only pages,
+            // now native. No Siri phrases (the provider sits at Apple's
+            // 10-shortcut cap) and no Quick Actions (4 shown, 5 declared)
+            // -- same constraint notes as Alerts.
+            Button { route = .myCreations } label: {
+                Label("My Creations", systemImage: "photo.stack")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .yellow))
+            .accessibilityHint("Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.")
+
+            Button { route = .wallOfFame } label: {
+                Label("Wall of Fame", systemImage: "trophy")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .brown))
+            .accessibilityHint("Creations the whole family chose to share, newest first.")
+
             Text("Settings and help")
                 .font(.headline)
                 .padding(.top, 8)
@@ -693,6 +718,8 @@ enum HomeRoute: Identifiable, Hashable {
     case agentBuilder
     case settings
     case alerts
+    case myCreations
+    case wallOfFame
 
     var id: String {
         switch self {
@@ -707,6 +734,8 @@ enum HomeRoute: Identifiable, Hashable {
         case .agentBuilder: return "agentBuilder"
         case .settings: return "settings"
         case .alerts: return "alerts"
+        case .myCreations: return "myCreations"
+        case .wallOfFame: return "wallOfFame"
         }
     }
 }
