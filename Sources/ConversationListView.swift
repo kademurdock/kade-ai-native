@@ -31,6 +31,10 @@ struct ConversationListView: View {
     // conversation yet" into the same optional would mean every place that
     // reads it has to re-decide which kind of nil it's looking at.
     @State private var startingNewConversation = false
+    /// Session 24 (leftovers item 4): entry point to the archived
+    /// conversations screen -- same `isPresented` destination pattern as
+    /// `startingNewConversation` above.
+    @State private var showingArchived = false
 
     // Session 14 (Kade: "maybe a rotor of actions in the conversations list
     // where you can delete stuff? Stuff like that.").
@@ -89,9 +93,21 @@ struct ConversationListView: View {
                 .accessibilityLabel("New conversation")
                 .accessibilityHint("Starts a new conversation and lets you pick who to talk to.")
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingArchived = true
+                } label: {
+                    Image(systemName: "archivebox")
+                }
+                .accessibilityLabel("Archived conversations")
+                .accessibilityHint("Shows conversations you've archived, and lets you restore or delete them.")
+            }
         }
         .navigationDestination(isPresented: $startingNewConversation) {
             ConversationDetailView(conversation: nil)
+        }
+        .navigationDestination(isPresented: $showingArchived) {
+            ArchivedConversationsView()
         }
         .task {
             if conversationsService.conversations.isEmpty {
@@ -130,7 +146,7 @@ struct ConversationListView: View {
                     // as the never-do rules in PROJECT_STATUS: never move
                     // list focus while another screen sits pushed on top of
                     // the list.
-                    if selectedConversation == nil && !startingNewConversation {
+                    if selectedConversation == nil && !startingNewConversation && !showingArchived {
                         focusedConversationID = conversationsService.conversations.first?.id
                     }
                 }
@@ -146,7 +162,7 @@ struct ConversationListView: View {
             // ConversationDetailView), so only steer focus when this list
             // is actually the screen on top. Delete/archive (this guard's
             // real audience) always happen with the list on top anyway.
-            if selectedConversation == nil, !startingNewConversation,
+            if selectedConversation == nil, !startingNewConversation, !showingArchived,
                let current = focusedConversationID,
                !conversationsService.conversations.contains(where: { $0.id == current }) {
                 focusedConversationID = conversationsService.conversations.first?.id

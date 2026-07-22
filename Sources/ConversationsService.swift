@@ -331,6 +331,52 @@ final class ConversationsService: ObservableObject {
         }
     }
 
+    /// One page of ARCHIVED conversations -- same route and page shape as
+    /// the main list, filtered server-side (`GET /api/convos?isArchived=
+    /// true`; the fork reads the param through `isEnabled`, so the literal
+    /// string "true" is correct). Deliberately NOT cached on a @Published
+    /// here: archived is a visit-when-needed surface, and a second stored
+    /// list would need syncing through every archive/unarchive/delete --
+    /// `ArchivedConversationsView` fetches fresh each visit instead.
+    func fetchArchivedPage(cursor: String?) async throws
+        -> (conversations: [KadeConversation], nextCursor: String?) {
+        var items: [URLQueryItem] = [URLQueryItem(name: "isArchived", value: "true")]
+        if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let req = client.request(path: "api/convos", authorized: true, queryItems: items)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else { throw ConversationsError.server(http.statusCode) }
+        let page = try decoder.decode(ConversationsPage.self, from: data)
+        return (page.conversations, page.nextCursor)
+    }
+
+    /// The exact inverse of `archiveConversation` (same route, `isArchived:
+    /// false`), split into its own method so the spoken confirmation reads
+    /// as a restore. Refreshes the main list on success so the restored
+    /// conversation is already back in place -- the list's focus steering
+    /// is covered-screen-guarded (session 24), so this background refresh
+    /// can never yank VoiceOver focus out from under the archived screen.
+    @discardableResult
+    func unarchiveConversation(id: String, title: String) async -> Bool {
+        var req = client.request(path: "api/convos/archive", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["arg": ["conversationId": id, "isArchived": false]]
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...201).contains(http.statusCode) else {
+                actionMessage = "Couldn't restore \(title). Try again."
+                return false
+            }
+            actionMessage = "Restored \(title). It's back in your conversations."
+            await loadFirstPage()
+            return true
+        } catch {
+            actionMessage = "Couldn't restore \(title). Try again."
+            return false
+        }
+    }
+
     /// `KadeConversation` is a `let`-only value type (correct -- it models a
     /// server response), so a rename replaces the element rather than
     /// mutating it in place.
