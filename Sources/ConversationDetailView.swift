@@ -651,46 +651,53 @@ struct ConversationDetailView: View {
     /// playing and drops anything still queued -- see
     /// `VoiceService.stopSpeaking()`.
     private var readAloudToggle: some View {
-        Button {
-            readAloudEnabled.toggle()
-            if !readAloudEnabled {
-                voiceService.stopSpeaking()
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
-                Text(readAloudEnabled ? "Voice messages: On" : "Voice messages: Off")
-                    .font(.footnote)
-                if voiceService.isSpeaking {
-                    ProgressView().scaleEffect(0.7)
+        // Session 22 LIVE BUG (Amber A, first-day tester: "can't get the
+        // voice message auto play button to toggle with voiceover"): this
+        // row used to be ONE Button whose label CONTAINED the speed button,
+        // flattened with .accessibilityElement(children: .ignore). Replacing
+        // a Button's own element that way costs it DIRECT VoiceOver
+        // activation -- double-tap falls back to a synthesized tap at the
+        // element's activation point, and where that point lands shifts
+        // with text size and with the progress spinner appearing. On Kade's
+        // phone it hit the toggle; on Amber's it didn't. Restructured: the
+        // toggle is a plain Button carrying its own accessibility (a Button
+        // flattens its label natively and keeps direct, layout-independent
+        // activation -- no children:.ignore needed or wanted), and the
+        // speed control is a true SIBLING element instead of living inside
+        // the toggle's flattened shadow. The session-11 name-vs-state
+        // pattern (label "Voice messages", value On/Off) is unchanged.
+        HStack(spacing: 6) {
+            Button {
+                readAloudEnabled.toggle()
+                if !readAloudEnabled {
+                    voiceService.stopSpeaking()
                 }
-                Spacer()
-                speedButton
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                    Text(readAloudEnabled ? "Voice messages: On" : "Voice messages: Off")
+                        .font(.footnote)
+                    if voiceService.isSpeaking {
+                        ProgressView().scaleEffect(0.7)
+                    }
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Voice messages")
+            .accessibilityValue(readAloudEnabled ? "On" : "Off")
+            .accessibilityHint(
+                readAloudEnabled
+                    ? "Turns off automatic voice messages."
+                    : "Turns on automatic voice messages. Each new reply from \(conversationTitleForCopy) will play as a voice message in its own voice."
+            )
+            .accessibilityAddTraits(.isToggle)
+
+            Spacer()
+
+            speedButton
         }
-        .buttonStyle(.plain)
         .padding(.horizontal)
         .padding(.top, 4)
-        .accessibilityElement(children: .ignore)
-        // Session 11 (Kade: "it says off button on or on button off...
-        // when you toggle it you can't tell if it's off or on"): baking
-        // "on"/"off" INTO the label text while also carrying the
-        // `.isToggle` trait is the bug -- VoiceOver expects a toggle's
-        // current state in `.accessibilityValue`, separate from its name,
-        // and announces both together ("Read aloud, on, switch button" for
-        // example). With the state word living inside the label instead,
-        // VoiceOver's own toggle narration and the hand-written label text
-        // talked over each other. Fixed by giving the label just the NAME
-        // and the state its own `.accessibilityValue` -- the standard,
-        // unambiguous pattern every native iOS Settings toggle uses.
-        .accessibilityLabel("Voice messages")
-        .accessibilityValue(readAloudEnabled ? "On" : "Off")
-        .accessibilityHint(
-            readAloudEnabled
-                ? "Turns off automatic voice messages."
-                : "Turns on automatic voice messages. Each new reply from \(conversationTitleForCopy) will play as a voice message in its own voice."
-        )
-        .accessibilityAddTraits(.isToggle)
     }
 
     /// Playback-speed control, sitting beside the voice-messages toggle

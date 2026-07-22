@@ -103,6 +103,23 @@ struct ConversationListView: View {
             // the same session still gets a predictable starting focus.
             focusedConversationID = conversationsService.conversations.first?.id
         }
+        .onChange(of: startingNewConversation) { was, isNow in
+            // Session 22 LIVE BUG (Amber A: made a new chat, backed out,
+            // "couldn't get back in the chat she had just created"): the
+            // .task above only fetches when the cached list is EMPTY, so a
+            // conversation born inside the new-chat screen wasn't in the
+            // list on return -- invisible until pull-to-refresh, which is
+            // a buried gesture under VoiceOver. Returning from the
+            // new-chat screen now refetches page one and lands VoiceOver
+            // focus on the newest row -- the chat she was just inside --
+            // so backing out and going back in works the way it reads.
+            if was && !isNow {
+                Task {
+                    await conversationsService.loadFirstPage()
+                    focusedConversationID = conversationsService.conversations.first?.id
+                }
+            }
+        }
         .onChange(of: conversationsService.conversations) { _, _ in
             // A deleted/archived row disappearing must not strand VoiceOver
             // focus on an element that no longer exists -- move it to
