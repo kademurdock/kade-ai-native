@@ -108,6 +108,12 @@ struct ConversationDetailView: View {
     // presented full-screen so an accidental swipe-down can't drop the
     // call the way dismissing a .sheet would.
     @State private var showingCall = false
+    // Session 25 ("a reading view for native like we do on web"): which
+    // reply is open in the full-screen reader, plus where VoiceOver focus
+    // returns when it closes (the item binding is already nil by the time
+    // onDismiss runs, so the id is stashed separately at open time).
+    @State private var readingMessage: KadeMessage?
+    @State private var readingReturnId: String?
     // Session 24 (leftovers item 2): search WITHIN this conversation.
     // Client-side filter over the messages already in hand, same deliberate
     // choice (and same reasons) as the conversation list's search: instant,
@@ -600,6 +606,10 @@ struct ConversationDetailView: View {
                             canEdit: canEdit(message),
                             canRegenerate: canRegenerate(message),
                             onReadAloud: { readAloud(message) },
+                            onReadingView: message.isCreatedByUser ? nil : {
+                                readingReturnId = message.id
+                                readingMessage = message
+                            },
                             onEdit: { beginEdit(message) },
                             onRegenerate: { sendTask = Task { await regenerate(message) } },
                             onSaveVoiceMessage: { Task { await saveVoiceMessage(message) } },
@@ -617,6 +627,22 @@ struct ConversationDetailView: View {
                 .padding()
             }
             .onAppear { scrollToBottom(proxy) }
+            .fullScreenCover(item: $readingMessage, onDismiss: {
+                // Hand VoiceOver focus back to the message the reader was
+                // opened from -- the same focus-restoration promise the
+                // web version makes with its openerRef.
+                if let id = readingReturnId {
+                    a11yFocus = .message(id)
+                    readingReturnId = nil
+                }
+            }) { message in
+                ReadingView(
+                    speaker: message.speakerLabel,
+                    text: message.readableText.isEmpty
+                        ? "(No text in this reply — it looks like tool activity only.)"
+                        : message.readableText
+                )
+            }
             .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: sendState) { _, _ in scrollToBottom(proxy) }
             // Phase 7 (accessibility polish): two custom VoiceOver rotors so
@@ -1446,6 +1472,12 @@ private struct MessageRow: View {
     /// `ConversationDetailView.canRegenerate(_:)`.
     let canRegenerate: Bool
     let onReadAloud: () -> Void
+    /// Session 25: opens the full-screen distraction-free reader for this
+    /// reply. Nil on USER messages (the web feature is AI-replies-only and
+    /// this port keeps that) -- nil means neither the rotor action nor the
+    /// menu item exists, so VoiceOver never announces an action a message
+    /// can't perform.
+    let onReadingView: (() -> Void)?
     let onEdit: () -> Void
     let onRegenerate: () -> Void
     /// Session 14 (Kade: "needs to be a download voice clip button, needs to
@@ -1516,6 +1548,9 @@ private struct MessageRow: View {
                     UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
                 }
                 Button("Play as voice message") { onReadAloud() }
+                if let onReadingView {
+                    Button("Open reading view") { onReadingView() }
+                }
                 Button("Save voice message") { onSaveVoiceMessage() }
                 Button("Share text") { onShare() }
                 if canEdit {
@@ -1555,6 +1590,13 @@ private struct MessageRow: View {
                 onReadAloud()
             } label: {
                 Label("Play as Voice Message", systemImage: "speaker.wave.2")
+            }
+            if let onReadingView {
+                Button {
+                    onReadingView()
+                } label: {
+                    Label("Reading View", systemImage: "book")
+                }
             }
             Button {
                 onSaveVoiceMessage()

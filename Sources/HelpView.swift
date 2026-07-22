@@ -105,7 +105,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "New chats finally get real names: the server now names every conversation you start here after your first exchange, the way it always did on the web — no more lists full of rows all called New Chat. Opening a chat right after making one is solid under VoiceOver too. Archived conversations got their own screen — the archive box button in your conversation list — where you can read them, restore them, or delete them for good. And every conversation gained a search button that narrows the messages to the ones whose text matches what you type."
+                body: "Every reply now has a Reading view — flick to it in the Actions rotor on any reply, or use the actions menu — a full-screen, distraction-free page with big print in your chosen reading font, one paragraph per swipe, and a close button that puts you right back on the message. New chats finally get real names: the server now names every conversation you start here after your first exchange, the way it always did on the web — no more lists full of rows all called New Chat. Opening a chat right after making one is solid under VoiceOver too. Archived conversations got their own screen — the archive box button in your conversation list — where you can read them, restore them, or delete them for good. And every conversation gained a search button that narrows the messages to the ones whose text matches what you type."
             ),
             HelpEntry(
                 title: "The build before",
