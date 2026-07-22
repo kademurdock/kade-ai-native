@@ -69,6 +69,13 @@ struct CallView: View {
                     cameraPreview
                 }
                 Spacer(minLength: 0)
+                // Session 27 (visual delight, VO-invisible): the call's
+                // state as a breathing orb -- teal listening, amber
+                // thinking (twin of the typing sound), green + ripples
+                // speaking. See KadeCallStateOrb for the motion gates.
+                KadeCallStateOrb(status: callService.status)
+                    .padding(.bottom, 8)
+                Spacer(minLength: 0)
                 if wrappingUp {
                     wrapUpPanel
                 }

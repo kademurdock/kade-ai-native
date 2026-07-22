@@ -1711,6 +1711,17 @@ private struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 6) {
+            // Session 27 (visual delight): agent replies carry a small
+            // colored initial circle -- speaker identity at a glance when
+            // agents switch mid-conversation. Sits OUTSIDE the row's
+            // combined accessibility element, so it hides itself
+            // (KadeSpeakerMonogram is accessibilityHidden internally); the
+            // user's own messages stay clean on purpose.
+            HStack(alignment: .top, spacing: 8) {
+            if !message.isCreatedByUser {
+                KadeSpeakerMonogram(name: message.speakerLabel)
+                    .padding(.top, 2)
+            }
             VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 4) {
                 Text(message.speakerLabel)
                     .font(.caption.bold())
@@ -1784,6 +1795,7 @@ private struct MessageRow: View {
                 if let onDelete {
                     Button("Delete message") { onDelete() }
                 }
+            }
             }
 
             actionsButton

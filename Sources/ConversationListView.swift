@@ -436,6 +436,10 @@ struct ConversationListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 52))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             Text("No conversations yet")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)

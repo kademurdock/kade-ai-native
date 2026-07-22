@@ -91,6 +91,10 @@ struct ArchivedConversationsView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
+            Image(systemName: "archivebox")
+                .font(.system(size: 52))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             Text("Nothing archived")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)

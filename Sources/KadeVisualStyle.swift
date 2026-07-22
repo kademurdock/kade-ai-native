@@ -252,3 +252,133 @@ struct KadeWaveformBars: View {
         return animating ? 1.0 : rest[i]
     }
 }
+
+// MARK: - Session 27: visual delight for sighted riders
+// (Kade: "Anything visual I wouldn't know about because I'm totally blind
+// that would make it easier for those folks or more interesting." Everything
+// below is DECORATIVE: accessibilityHidden, no VoiceOver change of any kind,
+// and every animation is double-gated on system Reduce Motion + the in-app
+// override, same rules as every visual in this file.)
+
+/// The call screen's state, visible at a glance: a soft breathing orb that
+/// wears the call's color — calm teal while listening, warm amber while
+/// thinking (the visual twin of the typing sound), green with outward
+/// ripples while the agent speaks, blue while connecting, gray otherwise.
+/// Under Reduce Motion the colors still change (state, not motion) but
+/// nothing breathes or ripples.
+struct KadeCallStateOrb: View {
+    let status: StreamingCallService.Status
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @State private var breathing = false
+    @State private var rippling = false
+
+    private var reduceMotion: Bool { systemReduceMotion || StylePrefs.forceReduceMotion }
+
+    private var fill: Color {
+        switch status {
+        case .listening: return .teal
+        case .thinking: return .orange
+        case .speaking: return .green
+        case .connecting: return .blue
+        default: return .gray
+        }
+    }
+
+    private var breathDuration: Double {
+        switch status {
+        case .thinking: return 0.85   // matches the typing tick's urgency
+        case .speaking: return 1.2
+        default: return 2.4           // calm listening breath
+        }
+    }
+
+    private var statusKey: String {
+        switch status {
+        case .listening: return "listening"
+        case .thinking: return "thinking"
+        case .speaking: return "speaking"
+        case .connecting: return "connecting"
+        default: return "other"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            if statusKey == "speaking" && !reduceMotion {
+                ForEach(0..<2, id: \.self) { ring in
+                    Circle()
+                        .stroke(fill.opacity(0.35), lineWidth: 2)
+                        .scaleEffect(rippling ? 1.9 : 1.0)
+                        .opacity(rippling ? 0.0 : 0.8)
+                        .animation(
+                            .easeOut(duration: 1.6)
+                                .repeatForever(autoreverses: false)
+                                .delay(Double(ring) * 0.8),
+                            value: rippling
+                        )
+                }
+            }
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [fill.opacity(0.85), fill.opacity(0.4)],
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: 70
+                    )
+                )
+                .scaleEffect(!reduceMotion && breathing ? 1.06 : 1.0)
+                .animation(
+                    reduceMotion
+                        ? nil
+                        : .easeInOut(duration: breathDuration).repeatForever(autoreverses: true),
+                    value: breathing
+                )
+        }
+        .frame(width: 132, height: 132)
+        .accessibilityHidden(true)
+        // New identity per state: restarts the breath at that state's own
+        // rhythm and re-arms the ripples cleanly -- changing a
+        // repeatForever's duration mid-flight is undefined-feeling
+        // territory; a fresh subtree is deterministic.
+        .id(statusKey)
+        .onAppear {
+            breathing = true
+            rippling = true
+        }
+    }
+}
+
+/// A small colored initial circle beside an agent reply -- speaker identity
+/// at a glance in group-ish conversations (Debate Room mints, Spotter
+/// handoffs, agent switches mid-chat). Deterministic hue from the name so
+/// Kiana is always Kiana's color on every screen, no stored config. The
+/// user's own messages deliberately get none (their side of the chat stays
+/// clean, iMessage-style).
+struct KadeSpeakerMonogram: View {
+    let name: String
+
+    private var initialLetter: String {
+        String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+    }
+
+    private var hue: Double {
+        var h = 5381
+        for scalar in name.unicodeScalars {
+            h = (h &* 33) &+ Int(scalar.value)
+        }
+        return Double(abs(h % 360)) / 360.0
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color(hue: hue, saturation: 0.55, brightness: 0.82))
+            Text(initialLetter)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 26, height: 26)
+        .accessibilityHidden(true)
+    }
+}
