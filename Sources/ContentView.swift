@@ -310,6 +310,9 @@ struct ContentView: View {
                 .accessibilityAddTraits(.isHeader)
 
             Button {
+                // Session 23 garnish: the one big action gets the one
+                // medium tap -- gated like every haptic in the app.
+                KadeHaptics.press()
                 callingSpotter = true
             } label: {
                 Label("Call your Spotter", systemImage: "eye")

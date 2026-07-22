@@ -265,7 +265,11 @@ struct ConversationListView: View {
             }
         }
         .listStyle(.plain)
-        .refreshable { await conversationsService.loadFirstPage() }
+        .refreshable {
+            await conversationsService.loadFirstPage()
+            // Session 23 garnish: fresh data landing is worth one light tap.
+            KadeHaptics.tap()
+        }
         .navigationDestination(item: $selectedConversation) { convo in
             ConversationDetailView(conversation: convo)
         }

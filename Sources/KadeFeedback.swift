@@ -113,6 +113,10 @@ enum KadeHaptics {
     /// someone FEEL the pulse rhythm's single beat before deciding whether
     /// to keep "Pulse with the visuals" on.
     static func pulseBeat() { fire { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55) } }
+    /// Medium impact for the app's one deliberately big action (starting a
+    /// Spotter call). Everything else stays light -- "lots of hapteks"
+    /// per Kade, but graded, never uniform thumping.
+    static func press()   { fire { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
     private static func fire(_ body: () -> Void) {
         guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
         body()

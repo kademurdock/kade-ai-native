@@ -708,6 +708,9 @@ struct ConversationDetailView: View {
                     : "Turns on automatic voice messages. Each new reply from \(conversationTitleForCopy) will play as a voice message in its own voice."
             )
             .accessibilityAddTraits(.isToggle)
+            .sensoryFeedback(trigger: readAloudEnabled) { _, _ in
+                FeedbackPrefs.gate(.selection)
+            }
 
             Spacer()
 
@@ -1205,6 +1208,14 @@ struct ConversationDetailView: View {
         Task {
             try? await Task.sleep(nanoseconds: 60_000_000_000)
             if voiceService.isRecording {
+                // Session 23 garnish: the auto-stop used to be silent --
+                // indistinguishable from a manual stop. A warning tap plus
+                // a spoken line says WHY the mic just went quiet.
+                KadeHaptics.warning()
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "Recording stopped at the one-minute limit. Turning what you said into text."
+                )
                 await finishRecording()
             }
         }
