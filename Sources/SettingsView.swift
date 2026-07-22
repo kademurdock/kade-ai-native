@@ -130,28 +130,31 @@ struct SettingsView: View {
                 }
                 .accessibilityHint("Turns off the app's decorative animations even if your iPhone's own Reduce Motion setting is off. Your system Reduce Motion setting is always honored on top of this.")
 
-                Button {
-                    Earcons.shared.play(.messageReceived)
-                    UIAccessibility.post(notification: .announcement, argument: "Test sound played.")
-                } label: {
-                    Label("Play a test sound", systemImage: "speaker.wave.2")
+                // Session 23 (Kade: "Eventually I'll make new sounds"):
+                // the two lonely test buttons grew into the full vocabulary
+                // -- every sound playable, every tap feelable, so she can
+                // audition the current set and redesign from real hearings
+                // rather than memory. Plain Buttons in Form rows, each its
+                // own element, no children:.ignore (the Amber rule).
+                DisclosureGroup("Hear every sound") {
+                    auditionSoundRow("Message sent", .messageSent)
+                    auditionSoundRow("Reply landed", .messageReceived)
+                    auditionSoundRow("Working", .actionStart)
+                    auditionSoundRow("Done", .actionDone)
+                    auditionSoundRow("Something went wrong", .error)
                 }
-                .buttonStyle(.plain)
                 .disabled(!feedback.soundEffects)
-                .accessibilityHint("Plays the reply sound so you can hear how loud the effects are.")
+                .accessibilityHint("Opens a list of every sound the app makes, each with a play button.")
 
-                // Session 22: the haptic counterpart to the test sound, so
-                // the Haptics switch can be judged by feel the same way the
-                // Sound switch can be judged by ear.
-                Button {
-                    KadeHaptics.success()
-                    UIAccessibility.post(notification: .announcement, argument: "Test tap played.")
-                } label: {
-                    Label("Feel a test tap", systemImage: "hand.tap")
+                DisclosureGroup("Feel every tap") {
+                    auditionTapRow("Light tap") { KadeHaptics.tap() }
+                    auditionTapRow("Success") { KadeHaptics.success() }
+                    auditionTapRow("Warning") { KadeHaptics.warning() }
+                    auditionTapRow("Error") { KadeHaptics.error() }
+                    auditionTapRow("Pulse beat") { KadeHaptics.pulseBeat() }
                 }
-                .buttonStyle(.plain)
                 .disabled(!feedback.haptics)
-                .accessibilityHint("Fires the success tap so you can feel how strong haptics are.")
+                .accessibilityHint("Opens a list of every haptic the app uses, each with a button that fires it once.")
             } header: {
                 Text("Feedback")
             } footer: {
@@ -212,6 +215,36 @@ struct SettingsView: View {
         .accessibilityLabel("Voice message speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
         .accessibilityHint("Double-tap to change how fast voice messages and Spotter calls play back.")
+    }
+
+    // MARK: - Session 23 audition rows
+
+    private func auditionSoundRow(_ name: String, _ earcon: Earcon) -> some View {
+        Button {
+            Earcons.shared.play(earcon)
+        } label: {
+            HStack {
+                Text(name)
+                Spacer()
+                Image(systemName: "play.circle")
+                    .accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Play the \(name) sound")
+    }
+
+    private func auditionTapRow(_ name: String, _ fire: @escaping () -> Void) -> some View {
+        Button(action: fire) {
+            HStack {
+                Text(name)
+                Spacer()
+                Image(systemName: "hand.tap")
+                    .accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Feel the \(name) haptic")
     }
 }
 

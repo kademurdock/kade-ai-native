@@ -108,6 +108,11 @@ enum KadeHaptics {
     static func warning() { fire { UINotificationFeedbackGenerator().notificationOccurred(.warning) } }
     static func error()   { fire { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
     static func tap()     { fire { UIImpactFeedbackGenerator(style: .light).impactOccurred() } }
+    /// The exact soft beat KadePulseDot's heartbeat uses (style .soft,
+    /// intensity 0.55) -- exists so the Settings audition list can let
+    /// someone FEEL the pulse rhythm's single beat before deciding whether
+    /// to keep "Pulse with the visuals" on.
+    static func pulseBeat() { fire { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.55) } }
     private static func fire(_ body: () -> Void) {
         guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
         body()
