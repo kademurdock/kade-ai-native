@@ -108,6 +108,15 @@ struct ConversationDetailView: View {
     // presented full-screen so an accidental swipe-down can't drop the
     // call the way dismissing a .sheet would.
     @State private var showingCall = false
+    // Session 24 (leftovers item 2): search WITHIN this conversation.
+    // Client-side filter over the messages already in hand, same deliberate
+    // choice (and same reasons) as the conversation list's search: instant,
+    // network-free, degrades honestly. Filters on `readableText` so what
+    // matches is exactly what VoiceOver reads -- steering tags and Deep
+    // Think markers can never make an invisible match.
+    @State private var messageSearchActive = false
+    @State private var messageSearchText: String = ""
+    @FocusState private var messageSearchFocused: Bool
 
     /// What a FAILED send was trying to do -- captured so "Retry" can
     /// resend the identical (text, parent) pair directly. Added this
@@ -210,6 +219,9 @@ struct ConversationDetailView: View {
                         .padding()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    if messageSearchActive {
+                        messageSearchBar
+                    }
                     messageList
                 }
             }
@@ -235,6 +247,22 @@ struct ConversationDetailView: View {
                     Button("Close") { dismiss() }
                         .accessibilityHint("Closes this transcript and returns to your call.")
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    if messageSearchActive {
+                        endMessageSearch()
+                    } else {
+                        messageSearchActive = true
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .disabled(messages.isEmpty)
+                .accessibilityLabel(messageSearchActive ? "Close search" : "Search this conversation")
+                .accessibilityHint(messageSearchActive
+                    ? "Clears the search and shows the whole conversation again."
+                    : "Opens a search field that narrows the messages to ones whose text matches.")
             }
             ToolbarItem(placement: .primaryAction) {
                 // Session 21g: change the voice THIS agent speaks in, per the
@@ -492,11 +520,81 @@ struct ConversationDetailView: View {
 
     // MARK: - History
 
+    /// What the transcript ForEach (and both rotors) actually render:
+    /// everything, unless an in-conversation search is narrowing things.
+    private var visibleMessages: [KadeMessage] {
+        let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard messageSearchActive, !query.isEmpty else { return messages }
+        return messages.filter {
+            $0.readableText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    private var messageSearchSummary: String {
+        let count = visibleMessages.count
+        if count == 0 {
+            return "No messages match. Clear the search to see the whole conversation."
+        }
+        let noun = count == 1 ? "message matches" : "messages match"
+        return "\(count) of \(messages.count) \(noun). The conversation below is narrowed to them."
+    }
+
+    /// Same hand-built field as the conversation list's search (same
+    /// iOS 17 `.searchable` focus limitation, same look). Unlike that
+    /// screen it DOES grab the keyboard on appear -- it only ever appears
+    /// because the search button was explicitly activated, so the keyboard
+    /// is the whole point, not a hijack.
+    private var messageSearchBar: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Search this conversation", text: $messageSearchText)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .focused($messageSearchFocused)
+                    .accessibilityLabel("Search this conversation")
+                    .accessibilityHint("Type to narrow the messages to ones whose text matches.")
+                    .onAppear { messageSearchFocused = true }
+                Button {
+                    endMessageSearch()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Close search")
+                .accessibilityHint("Clears the search and shows the whole conversation again.")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            if !messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(messageSearchSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(messageSearchSummary)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
+    private func endMessageSearch() {
+        messageSearchText = ""
+        messageSearchActive = false
+        messageSearchFocused = false
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(messages) { message in
+                    ForEach(visibleMessages) { message in
                         MessageRow(
                             message: message,
                             canEdit: canEdit(message),
@@ -533,12 +631,12 @@ struct ConversationDetailView: View {
             // accessibilityRotorEntry wiring, since SwiftUI matches rotor
             // entries to on-screen elements by that shared id.
             .accessibilityRotor("Your messages") {
-                ForEach(messages.filter { $0.isCreatedByUser }) { message in
+                ForEach(visibleMessages.filter { $0.isCreatedByUser }) { message in
                     AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
                 }
             }
             .accessibilityRotor("Replies") {
-                ForEach(messages.filter { !$0.isCreatedByUser }) { message in
+                ForEach(visibleMessages.filter { !$0.isCreatedByUser }) { message in
                     AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
                 }
             }
@@ -962,6 +1060,11 @@ struct ConversationDetailView: View {
         // exactly once: a plain Send after that always goes back to
         // replying to whatever's now last, same as before this feature
         // existed.
+        // Sending while a search filter is up would land the new turn
+        // invisibly outside the filter -- close the search first so the
+        // conversation is whole again when the reply arrives.
+        if messageSearchActive { endMessageSearch() }
+
         let parentId = sendParentOverride ?? messages.last?.messageId
         sendParentOverride = nil
         draftText = ""
