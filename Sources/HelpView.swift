@@ -105,11 +105,11 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "The haptics grew bass: every tap is now a real pattern — hard knocks with low rumbles behind them — and the thinking pulse became a true heartbeat, a lub-dub in your hand in rhythm with the dot on screen. The sounds turned into bubbles: sending slides up like a bloop rising, a reply slides back down, and the audition list in Settings plays them all. Deep think now switches off the moment you switch it off — it had been lingering up to ten minutes after. And turning Deep think off is instant everywhere: web, app, and phone."
+                body: "New chats finally get real names: the server now names every conversation you start here after your first exchange, the way it always did on the web — no more lists full of rows all called New Chat. Opening a chat right after making one is solid under VoiceOver too. Archived conversations got their own screen — the archive box button in your conversation list — where you can read them, restore them, or delete them for good. And every conversation gained a search button that narrows the messages to the ones whose text matches what you type."
             ),
             HelpEntry(
                 title: "The build before",
-                body: "My Creations and the Wall of Fame went native: play, save, and share everything the family has made. Recording no longer cuts off at one minute — it runs as long as you're talking and stops itself only after ten silent seconds, with a warning and a spoken line. Report a problem from the top of this Help screen. Settings grew the sound-and-tap audition list, the Pulse with the visuals switch, and Deep think arrived as the brain button at the start of the message row. Plus two VoiceOver fixes from family testing: the voice messages toggle flips reliably at any text size, and a brand-new chat is right there in your list when you back out of it."
+                body: "The haptics grew bass: every tap is a real pattern — hard knocks with low rumbles behind them — and the thinking pulse became a true heartbeat in rhythm with the dot on screen. The sounds turned into bubbles: sending slides up, a reply slides back down, and the audition list in Settings plays them all. Deep think switches off the moment you switch it off. My Creations and the Wall of Fame went native. Recording runs as long as you're talking and stops itself only after ten silent seconds. Report a problem lives at the top of this Help screen."
             ),
             HelpEntry(
                 title: "Earlier",
@@ -123,11 +123,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Your conversations",
-                body: "Every chat you've had, newest first, including the written version of every call. Double-tap a conversation to open it. There's a search field above the list that filters what's loaded."
+                body: "Every chat you've had, newest first, including the written version of every call. Double-tap a conversation to open it. There's a search field above the list that filters what's loaded, and the archive box button up top holds everything you've archived — restorable any time."
             ),
             HelpEntry(
                 title: "Actions on a conversation",
-                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Rename, Archive and Delete. Sighted users can swipe the row sideways for the same things."
+                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Rename, Archive and Delete. Sighted users can swipe the row sideways for the same things. Archive tucks a chat away without deleting it — find it again under the archive box button, where Restore brings it home."
             ),
             HelpEntry(
                 title: "Starting a new chat",

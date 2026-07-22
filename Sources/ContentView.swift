@@ -206,6 +206,8 @@ struct ContentView: View {
                     MyCreationsView(apiClient: apiClient)
                 case .wallOfFame:
                     WallOfFameView(apiClient: apiClient)
+                case .admin:
+                    AdminView(apiClient: apiClient)
                 }
             }
         }
@@ -516,6 +518,26 @@ struct ContentView: View {
             .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityHint("Opens the full Kade-AI web app in a browser inside this app.")
 
+            // Session 24 (leftovers item 10, the "natural big rock"): the
+            // native Admin section -- usage dashboard, feedback triage, and
+            // the activity-logs drill-down. Server-gated (requireAdminAccess
+            // on every route); this card renders only for an ADMIN account,
+            // so nobody else ever hears a section they can't use.
+            if user.role == "ADMIN" {
+                Text("Admin")
+                    .font(.headline)
+                    .padding(.top, 8)
+                    .accessibilityAddTraits(.isHeader)
+
+                Button { route = .admin } label: {
+                    Label("Admin dashboard", systemImage: "chart.bar.doc.horizontal")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                .labelStyle(KadeTileLabelStyle(tint: .red))
+                .accessibilityHint("Usage and spending, feedback reports, and activity logs. Only admin accounts see this.")
+            }
+
             Button(role: .destructive, action: auth.signOut) {
                 Text("Sign out").frame(maxWidth: .infinity)
             }
@@ -720,6 +742,7 @@ enum HomeRoute: Identifiable, Hashable {
     case alerts
     case myCreations
     case wallOfFame
+    case admin
 
     var id: String {
         switch self {
@@ -736,6 +759,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .alerts: return "alerts"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
+        case .admin: return "admin"
         }
     }
 }
