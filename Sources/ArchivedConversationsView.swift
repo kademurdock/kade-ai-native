@@ -123,7 +123,7 @@ struct ArchivedConversationsView: View {
                 .accessibilityFocused($focusedRowID, equals: convo.id)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
-                .accessibilityHint("Opens this archived conversation. Restore it to move it back to your main list.")
+                .accessibilityHint("Opens this archived conversation.")
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingConversation = convo

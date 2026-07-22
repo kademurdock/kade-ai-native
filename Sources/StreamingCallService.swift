@@ -95,7 +95,13 @@ final class StreamingCallService: NSObject, ObservableObject {
         case reconnecting
     }
 
-    @Published private(set) var status: Status = .idle
+    @Published private(set) var status: Status = .idle {
+        didSet {
+            // Session 26: the thinking loop follows the status wherever it
+            // is set from -- one choke point, no per-call-site wiring.
+            if oldValue != status { updateThinkingLoop() }
+        }
+    }
     @Published private(set) var agentName: String = ""
     @Published private(set) var userCaption: String = ""
     @Published private(set) var agentCaption: String = ""
@@ -169,6 +175,22 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    /// Session 26 (Kade: "the thinking sound is no longer working on app,
+    /// or it never did"): it never did. The bridge deliberately stays
+    /// silent while generating on non-phone lanes because "the client
+    /// plays its own thinking loop" -- TRUE of the web page
+    /// (ConversationMode's quiet loop), never true of this app, so app
+    /// calls sat in dead air. This is the native half of that design: a
+    /// second player node looping a soft procedurally-generated typing
+    /// texture whenever the call is in `thinking`, stopped the instant
+    /// anything else happens. Quiet by construction (peak ~0.06) so it
+    /// sits under VoiceOver and the agent's own voice.
+    private let thinkingNode = AVAudioPlayerNode()
+    private var thinkingBuffer: AVAudioPCMBuffer?
+    private var thinkingLooping = false
+    /// Session 26 (call continuity): the conversation this call should
+    /// continue, handed to `start()` by a call opened from inside one.
+    private var pendingConversationId: String?
     /// Running playhead (on `playerNode`'s own sample-time timeline, at
     /// `playerFormat.sampleRate`) the next scheduled buffer pins to. `nil`
     /// means nothing is queued -- the next schedule starts a small lead
@@ -235,7 +257,9 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// mirrors `useStreamingCall.ts`'s own `start()` contract exactly
     /// (ticket fetch fails -> throw; mic fails -> throw; socket fails ->
     /// throw), including tearing everything back down on any failure.
-    func start(agentId: String?, displayName: String, spotterDirect: Bool) async throws {
+    func start(agentId: String?, displayName: String, spotterDirect: Bool, conversationId: String? = nil) async throws {
+        // Session 26 (call continuity): stashed for the hello message below.
+        pendingConversationId = conversationId
         guard webSocketTask == nil else { return }
         agentName = displayName
         callAgentId = agentId
@@ -284,7 +308,17 @@ final class StreamingCallService: NSObject, ObservableObject {
         task.maximumMessageSize = 16 * 1024 * 1024
         webSocketTask = task
         task.resume()
-        sendJSON(["type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect])
+        // Session 26 (Kade: re-calling inside an open conversation must
+        // CONTINUE it, "they should have to go to a new conversation to get
+        // a fresh call"): the open conversation's id rides the hello; the
+        // bridge seeds the agent with its recent turns and the post-call
+        // ingest appends the transcript there instead of minting a new
+        // conversation.
+        var hello: [String: Any] = ["type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect]
+        if let pendingConversationId {
+            hello["conversationId"] = pendingConversationId
+        }
+        sendJSON(hello)
         startReceiveLoop()
     }
 
@@ -696,6 +730,8 @@ final class StreamingCallService: NSObject, ObservableObject {
 
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        audioEngine.attach(thinkingNode)
+        audioEngine.connect(thinkingNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
         // FIX (live-tested): the first echo fix (enabling voice processing
         // above) broke mic capture entirely on the very next call -- Kiana
@@ -834,6 +870,55 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     /// Two short sine blips (880Hz then 1175Hz, ~110ms each) synthesized
     /// straight into `playerFormat` and scheduled like any agent clip.
+    /// Session 26: the app-call thinking texture. A 1.7s buffer of six
+    /// soft key-tap ticks (decaying sine bursts, slightly varied pitch and
+    /// spacing so the loop doesn't read as a metronome), scheduled with
+    /// `.loops` while the agent is thinking. Built once per engine
+    /// lifetime, first time it's needed.
+    private func makeThinkingBuffer() -> AVAudioPCMBuffer? {
+        let sampleRate = playerFormat.sampleRate
+        let total = Int(sampleRate * 1.7)
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: playerFormat, frameCapacity: AVAudioFrameCount(total)
+        ), let channel = buffer.floatChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(total)
+        let dst = channel[0]
+        for i in 0..<total { dst[i] = 0 }
+        // Six ticks, hand-placed offsets/frequencies -- deterministic (no
+        // RNG) so the loop is stable and testable, varied enough not to
+        // sound mechanical.
+        let ticks: [(offsetSec: Double, freq: Double, amp: Double)] = [
+            (0.05, 2350, 0.055), (0.32, 2050, 0.045), (0.55, 2600, 0.050),
+            (0.92, 2200, 0.055), (1.18, 2500, 0.042), (1.38, 2150, 0.050),
+        ]
+        for tick in ticks {
+            let start = Int(sampleRate * tick.offsetSec)
+            let length = Int(sampleRate * 0.035)
+            guard start + length < total else { continue }
+            for j in 0..<length {
+                let t = Double(j) / sampleRate
+                let envelope = exp(-t * 160.0)
+                let sample = sin(2.0 * Double.pi * tick.freq * t) * tick.amp * envelope
+                dst[start + j] += Float(sample)
+            }
+        }
+        return buffer
+    }
+
+    private func updateThinkingLoop() {
+        let shouldLoop = (status == .thinking) && engineRunning
+        if shouldLoop && !thinkingLooping {
+            if thinkingBuffer == nil { thinkingBuffer = makeThinkingBuffer() }
+            guard let buffer = thinkingBuffer else { return }
+            thinkingLooping = true
+            thinkingNode.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
+            thinkingNode.play()
+        } else if !shouldLoop && thinkingLooping {
+            thinkingLooping = false
+            thinkingNode.stop()
+        }
+    }
+
     private func playConnectTone() {
         let sampleRate = playerFormat.sampleRate
         let noteFrames = Int(sampleRate * 0.11)
@@ -1162,6 +1247,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         stopNowPlaying()
         guard engineRunning else { return }
         engineRunning = false
+        // Session 26: the thinking loop must not survive teardown.
+        thinkingLooping = false
+        thinkingNode.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         playerNode.stop()
         audioEngine.stop()

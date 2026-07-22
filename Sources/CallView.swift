@@ -36,16 +36,26 @@ struct CallView: View {
     private enum A11yFocus: Hashable { case status, error }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
 
+    /// Session 26 (call continuity): non-nil when this call was started
+    /// from INSIDE a conversation -- rides the call's hello so the agent
+    /// picks up with that conversation's recent turns in mind, and the
+    /// post-call transcript APPENDS there instead of minting a fresh
+    /// conversation. Nil (home-screen Spotter, agent picker) = the old
+    /// fresh-call behavior, unchanged.
+    let conversationId: String?
+
     init(
         agentId: String?,
         agentName: String,
         apiClient: KadeAPIClient,
         spotterDirect: Bool = false,
+        conversationId: String? = nil,
         onOpenTranscript: ((KadeConversation) -> Void)? = nil
     ) {
         self.agentId = agentId
         self.agentName = agentName
         self.spotterDirect = spotterDirect
+        self.conversationId = conversationId
         self.onOpenTranscript = onOpenTranscript
         _callService = StateObject(wrappedValue: StreamingCallService(apiClient: apiClient))
     }
@@ -438,7 +448,8 @@ struct CallView: View {
     private func beginCall() async {
         do {
             try await callService.start(
-                agentId: agentId, displayName: agentName, spotterDirect: spotterDirect
+                agentId: agentId, displayName: agentName, spotterDirect: spotterDirect,
+                conversationId: conversationId
             )
         } catch {
             startError = (error as? LocalizedError)?.errorDescription ?? "Something went wrong starting the call."

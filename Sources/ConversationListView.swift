@@ -95,7 +95,7 @@ struct ConversationListView: View {
                     Image(systemName: "square.and.pencil")
                 }
                 .accessibilityLabel("New conversation")
-                .accessibilityHint("Starts a new conversation and lets you pick who to talk to.")
+                .accessibilityHint("Starts a new conversation.")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -273,7 +273,7 @@ struct ConversationListView: View {
                 // that assembles its label.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibleLabel(for: convo))
-                .accessibilityHint("Opens this conversation and reads its history.")
+                .accessibilityHint("Opens this conversation.")
                 // Rename/Archive/Delete live ONLY on `.swipeActions` below.
                 // Session 21g: they used to ALSO be declared as explicit
                 // `.accessibilityActions`, but `.swipeActions` already

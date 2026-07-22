@@ -297,7 +297,7 @@ struct ConversationDetailView: View {
                 }
                 .disabled(selectedAgentId == nil)
                 .accessibilityLabel("Call \(agentDisplayLabel)")
-                .accessibilityHint("Starts a real-time voice call. You can bring in your Spotter once connected.")
+                .accessibilityHint("Starts a live voice call.")
             }
         }
         .task {
@@ -372,8 +372,30 @@ struct ConversationDetailView: View {
                 agentId: selectedAgentId,
                 agentName: agentDisplayLabel,
                 apiClient: apiClient,
+                // Session 26 (call continuity, her spec): a call placed from
+                // INSIDE this conversation continues it -- context seeded on
+                // pickup, transcript appended here on hangup. A brand-new
+                // not-yet-sent conversation has nil and gets a fresh call.
+                conversationId: conversationId,
                 onOpenTranscript: { convo in
-                    activeSheet = .transcript(ChatTranscriptHandoff(conversation: convo))
+                    if let current = conversationId, convo.conversationId == current {
+                        // The call merged into THE CONVERSATION ALREADY OPEN
+                        // behind this cover -- presenting a second copy of it
+                        // as a sheet would stack the same screen twice. Just
+                        // reload in place; the transcript is in the history
+                        // the user lands back on.
+                        Task {
+                            if let fresh = try? await conversationsService.fetchMessages(conversationId: current) {
+                                messages = fresh
+                            }
+                            UIAccessibility.post(
+                                notification: .announcement,
+                                argument: "Call added to this conversation."
+                            )
+                        }
+                    } else {
+                        activeSheet = .transcript(ChatTranscriptHandoff(conversation: convo))
+                    }
                 }
             )
         }
@@ -791,7 +813,7 @@ struct ConversationDetailView: View {
             .buttonStyle(.plain)
             .disabled(selectedAgentId == nil)
             .accessibilityLabel("Voice")
-            .accessibilityHint("Browse, preview, and change the voice \(agentDisplayLabel) speaks in. Your pick follows this companion.")
+            .accessibilityHint("Change the voice \(agentDisplayLabel) speaks in.")
         }
         .padding(.horizontal)
         .padding(.top, 8)
