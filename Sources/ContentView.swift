@@ -183,7 +183,7 @@ struct ContentView: View {
                 case .transcribe:
                     TranscribeView(apiClient: apiClient)
                 case .help:
-                    HelpView()
+                    HelpView(apiClient: apiClient)
                 case .conversations:
                     ConversationListView()
                 case .describe:

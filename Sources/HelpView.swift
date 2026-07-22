@@ -17,11 +17,32 @@ import SwiftUI
 ///   names the control by the exact words VoiceOver will speak for it, so
 ///   the instruction and the thing it describes match by ear.
 struct HelpView: View {
+    /// Session 23: nil when Help is opened signed-out (ContentView's
+    /// pre-sign-in block) -- the Report a problem button only renders with
+    /// a real client, since filing requires being signed in. Default nil
+    /// keeps every existing `HelpView()` call site compiling untouched.
+    var apiClient: KadeAPIClient? = nil
+    @State private var showingReport = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Everything Kade-AI can do, and how to get to it. Turn on the Headings rotor to jump between sections.")
                     .font(.body)
+
+                // Session 23: the tester loop, closed -- Amber's first-day
+                // bugs traveled by mouth; now any tester can file from the
+                // exact place they go when something's wrong.
+                if apiClient != nil {
+                    Button {
+                        showingReport = true
+                    } label: {
+                        Label("Report a problem or share an idea", systemImage: "exclamationmark.bubble")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint("Opens a short form that goes straight to Kade with your name on it.")
+                }
 
                 ForEach(HelpSection.all) { section in
                     VStack(alignment: .leading, spacing: 14) {
@@ -56,6 +77,11 @@ struct HelpView: View {
         }
         .navigationTitle("Help")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingReport) {
+            if let apiClient {
+                FeedbackReportView(apiClient: apiClient)
+            }
+        }
     }
 }
 
