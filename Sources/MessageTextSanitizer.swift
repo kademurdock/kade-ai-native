@@ -58,6 +58,29 @@ enum MessageTextSanitizer {
         "\\[DEEP THINK(?:\\s+\\d{10,17})?\\]", caseInsensitive: true
     )
 
+    /// Session 23 (Kade: "\\u200 searchtern spam in the text of Kiana's
+    /// replies... they didn't show up in audio but they need to be gone
+    /// from the text"): WEB-SEARCH CITATION ANCHORS. The web-search tool
+    /// context instructs the model to emit citation markers — private-use
+    /// characters U+E200..U+E204 plus anchors like "turn0search0" — which
+    /// the WEB client renders as tidy citation chips. This app renders raw
+    /// text, so they surfaced verbatim (and models often emit the LITERAL
+    /// ASCII escape "\\ue202turn0search0" rather than the real
+    /// character, which is exactly the "\\u200 searchtern" VoiceOver
+    /// read to her). The voice lane never had them because the TTS path
+    /// scrubs server-side. Three passes: literal ASCII escapes with any
+    /// attached anchor token, real PUA characters with any attached
+    /// anchor token, then orphaned anchor tokens left behind by either.
+    private static let literalCitationRegex = makeRegex(
+        "\\\\+u\\s?e?20[0-4](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
+    )
+    private static let puaCitationRegex = makeRegex(
+        "[\u{E200}-\u{E204}](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
+    )
+    private static let orphanAnchorRegex = makeRegex(
+        "\\bturn\\d{1,3}(?:search|news|image|ref|view|fetch)\\d{1,3}\\b", caseInsensitive: true
+    )
+
     private static let doubledSpaceOrTabRegex = makeRegex("[ \\t]{2,}")
     private static let leadingSpaceOrTabPerLineRegex = makeRegex(
         "^[ \\t]+", extraOptions: [.anchorsMatchLines]
@@ -119,11 +142,30 @@ enum MessageTextSanitizer {
         return result
     }
 
+    /// Session 23: strips web-search citation anchors (see the regex doc
+    /// comment above). Guarded cheaply: the overwhelming majority of
+    /// messages contain neither the literal "ue20" spelling nor any
+    /// U+E200-block character and skip all three regex passes.
+    static func stripCitationAnchors(_ text: String) -> String {
+        let hasLiteral = text.range(of: "ue20", options: .caseInsensitive) != nil
+        let hasPUA = text.unicodeScalars.contains { (0xE200...0xE204).contains($0.value) }
+        guard hasLiteral || hasPUA else { return text }
+        var result = text
+        result = removingMatches(of: literalCitationRegex, in: result)
+        result = removingMatches(of: puaCitationRegex, in: result)
+        result = removingMatches(of: orphanAnchorRegex, in: result)
+        result = removingMatches(of: doubledSpaceOrTabRegex, in: result, replacement: " ")
+        result = removingMatches(of: leadingWhitespaceRegex, in: result)
+        return result
+    }
+
     /// The one function call sites should actually use for anything a
     /// human reads or VoiceOver speaks. Mirrors the web client's own
     /// `stripGameSoundTags(stripVoiceTags(text))` call order
-    /// (`Content/Parts/Text.tsx`, `MessageContent.tsx`).
+    /// (`Content/Parts/Text.tsx`, `MessageContent.tsx`) — plus the
+    /// session-23 citation-anchor pass, which the web client doesn't need
+    /// (it RENDERS those anchors as citation chips instead).
     static func forDisplay(_ text: String) -> String {
-        stripGameSoundTags(stripVoiceTags(text))
+        stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text)))
     }
 }

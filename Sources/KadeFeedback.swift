@@ -280,6 +280,54 @@ final class Earcons {
         player.play()
     }
 
+    /// Session 23 (Kade: "the space between the send sound, and the
+    /// thinking sound, is huge"): text chat had NO waiting sound at all —
+    /// send bloop, then dead air for the whole generation (and on voice
+    /// messages, the TTS fetch too) until the reply bloop. This is the
+    /// chat lane's soft waiting loop: two gentle low ticks about once a
+    /// second, quiet enough to sit under speech, looped by the player
+    /// itself (numberOfLoops = -1) so it costs nothing per cycle. Started
+    /// a breath after the send bloop (see ConversationDetailView's
+    /// sendState watcher), stopped the moment the reply lands or the send
+    /// fails. Same Sound-effects switch as every other earcon.
+    private var waitingPlayer: AVAudioPlayer?
+    private var waitingData: Data?
+
+    func startWaitingLoop() {
+        guard FeedbackPrefs.shared.soundEffects, waitingPlayer == nil else { return }
+        if waitingData == nil {
+            // Two soft ticks (short falling glides) with REAL zero-sample
+            // silence between and after — a 0 Hz "segment" through the
+            // glide renderer would hold a DC value, not silence, and could
+            // click at the joins. Each tick edge-fades inside
+            // renderSamples, so the seams stay clean. Loop period ~1.1s,
+            // low amplitude on purpose: it sits under speech.
+            let tickA = Self.renderSamples(
+                segments: [(880, 760, 0.045)], amplitude: 0.16, sampleRate: sampleRate
+            )
+            let tickB = Self.renderSamples(
+                segments: [(760, 660, 0.045)], amplitude: 0.16, sampleRate: sampleRate
+            )
+            var samples: [Int16] = []
+            samples.append(contentsOf: tickA)
+            samples.append(contentsOf: [Int16](repeating: 0, count: Int(sampleRate * 0.12)))
+            samples.append(contentsOf: tickB)
+            samples.append(contentsOf: [Int16](repeating: 0, count: Int(sampleRate * 0.9)))
+            waitingData = Self.encodeWAV(samples: samples, sampleRate: Int(sampleRate))
+        }
+        guard let data = waitingData, let player = try? AVAudioPlayer(data: data) else { return }
+        player.numberOfLoops = -1
+        player.volume = 0.9
+        player.prepareToPlay()
+        player.play()
+        waitingPlayer = player
+    }
+
+    func stopWaitingLoop() {
+        waitingPlayer?.stop()
+        waitingPlayer = nil
+    }
+
     /// Convenience for the chat composer: map a send-state transition to the
     /// right earcon in one call, mirroring the existing haptic mapping.
     func onSend(sent: Bool = false, received: Bool = false, failed: Bool = false) {
@@ -295,6 +343,10 @@ final class Earcons {
     /// harmonic for watery warmth, and a gentle per-segment decay so each
     /// bloop rounds off like a bubble surfacing rather than cutting out.
     private static func renderWAV(segments: [(Double, Double, Double)], amplitude: Float, sampleRate: Double) -> Data {
+        encodeWAV(samples: renderSamples(segments: segments, amplitude: amplitude, sampleRate: sampleRate), sampleRate: Int(sampleRate))
+    }
+
+    private static func renderSamples(segments: [(Double, Double, Double)], amplitude: Float, sampleRate: Double) -> [Int16] {
         var samples: [Int16] = []
         let fadeSeconds = 0.006
         let fadeLen = Int(sampleRate * fadeSeconds)
@@ -322,7 +374,7 @@ final class Earcons {
                 produced += 1
             }
         }
-        return encodeWAV(samples: samples, sampleRate: Int(sampleRate))
+        return samples
     }
 
     private static func encodeWAV(samples: [Int16], sampleRate: Int) -> Data {

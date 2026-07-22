@@ -227,6 +227,11 @@ struct ConversationDetailView: View {
         case composerError
         case agentButton
         case composerField
+        /// Session 23 (Kade: VoiceOver "bounces your focus so you can't
+        /// just double tap the button to be done recording"): an explicit
+        /// anchor for the mic button so starting a recording PINS focus
+        /// there — double-tap-again-to-stop always works.
+        case micButton
         case voiceError
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
@@ -399,9 +404,28 @@ struct ConversationDetailView: View {
         // gentle non-speech sound (honouring the Sound effects switch),
         // COMPLEMENTING -- never replacing -- VoiceOver's own spoken cue.
         .onChange(of: sendState) { old, new in
-            if case .idle = old, case .sending = new { Earcons.shared.play(.messageSent) }
-            else if case .sending = old, case .idle = new { Earcons.shared.play(.messageReceived) }
-            else if case .failed = new { Earcons.shared.play(.error) }
+            if case .idle = old, case .sending = new {
+                Earcons.shared.play(.messageSent)
+                // Session 23 (Kade: "the space between the send sound and
+                // the thinking sound is huge"): the soft waiting ticks
+                // start a breath after the send bloop and run until the
+                // reply lands or the send fails — the whole generation
+                // (and TTS fetch on voice messages) is audibly "alive"
+                // now instead of dead air. Guarded on still-sending so a
+                // fast reply never starts a loop after the fact.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    if case .sending = sendState { Earcons.shared.startWaitingLoop() }
+                }
+            }
+            else if case .sending = old, case .idle = new {
+                Earcons.shared.stopWaitingLoop()
+                Earcons.shared.play(.messageReceived)
+            }
+            else if case .failed = new {
+                Earcons.shared.stopWaitingLoop()
+                Earcons.shared.play(.error)
+            }
         }
         // Same Phase B ask, "recording start/stop" -- driven directly by
         // VoiceService's own published `isRecording` so this can never drift
@@ -1291,23 +1315,31 @@ struct ConversationDetailView: View {
     /// interaction for this audience, matching every other control in this
     /// app. Recording auto-stops after 60 seconds as a safety net against
     /// an accidental open-ended recording nobody remembers to stop.
+    /// Session 23 focus-bounce fix (Kade: "voiceover bounces your focus so
+    /// you can't just double tap the button to be done recording...
+    /// sometimes it says stop recording or some shit a couple seconds
+    /// after you press it"). Two mechanical causes, both fixed here:
+    /// (1) the label used to SWAP VIEW TYPES (ProgressView ↔ Image),
+    /// and (2) `.disabled(...)` flipped ON the moment transcription
+    /// started — either can rebuild/retire the accessibility element
+    /// under VoiceOver's cursor, which reads as a bounce. Now it is ONE
+    /// Image always (only systemName changes), never disabled — the
+    /// in-flight states are guarded inside toggleRecording instead — and
+    /// `toggleRecording` pins accessibility focus here the moment
+    /// recording starts. The delayed "Stop recording" announcement she
+    /// heard is the label flipping when the audio session actually
+    /// engages; that one is genuine, useful state feedback and stays.
     private var micButton: some View {
         Button {
             Task { await toggleRecording() }
         } label: {
-            Group {
-                if voiceService.isTranscribing {
-                    ProgressView()
-                } else if voiceService.isRecording {
-                    Image(systemName: "stop.circle.fill")
-                } else {
-                    Image(systemName: "mic.circle.fill")
-                }
-            }
+            Image(systemName: voiceService.isTranscribing
+                ? "waveform.circle.fill"
+                : voiceService.isRecording ? "stop.circle.fill" : "mic.circle.fill")
             .font(.title)
             .foregroundStyle(voiceService.isRecording ? .red : .accentColor)
         }
-        .disabled(isSending || voiceService.isTranscribing)
+        .accessibilityFocused($a11yFocus, equals: .micButton)
         .accessibilityLabel(micAccessibilityLabel)
         .accessibilityHint(
             voiceService.isRecording
@@ -1653,6 +1685,20 @@ struct ConversationDetailView: View {
     // MARK: - Voice input (Phase 5)
 
     private func toggleRecording() async {
+        // Replaces the old `.disabled(...)` on the button (which retired
+        // the element under VoiceOver's cursor — the focus bounce): the
+        // button stays live and these states just decline politely.
+        if voiceService.isTranscribing {
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Still turning your last recording into text."
+            )
+            return
+        }
+        if isSending {
+            UIAccessibility.post(notification: .announcement, argument: "Still sending.")
+            return
+        }
         if voiceService.isRecording {
             await finishRecording()
             return
@@ -1677,6 +1723,9 @@ struct ConversationDetailView: View {
             a11yFocus = .voiceError
             return
         }
+        // Pin VoiceOver to the button that is now "Stop recording" — the
+        // whole point of the session-23 fix: double-tap again just works.
+        a11yFocus = .micButton
     }
 
     private func finishRecording() async {
