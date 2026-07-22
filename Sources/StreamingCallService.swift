@@ -111,6 +111,18 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// batch as "its own well-scoped follow-up" and Kade asked for it by
     /// name ("plain camera describe mode").
     @Published private(set) var videoOn: Bool = false
+    /// Session 26 (Kade: "What we need is a mute button to mute your mic").
+    /// While true, converted mic chunks are dropped in `sendMicData` -- the
+    /// single funnel every outbound mic byte passes through -- so the tap
+    /// stays installed and the engine keeps running (unmute is instant),
+    /// and the server simply hears silence: no auto barge-in from stray
+    /// noise, no captions from the TV. Deliberately NOT persisted -- every
+    /// call starts with the mic live, same as every phone ever made.
+    @Published private(set) var micMuted = false
+
+    func setMicMuted(_ muted: Bool) {
+        micMuted = muted
+    }
     @Published private(set) var videoNotice: String?
     @Published private(set) var videoMinutesLeft: Int?
     @Published private(set) var errorMessage: String?
@@ -230,6 +242,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         callSpotterDirect = spotterDirect
         reconnectAttempts = 0
         status = .connecting
+        micMuted = false
         errorMessage = nil
         byeSent = false
         stopping = false
@@ -910,6 +923,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     }
 
     private func sendMicData(_ pcmData: Data) {
+        guard !micMuted else { return }
         guard let task = webSocketTask else { return }
         task.send(.data(pcmData)) { _ in /* fail-soft: one dropped mic chunk ≠ dead call */ }
     }

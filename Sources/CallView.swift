@@ -379,6 +379,38 @@ struct CallView: View {
 
     private var controls: some View {
         HStack(spacing: 16) {
+            // Session 26, her spec exactly: "a mute button to mute your
+            // mic" -- with auto barge-in, a hot mic means any cough or TV
+            // line interrupts the agent mid-sentence; mute sends silence
+            // instead (see StreamingCallService.micMuted). Same
+            // label/value/hint construction as Camera and Spotter above.
+            Button {
+                callService.setMicMuted(!callService.micMuted)
+                if callService.micMuted {
+                    KadeHaptics.warning()
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Microphone muted. \(currentSpeakerName) can't hear you."
+                    )
+                } else {
+                    KadeHaptics.tap()
+                    UIAccessibility.post(notification: .announcement, argument: "Microphone back on.")
+                }
+            } label: {
+                Label(callService.micMuted ? "Unmute" : "Mute", systemImage: callService.micMuted ? "mic.slash.fill" : "mic.slash")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(callService.micMuted ? .red : nil)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Mute microphone")
+            .accessibilityValue(callService.micMuted ? "Muted" : "On")
+            .accessibilityHint(
+                callService.micMuted
+                    ? "Double-tap so \(currentSpeakerName) can hear you again."
+                    : "Double-tap to send silence instead of your microphone. Stops accidental interruptions too."
+            )
+
             Button {
                 callService.barge()
             } label: {
