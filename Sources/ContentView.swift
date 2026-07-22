@@ -386,102 +386,38 @@ struct ContentView: View {
                 .padding(.top, 8)
                 .accessibilityAddTraits(.isHeader)
 
-            // Session 15 (Kade: "consider the transcriber app and similar
-            // apps like that. They need to go native as well"). This used
-            // to be reachable only by leaving the app into the web view,
-            // where none of this app's VoiceOver work applies.
-            Button { route = .transcribe } label: {
-                Label("Transcribe a voice memo", systemImage: "waveform")
-                    .frame(maxWidth: .infinity)
+            // Session 25 (Kade approved the audit list: "All four"): Tools
+            // was 8 identical full-width rows -- a long scroll for a
+            // section used a couple of taps at a time. Now a 2-column tile
+            // grid: SAME order, SAME spoken labels (each tile pins its
+            // accessibilityLabel to the exact full phrase the old row
+            // spoke), SAME hints -- by ear nothing changed except there is
+            // half as far to go. Visible titles are shortened to fit
+            // tiles; the spoken ones are not.
+            //
+            // Per-tool history, carried from the row era: Transcribe --
+            // session 15 ("consider the transcriber app... they need to go
+            // native as well"). Describe -- session 16, the other half of
+            // "as much accessible native as possible." Matchmaker / Game
+            // Room -- session 17/18 ports (read/quiz-only, tractable in one
+            // session; see their services). Debate Room -- same night,
+            // upgraded from "too large" on a full route read (475 lines,
+            // no WebSocket; see RoomService.swift). Agent Builder -- "Go
+            // head with agent builder," built phased (see
+            // AgentBuilderService.swift). My Creations / Wall of Fame --
+            // session 23, the last two user-facing web-only pages; no Siri
+            // phrases (10-cap) or Quick Actions (4-of-5) -- same
+            // constraint notes as Alerts.
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                toolTile("Transcribe", spoken: "Transcribe a voice memo", icon: "waveform", tint: .purple, hint: "Records what you say and turns it into text you can edit, tidy up and share.", destination: .transcribe)
+                toolTile("Describe", spoken: "Describe a photo, video, or document", icon: "plus.viewfinder", tint: .teal, hint: "Take or choose a photo or video, or pick a document, and get it described or read back to you.", destination: .describe)
+                toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
+                toolTile("Game Room", spoken: "Game Room", icon: "gamecontroller", tint: .green, hint: "Family standings and recent results from games played in chat.", destination: .gameRoom)
+                toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
+                toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
+                toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
+                toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
             }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .purple))
-            .accessibilityHint("Records what you say and turns it into text you can edit, tidy up and share.")
-
-            // Session 16: photo/document description, the other half of
-            // "as much accessible native as possible" alongside Transcribe
-            // -- same shape (upload, get something back to read or hear),
-            // different sense.
-            Button { route = .describe } label: {
-                Label("Describe a photo, video, or document", systemImage: "plus.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .teal))
-            .accessibilityHint("Take or choose a photo or video, or pick a document, and get it described or read back to you.")
-
-            // Session 17/18 (Kade: "match maker... game room... so many
-            // things"): native ports of two more web-only pages. Both are
-            // read/quiz-only, no live multi-turn state to manage -- see
-            // MatchmakerService/GameRoomService's doc comments for why
-            // these two specifically were tractable in one session while
-            // Debate Room, the full games catalog, and Agent Builder were
-            // deliberately left for a future one (see
-            // NEXT_SESSION_PASTE.md for the full scoping notes on each).
-            Button { route = .matchmaker } label: {
-                Label("Matchmaker", systemImage: "person.2.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .pink))
-            .accessibilityHint("Five quick questions, then three companions who might be a good fit.")
-
-            Button { route = .gameRoom } label: {
-                Label("Game Room", systemImage: "gamecontroller")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .green))
-            .accessibilityHint("Family standings and recent results from games played in chat.")
-
-            // Session 17/18, later the same night once Kade was back up:
-            // the biggest item researched-but-deferred earlier turned out
-            // more tractable on a full read of the route (475 lines, no
-            // WebSocket, plain request/response -- same risk shape as
-            // Matchmaker/Game Room, not the real-time-call shape). See
-            // RoomService.swift for the full contract.
-            Button { route = .debateRoom } label: {
-                Label("Debate Room", systemImage: "person.3.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .indigo))
-            .accessibilityHint("Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.")
-
-            // Session 17/18: "Go head with agent builder" -- Phase 1 only
-            // (name, description, persona, category, provider/model), her
-            // explicit choice after being told how big the FULL LibreChat
-            // builder really is (tools/actions, subagent handoffs,
-            // knowledge files, version history). See
-            // AgentBuilderService.swift's doc comment for the phased plan.
-            Button { route = .agentBuilder } label: {
-                Label("Agent Builder", systemImage: "person.crop.circle.badge.plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .cyan))
-            .accessibilityHint("Create or edit your own companions.")
-
-            // Session 23 ("It would be dope if we did most if not all the
-            // native port lol"): the last two user-facing web-only pages,
-            // now native. No Siri phrases (the provider sits at Apple's
-            // 10-shortcut cap) and no Quick Actions (4 shown, 5 declared)
-            // -- same constraint notes as Alerts.
-            Button { route = .myCreations } label: {
-                Label("My Creations", systemImage: "photo.stack")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .yellow))
-            .accessibilityHint("Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.")
-
-            Button { route = .wallOfFame } label: {
-                Label("Wall of Fame", systemImage: "trophy")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeTileLabelStyle(tint: .brown))
-            .accessibilityHint("Creations the whole family chose to share, newest first.")
 
             Text("Settings and help")
                 .font(.headline)
@@ -544,6 +480,20 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .accessibilityHint("Signs you out and clears your saved session on this device.")
         }
+    }
+
+    /// One home Tools tile (session 25 grid). The VISIBLE title is short
+    /// so tiles fit two-up; the SPOKEN label is pinned to the exact phrase
+    /// the old full-width row used, so the grid change is invisible by ear.
+    private func toolTile(_ title: String, spoken: String, icon: String, tint: Color, hint: String, destination: HomeRoute) -> some View {
+        Button { route = destination } label: {
+            Label(title, systemImage: icon)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(KadeCardButtonStyle())
+        .labelStyle(KadeGridTileLabelStyle(tint: tint))
+        .accessibilityLabel(spoken)
+        .accessibilityHint(hint)
     }
 
     private var webButton: some View {

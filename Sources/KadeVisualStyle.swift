@@ -84,6 +84,50 @@ struct KadeTileLabelStyle: LabelStyle {
     }
 }
 
+/// Session 25 (Kade approved the audit list, "All four"): vertical tile for
+/// the home Tools GRID -- icon block on top, short centered title beneath,
+/// no chevron (a grid tile reads as a tile, not a row). Same tint /
+/// gradient / high-contrast rules as `KadeTileLabelStyle` above; same
+/// ScaledMetric so Dynamic Type grows the icon block too.
+struct KadeGridTileLabelStyle: LabelStyle {
+    var tint: Color
+    @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 44
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: tileSide * 0.24, style: .continuous)
+                    .fill(tileFill)
+                configuration.icon
+                    .font(.system(size: tileSide * 0.5, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: tileSide, height: tileSide)
+            .accessibilityHidden(true)
+
+            configuration.title
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+    }
+
+    private var tileFill: some ShapeStyle {
+        if StylePrefs.highContrast {
+            return AnyShapeStyle(tint)
+        }
+        return AnyShapeStyle(
+            LinearGradient(
+                colors: [tint.opacity(0.95), tint.opacity(0.7)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        )
+    }
+}
+
 // MARK: - Card button style
 
 /// A soft card behind each home row: rounded rect, subtle press-down spring.

@@ -270,23 +270,12 @@ struct ConversationDetailView: View {
                     ? "Clears the search and shows the whole conversation again."
                     : "Opens a search field that narrows the messages to ones whose text matches.")
             }
-            ToolbarItem(placement: .primaryAction) {
-                // Session 21g: change the voice THIS agent speaks in, per the
-                // "agent maker sets it, user changes it once they get it"
-                // model. The pick is saved per-user, per-agent, so it follows
-                // the account everywhere -- read-aloud here, and calls.
-                Button {
-                    activeSheet = .voicePicker
-                    if let id = selectedAgentId {
-                        Task { voiceOverride = (await voiceService.voiceOverride(forAgent: id)) ?? "" }
-                    }
-                } label: {
-                    Image(systemName: "waveform")
-                }
-                .disabled(selectedAgentId == nil)
-                .accessibilityLabel("Voice")
-                .accessibilityHint("Browse, preview, and change the voice \(agentDisplayLabel) speaks in. Your pick follows this companion.")
-            }
+            // Session 25 (Kade approved the audit list, "All four"): the
+            // Voice button used to be a THIRD icon crammed into this bar
+            // (search, voice, call). It now lives on the agent row below --
+            // voice belongs beside "Talking to X" conceptually (it IS that
+            // agent's voice), and the bar is calmer at two icons. Same
+            // label, same hint, same behavior -- see `agentSection`.
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingCall = true
@@ -751,26 +740,48 @@ struct ConversationDetailView: View {
     /// requested, only the confusion of tapping something that visibly does
     /// nothing to it.
     private var agentSection: some View {
-        Button {
-            activeSheet = .agentPicker
-        } label: {
-            HStack {
-                Text(agentDisplayLabel)
-                    .font(.footnote)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 16) {
+            Button {
+                activeSheet = .agentPicker
+            } label: {
+                HStack {
+                    Text(agentDisplayLabel)
+                        .font(.footnote)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .buttonStyle(.plain)
+            .disabled(isSending)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Talking to \(agentDisplayLabel)")
+            .accessibilityHint("Opens the list of agents to switch who answers your next message.")
+            .accessibilityFocused($a11yFocus, equals: .agentButton)
+
+            // Session 25: moved here from the toolbar (see the toolbar
+            // comment). Session 21g's original design note still applies:
+            // "agent maker sets it, user changes it once they get it" --
+            // the pick is saved per-user, per-agent, and follows the
+            // account everywhere (read-aloud here, and calls).
+            Button {
+                activeSheet = .voicePicker
+                if let id = selectedAgentId {
+                    Task { voiceOverride = (await voiceService.voiceOverride(forAgent: id)) ?? "" }
+                }
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.footnote)
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedAgentId == nil)
+            .accessibilityLabel("Voice")
+            .accessibilityHint("Browse, preview, and change the voice \(agentDisplayLabel) speaks in. Your pick follows this companion.")
         }
-        .buttonStyle(.plain)
-        .disabled(isSending)
         .padding(.horizontal)
         .padding(.top, 8)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Talking to \(agentDisplayLabel)")
-        .accessibilityHint("Opens the list of agents to switch who answers your next message.")
-        .accessibilityFocused($a11yFocus, equals: .agentButton)
     }
 
     private var agentDisplayLabel: String {
@@ -812,8 +823,17 @@ struct ConversationDetailView: View {
     @ViewBuilder
     private var contextMeter: some View {
         let used = messages.reduce(0) { $0 + ($1.tokenCount ?? 0) }
-        if used > 0 {
-            let percent = min(100, Int((Double(used) / Double(Self.effectiveContextTokens) * 100).rounded()))
+        let percent = used > 0
+            ? min(100, Int((Double(used) / Double(Self.effectiveContextTokens) * 100).rounded()))
+            : 0
+        // Session 25 (Kade approved the audit list, "All four"): this
+        // gauge used to render from the very first token -- a permanent
+        // extra VoiceOver stop and a line of chrome on EVERY chat, almost
+        // always saying a number that needs no attention. Now it appears
+        // only once the window is genuinely filling (60%+), and keeps the
+        // existing orange urgency at 85. Below 60 the bottom stack is one
+        // element shorter on every swipe-through.
+        if percent >= 60 {
             HStack(spacing: 6) {
                 Image(systemName: "gauge.with.needle")
                     .font(.caption2)
@@ -1514,6 +1534,23 @@ private struct MessageRow: View {
                     .font(appearance.messageFont())
                     .lineSpacing(appearance.lineSpacing.extraPoints)
                     .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
+                    // Session 25 (Kade approved the audit list, "All four"):
+                    // the transcript used to be bare aligned text -- no
+                    // bubble chrome at all, visually spartan next to every
+                    // modern chat app. Soft rounded bubbles now: hers in a
+                    // gentle accent tint, replies on the system's secondary
+                    // surface (adapts to light/dark for free). Purely
+                    // decorative -- the row's accessibility element ignores
+                    // children and its label is unchanged, so VoiceOver
+                    // reads exactly what it read before. High contrast gets
+                    // a stronger tint (opacity alone is the low-contrast
+                    // trap KadeVisualStyle's own styles avoid).
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        bubbleFill,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
                 if !timeLabel.isEmpty {
                     Text(timeLabel)
                         .font(.caption2)
@@ -1568,6 +1605,18 @@ private struct MessageRow: View {
                 .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: message.isCreatedByUser ? .trailing : .leading)
+    }
+
+    private var bubbleFill: Color {
+        // `appearance` (the live environment object this row already holds
+        // for fonts/spacing), NOT KadeVisualStyle's StylePrefs -- that enum
+        // is private to its own file, and the environment object is the
+        // reactive source of truth anyway (a toggle flip restyles bubbles
+        // without a relaunch).
+        if message.isCreatedByUser {
+            return Color.accentColor.opacity(appearance.highContrast ? 0.30 : 0.15)
+        }
+        return Color(uiColor: .secondarySystemBackground)
     }
 
     private var accessibleLabel: String {
