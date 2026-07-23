@@ -119,6 +119,18 @@ struct KadeMessage: Codable, Identifiable {
         MessageTextSanitizer.forDisplay(displayText)
     }
 
+    /// True when this reply carries a context-compaction "summary" content
+    /// block: the server condensed everything OLDER than this point into a
+    /// running story-so-far summary for the model's payload only. Nothing in
+    /// the stored transcript is deleted; the block itself is invisible to
+    /// `displayText` (it filters for type == "text"). The web app renders a
+    /// collapsible "Summary" element here; MessageRow surfaces a one-line,
+    /// screen-reader-brief note instead. (July 22 2026, decision #2 of
+    /// CONVERSATION_COMPACTING_PLAN: a subtle note, once per compaction.)
+    var hasCompactionSummary: Bool {
+        content?.contains(where: { $0.type == "summary" }) ?? false
+    }
+
     /// Who VoiceOver announces this message as coming from.
     var speakerLabel: String {
         if isCreatedByUser { return "You" }

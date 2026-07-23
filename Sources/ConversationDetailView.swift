@@ -171,6 +171,17 @@ struct ConversationDetailView: View {
     /// opt-in rather than ambient -- a blind user shouldn't get surprise
     /// audio the first time they open a conversation.
     @State private var readAloudEnabled = false
+    /// Session 28 (Kade: "there is a silent gap between received and playing
+    /// the voiceclip, if you have auto play on"): true from "reply landed and
+    /// WILL be auto-spoken" until its clip actually starts (or provably
+    /// won't). While true, the waiting ticks stay alive through the TTS
+    /// fetch instead of dying at the received bloop. Set BEFORE sendState
+    /// flips to .idle so the sendState watcher reads it race-free.
+    @State private var awaitingSpokenReply = false
+    /// Fail-safe for the flag above: if the clip never starts AND the queue
+    /// never visibly drains (a hang, not a clean failure), stop ticking
+    /// after 12s rather than forever.
+    @State private var speechWaitWatchdog: Task<Void, Never>? = nil
     /// Session 23 (Kade: "no deepthink switch on native iOS. That's not
     /// good at all."): parity with the web composer's sticky Deep Think
     /// toggle (DeepThinkToggle.tsx). While armed, every FRESH send gets an
@@ -419,13 +430,42 @@ struct ConversationDetailView: View {
                 }
             }
             else if case .sending = old, case .idle = new {
-                Earcons.shared.stopWaitingLoop()
                 Earcons.shared.play(.messageReceived)
+                // Autoplay handoff (session 28): when this reply is about to
+                // be read aloud, the ticks keep running underneath the
+                // received bloop and through the TTS fetch -- the
+                // isClipPlaying watcher below stops them the moment the
+                // voice starts, the isSpeaking watcher stops them if TTS
+                // fails (its error boop already sounded), and the watchdog
+                // stops them if everything just hangs. No autoplay = stop
+                // exactly as before.
+                if awaitingSpokenReply {
+                    speechWaitWatchdog?.cancel()
+                    speechWaitWatchdog = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 12_000_000_000)
+                        if !Task.isCancelled { endSpeechWait() }
+                    }
+                } else {
+                    Earcons.shared.stopWaitingLoop()
+                }
             }
             else if case .failed = new {
-                Earcons.shared.stopWaitingLoop()
+                endSpeechWait()
                 Earcons.shared.play(.error)
             }
+        }
+        // The two halves of the session-28 autoplay handoff (see the
+        // sending->idle branch above). First: the clip actually started --
+        // stop the ticks, the voice takes over seamlessly. Second: the speak
+        // queue drained without a clip ever starting (isSpeaking true->false
+        // while still waiting) -- TTS failed, VoiceService's own error boop
+        // already said so audibly, stop the ticks now instead of letting the
+        // watchdog drag them out.
+        .onChange(of: voiceService.isClipPlaying) { _, playing in
+            if playing, awaitingSpokenReply { endSpeechWait() }
+        }
+        .onChange(of: voiceService.isSpeaking) { was, speaking in
+            if was, !speaking, awaitingSpokenReply { endSpeechWait() }
         }
         // Same Phase B ask, "recording start/stop" -- driven directly by
         // VoiceService's own published `isRecording` so this can never drift
@@ -992,6 +1032,7 @@ struct ConversationDetailView: View {
             Button {
                 readAloudEnabled.toggle()
                 if !readAloudEnabled {
+                    endSpeechWait()
                     voiceService.stopSpeaking()
                 }
             } label: {
@@ -1479,6 +1520,16 @@ struct ConversationDetailView: View {
         return !last.isCreatedByUser && message.id == last.id
     }
 
+    /// Ends the session-28 autoplay wait: stops the waiting ticks and
+    /// disarms the watchdog. Safe to call redundantly -- stopWaitingLoop is
+    /// a no-op when nothing is looping.
+    private func endSpeechWait() {
+        awaitingSpokenReply = false
+        speechWaitWatchdog?.cancel()
+        speechWaitWatchdog = nil
+        Earcons.shared.stopWaitingLoop()
+    }
+
     private func readAloud(_ message: KadeMessage) {
         // Raw `displayText`, not `readableText` -- same reasoning as the
         // auto-read-aloud call in `performSend` below: this is the actual
@@ -1562,6 +1613,11 @@ struct ConversationDetailView: View {
             messages = try await conversationsService.fetchMessages(
                 conversationId: resolvedConversationId
             )
+            // Session 28: decide the autoplay handoff BEFORE sendState
+            // flips -- the sendState watcher reads this flag to know whether
+            // the waiting ticks survive past the received bloop. Same
+            // reply-exists condition as the enqueueSpeak below.
+            awaitingSpokenReply = readAloudEnabled && messages.contains(where: { !$0.isCreatedByUser })
             sendState = .idle
             if files != nil {
                 // Spent successfully -- the server owns it now.
@@ -1823,6 +1879,19 @@ private struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 6) {
+            // Conversation compacting (July 22 2026): a reply that carries a
+            // summary block marks the spot where the server condensed the
+            // OLDER conversation into a running summary -- payload-only,
+            // nothing visible was deleted. One short system-style line,
+            // its own VoiceOver stop, deliberately brief by her decision
+            // ("one-time subtle note").
+            if message.hasCompactionSummary {
+                Text("Earlier conversation condensed into a summary — nothing deleted.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityLabel("Earlier conversation condensed into a summary. Nothing deleted.")
+            }
             // Session 27 (visual delight): agent replies carry a small
             // colored initial circle -- speaker identity at a glance when
             // agents switch mid-conversation. Sits OUTSIDE the row's

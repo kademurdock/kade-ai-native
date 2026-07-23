@@ -30,6 +30,14 @@ final class VoiceService: NSObject, ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isTranscribing = false
     @Published private(set) var isSpeaking = false
+    /// True only while a TTS clip is actually coming out of the speaker.
+    /// `isSpeaking` (above) flips true when the speak QUEUE starts -- i.e.
+    /// before the network fetch -- so it cannot tell "fetching" apart from
+    /// "playing." This one flips at a successful `player.play()` and back on
+    /// finish/stop. It exists for the chat lane's autoplay handoff (see
+    /// ConversationDetailView's sendState watcher): the waiting ticks keep
+    /// running through the TTS fetch and stop the instant the voice starts.
+    @Published private(set) var isClipPlaying = false
     @Published var recordError: String?
 
     private let client: KadeAPIClient
@@ -344,6 +352,7 @@ final class VoiceService: NSObject, ObservableObject {
         playbackContinuation?.resume()
         playbackContinuation = nil
         isSpeaking = false
+        isClipPlaying = false
         isPumping = false
     }
 
@@ -445,6 +454,8 @@ final class VoiceService: NSObject, ObservableObject {
                 if !player.play() {
                     playbackContinuation = nil
                     continuation.resume()
+                } else {
+                    isClipPlaying = true
                 }
             } catch {
                 continuation.resume()
@@ -665,6 +676,7 @@ extension VoiceService: AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
             self.currentPlayer = nil
+            self.isClipPlaying = false
             self.playbackContinuation?.resume()
             self.playbackContinuation = nil
         }
