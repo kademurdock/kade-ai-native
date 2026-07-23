@@ -239,6 +239,29 @@ enum Earcon: CaseIterable {
         default:     return 0.28
         }
     }
+
+    /// July 22 2026 — Kade's OWN recordings take over where a bundled file
+    /// exists (masters live in her folder's ui_sounds/; XcodeGen bundles
+    /// anything dropped in Sources/ automatically). The synthesized glides
+    /// above stay as the permanent fallback: a missing or undecodable file
+    /// means the old sound, never accidental silence. Only the two chat
+    /// moments have real recordings so far; action/error stay synth.
+    fileprivate var bundleFile: (name: String, ext: String)? {
+        switch self {
+        case .messageSent:     return ("EarconSent", "mp3")
+        case .messageReceived: return ("EarconReceived", "mp3")
+        default:               return nil
+        }
+    }
+
+    /// Per-file playback volume: her Sent master peaks hot (-4.7 dBFS), the
+    /// reply cue is gentler. One constant each — retune by ear here.
+    fileprivate var bundleVolume: Float {
+        switch self {
+        case .messageSent: return 0.6
+        default:           return 0.9
+        }
+    }
 }
 
 @MainActor
@@ -262,8 +285,27 @@ final class Earcons {
 
     /// Play an earcon, honouring the Sound effects switch. Safe to call from
     /// anywhere on the main actor; a no-op if sound is off or synthesis fails.
+    /// Cache of the real recordings' bytes, loaded lazily per earcon.
+    private var fileCache: [Earcon: Data] = [:]
+
     func play(_ earcon: Earcon) {
         guard FeedbackPrefs.shared.soundEffects else { return }
+        // Real recording first (July 22 2026); the synth path below is the
+        // fail-soft fallback and still owns every earcon with no file.
+        if let file = earcon.bundleFile {
+            if fileCache[earcon] == nil,
+               let url = Bundle.main.url(forResource: file.name, withExtension: file.ext) {
+                fileCache[earcon] = try? Data(contentsOf: url)
+            }
+            if let fileData = fileCache[earcon], let player = try? AVAudioPlayer(data: fileData) {
+                player.volume = earcon.bundleVolume
+                player.prepareToPlay()
+                players.removeAll { !$0.isPlaying }
+                players.append(player)
+                player.play()
+                return
+            }
+        }
         let data: Data
         if let cached = cache[earcon] {
             data = cached
@@ -295,6 +337,20 @@ final class Earcons {
 
     func startWaitingLoop() {
         guard FeedbackPrefs.shared.soundEffects, waitingPlayer == nil else { return }
+        // July 22 2026: Kade's bubbling Thinking loop (shipped pre-trimmed —
+        // the raw master carries ~1.16s of MP3 encoder silence that made
+        // every loop cycle hiccup, so the bundled WAV is the trimmed decode;
+        // recipe in ui_sounds/README). Quiet enough to sit under speech and
+        // VoiceOver. Synth ticks below remain the fail-soft fallback.
+        if let url = Bundle.main.url(forResource: "EarconThinkingLoop", withExtension: "wav"),
+           let player = try? AVAudioPlayer(contentsOf: url) {
+            player.numberOfLoops = -1
+            player.volume = 0.55
+            player.prepareToPlay()
+            player.play()
+            waitingPlayer = player
+            return
+        }
         if waitingData == nil {
             // Two soft ticks (short falling glides) with REAL zero-sample
             // silence between and after — a 0 Hz "segment" through the
