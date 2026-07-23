@@ -211,6 +211,20 @@ final class AdminService: ObservableObject {
         return (try? decoder.decode(Confirm.self, from: data))?.status ?? status
     }
 
+    /// POST /api/kade/add-credits -- instant prepaid top-up to one person's
+    /// wallet. Mirrors the web usage-dashboard's "+$5" button exactly: no
+    /// amount sent, the server defaults to $5 (ceiling $100) and upserts the
+    /// Balance record so it works even for someone who never had one.
+    /// Returns the new balance in USD, or nil on failure.
+    func addCredits(userId: String) async -> Double? {
+        var req = client.request(path: "api/kade/add-credits", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["userId": userId])
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200 else { return nil }
+        struct Confirm: Decodable { let ok: Bool?; let balanceUSD: Double? }
+        return (try? decoder.decode(Confirm.self, from: data))?.balanceUSD
+    }
+
     func logsUsers() async throws -> [AdminLogUser] {
         struct Wrapper: Decodable { let users: [AdminLogUser] }
         let req = client.request(path: "api/kade/admin/logs-users", authorized: true)
@@ -310,6 +324,10 @@ struct AdminUsageView: View {
     @State private var models: [AdminModelSpend] = []
     @State private var loadError: String?
     @State private var isLoading = true
+    /// userIds with an add-credits call in flight. The button is NEVER
+    /// disabled (disabling retires the element under the VoiceOver cursor --
+    /// the session-23 record-button lesson); repeat taps decline politely.
+    @State private var addingCreditsFor: Set<String> = []
 
     var body: some View {
         Group {
@@ -428,7 +446,41 @@ struct AdminUsageView: View {
                 lines.append("\(name): \(adminCount(s.quantity?.allTime)) \(s.unit.map { $0 + "s" } ?? "uses"), \(adminUSD(s.costUSD?.allTime)).")
             }
         }
-        return card(lines.joined(separator: " "))
+        // July 23 2026 (Kade: "I need an add five dollars button on native to
+        // add to people's accounts like I do on web"): the info card stays ONE
+        // static VoiceOver element; the button is its own separate, real
+        // element right under it -- never combined (the Amber rule is about
+        // Buttons swallowed by children:.ignore).
+        return VStack(alignment: .leading, spacing: 8) {
+            card(lines.joined(separator: " "))
+            Button {
+                Task { await addFive(to: person) }
+            } label: {
+                Label("Add $5", systemImage: "plus.circle")
+                    .font(.callout.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Add 5 dollars to \(who)'s balance")
+            .accessibilityHint("Instantly tops up their prepaid credit, same as the web dashboard's plus five button.")
+        }
+    }
+
+    private func addFive(to person: AdminUsageReport.Person) async {
+        let who = person.name ?? person.email ?? person.userId
+        guard !addingCreditsFor.contains(person.userId) else {
+            UIAccessibility.post(notification: .announcement, argument: "Still adding credit for \(who).")
+            return
+        }
+        addingCreditsFor.insert(person.userId)
+        defer { addingCreditsFor.remove(person.userId) }
+        if let newBalance = await service.addCredits(userId: person.userId) {
+            KadeHaptics.success()
+            UIAccessibility.post(notification: .announcement, argument: "Added 5 dollars to \(who). New balance \(adminUSD(newBalance)).")
+            await load()
+        } else {
+            KadeHaptics.error()
+            UIAccessibility.post(notification: .announcement, argument: "Couldn't add credit for \(who). Check the connection and try again.")
+        }
     }
 
     /// One information card = ONE VoiceOver element. Static text only --
