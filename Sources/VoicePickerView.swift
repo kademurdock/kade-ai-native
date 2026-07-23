@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Browse, preview, and pick a TTS voice from the full catalog
-/// ("Voice 1"..."Voice 326", `GET /api/files/speech/tts/voices`). Session 21g
+/// ("Voice 1"..., `GET /api/files/speech/tts/voices`). Session 21g
 /// (Kade: "needs to be a way to go through the voices in the agent builder").
 ///
 /// Self-contained on purpose: it takes a `KadeAPIClient` and stands up its own
@@ -14,6 +14,14 @@ import UIKit
 /// "Preview" action to hear it; the visible speaker button is the sighted
 /// affordance and is hidden from VoiceOver, the same pattern the message row
 /// uses so the Actions rotor never lists a thing twice.
+///
+/// July 23 2026 (Kade: "I'd like to have voices loosely categorised... so the
+/// madness and chaos has some form and shape"): the list is now grouped into
+/// loose sections served by the TTS proxy (/voices.json `categories` -- the
+/// same public endpoint the web pickers read). Fail-soft: if the category
+/// fetch misses, the flat numeric list renders exactly as before. Searching
+/// always searches the WHOLE catalog flat -- sections are a browsing aid, not
+/// a filter.
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
@@ -22,10 +30,23 @@ struct VoicePickerView: View {
     @StateObject private var voice: VoiceService
 
     @State private var voices: [String] = []
+    @State private var categories: [VoiceGroup] = []
     @State private var isLoading = true
     @State private var loadFailed = false
     @State private var search = ""
     @State private var previewing: String?
+
+    /// One picker section. `name == nil` means "render flat, no header".
+    struct VoiceGroup: Hashable {
+        let name: String?
+        let voices: [String]
+    }
+
+    /// The proxy's public catalog endpoint -- same host the fork's
+    /// `speech.tts.openai.url` points at, same /voices.json the web client
+    /// fetches cross-origin for audition text + categories. Unauthenticated
+    /// by design (it serves labels, not audio).
+    private static let catalogURL = URL(string: "https://inworld-tts-proxy-production.up.railway.app/voices.json")!
 
     init(apiClient: KadeAPIClient, selection: Binding<String>) {
         self.apiClient = apiClient
@@ -43,6 +64,34 @@ struct VoicePickerView: View {
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return base }
         return base.filter { $0.localizedCaseInsensitiveContains(q) }
+    }
+
+    /// Sections for the current view state. Searching (or no category data)
+    /// collapses to one flat unnamed group -- the pre-categories behavior.
+    private var sections: [VoiceGroup] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.isEmpty, !categories.isEmpty else {
+            return [VoiceGroup(name: nil, voices: filtered)]
+        }
+        let present = Set(voices)
+        var seen = Set<String>()
+        var out: [VoiceGroup] = []
+        for group in categories {
+            let vs = group.voices.filter { present.contains($0) && !seen.contains($0) }
+            vs.forEach { seen.insert($0) }
+            if !vs.isEmpty { out.append(VoiceGroup(name: group.name, voices: vs)) }
+        }
+        let rest = filtered.filter { !seen.contains($0) }
+        if !rest.isEmpty {
+            out.append(VoiceGroup(name: out.isEmpty ? nil : "More voices", voices: rest))
+        }
+        return out
+    }
+
+    /// Selection match, tolerant of a stored beta-era spelling
+    /// ("Voice 340 (Beta)" selects "Voice 340" after the July 23 graduation).
+    private func isSelected(_ v: String) -> Bool {
+        v == selection || v == selection.replacingOccurrences(of: " (Beta)", with: "")
     }
 
     var body: some View {
@@ -66,8 +115,18 @@ struct VoicePickerView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
-                        ForEach(filtered, id: \.self) { v in
-                            voiceRow(v)
+                        ForEach(sections, id: \.self) { group in
+                            if let name = group.name {
+                                Section(name) {
+                                    ForEach(group.voices, id: \.self) { v in
+                                        voiceRow(v)
+                                    }
+                                }
+                            } else {
+                                ForEach(group.voices, id: \.self) { v in
+                                    voiceRow(v)
+                                }
+                            }
                         }
                     }
                     .listStyle(.plain)
@@ -95,7 +154,7 @@ struct VoicePickerView: View {
             } label: {
                 HStack {
                     Text(v)
-                    if v == selection {
+                    if isSelected(v) {
                         Spacer()
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.tint)
@@ -106,7 +165,7 @@ struct VoicePickerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(v)
-            .accessibilityValue(v == selection ? "Selected" : "")
+            .accessibilityValue(isSelected(v) ? "Selected" : "")
             .accessibilityHint("Picks this voice.")
             .accessibilityActions {
                 Button(previewing == v ? "Stop preview" : "Preview voice") {
@@ -130,7 +189,31 @@ struct VoicePickerView: View {
         let list = await voice.availableVoices()
         voices = list
         loadFailed = list.isEmpty
+        if !list.isEmpty {
+            categories = await Self.fetchCategories()
+        }
         isLoading = false
+    }
+
+    /// GET the proxy's /voices.json and pull `categories`. Any failure --
+    /// network, shape, empty -- returns [] and the picker stays flat.
+    private static func fetchCategories() async -> [VoiceGroup] {
+        struct CatalogDTO: Decodable {
+            struct CategoryDTO: Decodable {
+                let name: String
+                let voices: [String]
+            }
+            let categories: [CategoryDTO]?
+        }
+        var req = URLRequest(url: catalogURL)
+        req.timeoutInterval = 6
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let dto = try? JSONDecoder().decode(CatalogDTO.self, from: data),
+              let cats = dto.categories, !cats.isEmpty else {
+            return []
+        }
+        return cats.map { VoiceGroup(name: $0.name, voices: $0.voices) }
     }
 
     private func preview(_ v: String) async {
