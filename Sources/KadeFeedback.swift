@@ -345,7 +345,8 @@ final class Earcons {
         if let url = Bundle.main.url(forResource: "EarconThinkingLoop", withExtension: "wav"),
            let player = try? AVAudioPlayer(contentsOf: url) {
             player.numberOfLoops = -1
-            player.volume = 0.55
+            // July 22 night, Kade: "could go quite a bit down in volume." 0.55 -> 0.22.
+            player.volume = 0.22
             player.prepareToPlay()
             player.play()
             waitingPlayer = player
