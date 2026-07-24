@@ -125,6 +125,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     @Published var recFileURL: URL?
     @Published var recFileLine = ""
     @Published var tapersLine = ""
+    @Published var knockLine = ""
 
     private let client: KadeAPIClient
     let engine = ClubhouseEngine()
@@ -178,6 +179,8 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var recData = Data()
     private var recorders: [String: String] = [:] // identity -> name
     private var leaveAfterRec = false
+    private var knockTask: Task<Void, Never>?
+    private var routeObserver: NSObjectProtocol?
 
     init(client: KadeAPIClient) {
         let saved = UserDefaults.standard.object(forKey: "kadeClubMusicVol") as? Double
@@ -1004,6 +1007,21 @@ final class ClubhouseService: NSObject, ObservableObject {
             announce("Mic permission was refused — you can listen, but the room cannot hear you.")
         }
 
+        // HER CATCH (July 24 night: "the app just randomly went to ear piece
+        // and got stuck" — clarity-mode toggles and headphone plug/unplug):
+        // every audio-unit rebuild or route change can land iOS on the
+        // RECEIVER (the tiny ear speaker) and nothing re-asserted the
+        // speaker preference. Watch route changes for the whole room stay;
+        // whenever the route falls to the receiver with no headphones or
+        // Bluetooth in play, put the speaker back.
+        if routeObserver == nil {
+            routeObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.assertSpeakerIfBare() }
+            }
+        }
+
         club = ClubState()
         lastActn = 0
         bot = nil
@@ -1097,7 +1115,22 @@ final class ClubhouseService: NSObject, ObservableObject {
             if unmuted {
                 try? await room.localParticipant.setMicrophone(enabled: true, captureOptions: opts)
             }
+            // the audio-unit rebuild above is exactly the move that used to
+            // strand output on the earpiece — put the speaker preference back
+            AudioManager.shared.isSpeakerOutputPreferred = true
+            self.assertSpeakerIfBare()
             self.announce(on ? "Mic is raw now — full clarity, headphones etiquette." : "Mic is speaker-friendly now.")
+        }
+    }
+
+    /// If the current route landed on the tiny ear speaker with no
+    /// headphones or Bluetooth in play, nobody chose that — fix it.
+    private func assertSpeakerIfBare() {
+        guard phase == .inRoom else { return }
+        let outs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType }
+        let external: [AVAudioSession.Port] = [.headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .airPlay, .carAudio, .usbAudio]
+        if outs.contains(.builtInReceiver) && !outs.contains(where: { external.contains($0) }) {
+            AudioManager.shared.isSpeakerOutputPreferred = true
         }
     }
 
@@ -1165,6 +1198,11 @@ final class ClubhouseService: NSObject, ObservableObject {
 
     func leave() {
         pa.stop()
+        stopKnocking(quiet: true)
+        if let obs = routeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            routeObserver = nil
+        }
         recording = false
         recPending = false
         recStartDate = nil
@@ -1223,45 +1261,111 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
-    /// The link lane (round 7): a pasted YouTube/Spotify link becomes
-    /// ordinary jukebox bytes — the fork pulls the audio (yt-dlp; Spotify
-    /// arrives by name-match since its audio is locked) and from there
-    /// it's a normal entry: queue, cut in, radio-fight over it.
-    func addSong(fromLink raw: String, interrupt: Bool) {
-        let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !urlStr.isEmpty else { return }
-        announce("Fetching that link — give it a few seconds…")
-        Task { [weak self] in
-            guard let self else { return }
-            var req = self.client.request(path: "api/kade/lounge/fetch-track", method: "POST", authorized: true)
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.timeoutInterval = 150
-            req.httpBody = try? JSONSerialization.data(withJSONObject: ["url": urlStr])
-            guard let (data, http) = try? await self.client.send(req) else {
-                self.announce("That link would not fetch — try another.")
-                return
-            }
-            guard http.statusCode == 200, !data.isEmpty else {
-                self.announce(Self.explain(data, fallback: "That link would not fetch — YouTube song links work best."))
-                return
-            }
+    /// The link lane (round 7): a pasted link becomes ordinary jukebox
+    /// bytes — the fork pulls the audio (yt-dlp speaks ~1,800 sites;
+    /// Spotify arrives by name-match since its audio is locked) and from
+    /// there it's a normal entry: queue, cut in, radio-fight over it.
+    /// When YouTube's flickering gate is closed (walled from the server),
+    /// THE KNOCKER takes the link: quiet retries every three minutes for
+    /// up to an hour, a holler through the PA when it lands, a Stop button
+    /// for changed minds.
+    private enum LinkFetch {
+        case ok(Data, String)
+        case walled(String)
+        case failed(String)
+    }
+
+    private func fetchLink(_ urlStr: String) async -> LinkFetch {
+        var req = client.request(path: "api/kade/lounge/fetch-track", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 150
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["url": urlStr])
+        guard let (data, http) = try? await client.send(req) else {
+            return .failed("That link would not fetch — try another.")
+        }
+        if http.statusCode == 200, !data.isEmpty {
             guard data.count <= 60_000_000 else {
-                self.announce("That file is too big — keep songs under about sixty megabytes.")
-                return
+                return .failed("That file is too big — keep songs under about sixty megabytes.")
             }
             var title = "a song"
             if let th = http.value(forHTTPHeaderField: "x-kade-title"),
                let dec = th.removingPercentEncoding, !dec.isEmpty {
                 title = String(dec.prefix(60))
             }
-            let id = "e" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(7).lowercased()
-            self.songData[id] = data
-            let entry = ClubEntry(id: id, title: title, by: self.myIdentity, byName: self.myName)
-            if self.iAmAuthority() {
-                self.applyAdd(entry: entry, interrupt: interrupt, fromName: self.myName)
-            } else {
-                self.sendData(["t": "add", "entry": entry.dict, "interrupt": interrupt, "fromName": self.myName])
+            return .ok(data, title)
+        }
+        let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let msg = (j?["error"] as? String) ?? "That link would not fetch — try another."
+        if (j?["walled"] as? Bool) == true { return .walled(msg) }
+        return .failed(msg)
+    }
+
+    private func landFetched(_ data: Data, _ title: String, interrupt: Bool) {
+        let id = "e" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(7).lowercased()
+        songData[id] = data
+        let entry = ClubEntry(id: id, title: title, by: myIdentity, byName: myName)
+        if iAmAuthority() {
+            applyAdd(entry: entry, interrupt: interrupt, fromName: myName)
+        } else {
+            sendData(["t": "add", "entry": entry.dict, "interrupt": interrupt, "fromName": myName])
+        }
+    }
+
+    func addSong(fromLink raw: String, interrupt: Bool) {
+        let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !urlStr.isEmpty else { return }
+        stopKnocking(quiet: true) // a fresh paste replaces any old knock
+        announce("Fetching that link — give it a few seconds…")
+        Task { [weak self] in
+            guard let self else { return }
+            switch await self.fetchLink(urlStr) {
+            case let .ok(data, title):
+                self.landFetched(data, title, interrupt: interrupt)
+            case .walled:
+                self.startKnocking(url: urlStr, interrupt: interrupt)
+            case let .failed(msg):
+                self.announce(msg)
             }
+        }
+    }
+
+    func stopKnocking(quiet: Bool = false) {
+        knockTask?.cancel()
+        knockTask = nil
+        let had = !knockLine.isEmpty
+        knockLine = ""
+        if had && !quiet { announce("Stopped knocking for that link.") }
+    }
+
+    private func startKnocking(url: String, interrupt: Bool) {
+        stopKnocking(quiet: true)
+        announce("YouTube's gate is closed — I'll keep knocking every few minutes and holler when it opens.")
+        knockLine = "Knocking for that link — YouTube's gate is closed. Retrying every three minutes."
+        knockTask = Task { [weak self] in
+            for attempt in 1...20 {
+                try? await Task.sleep(nanoseconds: 180_000_000_000)
+                if Task.isCancelled { return }
+                guard let self, self.phase == .inRoom else { return }
+                switch await self.fetchLink(url) {
+                case let .ok(data, title):
+                    self.landFetched(data, title, interrupt: interrupt)
+                    self.knockLine = ""
+                    self.knockTask = nil
+                    self.announceRoom("That link finally cleared the gate — \(title) just landed.", lane: .booth)
+                    return
+                case .walled:
+                    self.knockLine = "Still knocking — try \(attempt) of 20. YouTube's gate stays moody."
+                case let .failed(msg):
+                    self.knockLine = ""
+                    self.knockTask = nil
+                    self.announce(msg)
+                    return
+                }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.knockLine = ""
+            self.knockTask = nil
+            self.announce("YouTube never opened up for that one — try it fresh later.")
         }
     }
 
