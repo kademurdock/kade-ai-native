@@ -36,6 +36,10 @@ final class ClubhouseEngine: NSObject {
         case botDone
         case botFail
         case ears(String)
+        case recStarted
+        case recChunk(b64: String)
+        case recDone(mime: String, secs: Double)
+        case recFail
     }
 
     var onEvent: ((Event) -> Void)?
@@ -122,6 +126,13 @@ final class ClubhouseEngine: NSObject {
         case "botFail": onEvent?(.botFail)
         case "ears":
             if let text = dict["text"] as? String, !text.isEmpty { onEvent?(.ears(text)) }
+        case "recon": onEvent?(.recStarted)
+        case "recb":
+            if let b64 = dict["b64"] as? String, !b64.isEmpty { onEvent?(.recChunk(b64: b64)) }
+        case "recdone":
+            onEvent?(.recDone(mime: (dict["mime"] as? String) ?? "audio/mp4",
+                              secs: (dict["secs"] as? NSNumber)?.doubleValue ?? 0))
+        case "recfail": onEvent?(.recFail)
         default: break
         }
     }

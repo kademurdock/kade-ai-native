@@ -24,6 +24,8 @@ struct ClubhouseView: View {
     @State private var showClearConfirm = false
     @State private var seekPos: Double = 0
     @State private var seekEditing = false
+    @State private var showLeaveWhileTaping = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: ClubhouseService(client: apiClient))
@@ -156,8 +158,15 @@ struct ClubhouseView: View {
             }
             Section("Who's here — \(service.roomLabel)") {
                 ForEach(service.roster) { row in
-                    Text(rosterLine(row))
-                        .fontWeight(row.talking ? .bold : .regular)
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(row.talking ? Color.green : Color.clear)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text(rosterLine(row))
+                            .fontWeight(row.talking ? .bold : .regular)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
                 if let botName = service.botName {
                     VStack(alignment: .leading, spacing: 6) {
@@ -175,11 +184,49 @@ struct ClubhouseView: View {
             Section {
                 Button(service.micMuted ? "Unmute my mic" : "Mute my mic") { service.toggleMic() }
                 Button("Say who's here") { service.sayWhosHere() }
-                Button("Leave the room", role: .destructive) { service.leave() }
+                Button("Leave the room", role: .destructive) {
+                    if service.recording { showLeaveWhileTaping = true } else { service.leave() }
+                }
             }
             Section {
-                Text(service.nowPlayingLine)
-                    .accessibilityAddTraits(.updatesFrequently)
+                Button {
+                    if service.recording { service.stopRecording() } else { service.startRecording() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if service.recording {
+                            Circle().fill(.red).frame(width: 10, height: 10)
+                                .accessibilityHidden(true)
+                        }
+                        Text(service.recording ? "Stop the recording — \(clock(service.recElapsed))" : "Record this conversation")
+                    }
+                }
+                .tint(service.recording ? Color.red : nil)
+                if let url = service.recFileURL {
+                    ShareLink("Share the recording", item: url)
+                    Text(service.recFileLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if !service.tapersLine.isEmpty {
+                    Text(service.tapersLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("The tape deck")
+            } footer: {
+                Text("Tapes the whole room — every voice, the jukebox, the bot — into one audio file you can share or save, like a Parlor transcript. The room is always told when a tape starts and stops.")
+            }
+            Section {
+                HStack(spacing: 10) {
+                    Text(service.nowPlayingLine)
+                        .accessibilityAddTraits(.updatesFrequently)
+                    if service.isPlaying {
+                        Spacer()
+                        EqBars(animated: !reduceMotion)
+                            .accessibilityHidden(true)
+                    }
+                }
                 Button(service.isPlaying ? "Pause the music" : "Play") { service.togglePlay() }
                 Button("Back a song") { service.back() }
                     .accessibilityHint("Goes back to the song before this one — radio fights are allowed.")
@@ -261,6 +308,28 @@ struct ClubhouseView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Host voices read the announcements", isOn: Binding(
+                    get: { service.paOn },
+                    set: { service.setPAOn($0) }
+                ))
+                Slider(
+                    value: Binding(
+                        get: { service.paVolume },
+                        set: { service.setPAVolume($0) }
+                    ),
+                    in: 0...1,
+                    step: 0.05
+                ) {
+                    Text("Announcement volume")
+                }
+                .accessibilityValue("\(Int(service.paVolume * 100)) percent")
+                .disabled(!service.paOn)
+            } header: {
+                Text("The house PA")
+            } footer: {
+                Text("Two host voices read the room out loud for everybody — Miss A works the front desk (comings, goings, taping notices) and Kade's calm narrator runs the booth (jukebox news). Real audio, no screen reader needed; volume is yours alone.")
+            }
+            Section {
                 Toggle("Headphones clarity mode", isOn: Binding(
                     get: { service.clearMic },
                     set: { service.setClearMic($0) }
@@ -316,6 +385,11 @@ struct ClubhouseView: View {
             }
             Button("Never mind", role: .cancel) { pendingSongURL = nil }
         }
+        .confirmationDialog("You're still taping this room.", isPresented: $showLeaveWhileTaping, titleVisibility: .visible) {
+            Button("Stop the tape, keep it, then leave") { service.stopRecordingThenLeave() }
+            Button("Leave and lose the tape", role: .destructive) { service.leave() }
+            Button("Stay", role: .cancel) {}
+        }
     }
 
     private func timeString(_ t: Double) -> String {
@@ -323,11 +397,45 @@ struct ClubhouseView: View {
         return "\(secs / 60):" + String(format: "%02d", secs % 60)
     }
 
+    private func clock(_ t: TimeInterval) -> String {
+        timeString(t)
+    }
+
     private func rosterLine(_ row: ClubRosterRow) -> String {
         var line = row.name
         if row.isMe { line += " (you)" }
         if row.talking { line += " — talking" }
         return line
+    }
+}
+
+/// Decorative EQ bars for the now-playing line — pure eye candy, hidden
+/// from VoiceOver, honest sine-wave motion (not audio-reactive), and it
+/// sits politely still when Reduce Motion is on.
+private struct EqBars: View {
+    let animated: Bool
+
+    var body: some View {
+        Group {
+            if animated {
+                TimelineView(.animation(minimumInterval: 0.12)) { context in
+                    bars(at: context.date.timeIntervalSinceReferenceDate)
+                }
+            } else {
+                bars(at: 1.7)
+            }
+        }
+        .frame(width: 34, height: 18)
+    }
+
+    private func bars(at t: Double) -> some View {
+        HStack(alignment: .bottom, spacing: 3) {
+            ForEach(0..<5, id: \.self) { i in
+                Capsule()
+                    .fill(Color.green.opacity(0.85))
+                    .frame(width: 4, height: 4 + 13 * abs(sin(t * (1.3 + Double(i) * 0.35) + Double(i))))
+            }
+        }
     }
 }
 

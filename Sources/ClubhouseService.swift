@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 import UIKit
@@ -117,6 +118,13 @@ final class ClubhouseService: NSObject, ObservableObject {
     @Published var songDur: Double = 300
     @Published var hasSong = false
     @Published var clearMic: Bool
+    @Published var paOn: Bool
+    @Published var paVolume: Double
+    @Published var recording = false
+    @Published var recElapsed: TimeInterval = 0
+    @Published var recFileURL: URL?
+    @Published var recFileLine = ""
+    @Published var tapersLine = ""
 
     private let client: KadeAPIClient
     let engine = ClubhouseEngine()
@@ -162,12 +170,29 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var tick: Timer?
     private var uiTick: Timer?
 
+    // ── the house PA + the tape deck ──
+    private let pa: ClubPA
+    private var recPending = false
+    private var recStartDate: Date?
+    private var recData = Data()
+    private var recorders: [String: String] = [:] // identity -> name
+    private var leaveAfterRec = false
+
     init(client: KadeAPIClient) {
         let saved = UserDefaults.standard.object(forKey: "kadeClubMusicVol") as? Double
         musicVolume = saved.map { max(0, min(1, $0)) } ?? 0.25
         clearMic = UserDefaults.standard.bool(forKey: "kadeClubClearMic")
+        paOn = UserDefaults.standard.object(forKey: "kadeClubPAOn") as? Bool ?? true
+        let pv = UserDefaults.standard.object(forKey: "kadeClubPAVol") as? Double
+        paVolume = pv.map { max(0, min(1, $0)) } ?? 0.9
+        pa = ClubPA(client: client)
         self.client = client
         super.init()
+        pa.volume = paVolume
+        pa.onFallback = { text in
+            // the PA lost power on this clip — VoiceOver takes it, nothing missed
+            UIAccessibility.post(notification: .announcement, argument: text)
+        }
         engine.onEvent = { [weak self] event in
             self?.handleEngine(event)
         }
@@ -179,6 +204,35 @@ final class ClubhouseService: NSObject, ObservableObject {
     private func announce(_ text: String) {
         roomSay = text
         UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
+    /// Room-wide events go through the house PA when it's on (host clone
+    /// voices, real audio for everybody, no screen reader needed) — and the
+    /// text lands quietly on screen WITHOUT a VoiceOver announcement, so
+    /// VoiceOver users hear the host once instead of twice. PA off, or a
+    /// clip that won't fetch, falls back to the old announcement path.
+    enum PALane { case doors, booth }
+
+    private func announceRoom(_ text: String, lane: PALane) {
+        if paOn && phase == .inRoom {
+            roomSay = text
+            pa.say(text, voice: lane == .doors ? ClubPA.doors : ClubPA.booth)
+        } else {
+            announce(text)
+        }
+    }
+
+    func setPAOn(_ on: Bool) {
+        paOn = on
+        UserDefaults.standard.set(on, forKey: "kadeClubPAOn")
+        if !on { pa.stop() }
+        announce(on ? "Host voices are on." : "Host voices are off — announcements go back to VoiceOver.")
+    }
+
+    func setPAVolume(_ v: Double) {
+        paVolume = max(0, min(1, v))
+        UserDefaults.standard.set(paVolume, forKey: "kadeClubPAVol")
+        pa.volume = paVolume
     }
 
     private func realRemotes() -> [RemoteParticipant] {
@@ -265,7 +319,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         broadcastState()
         if club.actn > lastActn {
             lastActn = club.actn
-            if !club.act.isEmpty { announce(club.act) }
+            if !club.act.isEmpty { announceRoom(club.act, lane: .booth) }
         }
         reconcile()
     }
@@ -285,7 +339,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
         if club.actn > lastActn {
             lastActn = club.actn
-            if !club.act.isEmpty { announce(club.act) }
+            if !club.act.isEmpty { announceRoom(club.act, lane: .booth) }
         }
         reconcile()
     }
@@ -321,8 +375,12 @@ final class ClubhouseService: NSObject, ObservableObject {
             }
         case "pause":
             if club.playing {
+                // keep the position on pause (was -1) so the slider shows the
+                // real spot instead of 0:00; resume still rides myPos.
+                let base = club.pos >= 0 ? club.pos : 0
+                let live = base + Date().timeIntervalSince(posStamp)
                 club.playing = false
-                club.pos = -1
+                club.pos = max(0, live.rounded())
                 setAct("\(who) paused the music.")
             }
         case "stop":
@@ -571,6 +629,16 @@ final class ClubhouseService: NSObject, ObservableObject {
             engine.teardown()
             engineUp = false
             resolveEngineWaiters(false)
+            if recording || recPending {
+                recording = false
+                recPending = false
+                recData = Data()
+                recorders.removeValue(forKey: myIdentity)
+                rebuildUI()
+                sendData(["t": "rec", "on": false, "fromName": myName])
+                announce("The engine died and took the tape with it — sorry. Start a fresh one.")
+                if leaveAfterRec { leaveAfterRec = false; leave() }
+            }
         case let .playing(id, pos, dur):
             if enginePlayingId == id {
                 engineLastPos = pos
@@ -645,6 +713,63 @@ final class ClubhouseService: NSObject, ObservableObject {
                 announce("That file would not play — try an MP3, M4A, or WAV.")
                 autoRemove(id)
             }
+        case .recStarted:
+            recPending = false
+            recording = true
+            recStartDate = Date()
+            recElapsed = 0
+            recData = Data()
+            recFileURL = nil
+            recFileLine = ""
+            recorders[myIdentity] = myName
+            rebuildUI()
+            sendData(["t": "rec", "on": true, "fromName": myName])
+            announceRoom("\(myName) is recording this conversation.", lane: .doors)
+        case let .recChunk(b64):
+            if let part = Data(base64Encoded: b64) { recData.append(part) }
+        case let .recDone(mime, secs):
+            recording = false
+            recorders.removeValue(forKey: myIdentity)
+            let taped = recData
+            recData = Data()
+            defer {
+                if leaveAfterRec { leaveAfterRec = false; leave() }
+            }
+            guard !taped.isEmpty else {
+                announce("The tape came out blank — try again.")
+                rebuildUI()
+                break
+            }
+            let ext = mime.contains("mp4") ? "m4a" : "webm"
+            let stamp = Date().formatted(date: .abbreviated, time: .shortened)
+                .replacingOccurrences(of: ":", with: ".")
+                .replacingOccurrences(of: "/", with: "-")
+            let label = roomLabel.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+            let name = "Clubhouse - \(label) - \(stamp).\(ext)"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            do {
+                try? FileManager.default.removeItem(at: url)
+                try taped.write(to: url)
+                recFileURL = url
+                let mins = Int(secs) / 60
+                let secR = Int(secs) % 60
+                let mb = String(format: "%.1f", Double(taped.count) / 1_048_576)
+                recFileLine = "\(mins):" + String(format: "%02d", secR) + ", \(mb) MB — share it anywhere or save it to Files."
+            } catch {
+                announce("The tape would not save — try again.")
+            }
+            rebuildUI()
+            sendData(["t": "rec", "on": false, "fromName": myName])
+            announceRoom("\(myName) stopped recording. The tape is theirs to keep.", lane: .doors)
+        case .recFail:
+            let wasPending = recPending
+            recPending = false
+            recording = false
+            recData = Data()
+            recorders.removeValue(forKey: myIdentity)
+            rebuildUI()
+            announce(wasPending ? "The tape deck jammed — try again." : "The tape deck jammed — nothing was saved.")
+            if leaveAfterRec { leaveAfterRec = false; leave() }
         case .botReady:
             if let agent = pendingInviteAgent {
                 pendingInviteAgent = nil
@@ -855,6 +980,12 @@ final class ClubhouseService: NSObject, ObservableObject {
         bot = nil
         botBusy = false
         trans = ""
+        recording = false
+        recPending = false
+        recStartDate = nil
+        recData = Data()
+        recorders = [:]
+        leaveAfterRec = false
         phase = .inRoom
         rebuildRoster()
         rebuildUI()
@@ -876,6 +1007,9 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     private func uiTickBeat() {
+        if recording, let t0 = recStartDate {
+            recElapsed = Date().timeIntervalSince(t0)
+        }
         guard let cur = curEntry() else {
             hasSong = false
             songPos = 0
@@ -937,6 +1071,48 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
+    // ── the tape deck ("record this conversation") ──
+    // The ENGINE records: it is the one seat that hears every voice (this
+    // phone's own mic arrives there as a remote track), every jukebox, and
+    // the bot — one mixed file, handed back as base64 and shared like a
+    // Parlor transcript. The whole room is told when a tape starts and
+    // stops; no sneaky taping in this house.
+    func startRecording() {
+        guard !recording, !recPending, phase == .inRoom else { return }
+        recPending = true
+        announce("Setting up the tape…")
+        Task { [weak self] in
+            guard let self else { return }
+            let ok = await self.ensureEngine()
+            guard self.recPending else { return }
+            guard ok else {
+                self.recPending = false
+                self.announce("The tape deck could not reach the room — try again.")
+                return
+            }
+            self.engine.command("KE.recOn()")
+        }
+    }
+
+    func stopRecording() {
+        guard recording else {
+            recPending = false
+            return
+        }
+        engine.command("KE.recOff()")
+        // recDone / recFail events finish the job (file, announcements)
+    }
+
+    /// Leave-with-a-live-tape path: stop the tape, keep the file, then go.
+    func stopRecordingThenLeave() {
+        guard recording || recPending else {
+            leave()
+            return
+        }
+        leaveAfterRec = true
+        if recording { stopRecording() } else { recPending = false; leaveAfterRec = false; leave() }
+    }
+
     func seek(to seconds: Double) {
         guard let cur = curEntry() else { return }
         clubCmd("seek", id: cur.id, extra: ["pos": max(0, seconds)])
@@ -958,6 +1134,14 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     func leave() {
+        pa.stop()
+        recording = false
+        recPending = false
+        recStartDate = nil
+        recData = Data()
+        recorders = [:]
+        leaveAfterRec = false
+        tapersLine = ""
         engine.command("KE.silence(); KE.earsOff(); KE.botOff();")
         engine.teardown()
         engineUp = false
@@ -1159,6 +1343,21 @@ final class ClubhouseService: NSObject, ObservableObject {
         case "hello":
             if iAmAuthority() { broadcastState() }
             if bot?.anchor == myIdentity { sendBotState() }
+            if recording { sendData(["t": "rec", "on": true, "fromName": myName, "again": true]) }
+        case "rec":
+            let rn = (msg["fromName"] as? String) ?? "Somebody"
+            let on = (msg["on"] as? Bool) ?? false
+            let again = (msg["again"] as? Bool) ?? false
+            if on {
+                let knew = identity.flatMap { recorders[$0] } != nil
+                if let identity { recorders[identity] = rn }
+                rebuildUI()
+                if !knew && !again { announceRoom("\(rn) is recording this conversation.", lane: .doors) }
+            } else {
+                if let identity { recorders.removeValue(forKey: identity) }
+                rebuildUI()
+                announceRoom("\(rn) stopped recording. The tape is theirs to keep.", lane: .doors)
+            }
         case "cmd":
             if iAmAuthority() { applyCmd(msg) }
         case "add":
@@ -1233,6 +1432,96 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
         botName = bot?.name
         botAnchorName = bot?.anchorName ?? ""
+        let tapers = recorders.filter { $0.key != myIdentity }.values.sorted()
+        tapersLine = tapers.isEmpty ? "" : "Taping now: \(tapers.joined(separator: ", "))."
+    }
+}
+
+/// THE HOUSE PA (July 24 — her ask: announcements "like a PA system and
+/// isn't screen reader reliant"). Two host clone voices read room events
+/// out loud on every member's device: Miss A pro reading works the front
+/// desk (comings, goings, taping notices) and Kade's calm narrator runs
+/// the booth (jukebox news). Modeled on ParlorNarrator: a tiny dedicated
+/// AVAudioPlayer queue, clip cache, fail-soft — a clip that won't fetch
+/// hands its text to the onFallback closure so nothing is ever missed.
+@MainActor
+final class ClubPA: NSObject, AVAudioPlayerDelegate {
+    static let doors = "Voice 393" // Miss A pro reading — the front desk
+    static let booth = "Voice 327" // Kade, calm inspirational — the booth
+
+    var volume: Double = 0.9
+    var onFallback: ((String) -> Void)?
+
+    private let client: KadeAPIClient
+    private var queue: [(String, String)] = []
+    private var cache: [String: Data] = [:]
+    private var cacheOrder: [String] = []
+    private var player: AVAudioPlayer?
+    private var pumping = false
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    init(client: KadeAPIClient) {
+        self.client = client
+    }
+
+    func say(_ text: String, voice: String) {
+        guard !text.isEmpty else { return }
+        if queue.count > 6 { queue.removeFirst() } // never let a backlog lecture the room
+        queue.append((text, voice))
+        if !pumping { Task { await pump() } }
+    }
+
+    func stop() {
+        queue.removeAll()
+        player?.stop()
+        player = nil
+        finishContinuation?.resume()
+        finishContinuation = nil
+    }
+
+    private func pump() async {
+        pumping = true
+        while !queue.isEmpty {
+            let (text, voice) = queue.removeFirst()
+            let key = voice + "|" + text
+            var clip = cache[key]
+            if clip == nil {
+                let fields: [(String, String)] = [("input", text), ("voice", voice)]
+                let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
+                if let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty {
+                    clip = data
+                    cache[key] = data
+                    cacheOrder.append(key)
+                    if cacheOrder.count > 40 { cache.removeValue(forKey: cacheOrder.removeFirst()) }
+                }
+            }
+            guard let clip, let p = try? AVAudioPlayer(data: clip) else {
+                onFallback?(text)
+                continue
+            }
+            p.volume = Float(volume)
+            p.delegate = self
+            player = p
+            p.play()
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                finishContinuation = c
+            }
+        }
+        pumping = false
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            self.finishContinuation?.resume()
+            self.finishContinuation = nil
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            self.finishContinuation?.resume()
+            self.finishContinuation = nil
+        }
     }
 }
 
@@ -1244,7 +1533,7 @@ extension ClubhouseService: RoomDelegate {
         Task { @MainActor in
             guard !self.isDj(identity) else { return }
             self.rebuildRoster()
-            self.announce("\(name) joined.")
+            self.announceRoom("\(name) just walked in.", lane: .doors)
         }
     }
 
@@ -1257,13 +1546,14 @@ extension ClubhouseService: RoomDelegate {
                 self.reconcile()
                 return
             }
+            if self.recorders.removeValue(forKey: identity) != nil { self.rebuildUI() }
             if let bot = self.bot, bot.anchor == identity {
                 let botName = bot.name
                 self.bot = nil
                 self.botBusy = false
-                self.announce("\(name) left and took \(botName) with them.")
+                self.announceRoom("\(name) left and took \(botName) with them.", lane: .doors)
             } else {
-                self.announce("\(name) left.")
+                self.announceRoom("\(name) headed out.", lane: .doors)
             }
             self.rebuildRoster()
             if self.iAmAuthority() {
