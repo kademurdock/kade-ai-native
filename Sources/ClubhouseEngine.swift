@@ -15,8 +15,10 @@ import WebKit
 /// "<name>-<id4>-dj" participant, which every roster/steward/announcement
 /// path (web and native) filters out — furniture, not a person.
 ///
-/// Song files never touch the network: the picked file's bytes are served to
-/// the page over a kadefile:// custom scheme straight from memory.
+/// Song files never touch the network: the picked file's bytes are FED to
+/// the page as chunked base64 over evaluateJavaScript (KE.feedB64) — fetch()
+/// flatly refuses custom URL schemes in WebKit, a lesson build 156 taught
+/// live, so there is no kadefile:// lane anymore, only the JS bridge.
 @MainActor
 final class ClubhouseEngine: NSObject {
     enum Event {
@@ -26,7 +28,9 @@ final class ClubhouseEngine: NSObject {
         case playing(id: String, pos: Double)
         case pos(id: String, pos: Double, silenced: Bool)
         case ended(id: String)
-        case playFail(id: String)
+        case playFail(id: String, why: String)
+        case needSong(id: String)
+        case feedFail(id: String)
         case botReady
         case botDone
         case botFail
@@ -36,7 +40,6 @@ final class ClubhouseEngine: NSObject {
     var onEvent: ((Event) -> Void)?
 
     private(set) var webView: WKWebView?
-    private let songs = SongSchemeHandler()
 
     /// Loads the headless page with everything it needs riding the URL
     /// FRAGMENT (LiveKit token, signal URL, the app's own API token) —
@@ -47,7 +50,6 @@ final class ClubhouseEngine: NSObject {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        config.setURLSchemeHandler(songs, forURLScheme: "kadefile")
         config.userContentController.add(WeakScriptHandler(self), name: "engine")
         let web = WKWebView(frame: .zero, configuration: config)
         web.isOpaque = false
@@ -71,18 +73,23 @@ final class ClubhouseEngine: NSObject {
             web.load(URLRequest(url: URL(string: "about:blank")!))
         }
         webView = nil
-        songs.clear()
     }
 
     var isUp: Bool { webView != nil }
 
-    /// Hands a picked song's bytes to the kadefile:// lane.
-    func register(songId: String, data: Data) {
-        songs.put(id: songId, data: data)
-    }
-
     func command(_ js: String) {
         webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    /// Runs JS and reports whether WebKit accepted it — the song-feeding
+    /// lane awaits each chunk so big files never pile up in flight.
+    func commandAsync(_ js: String) async -> Bool {
+        guard let web = webView else { return false }
+        return await withCheckedContinuation { cont in
+            web.evaluateJavaScript(js) { _, error in
+                cont.resume(returning: error == nil)
+            }
+        }
     }
 
     /// JSON-encodes a Swift string into a safe JS string literal.
@@ -105,7 +112,9 @@ final class ClubhouseEngine: NSObject {
         case "playing": onEvent?(.playing(id: id, pos: pos))
         case "pos": onEvent?(.pos(id: id, pos: pos, silenced: (dict["silenced"] as? Bool) ?? false))
         case "ended": onEvent?(.ended(id: id))
-        case "playfail": onEvent?(.playFail(id: id))
+        case "playfail": onEvent?(.playFail(id: id, why: (dict["why"] as? String) ?? ""))
+        case "need": onEvent?(.needSong(id: id))
+        case "feedfail": onEvent?(.feedFail(id: id))
         case "botReady": onEvent?(.botReady)
         case "botDone": onEvent?(.botDone)
         case "botFail": onEvent?(.botFail)
@@ -128,56 +137,3 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// Serves picked song bytes to the engine page as kadefile://song/<id>.
-/// CORS headers included — WebKit applies cross-origin rules to custom-scheme
-/// fetches made from an https page.
-private final class SongSchemeHandler: NSObject, WKURLSchemeHandler {
-    private var files: [String: Data] = [:]
-    private let lock = NSLock()
-
-    func put(id: String, data: Data) {
-        lock.lock(); defer { lock.unlock() }
-        // Keep at most three songs in memory — radio fights replay recents.
-        if files.count >= 3, files[id] == nil, let oldest = files.keys.first {
-            files.removeValue(forKey: oldest)
-        }
-        files[id] = data
-    }
-
-    func clear() {
-        lock.lock(); defer { lock.unlock() }
-        files.removeAll()
-    }
-
-    private func data(for id: String) -> Data? {
-        lock.lock(); defer { lock.unlock() }
-        return files[id]
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard let url = urlSchemeTask.request.url else {
-            urlSchemeTask.didFailWithError(URLError(.badURL))
-            return
-        }
-        let id = url.lastPathComponent
-        guard let bytes = data(for: id) else {
-            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
-            return
-        }
-        let headers: [String: String] = [
-            "Content-Type": "application/octet-stream",
-            "Content-Length": String(bytes.count),
-            "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "no-store",
-        ]
-        if let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers) {
-            urlSchemeTask.didReceive(response)
-            urlSchemeTask.didReceive(bytes)
-            urlSchemeTask.didFinish()
-        } else {
-            urlSchemeTask.didFailWithError(URLError(.cannotParseResponse))
-        }
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
-}

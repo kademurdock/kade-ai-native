@@ -144,6 +144,8 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var engineLastPos: Double = 0
     private var engineLastPosAt = Date()
     private var pendingInviteAgent: ClubAgent?
+    private var pendingResume: [String: Double] = [:]
+    private var feedingSongs: Set<String> = []
     private var tick: Timer?
 
     init(client: KadeAPIClient) {
@@ -348,7 +350,8 @@ final class ClubhouseService: NSObject, ObservableObject {
                         club.playing = false
                     }
                 }
-                setAct("\(who) took \(r.title) off the list.")
+                let auto = (m["auto"] as? Bool) ?? false
+                setAct(auto ? "\(r.title) would not play and came off the list." : "\(who) took \(r.title) off the list.")
             }
         case "ended":
             if let n = nextPlayable(from: i, dir: 1) {
@@ -418,22 +421,56 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     private func startEnginePlayback(_ e: ClubEntry) {
-        guard let data = songData[e.id] else {
-            announce("That song's file is missing — taking it off the list.")
-            clubCmd("remove", id: e.id)
+        guard songData[e.id] != nil else {
+            announce("That song's file went missing on this phone — taking it off the list.")
+            autoRemove(e.id)
             return
         }
         enginePlayingId = e.id
         engineLastPos = club.pos == 0 ? 0 : (myPos[e.id] ?? 0)
         engineLastPosAt = Date()
         let resume = club.pos == 0 ? 0 : (myPos[e.id] ?? 0)
+        pendingResume[e.id] = resume
         Task { [weak self] in
             guard let self else { return }
             let ok = await self.ensureEngine()
-            guard ok, self.enginePlayingId == e.id else { return }
-            self.engine.register(songId: e.id, data: data)
+            guard self.enginePlayingId == e.id else { return }
+            guard ok else {
+                self.enginePlayingId = nil
+                self.announce("The music engine could not start — pausing the jukebox for now.")
+                self.clubCmd("pause")
+                return
+            }
             self.engine.command("KE.loadPlay(\(ClubhouseEngine.jsString(e.id)), \(resume))")
         }
+    }
+
+    /// Feeds a song's bytes to the engine as base64 chunks over the JS
+    /// bridge — awaited per chunk so nothing piles up in flight. (fetch()
+    /// refuses custom URL schemes in WebKit; build 156 proved it live.)
+    private func feedSong(_ id: String) async -> Bool {
+        guard let data = songData[id] else { return false }
+        if feedingSongs.contains(id) { return true }
+        feedingSongs.insert(id)
+        defer { feedingSongs.remove(id) }
+        let b64 = data.base64EncodedString()
+        let chunkSize = 3_000_000
+        var idx = b64.startIndex
+        while idx < b64.endIndex {
+            let end = b64.index(idx, offsetBy: chunkSize, limitedBy: b64.endIndex) ?? b64.endIndex
+            let chunk = String(b64[idx..<end])
+            let last = end == b64.endIndex
+            let js = "KE.feedB64(\(ClubhouseEngine.jsString(id)), \"\(chunk)\", \(last))"
+            let ok = await engine.commandAsync(js)
+            if !ok { return false }
+            idx = end
+        }
+        return true
+    }
+
+    private func autoRemove(_ id: String) {
+        let msg: [String: Any] = ["t": "cmd", "cmd": "remove", "id": id, "auto": true, "fromName": myName]
+        if iAmAuthority() { applyCmd(msg) } else { sendData(msg) }
     }
 
     private func silenceEngine() {
@@ -511,10 +548,32 @@ final class ClubhouseService: NSObject, ObservableObject {
                 enginePlayingId = nil
                 if iAmAuthority() { applyCmd(["cmd": "ended", "fromName": ""]) }
             }
-        case let .playFail(id):
+        case let .needSong(id):
+            Task { [weak self] in
+                guard let self else { return }
+                let ok = await self.feedSong(id)
+                guard self.enginePlayingId == id else { return }
+                if ok {
+                    let resume = self.pendingResume[id] ?? 0
+                    self.engine.command("KE.loadPlay(\(ClubhouseEngine.jsString(id)), \(resume))")
+                } else {
+                    self.enginePlayingId = nil
+                    self.announce("That song would not reach the engine — taking it off the list.")
+                    self.autoRemove(id)
+                }
+            }
+        case let .feedFail(id):
             enginePlayingId = nil
-            announce("That file would not play — try an MP3, M4A, or WAV.")
-            clubCmd("remove", id: id)
+            announce("That song's data would not load — taking it off the list.")
+            autoRemove(id)
+        case let .playFail(id, why):
+            enginePlayingId = nil
+            if why == "publish" {
+                announce("The room would not take the track — try playing it again.")
+            } else {
+                announce("That file would not play — try an MP3, M4A, or WAV.")
+                autoRemove(id)
+            }
         case .botReady:
             if let agent = pendingInviteAgent {
                 pendingInviteAgent = nil
