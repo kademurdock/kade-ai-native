@@ -25,6 +25,7 @@ struct ClubhouseView: View {
     @State private var seekPos: Double = 0
     @State private var seekEditing = false
     @State private var showLeaveWhileTaping = false
+    @State private var showCompanionPicker = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(apiClient: KadeAPIClient) {
@@ -341,12 +342,25 @@ struct ClubhouseView: View {
             }
             Section {
                 if service.botName == nil {
-                    Picker("Who to invite", selection: $pickedAgentId) {
-                        Text("Pick a companion…").tag("")
-                        ForEach(service.agents) { a in
-                            Text(a.name).tag(a.id)
+                    // Her catch: a 200-name Picker renders as one giant menu —
+                    // unscrollable misery, worse with VoiceOver. A sheet with a
+                    // real List + search scrolls and rotors like anything else.
+                    Button {
+                        showCompanionPicker = true
+                    } label: {
+                        HStack {
+                            Text("Who to invite")
+                            Spacer()
+                            Text(service.agents.first(where: { $0.id == pickedAgentId })?.name ?? "Pick a companion")
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .accessibilityLabel(
+                        pickedAgentId.isEmpty
+                            ? "Who to invite. Nobody picked yet."
+                            : "Who to invite. Currently \(service.agents.first(where: { $0.id == pickedAgentId })?.name ?? "someone")."
+                    )
+                    .accessibilityHint("Opens a searchable list of companions.")
                     Button("Invite them in") {
                         if let agent = service.agents.first(where: { $0.id == pickedAgentId }) {
                             service.inviteBot(agent)
@@ -390,6 +404,9 @@ struct ClubhouseView: View {
             Button("Leave and lose the tape", role: .destructive) { service.leave() }
             Button("Stay", role: .cancel) {}
         }
+        .sheet(isPresented: $showCompanionPicker) {
+            CompanionPickerSheet(agents: service.agents, selectedId: $pickedAgentId)
+        }
     }
 
     private func timeString(_ t: Double) -> String {
@@ -406,6 +423,62 @@ struct ClubhouseView: View {
         if row.isMe { line += " (you)" }
         if row.talking { line += " — talking" }
         return line
+    }
+}
+
+/// The companion picker as a real, searchable, scrollable list — replacing
+/// a 200-name Picker menu that could not be scrolled (her catch, July 24).
+/// Plain List rows read and rotor cleanly under VoiceOver; the search field
+/// shortens the walk.
+private struct CompanionPickerSheet: View {
+    let agents: [ClubAgent]
+    @Binding var selectedId: String
+    @State private var search = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var hits: [ClubAgent] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return agents }
+        return agents.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(hits) { a in
+                        Button {
+                            selectedId = a.id
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(a.name)
+                                    .foregroundStyle(.primary)
+                                if a.id == selectedId {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                        }
+                        .accessibilityLabel(a.id == selectedId ? "\(a.name), current pick" : a.name)
+                        .accessibilityHint("Picks them and closes the list.")
+                    }
+                } footer: {
+                    Text(search.isEmpty
+                        ? "\(agents.count) companions — search above to shorten the list."
+                        : "Showing \(hits.count) of \(agents.count).")
+                }
+            }
+            .searchable(text: $search, prompt: "Search companions")
+            .navigationTitle("Who to invite")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
     }
 }
 
