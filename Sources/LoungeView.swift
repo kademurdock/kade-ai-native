@@ -2,7 +2,11 @@ import SwiftUI
 import WebKit
 import UIKit
 
-/// THE LOUNGE, native doorway (July 24 2026 — Kade: "Can you build the
+/// KADE'S CLUBHOUSE, native doorway (born THE LOUNGE — renamed July 24 2026
+/// per CLUBHOUSE_VISION: the web page this hosts now carries the shared
+/// jukebox, the Hotel's passcode rooms, and companion guests; the doorway
+/// inherits all of it for free because the page IS the feature).
+/// Original note (July 24 2026 — Kade: "Can you build the
 /// lounge into native so I can test it there? My computer has a crap
 /// internal mic.").
 ///
@@ -26,7 +30,7 @@ struct LoungeView: View {
 
     var body: some View {
         LoungeWebContainer()
-            .navigationTitle("The Lounge")
+            .navigationTitle("Kade's Clubhouse")
             .navigationBarTitleDisplayMode(.inline)
             .ignoresSafeArea(edges: .bottom)
     }
@@ -80,7 +84,7 @@ private struct LoungeWebContainer: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             UIAccessibility.post(
                 notification: .announcement,
-                argument: "The Lounge page couldn't load — check the connection and reopen this screen."
+                argument: "The Clubhouse page couldn't load — check the connection and reopen this screen."
             )
         }
     }
