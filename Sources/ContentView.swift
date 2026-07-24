@@ -206,6 +206,8 @@ struct ContentView: View {
                     MatchmakerView(apiClient: apiClient)
                 case .parlor:
                     ParlorView(apiClient: apiClient)
+                case .lounge:
+                    LoungeView(apiClient: apiClient)
                 case .gameRoom:
                     GameRoomView(apiClient: apiClient)
                 case .debateRoom:
@@ -427,6 +429,7 @@ struct ContentView: View {
                 toolTile("Describe", spoken: "Describe a photo, video, or document", icon: "plus.viewfinder", tint: .teal, hint: "Take or choose a photo or video, or pick a document, and get it described or read back to you.", destination: .describe)
                 toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
                 toolTile("The Parlor", spoken: "The Parlor", icon: "suit.club.fill", tint: .mint, hint: "Every game on a menu — play your own cards with buttons, seat characters if you want company, and a house narrator calls the table.", destination: .parlor)
+                toolTile("The Lounge", spoken: "The Lounge", icon: "hifispeaker.2.fill", tint: .pink, hint: "Family voice rooms with real stereo — sit and talk, take the music seat, or join a game table's room by its code.", destination: .lounge)
                 toolTile("Game Room", spoken: "Game Room", icon: "gamecontroller", tint: .green, hint: "Family standings and recent results from games played in chat.", destination: .gameRoom)
                 toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
                 toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
@@ -715,6 +718,7 @@ enum HomeRoute: Identifiable, Hashable {
     case quickDictate
     case matchmaker
     case parlor
+    case lounge
     case gameRoom
     case debateRoom
     case agentBuilder
@@ -734,6 +738,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .quickDictate: return "quickDictate"
         case .matchmaker: return "matchmaker"
         case .parlor: return "parlor"
+        case .lounge: return "lounge"
         case .gameRoom: return "gameRoom"
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
