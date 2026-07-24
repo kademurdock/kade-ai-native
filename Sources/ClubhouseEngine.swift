@@ -67,7 +67,10 @@ final class ClubhouseEngine: NSObject {
         }
         let frag = "lk=\(enc(livekitToken))&url=\(enc(livekitURL))&api=\(enc(apiToken))"
         if let url = URL(string: "https://kademurdock.com/clubhouse-engine#\(frag)") {
-            web.load(URLRequest(url: url))
+            // Always fetch the engine page FRESH — a cached copy from an old
+            // deploy replays yesterday's bugs on today's phone (round 5; the
+            // server now also sends Cache-Control: no-store).
+            web.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
     }
 

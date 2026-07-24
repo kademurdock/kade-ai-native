@@ -165,6 +165,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var pendingResume: [String: Double] = [:]
     private var feedingSongs: Set<String> = []
     private var haltCount: [String: Int] = [:]
+    private var engineRebuildTried: Set<String> = []
     private var mySeekN = 0
     private var posStamp = Date()
     private var tick: Timer?
@@ -640,6 +641,7 @@ final class ClubhouseService: NSObject, ObservableObject {
                 if leaveAfterRec { leaveAfterRec = false; leave() }
             }
         case let .playing(id, pos, dur):
+            engineRebuildTried.remove(id) // a clean start re-arms the rescue
             if enginePlayingId == id {
                 engineLastPos = pos
                 engineLastPosAt = Date()
@@ -708,7 +710,34 @@ final class ClubhouseService: NSObject, ObservableObject {
         case let .playFail(id, why):
             enginePlayingId = nil
             if why == "publish" {
-                announce("The room would not take the track — try playing it again.")
+                // THE NUCLEAR OPTION (round 5, her wedge outlived the
+                // watchdog): a WebContent process whose audio died stays
+                // dead — so scrap the whole engine WebView ONCE and rebuild
+                // fresh (new process, new audio unit), then replay from the
+                // same spot. The engine posts 'need', the app re-feeds the
+                // bytes. A second failure in a row gets the honest line.
+                if !engineRebuildTried.contains(id), let e = entryById(id), e.by == myIdentity {
+                    engineRebuildTried.insert(id)
+                    if recording || recPending {
+                        recording = false
+                        recPending = false
+                        recData = Data()
+                        recorders.removeValue(forKey: myIdentity)
+                        rebuildUI()
+                        sendData(["t": "rec", "on": false, "fromName": myName])
+                        announce("The engine needed a rebuild and the tape went with it — sorry. Start a fresh one.")
+                    }
+                    engine.teardown()
+                    engineUp = false
+                    engineReadyFlag = false
+                    resolveEngineWaiters(false)
+                    announce("The music engine dozed off — rebuilding it, one second…")
+                    if club.playing, let cur = curEntry(), cur.id == id {
+                        startEnginePlayback(e)
+                    }
+                } else {
+                    announce("The room would not take the track — try playing it again.")
+                }
             } else {
                 announce("That file would not play — try an MP3, M4A, or WAV.")
                 autoRemove(id)
@@ -986,6 +1015,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         recData = Data()
         recorders = [:]
         leaveAfterRec = false
+        engineRebuildTried = []
         phase = .inRoom
         rebuildRoster()
         rebuildUI()

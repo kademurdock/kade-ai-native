@@ -338,7 +338,7 @@ struct ClubhouseView: View {
             } header: {
                 Text("My mic")
             } footer: {
-                Text("Sends your mic raw — no echo cancel, no noise trims, full fidelity, and incoming music stops dipping while you talk. Headphones only: on a speaker, the room will hear themselves echo off you.")
+                Text("Sends your mic raw — no echo cancel, no noise trims, full fidelity, and incoming music stops dipping while you talk. It also unlocks STEREO music on this phone: Apple's echo-cancel engine is mono-only (the same wall TeamTalk hits), so with this off, the jukebox arrives folded to one channel. Headphones only: on a speaker, the room will hear themselves echo off you.")
             }
             Section {
                 if service.botName == nil {
