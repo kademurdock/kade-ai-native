@@ -194,6 +194,13 @@ final class MessageSendingService: ObservableObject {
         if let files, !files.isEmpty {
             body["files"] = files
         }
+        // July 23 2026 (kade_location): opt-in coordinate ride-along — same
+        // shape the web client attaches. Nil (setting off / no fresh fix)
+        // means the key is absent and the payload is byte-identical to
+        // before this feature existed.
+        if let userLocation = KadeLocationShare.shared.freshPayload() {
+            body["userLocation"] = userLocation
+        }
 
         var req = client.request(path: "api/agents/chat/agents", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

@@ -33,6 +33,9 @@ struct SettingsView: View {
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var appearance: AppearancePreferences
     @EnvironmentObject private var feedback: FeedbackPrefs
+    /// July 23 2026: opt-in location ride-along (singleton — the watch must
+    /// outlive this screen, so it's observed here, never owned here).
+    @ObservedObject private var locationShare = KadeLocationShare.shared
 
     @State private var showingSpeedPicker = false
     /// Bool-based (not a `NavigationLink`, matching this app's own house
@@ -99,6 +102,21 @@ struct SettingsView: View {
                 Text("Speech")
             } footer: {
                 Text("Voice message speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
+            }
+
+            // July 23 2026 (Maps/GPS slice 1, Kade-approved): opt-in
+            // location ride-along for the kade_location tool. OFF by
+            // default; flipping it on triggers the system permission prompt
+            // via KadeLocationShare.
+            Section {
+                Toggle(isOn: $locationShare.enabled) {
+                    Text("Share my location with your companions")
+                }
+                .accessibilityHint("Lets companions answer where am I, what's around me, and give walking directions, using this phone's location while the app is open.")
+            } header: {
+                Text("Location")
+            } footer: {
+                Text("Only while the app is open, and only when this is on. Nothing is shared when it's off.")
             }
 
             Section {
