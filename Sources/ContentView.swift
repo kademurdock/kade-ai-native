@@ -207,7 +207,7 @@ struct ContentView: View {
                 case .parlor:
                     ParlorView(apiClient: apiClient)
                 case .lounge:
-                    LoungeView(apiClient: apiClient)
+                    ClubhouseView(apiClient: apiClient)
                 case .gameRoom:
                     GameRoomView(apiClient: apiClient)
                 case .debateRoom:
@@ -430,7 +430,6 @@ struct ContentView: View {
                 toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
                 toolTile("The Parlor", spoken: "The Parlor", icon: "suit.club.fill", tint: .mint, hint: "Every game on a menu — play your own cards with buttons, seat characters if you want company, and a house narrator calls the table.", destination: .parlor)
                 toolTile("Kade's Clubhouse", spoken: "Kade's Clubhouse", icon: "hifispeaker.2.fill", tint: .pink, hint: "Live family voice rooms with a shared jukebox anyone can drive, private Hotel rooms with passcodes, and companion guests you can invite in.", destination: .lounge)
-                toolTile("Game Room", spoken: "Game Room", icon: "gamecontroller", tint: .green, hint: "Family standings and recent results from games played in chat.", destination: .gameRoom)
                 toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
                 toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
                 toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)

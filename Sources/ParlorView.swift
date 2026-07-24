@@ -131,6 +131,21 @@ struct ParlorView: View {
                     }
                 }
             }
+            Section("The Game Room") {
+                // July 24 2026, her call: "the game room seems redundant with
+                // the parlor... combining them." The standings screen now
+                // lives HERE — the home tile is gone.
+                NavigationLink {
+                    GameRoomView(apiClient: apiClient)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Family standings and records")
+                        Text("Bragging rights, highlights, and the latest results — straight from the referee.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             Section("Deal something new") {
                 if loadFailed {
                     Button("Couldn't load the menu — try again") { Task { await loadMenu() } }
