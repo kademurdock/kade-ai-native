@@ -21,6 +21,9 @@ struct ClubhouseView: View {
     @State private var showAddChoice = false
     @State private var roomPendingClose: ClubHotelRoom?
     @State private var showCloseConfirm = false
+    @State private var showClearConfirm = false
+    @State private var seekPos: Double = 0
+    @State private var seekEditing = false
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: ClubhouseService(client: apiClient))
@@ -181,13 +184,40 @@ struct ClubhouseView: View {
                 Button("Back a song") { service.back() }
                     .accessibilityHint("Goes back to the song before this one — radio fights are allowed.")
                 Button("Skip ahead") { service.skip() }
-                Button("Stop the music") { service.stopMusic() }
+                if service.hasSong {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Slider(
+                            value: $seekPos,
+                            in: 0...max(1, service.songDur)
+                        ) {
+                            Text("Song position")
+                        } onEditingChanged: { editing in
+                            seekEditing = editing
+                            if !editing { service.seek(to: seekPos) }
+                        }
+                        .accessibilityValue("\(timeString(seekPos)) of \(timeString(service.songDur))")
+                        Text("\(timeString(seekPos)) of \(timeString(service.songDur))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    HStack {
+                        Button("Back 15 seconds") { service.seekRelative(-15) }
+                            .buttonStyle(.bordered)
+                        Button("Ahead 15 seconds") { service.seekRelative(15) }
+                            .buttonStyle(.bordered)
+                    }
+                }
                 Button("Add a song") { showFilePicker = true }
                     .accessibilityHint("Pick an audio file, then choose to cut in or queue it politely.")
+                Button("Clear the queue", role: .destructive) { showClearConfirm = true }
             } header: {
                 Text("The jukebox")
             } footer: {
                 Text("One player for the whole room — anybody can drive it. Your volume below is yours alone; voices always come through full.")
+            }
+            .onChange(of: service.songPos) { _, newPos in
+                if !seekEditing { seekPos = newPos }
             }
             if !service.queueRows.isEmpty {
                 Section("Up next") {
@@ -231,6 +261,16 @@ struct ClubhouseView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Headphones clarity mode", isOn: Binding(
+                    get: { service.clearMic },
+                    set: { service.setClearMic($0) }
+                ))
+            } header: {
+                Text("My mic")
+            } footer: {
+                Text("Sends your mic raw — no echo cancel, no noise trims, full fidelity, and incoming music stops dipping while you talk. Headphones only: on a speaker, the room will hear themselves echo off you.")
+            }
+            Section {
                 if service.botName == nil {
                     Picker("Who to invite", selection: $pickedAgentId) {
                         Text("Pick a companion…").tag("")
@@ -261,6 +301,10 @@ struct ClubhouseView: View {
                 showAddChoice = true
             }
         }
+        .confirmationDialog("Clear the whole queue, for everybody?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("Clear it", role: .destructive) { service.clearQueue() }
+            Button("Keep it", role: .cancel) {}
+        }
         .confirmationDialog("How should it land?", isPresented: $showAddChoice, titleVisibility: .visible) {
             Button("Cut in and play it now") {
                 if let url = pendingSongURL { service.addSong(url: url, interrupt: true) }
@@ -272,6 +316,11 @@ struct ClubhouseView: View {
             }
             Button("Never mind", role: .cancel) { pendingSongURL = nil }
         }
+    }
+
+    private func timeString(_ t: Double) -> String {
+        let secs = max(0, Int(t.rounded()))
+        return "\(secs / 60):" + String(format: "%02d", secs % 60)
     }
 
     private func rosterLine(_ row: ClubRosterRow) -> String {

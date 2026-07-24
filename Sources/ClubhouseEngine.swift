@@ -25,9 +25,10 @@ final class ClubhouseEngine: NSObject {
         case ready
         case dead
         case gone
-        case playing(id: String, pos: Double)
+        case playing(id: String, pos: Double, dur: Double)
         case pos(id: String, pos: Double, silenced: Bool)
         case ended(id: String)
+        case halted(id: String, pos: Double)
         case playFail(id: String, why: String)
         case needSong(id: String)
         case feedFail(id: String)
@@ -109,7 +110,8 @@ final class ClubhouseEngine: NSObject {
         case "ready": onEvent?(.ready)
         case "dead": onEvent?(.dead)
         case "gone": onEvent?(.gone)
-        case "playing": onEvent?(.playing(id: id, pos: pos))
+        case "playing": onEvent?(.playing(id: id, pos: pos, dur: (dict["dur"] as? NSNumber)?.doubleValue ?? 0))
+        case "halted": onEvent?(.halted(id: id, pos: pos))
         case "pos": onEvent?(.pos(id: id, pos: pos, silenced: (dict["silenced"] as? Bool) ?? false))
         case "ended": onEvent?(.ended(id: id))
         case "playfail": onEvent?(.playFail(id: id, why: (dict["why"] as? String) ?? ""))

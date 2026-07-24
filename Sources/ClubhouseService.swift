@@ -21,16 +21,21 @@ struct ClubEntry: Equatable {
     let title: String
     let by: String
     let byName: String
+    var dur: Double?
 
     var dict: [String: Any] {
-        ["id": id, "title": title, "by": by, "byName": byName]
+        var d: [String: Any] = ["id": id, "title": title, "by": by, "byName": byName]
+        if let dur { d["dur"] = dur }
+        return d
     }
 
     static func from(_ d: [String: Any]) -> ClubEntry? {
         guard let id = d["id"] as? String,
               let title = d["title"] as? String,
               let by = d["by"] as? String else { return nil }
-        return ClubEntry(id: id, title: title, by: by, byName: (d["byName"] as? String) ?? "Somebody")
+        return ClubEntry(id: id, title: title, by: by,
+                         byName: (d["byName"] as? String) ?? "Somebody",
+                         dur: (d["dur"] as? NSNumber)?.doubleValue)
     }
 }
 
@@ -108,6 +113,10 @@ final class ClubhouseService: NSObject, ObservableObject {
     @Published var botBusy = false
     @Published var botLastLine = ""
     @Published var engineUp = false
+    @Published var songPos: Double = 0
+    @Published var songDur: Double = 300
+    @Published var hasSong = false
+    @Published var clearMic: Bool
 
     private let client: KadeAPIClient
     let engine = ClubhouseEngine()
@@ -128,6 +137,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         var curId: String?
         var playing = false
         var pos: Double = -1
+        var seek: [String: Any]?
     }
 
     private var club = ClubState()
@@ -146,11 +156,16 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var pendingInviteAgent: ClubAgent?
     private var pendingResume: [String: Double] = [:]
     private var feedingSongs: Set<String> = []
+    private var haltCount: [String: Int] = [:]
+    private var mySeekN = 0
+    private var posStamp = Date()
     private var tick: Timer?
+    private var uiTick: Timer?
 
     init(client: KadeAPIClient) {
         let saved = UserDefaults.standard.object(forKey: "kadeClubMusicVol") as? Double
         musicVolume = saved.map { max(0, min(1, $0)) } ?? 0.25
+        clearMic = UserDefaults.standard.bool(forKey: "kadeClubClearMic")
         self.client = client
         super.init()
         engine.onEvent = { [weak self] event in
@@ -240,6 +255,7 @@ final class ClubhouseService: NSObject, ObservableObject {
                 "curId": club.curId as Any? ?? NSNull(),
                 "playing": club.playing,
                 "pos": club.pos,
+                "seek": club.seek as Any? ?? NSNull(),
             ],
         ])
     }
@@ -264,6 +280,8 @@ final class ClubhouseService: NSObject, ObservableObject {
             club.curId = jb["curId"] as? String
             club.playing = (jb["playing"] as? Bool) ?? false
             club.pos = (jb["pos"] as? NSNumber)?.doubleValue ?? -1
+            club.seek = jb["seek"] as? [String: Any]
+            posStamp = Date()
         }
         if club.actn > lastActn {
             lastActn = club.actn
@@ -353,6 +371,24 @@ final class ClubhouseService: NSObject, ObservableObject {
                 let auto = (m["auto"] as? Bool) ?? false
                 setAct(auto ? "\(r.title) would not play and came off the list." : "\(who) took \(r.title) off the list.")
             }
+        case "seek":
+            let target = entryById((m["id"] as? String) ?? "") ?? curEntry()
+            if let e = target, e.id == club.curId {
+                let p = max(0, (m["pos"] as? NSNumber)?.doubleValue ?? 0)
+                club.pos = p
+                let n = ((club.seek?["n"] as? NSNumber)?.intValue ?? 0) + 1
+                club.seek = ["id": e.id, "pos": p, "n": n]
+                setAct("\(who) moved the song.")
+            }
+        case "clearq":
+            if !club.queue.isEmpty {
+                club.queue = []
+                club.curId = nil
+                club.playing = false
+                club.pos = -1
+                club.seek = nil
+                setAct("\(who) cleared the queue.")
+            }
         case "ended":
             if let n = nextPlayable(from: i, dir: 1) {
                 setCurrentId(n.id)
@@ -391,9 +427,10 @@ final class ClubhouseService: NSObject, ObservableObject {
         bumpBroadcast()
     }
 
-    func clubCmd(_ cmd: String, id: String? = nil) {
+    func clubCmd(_ cmd: String, id: String? = nil, extra: [String: Any] = [:]) {
         var msg: [String: Any] = ["t": "cmd", "cmd": cmd, "fromName": myName]
         if let id { msg["id"] = id }
+        for (k, v) in extra { msg[k] = v }
         if iAmAuthority() { applyCmd(msg) } else { sendData(msg) }
     }
 
@@ -405,6 +442,13 @@ final class ClubhouseService: NSObject, ObservableObject {
 
     private func reconcile() {
         let cur = curEntry()
+        if let e = cur, let sk = club.seek,
+           (sk["id"] as? String) == e.id,
+           let n = (sk["n"] as? NSNumber)?.intValue, n != mySeekN, e.by == myIdentity {
+            mySeekN = n
+            myPos[e.id] = max(0, (sk["pos"] as? NSNumber)?.doubleValue ?? 0)
+            if enginePlayingId == e.id { enginePlayingId = nil } // force restart at the spot
+        }
         let mine = cur != nil && club.playing && cur?.by == myIdentity
         if mine, let e = cur {
             if enginePlayingId != e.id {
@@ -527,10 +571,17 @@ final class ClubhouseService: NSObject, ObservableObject {
             engine.teardown()
             engineUp = false
             resolveEngineWaiters(false)
-        case let .playing(id, pos):
+        case let .playing(id, pos, dur):
             if enginePlayingId == id {
                 engineLastPos = pos
                 engineLastPosAt = Date()
+            }
+            if dur > 0, let idx = club.queue.firstIndex(where: { $0.id == id }),
+               club.queue[idx].dur == nil, club.queue[idx].by == myIdentity {
+                club.queue[idx].dur = dur
+                club.v += 1
+                broadcastState()
+                rebuildUI()
             }
         case let .pos(id, pos, silenced):
             myPos[id] = pos
@@ -540,6 +591,7 @@ final class ClubhouseService: NSObject, ObservableObject {
                 } else {
                     engineLastPos = pos
                     engineLastPosAt = Date()
+                    haltCount[id] = 0 // stable seconds — the interruption passed
                 }
             }
         case let .ended(id):
@@ -547,6 +599,25 @@ final class ClubhouseService: NSObject, ObservableObject {
             if enginePlayingId == id {
                 enginePlayingId = nil
                 if iAmAuthority() { applyCmd(["cmd": "ended", "fromName": ""]) }
+            }
+        case let .halted(id, pos):
+            // her live catch: a source dying mid-song is an iOS session grab
+            // (VoiceOver, a call), NOT the end of the song. Resume once,
+            // quietly; if it keeps dying, pause honestly. Never eat a queue.
+            myPos[id] = pos
+            guard enginePlayingId == id else { break }
+            enginePlayingId = nil
+            haltCount[id, default: 0] += 1
+            if haltCount[id, default: 0] <= 1 {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard let self, let e = self.curEntry(), e.id == id,
+                          self.club.playing, self.enginePlayingId == nil else { return }
+                    self.startEnginePlayback(e)
+                }
+            } else {
+                announce("The music keeps getting interrupted — press Play when you're ready.")
+                clubCmd("pause")
             }
         case let .needSong(id):
             Task { [weak self] in
@@ -746,6 +817,11 @@ final class ClubhouseService: NSObject, ObservableObject {
         newRoom.add(delegate: self)
         room = newRoom
         AudioManager.shared.isSpeakerOutputPreferred = true
+        // her audio-clarity call: iOS ducking of incoming audio drops to its
+        // minimum (the room's music/voice balance is HER slider's job, not
+        // Apple's), and platform voice processing follows the clarity pref.
+        AudioManager.shared.duckingLevel = .min
+        try? AudioManager.shared.setPlatformVoiceProcessingAllowed(!clearMic)
 
         var attempt = 0
         while true {
@@ -769,7 +845,7 @@ final class ClubhouseService: NSObject, ObservableObject {
 
         micMuted = false
         do {
-            try await newRoom.localParticipant.setMicrophone(enabled: true)
+            try await newRoom.localParticipant.setMicrophone(enabled: true, captureOptions: captureOpts())
         } catch {
             announce("Mic permission was refused — you can listen, but the room cannot hear you.")
         }
@@ -793,12 +869,30 @@ final class ClubhouseService: NSObject, ObservableObject {
         tick = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.periodicTick() }
         }
+        uiTick?.invalidate()
+        uiTick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.uiTickBeat() }
+        }
+    }
+
+    private func uiTickBeat() {
+        guard let cur = curEntry() else {
+            hasSong = false
+            songPos = 0
+            return
+        }
+        hasSong = true
+        songDur = cur.dur ?? 300
+        let base = club.pos >= 0 ? club.pos : 0
+        let live = club.playing ? base + Date().timeIntervalSince(posStamp) : base
+        songPos = min(songDur, max(0, live))
     }
 
     private func periodicTick() {
         guard room != nil else { return }
         if let e = curEntry(), club.playing, e.by == myIdentity, enginePlayingId == e.id {
             club.pos = enginePosEstimate().rounded()
+            posStamp = Date()
             club.v += 1
             broadcastState()
         }
@@ -809,10 +903,52 @@ final class ClubhouseService: NSObject, ObservableObject {
         guard let room else { return }
         micMuted.toggle()
         let enabled = !micMuted
+        let opts = captureOpts()
         Task {
-            try? await room.localParticipant.setMicrophone(enabled: enabled)
+            try? await room.localParticipant.setMicrophone(enabled: enabled, captureOptions: opts)
         }
         announce(micMuted ? "Mic muted." : "Mic live.")
+    }
+
+    /// Her design point, verbatim: "we might not TECHnically need iphone
+    /// noise reduction unless they were using the speaker and people heard
+    /// themselves... The idea is audio clarity anyway." Raw mic on request;
+    /// speaker-friendly processing stays the default because one
+    /// speakerphone without echo cancel wrecks the room for everybody.
+    private func captureOpts() -> AudioCaptureOptions {
+        clearMic
+            ? AudioCaptureOptions(echoCancellation: false, autoGainControl: false, noiseSuppression: false, highpassFilter: false)
+            : AudioCaptureOptions()
+    }
+
+    func setClearMic(_ on: Bool) {
+        clearMic = on
+        UserDefaults.standard.set(on, forKey: "kadeClubClearMic")
+        guard let room else { return }
+        try? AudioManager.shared.setPlatformVoiceProcessingAllowed(!on)
+        let opts = captureOpts()
+        let unmuted = !micMuted
+        Task {
+            try? await room.localParticipant.setMicrophone(enabled: false)
+            if unmuted {
+                try? await room.localParticipant.setMicrophone(enabled: true, captureOptions: opts)
+            }
+            self.announce(on ? "Mic is raw now — full clarity, headphones etiquette." : "Mic is speaker-friendly now.")
+        }
+    }
+
+    func seek(to seconds: Double) {
+        guard let cur = curEntry() else { return }
+        clubCmd("seek", id: cur.id, extra: ["pos": max(0, seconds)])
+    }
+
+    func seekRelative(_ delta: Double) {
+        guard curEntry() != nil else { return }
+        seek(to: max(0, songPos + delta))
+    }
+
+    func clearQueue() {
+        clubCmd("clearq")
     }
 
     func sayWhosHere() {
@@ -830,6 +966,8 @@ final class ClubhouseService: NSObject, ObservableObject {
         resolveEngineWaiters(false)
         tick?.invalidate()
         tick = nil
+        uiTick?.invalidate()
+        uiTick = nil
         if let room {
             Task { await room.disconnect() }
         }
