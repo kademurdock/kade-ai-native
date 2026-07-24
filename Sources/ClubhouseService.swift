@@ -1223,6 +1223,48 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
+    /// The link lane (round 7): a pasted YouTube/Spotify link becomes
+    /// ordinary jukebox bytes — the fork pulls the audio (yt-dlp; Spotify
+    /// arrives by name-match since its audio is locked) and from there
+    /// it's a normal entry: queue, cut in, radio-fight over it.
+    func addSong(fromLink raw: String, interrupt: Bool) {
+        let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !urlStr.isEmpty else { return }
+        announce("Fetching that link — give it a few seconds…")
+        Task { [weak self] in
+            guard let self else { return }
+            var req = self.client.request(path: "api/kade/lounge/fetch-track", method: "POST", authorized: true)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.timeoutInterval = 150
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["url": urlStr])
+            guard let (data, http) = try? await self.client.send(req) else {
+                self.announce("That link would not fetch — try another.")
+                return
+            }
+            guard http.statusCode == 200, !data.isEmpty else {
+                self.announce(Self.explain(data, fallback: "That link would not fetch — YouTube song links work best."))
+                return
+            }
+            guard data.count <= 60_000_000 else {
+                self.announce("That file is too big — keep songs under about sixty megabytes.")
+                return
+            }
+            var title = "a song"
+            if let th = http.value(forHTTPHeaderField: "x-kade-title"),
+               let dec = th.removingPercentEncoding, !dec.isEmpty {
+                title = String(dec.prefix(60))
+            }
+            let id = "e" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(7).lowercased()
+            self.songData[id] = data
+            let entry = ClubEntry(id: id, title: title, by: self.myIdentity, byName: self.myName)
+            if self.iAmAuthority() {
+                self.applyAdd(entry: entry, interrupt: interrupt, fromName: self.myName)
+            } else {
+                self.sendData(["t": "add", "entry": entry.dict, "interrupt": interrupt, "fromName": self.myName])
+            }
+        }
+    }
+
     func togglePlay() { clubCmd(club.playing ? "pause" : "play") }
     func skip() { clubCmd("skip") }
     func back() { clubCmd("back") }

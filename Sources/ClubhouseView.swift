@@ -26,6 +26,8 @@ struct ClubhouseView: View {
     @State private var seekEditing = false
     @State private var showLeaveWhileTaping = false
     @State private var showCompanionPicker = false
+    @State private var songLink = ""
+    @State private var showLinkChoice = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(apiClient: KadeAPIClient) {
@@ -258,6 +260,13 @@ struct ClubhouseView: View {
                 }
                 Button("Add a song") { showFilePicker = true }
                     .accessibilityHint("Pick an audio file, then choose to cut in or queue it politely.")
+                TextField("Or paste a YouTube or Spotify link", text: $songLink)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Button("Fetch from the link") { showLinkChoice = true }
+                    .disabled(songLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityHint("Pulls the song from the link, then choose to cut in or queue it. Spotify songs arrive by name-match.")
                 Button("Clear the queue", role: .destructive) { showClearConfirm = true }
             } header: {
                 Text("The jukebox")
@@ -398,6 +407,17 @@ struct ClubhouseView: View {
                 pendingSongURL = nil
             }
             Button("Never mind", role: .cancel) { pendingSongURL = nil }
+        }
+        .confirmationDialog("How should it land?", isPresented: $showLinkChoice, titleVisibility: .visible) {
+            Button("Cut in and play it now") {
+                service.addSong(fromLink: songLink, interrupt: true)
+                songLink = ""
+            }
+            Button("Add it to the queue") {
+                service.addSong(fromLink: songLink, interrupt: false)
+                songLink = ""
+            }
+            Button("Never mind", role: .cancel) {}
         }
         .confirmationDialog("You're still taping this room.", isPresented: $showLeaveWhileTaping, titleVisibility: .visible) {
             Button("Stop the tape, keep it, then leave") { service.stopRecordingThenLeave() }
