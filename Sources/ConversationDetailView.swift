@@ -440,13 +440,25 @@ struct ConversationDetailView: View {
                 // stops them if everything just hangs. No autoplay = stop
                 // exactly as before.
                 if awaitingSpokenReply {
+                    // July 24 2026 (her report: the loop rode full-volume
+                    // OVER the received bloop): duck it under the bloop,
+                    // then ease back up for the TTS-fetch stretch. The
+                    // stop is still owned by the watchers below.
+                    Earcons.shared.duckWaitingLoop(resume: true)
                     speechWaitWatchdog?.cancel()
                     speechWaitWatchdog = Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 12_000_000_000)
                         if !Task.isCancelled { endSpeechWait() }
                     }
                 } else {
-                    Earcons.shared.stopWaitingLoop()
+                    // No voice coming: fade out under the bloop instead of
+                    // the old hard cut (same 120ms dip, no resume), then
+                    // release the player.
+                    Earcons.shared.duckWaitingLoop(resume: false)
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        Earcons.shared.stopWaitingLoop()
+                    }
                 }
             }
             else if case .failed = new {

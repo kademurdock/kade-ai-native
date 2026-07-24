@@ -385,6 +385,26 @@ final class Earcons {
         waitingPlayer = nil
     }
 
+    /// July 24 2026 (Kade: the thinking loop "continues playing to the
+    /// finish of the file instead of stopping when the bloop starts") --
+    /// native twin of the web duck: dip the loop to silence UNDER the reply
+    /// bloop (120ms fade), then -- when the wait continues into the TTS
+    /// fetch -- ease back up to its original volume (350ms) once the bloop
+    /// has had the floor (~1.1s). Full stop stays with the existing callers
+    /// (voice starts / TTS fails / watchdog). Safe if the loop is already
+    /// gone; the resume guards against a NEW loop instance.
+    func duckWaitingLoop(resume: Bool) {
+        guard let player = waitingPlayer else { return }
+        let restoreVolume = player.volume
+        player.setVolume(0.0, fadeDuration: 0.12)
+        guard resume else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_250_000_000)
+            guard let self, let p = self.waitingPlayer, p === player else { return }
+            p.setVolume(restoreVolume, fadeDuration: 0.35)
+        }
+    }
+
     /// Convenience for the chat composer: map a send-state transition to the
     /// right earcon in one call, mirroring the existing haptic mapping.
     func onSend(sent: Bool = false, received: Bool = false, failed: Bool = false) {
