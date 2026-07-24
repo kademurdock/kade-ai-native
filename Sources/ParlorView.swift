@@ -56,6 +56,12 @@ struct ParlorView: View {
     @State private var transcriptText: String?
     @State private var busy = false
 
+    // Phase 2 (party tables)
+    @State private var joinCode = ""
+    @State private var optOpenSeats = 0
+    @State private var historyCursor = 0
+    @State private var pollTask: Task<Void, Never>?
+
     private static let narratorVoices: [(String, String)] = [
         ("Voice 466", "Kade Candid"),
         ("Voice 464", "Kade conversational"),
@@ -85,7 +91,10 @@ struct ParlorView: View {
         .navigationTitle("The Parlor")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadMenu() }
-        .onDisappear { narrator.stop() }
+        .onDisappear {
+            narrator.stop()
+            stopPolling()
+        }
     }
 
     // MARK: - Menu
@@ -96,6 +105,13 @@ struct ParlorView: View {
                 Text("Every game on a menu. Pick one, set the table your way, and play your own cards — characters are optional company, never the referee.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            Section("Join a friend's table") {
+                TextField("The 4-character code from your host", text: $joinCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Take a seat") { Task { await joinParty() } }
+                    .accessibilityHint("Joins the table that code belongs to.")
             }
             if !openTables.isEmpty {
                 Section("Your open tables") {
@@ -186,6 +202,13 @@ struct ParlorView: View {
                             Text(seats.isEmpty ? "Seat characters (optional, up to 3)" : "Seated: \(seats.joined(separator: ", "))")
                         }
                         .accessibilityHint("Their real personalities play their own hands and talk at the table.")
+                        Picker("Open seats for friends", selection: $optOpenSeats) {
+                            Text("None — just my table").tag(0)
+                            ForEach(1...3, id: \.self) { n in
+                                Text("\(n) friend\(n == 1 ? "" : "s")").tag(n)
+                            }
+                        }
+                        .accessibilityHint("Friends join with a 4 character code and play their own hands.")
                     }
                     if seats.isEmpty, let opp = o.opponents, opp.count == 3 {
                         Picker("House players", selection: $optOpponents) {
@@ -329,6 +352,7 @@ struct ParlorView: View {
             : narratorPick
         narrator.mode = narratorMode
         var reqBody = ParlorService.NewTableRequest(game: g.key)
+        if g.seatAware { reqBody.partyOpenSeats = optOpenSeats }
         if g.seatAware && !seats.isEmpty { reqBody.agentSeats = seats }
         else if g.options?.opponents != nil { reqBody.opponents = optOpponents }
         if g.options?.rounds != nil { reqBody.rounds = optRounds }
@@ -419,18 +443,79 @@ struct ParlorView: View {
     private var movesHeader: String {
         guard let t = table else { return "Your moves" }
         if t.over { return "This table is finished" }
+        if t.party == true && t.yourTurn == false {
+            return "Waiting on \(t.turnName ?? "the table")"
+        }
         return "Your moves"
     }
 
     private func applyTable(_ t: ParlorService.Table, announcePrefix: String) {
         table = t
         phase = .table
+        historyCursor = t.historyCursor ?? t.historyCount ?? historyCursor
         let news = (t.log ?? []).joined(separator: " ")
-        lastNews = news.isEmpty ? (t.over ? "Game over." : "Your move.") : news
+        let waitLine = (t.party == true && t.yourTurn == false && !t.over)
+            ? " Waiting on \(t.turnName ?? "the table")."
+            : ""
+        lastNews = (news.isEmpty ? (t.over ? "Game over." : "Your move.") : news) + waitLine
         ParlorSounds.shared.play(t.sounds ?? [], client: apiClient)
         narrator.narrate(t.log ?? [])
         let announcement = "\(announcePrefix) \(lastNews)"
         UIAccessibility.post(notification: .announcement, argument: announcement)
+        if t.party == true, let code = t.code, announcePrefix.hasPrefix("Table dealt") {
+            let spelled = code.map(String.init).joined(separator: " ")
+            narrator.say("Your join code is \(spelled).")
+            UIAccessibility.post(notification: .announcement, argument: "Join code \(spelled).")
+        }
+        if t.party == true { startPolling() } else { stopPolling() }
+    }
+
+    private func joinParty() async {
+        let code = joinCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !code.isEmpty else { return }
+        joinCode = ""
+        do {
+            let t = try await service.join(code: code)
+            chosen = games.first { $0.key == t.gameKey }
+            talkLog = []
+            transcriptText = nil
+            applyTable(t, announcePrefix: "You're seated.")
+        } catch {
+            statusLine = error.localizedDescription
+            UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
+        }
+    }
+
+    private func startPolling() {
+        stopPolling()
+        pollTask = Task { @MainActor [weak narrator] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled, let t = table, t.party == true, phase == .table else { continue }
+                guard let fresh = try? await service.partyState(gameId: t.gameId, since: historyCursor) else { continue }
+                let news = fresh.log ?? []
+                historyCursor = fresh.historyCursor ?? historyCursor
+                if !news.isEmpty || fresh.yourTurn != t.yourTurn || fresh.over != t.over {
+                    table = fresh
+                    let joined = news.joined(separator: " ")
+                    if !joined.isEmpty {
+                        lastNews = joined
+                        narrator?.narrate(news)
+                        UIAccessibility.post(notification: .announcement, argument: joined)
+                    }
+                    if fresh.yourTurn == true && t.yourTurn != true {
+                        UIAccessibility.post(notification: .announcement, argument: "Your turn.")
+                    }
+                } else {
+                    table = fresh
+                }
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     private func resume(_ gameId: String) async {
@@ -451,7 +536,9 @@ struct ParlorView: View {
         busy = true
         defer { busy = false }
         do {
-            let next = try await service.move(gameId: t.gameId, token: token)
+            let next = t.party == true
+                ? try await service.partyMove(gameId: t.gameId, token: token)
+                : try await service.move(gameId: t.gameId, token: token)
             transcriptText = nil // stale the moment a new move lands
             applyTable(next, announcePrefix: "")
         } catch {

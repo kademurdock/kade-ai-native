@@ -59,6 +59,13 @@ final class ParlorService: ObservableObject {
         var historyCount: Int?
         var log: [String]?
         var sounds: [String]?
+        // Phase 2 (party tables) — absent on solo tables.
+        var party: Bool?
+        var code: String?
+        var seat: Int?
+        var yourTurn: Bool?
+        var turnName: String?
+        var historyCursor: Int?
     }
 
     struct OpenTable: Decodable, Identifiable {
@@ -111,10 +118,13 @@ final class ParlorService: ObservableObject {
         var category: String?
         var bet: Int?
         var clean: Bool?
+        /// Phase 2: open seats friends can claim with the join code (0 = solo).
+        var partyOpenSeats: Int = 0
     }
 
     func newTable(_ r: NewTableRequest) async throws -> Table {
         var body: [String: Any] = ["game": r.game]
+        if r.partyOpenSeats > 0 { body["party_open_seats"] = r.partyOpenSeats }
         if !r.agentSeats.isEmpty { body["agent_seats"] = r.agentSeats }
         else if let o = r.opponents { body["opponents"] = o }
         if let v = r.rounds { body["rounds"] = v }
@@ -123,6 +133,28 @@ final class ParlorService: ObservableObject {
         if let v = r.bet { body["bet"] = v }
         if let v = r.clean { body["clean"] = v }
         return try await post(path: "api/kade/parlor/new", body: body, fallback: "Couldn't deal that table.")
+    }
+
+    /// Phase 2: take a seat at a friend's table by its 4-character code.
+    func join(code: String) async throws -> Table {
+        try await post(path: "api/kade/parlor/join", body: ["code": code], fallback: "No open table with that code.")
+    }
+
+    /// Phase 2: poll the shared table — YOUR view + everything said since `since`.
+    func partyState(gameId: String, since: Int) async throws -> Table {
+        let req = client.request(
+            path: "api/kade/parlor/party-state/\(gameId)",
+            authorized: true,
+            queryItems: [URLQueryItem(name: "since", value: String(since))]
+        )
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else { throw ParlorError.server(explain(data, fallback: "Couldn't read the table.")) }
+        return try decoder.decode(Table.self, from: data)
+    }
+
+    /// Phase 2: play YOUR seat's move on a shared table.
+    func partyMove(gameId: String, token: String) async throws -> Table {
+        try await post(path: "api/kade/parlor/party-move/\(gameId)", body: ["move": token], fallback: "That move didn't go through.")
     }
 
     func state(gameId: String) async throws -> Table {
