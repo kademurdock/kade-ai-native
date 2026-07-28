@@ -105,7 +105,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys grew up too: flip on Allow Full Access for it in Settings and the keyboard types your real saved prompts from the Prompt Library \u{2014} open Prompts in the app once to load them, then they ride the keyboard offline. Without full access the six built-in phrases stay, so nothing breaks. There's a new Kade Keys section further down this Help screen with the full setup."
+                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys phase two is wired in and waiting on one Apple-side switch: the app already mirrors your first dozen prompts for the keyboard, and the moment that switch flips in a coming build, Kade Keys types your real saved Prompt Library \u{2014} the six built-in phrases keep working exactly as before until then. There's a new Kade Keys section further down this Help screen."
             ),
             HelpEntry(
                 title: "The build before",
@@ -411,7 +411,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Your prompts on it",
-                body: "With Allow Full Access on (Settings, General, Keyboard, Kade Keys), the keyboard types your real saved prompts from the Prompt Library \u{2014} open the Prompts tile in this app once and the first dozen load onto the keyboard, titles as buttons, and stay there offline. About that switch: Apple puts reading the app's shared storage behind the same permission as network access, so the system shows a broad warning \u{2014} but this keyboard's code makes no network connections at all. It types, and that's the whole story. If you'd rather leave the switch off, the keyboard keeps six built-in phrases and works fine."
+                body: "Coming in a near build: the keyboard will type your real saved prompts from the Prompt Library \u{2014} the app already loads the first dozen for it when you open the Prompts tile. Apple requires a one-time setup on their developer site before the sharing lane can switch on, so until then the keyboard keeps its six built-in phrases. When it lands, it will sit behind Allow Full Access \u{2014} Apple puts reading the app's own shared storage behind the same permission as network access, so the warning sounds broad, but this keyboard's code makes no network connections at all. It types, and that's the whole story."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [

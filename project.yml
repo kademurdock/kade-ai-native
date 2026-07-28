@@ -116,13 +116,20 @@ targets:
       path: KadeAI.entitlements
       properties:
         aps-environment: production
-        # KADE KEYS phase 2 (July 28 2026): one shared container so the
-        # keyboard can read the Prompt Library offline. The SAME group id
-        # must appear on both targets AND on both App IDs in the developer
-        # portal -- codemagic.yaml's "App Group" step assigns it via the
-        # ASC API before signing files are fetched.
-        com.apple.security.application-groups:
-          - group.com.kademurdock.kadeai
+        # KADE KEYS phase 2, PARKED ON ONE PORTAL STEP (July 28 2026):
+        # the shared-container entitlement is written and ready below, but
+        # Apple's official ASC API REFUSES App Group assignment (live 409
+        # receipt, session 34: "'APP_GROUP_IDS' is not a valid value for
+        # the attribute 'settings/0/key'" -- only fastlane's cookie-auth
+        # private API can do it). Until group.com.kademurdock.kadeai is
+        # registered BY HAND (developer portal > Identifiers > App Groups)
+        # and assigned to BOTH App IDs, signing this entitlement fails --
+        # so it stays commented. TO COMPLETE PHASE 2: do the portal step,
+        # then uncomment here AND on the KadeKeyboard target AND flip
+        # RequestsOpenAccess to true below. The Swift halves already ship
+        # dormant and fail soft. See docs/APP_GROUP_STEP_PARKED.md.
+        # com.apple.security.application-groups:
+        #   - group.com.kademurdock.kadeai
   # KADE KEYS (July 28 2026) — typing-only custom keyboard, v1 = prove the
   # second-target signing pipeline (new bundle id + its own provisioning
   # profile via the same fetch-signing-files flow; see codemagic.yaml).
@@ -141,11 +148,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Manual
-    entitlements:
-      path: KadeKeyboard.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.com.kademurdock.kadeai
+    # entitlements:                    # PARKED with the App Group step --
+    #   path: KadeKeyboard.entitlements  # uncomment with the KadeAI block
+    #   properties:
+    #     com.apple.security.application-groups:
+    #       - group.com.kademurdock.kadeai
     info:
       path: KeyboardExtension/Info.plist
       properties:
@@ -159,14 +166,12 @@ targets:
             IsASCIICapable: false
             PrefersRightToLeft: false
             PrimaryLanguage: en-US
-            # Phase 2 (July 28 2026): reading the shared App Group
-            # container from a keyboard REQUIRES open access by OS rule
-            # (Apple's own capability table -- shared-container access is
-            # behind the "Allow Full Access" switch, same as network).
-            # The code still never touches the network; without the
-            # switch flipped the keyboard quietly falls back to the six
-            # built-in phrases, so nothing breaks for anyone who says no.
-            RequestsOpenAccess: true
+            # Phase 2 note (July 28 2026): reading the shared container
+            # needs open access (OS rule -- same switch as network) AND
+            # the App Group entitlement, which is PARKED on the manual
+            # portal step (see the KadeAI target's comment). Flip this to
+            # true in the same commit that uncomments the entitlements.
+            RequestsOpenAccess: false
 
 schemes:
   KadeAI:
