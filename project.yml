@@ -2,10 +2,15 @@ name: KadeAI
 # July 24 2026 — the project's FIRST Swift Package dependency: LiveKit's
 # client SDK for the pure-native Clubhouse (pinned exactly; bump on purpose,
 # never by accident — no local compiler exists to catch a surprise API break).
+# July 28 2026: 2.15.2 -> 2.15.3 on purpose (upstream patch fixes: connection
+# state stuck at .connected after a failed reconnect + a teardown crash on
+# disconnect mid-ICE-restart -- both sit on the Clubhouse join/leave lane; see
+# CLUBHOUSE_NATIVE_AUDIO_SPIKE_2026-07-28.md). Same API surface; the
+# second-custom-audio-track publish limit it does NOT fix (still blocked upstream).
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
-    exactVersion: 2.15.2
+    exactVersion: 2.15.3
 options:
   bundleIdPrefix: com.kademurdock
   deploymentTarget:
