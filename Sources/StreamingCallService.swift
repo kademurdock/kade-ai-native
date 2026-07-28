@@ -277,7 +277,15 @@ final class StreamingCallService: NSObject, ObservableObject {
         do {
             try startAudioEngine()
         } catch {
-            status = .failed("Microphone access is blocked. Enable mic permission in Settings, then try the call again.")
+            // July 27 2026: a failed engine start must leave NOTHING armed --
+            // see teardownAudio()'s unconditional-teardown note. Without this,
+            // the stranded mic tap crashed the NEXT call attempt (the
+            // consistent go-in-back-out-go-in repro). Engine start also fails
+            // transiently while the session is still settling from a call
+            // that just ended -- not only on blocked permission -- so the
+            // message stops blaming Settings for both.
+            teardownAudio()
+            status = .failed("Couldn't start the microphone. If mic permission is on in Settings, wait a moment and try the call again.")
             throw error
         }
 
@@ -750,6 +758,10 @@ final class StreamingCallService: NSObject, ObservableObject {
         // happens when the format actually changes (cheap after the first
         // call in the overwhelmingly common case).
         let box = MicConverterBox(outputFormat: sendFormat)
+        // July 27 2026: belt to teardownAudio()'s suspenders -- installing
+        // over a leftover tap is a hard crash; removing when none exists is a
+        // documented no-op. Costs nothing, closes the class for good.
+        input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1600, format: inputFormat) { [weak self] buffer, _ in
             guard let pcmData = box.convert(buffer) else { return }
             Task { @MainActor in
@@ -1245,7 +1257,16 @@ final class StreamingCallService: NSObject, ObservableObject {
             self.engineConfigObserver = nil
         }
         stopNowPlaying()
-        guard engineRunning else { return }
+        // July 27 2026 (the in-out-and-back-in call crash class): this used
+        // to bail right here whenever `engineRunning` was false -- but a
+        // start() that THREW midway (engine.start() can fail while the audio
+        // session is still settling from the call that JUST ended) leaves the
+        // mic tap installed with `engineRunning` never set true. The next
+        // attempt's installTap on an already-tapped bus is an unconditional
+        // runtime abort ("required condition is false: nullptr == Tap()").
+        // Everything below is a safe no-op on a partially-started engine
+        // (removeTap with no tap, stop() on a stopped engine), so teardown is
+        // now unconditional and idempotent -- never guard it again.
         engineRunning = false
         // Session 26: the thinking loop must not survive teardown.
         thinkingLooping = false

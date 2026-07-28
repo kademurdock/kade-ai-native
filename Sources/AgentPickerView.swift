@@ -78,7 +78,10 @@ struct AgentPickerView: View {
     }
 
     private var recentAgents: [KadeAgent] {
-        let byId = Dictionary(uniqueKeysWithValues: agentsService.agents.map { ($0.id, $0) })
+        // July 27 2026: uniquing form -- uniqueKeysWithValues TRAPS on a
+        // duplicate id, and this map must never be able to take the app down
+        // even if the roster de-dupe upstream ever regresses.
+        let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return RecentAgents.ids.compactMap { byId[$0] }
     }
 

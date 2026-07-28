@@ -94,7 +94,12 @@ final class AgentsService: ObservableObject {
             let (data, http) = try await client.send(req)
             guard http.statusCode == 200 else { throw AgentsError.server(http.statusCode) }
             let page = try decoder.decode(AgentsPage.self, from: data)
-            agents = page.data.sorted {
+            // July 27 2026: one agent appearing twice in the merged ACL list
+            // would crash AgentPickerView's Dictionary(uniqueKeysWithValues:)
+            // and poison every ForEach keyed by id -- de-dupe at the source,
+            // first occurrence wins.
+            var seenIds = Set<String>()
+            agents = page.data.filter { seenIds.insert($0.id).inserted }.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
             hasLoadedOnce = true

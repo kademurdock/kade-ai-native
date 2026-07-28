@@ -233,7 +233,13 @@ final class ConversationsService: ObservableObject {
         defer { isLoadingMore = false }
         do {
             let page = try await fetchPage(cursor: nextCursor)
-            conversations.append(contentsOf: page.conversations)
+            // July 27 2026: the list is cursor-paged over a list that RE-
+            // ORDERS as conversations update, so page N+1 can legitimately
+            // repeat a row page N already delivered -- and the list's ForEach
+            // keys by conversationId (duplicate-ID crash class, same as the
+            // messages fix). Append only genuinely new rows.
+            let known = Set(conversations.map(\.conversationId))
+            conversations.append(contentsOf: page.conversations.filter { !known.contains($0.conversationId) })
             nextCursor = page.nextCursor
         } catch {
             // Silent on purpose: the list the user already has stays intact
@@ -250,7 +256,14 @@ final class ConversationsService: ObservableObject {
         // or tree reconstruction for this first pass. Known simplification:
         // if a conversation has been branched/regenerated, this renders the
         // straight chronological line rather than the exact active branch.
-        return try decoder.decode([KadeMessage].self, from: data)
+        // July 27 2026: the chat view's ForEach keys rows by messageId, and
+        // SwiftUI's behavior with duplicate IDs ranges from undefined to a
+        // hard crash. A branched/regenerated thread is exactly where the
+        // server CAN surface a repeated row -- drop exact-id repeats, first
+        // occurrence wins, order untouched.
+        let decoded = try decoder.decode([KadeMessage].self, from: data)
+        var seenIds = Set<String>()
+        return decoded.filter { seenIds.insert($0.messageId).inserted }
     }
 
     // MARK: - Row actions (session 14)
