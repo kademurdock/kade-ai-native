@@ -2066,6 +2066,16 @@ private struct MessageRow: View {
                         bubbleFill,
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                     )
+                // Session 34 (July 28 2026): attachments finally SHOW on
+                // the transcript. Purely visual here -- the row is one
+                // accessibility element that ignores children, and
+                // `accessibleLabel` appends the spoken "sent with ..."
+                // sentence instead, so by ear this stays ONE swipe stop.
+                if let files = message.files, !files.isEmpty {
+                    ForEach(files) { file in
+                        MessageAttachmentView(file: file)
+                    }
+                }
                 if !timeLabel.isEmpty {
                     Text(timeLabel)
                         .font(.caption2)
@@ -2138,7 +2148,17 @@ private struct MessageRow: View {
     private var accessibleLabel: String {
         let who = message.isCreatedByUser ? "You said" : "\(message.speakerLabel) said"
         let time = timeLabel.isEmpty ? "" : ", \(timeLabel)"
-        return "\(who)\(time): \(bodyText)"
+        var label = "\(who)\(time): \(bodyText)"
+        // Session 34: attachments are spoken HERE, as part of the row's one
+        // element, rather than adding a second swipe stop -- "You said:
+        // look at this, 3:12 PM. Sent with a photo, porch.jpeg, attached."
+        if let files = message.files, !files.isEmpty {
+            let names = files.map(\.spokenLabel).joined(separator: "; ")
+            label += message.isCreatedByUser
+                ? " Sent with \(names) attached."
+                : " Comes with \(names) attached."
+        }
+        return label
     }
 
     // MARK: - Actions menu
@@ -2309,5 +2329,58 @@ enum DetailSheet: Identifiable {
         case .transcript(let handoff): return "transcript-\(handoff.id)"
         case .voicePicker: return "voice-picker"
         }
+    }
+}
+
+/// Session 34: one attachment under a message bubble. Images render as a
+/// small thumbnail straight off the presigned `filepath` URL; anything
+/// else -- and any image whose URL has expired or failed to load -- shows
+/// a named chip instead, so an attachment can never silently vanish.
+/// Decorative by design: the OWNING row speaks the attachment (see
+/// `MessageRow.accessibleLabel`), so everything here hides from VoiceOver
+/// and the transcript stays one swipe stop per message.
+private struct MessageAttachmentView: View {
+    let file: KadeMessageFile
+
+    var body: some View {
+        Group {
+            if file.isImage, let path = file.filepath, let url = URL(string: path) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 220, maxHeight: 180)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    case .failure:
+                        chip
+                    default:
+                        chip
+                    }
+                }
+            } else {
+                chip
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var chip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: file.isImage ? "photo" : "doc")
+                .font(.caption)
+            Text(file.filename ?? (file.isImage ? "Photo" : "File"))
+                .font(.footnote)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Color(uiColor: .secondarySystemBackground),
+            in: Capsule()
+        )
+        .foregroundStyle(.secondary)
     }
 }

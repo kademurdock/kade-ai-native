@@ -32,6 +32,43 @@ private struct ConversationsPage: Codable {
 }
 
 /// One message from GET /api/messages/:conversationId. Verified shape 2026-07-19.
+/// Session 34 (July 28 2026) -- one file a message carried, as the server
+/// returns it on /api/messages (the sanitized shape the fork's
+/// buildMessageFiles persists: file_id/filename/filepath/type, dimensions
+/// when known). Decoding these is what finally makes attachments VISIBLE
+/// on history rows -- the July 21 composer work could SEND a file, but a
+/// reopened conversation (or a web-sent photo) showed no trace the file
+/// ever existed, which by VoiceOver means it may as well not have.
+/// `filepath` on this deployment is a presigned B2 URL (fetchable with no
+/// auth header, so AsyncImage can render it directly) that EXPIRES after
+/// ~7 days -- every image render must fail soft to the named chip, never
+/// to a silent hole.
+struct KadeMessageFile: Codable, Equatable, Identifiable {
+    let file_id: String?
+    let filename: String?
+    let filepath: String?
+    let type: String?
+    let width: Int?
+    let height: Int?
+
+    /// Stable identity for ForEach: prefer the server's own id; a file
+    /// with no id at all (not seen live, but the schema allows it) falls
+    /// back to path/name so identity stays stable across reloads.
+    var id: String { file_id ?? filepath ?? filename ?? "attachment" }
+
+    var isImage: Bool { (type ?? "").hasPrefix("image/") }
+
+    /// What VoiceOver calls this attachment -- "a photo, orange_square.png"
+    /// reads better than a bare filename, and "a file" covers the rest.
+    var spokenLabel: String {
+        let kind = isImage ? "a photo" : "a file"
+        if let filename, !filename.isEmpty {
+            return "\(kind), \(filename)"
+        }
+        return kind
+    }
+}
+
 struct KadeMessage: Codable, Identifiable {
     let messageId: String
     let conversationId: String
@@ -63,11 +100,17 @@ struct KadeMessage: Codable, Identifiable {
     /// reply in the SAME voice that agent actually used, rather than
     /// whichever agent is currently selected for the NEXT message.
     let agentId: String?
+    /// Session 34: the attachments this message carried (nil or empty =
+    /// none). Optional-with-default so every existing memberwise init call
+    /// site (the optimistic placeholder in ConversationDetailView) compiles
+    /// unchanged -- same pattern tokenCount used.
+    var files: [KadeMessageFile]? = nil
 
     enum CodingKeys: String, CodingKey {
         case messageId, conversationId, createdAt, isCreatedByUser, sender, text, content
         case parentMessageId
         case tokenCount
+        case files
         case agentId = "model"
     }
 
