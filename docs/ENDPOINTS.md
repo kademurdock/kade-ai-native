@@ -419,3 +419,9 @@ matches the web builder's own limit. Read back from `GET /api/agents/:id/expande
 as the same `conversation_starters` key (the app's decoder uses exact key names — no
 snake-case conversion — so the Swift property is spelled `conversation_starters` on
 purpose).
+
+## In-chat attachments (verified live July 28 2026, session 34)
+
+- `POST /api/files` (multipart): fields `endpoint=agents`, `endpointType=` (empty), client `file_id` UUID, `message_file=true`, `agent_id` when selected, `conversationId` when the chat exists, `width`/`height` for images, then the `file` part (percent-encoded filename). Server re-mints `file_id` (client's becomes `temp_file_id`) — always use the RESPONSE's `file_id`. Response `filepath` on this deployment is a presigned B2 URL (~7-day expiry, fetchable with no auth header).
+- **`width`/`height` are load-bearing for images**: the S3/B2 storage lane computes no dimensions, and fork commit `98d8a1f` keeps the client-sent numbers when storage provides none. `encodeAndFormat` SKIPS any image doc without `height` — a dimensionless upload is invisible to every model (native vision AND Companion Sight). Never stop sending them.
+- Chat send carries `files: [{file_id, filepath, type, width, height}]`; the server persists the sanitized shape (`file_id`/`filename`/`filepath`/`type`/…) onto the user message's `files` array, which `GET /api/messages/:conversationId` returns — that's what `KadeMessageFile` decodes for the transcript display.
