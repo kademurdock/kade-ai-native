@@ -105,19 +105,19 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "Two new tiles on the home screen. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen, with add, rename and delete for the tags themselves. Prompts: your saved prompt library, straight from the web, now native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed, ready to send or edit. And the context meter grew up: when the gauge appears, the numbers now come from the server's own math \u{2014} the same counting the next reply will actually live under, instructions and tools included \u{2014} instead of the app's rough estimate. The meter says \u{2018}about\u{2019} only when it has to fall back."
+                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys grew up too: flip on Allow Full Access for it in Settings and the keyboard types your real saved prompts from the Prompt Library \u{2014} open Prompts in the app once to load them, then they ride the keyboard offline. Without full access the six built-in phrases stay, so nothing breaks. There's a new Kade Keys section further down this Help screen with the full setup."
             ),
             HelpEntry(
                 title: "The build before",
-                body: "Kade's Clubhouse went fully native — the rooms, the roster, the shared jukebox, the Hotel, and companion guests are all real app screens now, no web page in the middle. The Hotel also went dark on every device: rooms stay off the list, and checking in with your group's passcode is the only way in — or open a room of your own and pass the code around. And the Game Room moved in with the Parlor: family standings, highlights, and latest results now live on the Parlor menu, one door for everything cards and chips."
+                body: "Kade Keys arrived: a custom keyboard with big, spoken quick phrases plus globe, space and delete \u{2014} add it under Settings, General, Keyboard. And the build before that brought two new home tiles. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen. Prompts: your saved prompt library, native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed. The context meter grew up too: when the gauge appears, the numbers come from the server's own math instead of the app's rough estimate."
             ),
             HelpEntry(
                 title: "Two builds back",
-                body: "The Lounge grew up into Kade's Clubhouse — same tile, whole new party. The shared jukebox: one music player for the room where everybody holds the remote — play, pause, skip, jump back, queue a song politely or cut in rudely, and if somebody skips your jam, hit Back and fight for it. Your music volume is yours alone and starts low so talk rides over it; voices always come through full. The Hotel: private voice rooms with speakable passcodes so groups can group up — a Parlor table code works as a passcode too, one code for cards and voices. Companion guests: invite one into any room, press their talk button when it's their turn, and they answer out loud in their own voice, following along between turns by rough transcription — anyone can show them the door. Also from the build just before this one: The Parlor's party tables went native — join a friend's table by its four-character code and play your own hand — and the waiting ticks now duck politely under the reply sound."
+                body: "Kade's Clubhouse went fully native \u{2014} the rooms, the roster, the shared jukebox, the Hotel, and companion guests are all real app screens now, no web page in the middle. The Hotel also went dark on every device: rooms stay off the list, and checking in with your group's passcode is the only way in. And the Game Room moved in with the Parlor: family standings, highlights, and latest results now live on the Parlor menu."
             ),
             HelpEntry(
                 title: "Earlier",
-                body: "Bass haptics with a heartbeat thinking pulse and bubble sounds. Recording that stops itself only after ten silent seconds. Report a problem at the top of this Help screen. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
+                body: "The Clubhouse's shared jukebox with radio fights and personal volume, private Hotel rooms with speakable passcodes, and companion guests who talk in rooms. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Recording that stops itself only after ten silent seconds. Report a problem at the top of this Help screen. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
             ),
         ]),
         HelpSection(title: "Getting around", entries: [
@@ -402,6 +402,16 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Quick Actions on the app icon",
                 body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts — Call your Spotter, Transcribe, Describe, Quick Dictate, and Your conversations — without needing to say anything out loud."
+            ),
+        ]),
+        HelpSection(title: "Kade Keys keyboard", entries: [
+            HelpEntry(
+                title: "Adding the keyboard",
+                body: "Settings, General, Keyboard, Keyboards, Add New Keyboard, then pick Kade Keys. In any app, the globe key on the system keyboard switches between keyboards \u{2014} hold it and pick Kade Keys, or tap it to cycle. Everything on Kade Keys is a big labeled button: your phrases, then globe, space and delete along the bottom."
+            ),
+            HelpEntry(
+                title: "Your prompts on it",
+                body: "With Allow Full Access on (Settings, General, Keyboard, Kade Keys), the keyboard types your real saved prompts from the Prompt Library \u{2014} open the Prompts tile in this app once and the first dozen load onto the keyboard, titles as buttons, and stay there offline. About that switch: Apple puts reading the app's shared storage behind the same permission as network access, so the system shows a broad warning \u{2014} but this keyboard's code makes no network connections at all. It types, and that's the whole story. If you'd rather leave the switch off, the keyboard keeps six built-in phrases and works fine."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [

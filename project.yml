@@ -116,6 +116,13 @@ targets:
       path: KadeAI.entitlements
       properties:
         aps-environment: production
+        # KADE KEYS phase 2 (July 28 2026): one shared container so the
+        # keyboard can read the Prompt Library offline. The SAME group id
+        # must appear on both targets AND on both App IDs in the developer
+        # portal -- codemagic.yaml's "App Group" step assigns it via the
+        # ASC API before signing files are fetched.
+        com.apple.security.application-groups:
+          - group.com.kademurdock.kadeai
   # KADE KEYS (July 28 2026) — typing-only custom keyboard, v1 = prove the
   # second-target signing pipeline (new bundle id + its own provisioning
   # profile via the same fetch-signing-files flow; see codemagic.yaml).
@@ -134,6 +141,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Manual
+    entitlements:
+      path: KadeKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.kademurdock.kadeai
     info:
       path: KeyboardExtension/Info.plist
       properties:
@@ -147,7 +159,14 @@ targets:
             IsASCIICapable: false
             PrefersRightToLeft: false
             PrimaryLanguage: en-US
-            RequestsOpenAccess: false
+            # Phase 2 (July 28 2026): reading the shared App Group
+            # container from a keyboard REQUIRES open access by OS rule
+            # (Apple's own capability table -- shared-container access is
+            # behind the "Allow Full Access" switch, same as network).
+            # The code still never touches the network; without the
+            # switch flipped the keyboard quietly falls back to the six
+            # built-in phrases, so nothing breaks for anyone who says no.
+            RequestsOpenAccess: true
 
 schemes:
   KadeAI:

@@ -14,6 +14,8 @@ struct PromptsView: View {
     @State private var openedGroup: KadePromptGroup?
     @State private var showNewPromptForm = false
     @State private var announcement: String?
+    /// One keyboard mirror per screen visit; the refresh gesture re-fires it.
+    @State private var mirroredToKadeKeys = false
 
     private let apiClient: KadeAPIClient
     private let mainAgentId: String?
@@ -87,8 +89,20 @@ struct PromptsView: View {
         }
         .task {
             if service.groups.isEmpty { await service.loadGroups() }
+            // KADE KEYS phase 2: opening the library is also what feeds
+            // the keyboard its offline copy. Unstructured Task on purpose
+            // -- the mirror takes up to ~18s behind the client's pacing
+            // gate, and backing out of this screen must not strand a
+            // half-written set (the writer only writes a COMPLETE list).
+            if !mirroredToKadeKeys {
+                mirroredToKadeKeys = true
+                Task { await mirrorToKadeKeys() }
+            }
         }
-        .refreshable { await service.loadGroups(name: searchText.isEmpty ? nil : searchText) }
+        .refreshable {
+            await service.loadGroups(name: searchText.isEmpty ? nil : searchText)
+            Task { await mirrorToKadeKeys() }
+        }
         .overlay {
             if service.isLoading && service.groups.isEmpty {
                 ProgressView("Loading prompts")
@@ -111,6 +125,31 @@ struct PromptsView: View {
             announcement = nil
         }
     }
+    /// KADE KEYS phase 2 (July 28 2026): mirror the first prompts (title +
+    /// live production text) into the shared App Group container so the
+    /// keyboard can type them offline. Economics: at most
+    /// `KadeKeysSharedStore.maxPrompts` text fetches, each behind
+    /// KadeAPIClient's own pacing gate, all fail-soft. The mirror only
+    /// writes a COMPLETE list -- a cancelled or flaky pass leaves the
+    /// keyboard's previous copy untouched rather than shrinking it.
+    private func mirrorToKadeKeys() async {
+        let candidates = service.groups
+            .filter { $0.productionId != nil }
+            .prefix(KadeKeysSharedStore.maxPrompts)
+        guard !candidates.isEmpty else { return }
+        var shared: [KadeKeysSharedStore.SharedPrompt] = []
+        for group in candidates {
+            if Task.isCancelled { return }
+            guard let text = await service.promptText(for: group),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            shared.append(.init(title: group.name, text: text))
+        }
+        guard !shared.isEmpty else { return }
+        KadeKeysSharedStore.write(shared)
+    }
+
 }
 
 /// One prompt, opened: the full text (selectable, one VoiceOver element),
