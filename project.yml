@@ -17,6 +17,10 @@ targets:
     sources: [Sources]
     dependencies:
       - package: LiveKit
+      # July 28 2026 (un-parked by Kade): the Kade Keys keyboard extension
+      # rides embedded in the app. XcodeGen embeds app-extension targets
+      # into the app's PlugIns automatically from this dependency.
+      - target: KadeKeyboard
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
@@ -107,6 +111,39 @@ targets:
       path: KadeAI.entitlements
       properties:
         aps-environment: production
+  # KADE KEYS (July 28 2026) — typing-only custom keyboard, v1 = prove the
+  # second-target signing pipeline (new bundle id + its own provisioning
+  # profile via the same fetch-signing-files flow; see codemagic.yaml).
+  # No mic (OS-level block in keyboard extensions), no network
+  # (RequestsOpenAccess stays false), no App Group yet (phase 2).
+  KadeKeyboard:
+    type: app-extension
+    platform: iOS
+    sources: [KeyboardExtension]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.keyboard
+        MARKETING_VERSION: "2.0"
+        CURRENT_PROJECT_VERSION: 100
+        DEVELOPMENT_TEAM: JQPWZ2RL9P
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Manual
+    info:
+      path: KeyboardExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Kade Keys
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: false
+
 schemes:
   KadeAI:
     build:

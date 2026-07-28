@@ -30,6 +30,16 @@ workflows:
             --type IOS_APP_STORE \
             --certificate-key=@file:/tmp/cert_key.pem \
             --create
+          # July 28 2026 (keyboard extension attempt): the extension is its
+          # own bundle id and needs its own App Store profile. --create
+          # registers the id in the developer portal on first run via the
+          # same ASC integration. If THIS line is what a red build points
+          # at, the ASC key's role can't create bundle ids -- register
+          # com.kademurdock.kadeai.keyboard by hand in the portal and rerun.
+          app-store-connect fetch-signing-files "$BUNDLE_ID.keyboard" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
           keychain add-certificates
           xcode-project use-profiles
       - name: Auto-increment the TestFlight build number (floor 100 for native)
