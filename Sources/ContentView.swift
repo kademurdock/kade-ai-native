@@ -216,6 +216,13 @@ struct ContentView: View {
                     AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
                 case .marketplace:
                     MarketplaceView(currentUserId: currentUserIdOrEmpty)
+                case .bookmarks:
+                    BookmarksView(apiClient: apiClient)
+                case .prompts:
+                    PromptsView(
+                        apiClient: apiClient,
+                        mainAgentId: DefaultAgentStore.resolveId(in: agentsService.agents)
+                    )
                 case .settings:
                     SettingsView(apiClient: apiClient)
                 case .alerts:
@@ -435,6 +442,8 @@ struct ContentView: View {
                 toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
                 toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
                 toolTile("Marketplace", spoken: "The Marketplace", icon: "storefront", tint: .orange, hint: "Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.", destination: .marketplace)
+                toolTile("Bookmarks", spoken: "Bookmarks", icon: "bookmark.fill", tint: .red, hint: "Your tagged conversations, gathered by bookmark \u{2014} tag any conversation from the conversation list.", destination: .bookmarks)
+                toolTile("Prompts", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", destination: .prompts)
                 toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
                 toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
             }
@@ -725,6 +734,8 @@ enum HomeRoute: Identifiable, Hashable {
     case debateRoom
     case agentBuilder
     case marketplace
+    case bookmarks
+    case prompts
     case settings
     case alerts
     case myCreations
@@ -746,6 +757,8 @@ enum HomeRoute: Identifiable, Hashable {
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
         case .marketplace: return "marketplace"
+        case .bookmarks: return "bookmarks"
+        case .prompts: return "prompts"
         case .settings: return "settings"
         case .alerts: return "alerts"
         case .myCreations: return "myCreations"

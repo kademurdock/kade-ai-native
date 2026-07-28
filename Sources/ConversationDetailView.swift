@@ -51,6 +51,12 @@ struct ConversationDetailView: View {
     /// existing call site is untouched (same memberwise-init reasoning as
     /// `initialAgentId` above).
     var showSpotterShortcut: Bool = false
+    /// Session 33 (the Prompt Library, leftovers item 5): a prompt chosen
+    /// in PromptsView arrives here as pre-typed composer text. Seeded ONCE
+    /// in `.task` and only when the composer is empty, so it can never
+    /// stomp something the user already started typing. Same defaulted-
+    /// `var` memberwise-init reasoning as `initialAgentId` above.
+    var initialDraft: String? = nil
     /// True only for the ONE call site below that presents a fresh
     /// instance of this very view as the ROOT of its own sheet-hosted
     /// `NavigationStack` (the post-call transcript handoff). That instance
@@ -355,6 +361,15 @@ struct ConversationDetailView: View {
             // ever clobber; it only changes what the starting point is.
             readAloudEnabled = voiceService.defaultReadAloudOn
             deepThinkArmed = Self.deepThinkArmedGlobal
+            // Prompt Library handoff: pre-type the chosen prompt. Empty
+            // check = the never-clobber guarantee promised at the
+            // declaration; a re-appear after a push-pop also lands here,
+            // and by then draftText either still holds the prompt (no-op)
+            // or holds the user's own edit (guarded).
+            if let seed = initialDraft,
+               draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draftText = seed
+            }
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
             // "no custom init" note on `selectedAgentId`'s declaration).
@@ -431,6 +446,14 @@ struct ConversationDetailView: View {
             }
             else if case .sending = old, case .idle = new {
                 Earcons.shared.play(.messageReceived)
+                // Context meter v2: re-project once the turn settles (a
+                // breath after idle, letting the reply's own append land
+                // first so the projection sees the branch tip it will
+                // actually bill from).
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    await refreshContextProjection()
+                }
                 // Autoplay handoff (session 28): when this reply is about to
                 // be read aloud, the ticks keep running underneath the
                 // received bloop and through the TTS fetch -- the
@@ -906,6 +929,7 @@ struct ConversationDetailView: View {
             loadError = "Couldn't load this conversation. Check your connection and try again."
         }
         isLoading = false
+        await refreshContextProjection()
     }
 
     // MARK: - Agent switcher (Phase 4)
@@ -995,32 +1019,134 @@ struct ConversationDetailView: View {
     /// changes, update the constant with it.
     private static let effectiveContextTokens = 120_000
 
+    /// CONTEXT METER v2 (session 33, leftovers item 8): the server's own
+    /// projection replaces the client-side sum when it's available. POST
+    /// /api/endpoints/context-projection runs the SAME pruning math the
+    /// next model call will run (agents SDK, no model invoked) and hands
+    /// back the real budget: instructions + tool schemas + message tokens,
+    /// none of which the v1 estimate could see. v1's sum stays as the
+    /// fallback for offline/error/null answers, so the gauge can only get
+    /// MORE honest, never disappear. `maxContextTokens` rides in the
+    /// request and stays pinned to the yaml's 120K effective cap above --
+    /// the server projects for whatever window it's told, it does not know
+    /// the yaml cap on its own. If the yaml cap changes, update the one
+    /// constant and both halves follow.
+    @State private var serverContextUsed: Int?
+    @State private var serverContextBudget: Int?
+    @State private var contextProjectionInFlight = false
+
+    private struct ContextProjectionAnswer: Codable {
+        struct Breakdown: Codable {
+            var maxContextTokens: Int? = nil
+            var messageTokens: Int? = nil
+            var instructionTokens: Int? = nil
+            var toolSchemaTokens: Int? = nil
+        }
+        var breakdown: Breakdown? = nil
+        var contextBudget: Int? = nil
+        var remainingContextTokens: Int? = nil
+    }
+
+    /// One polite call per real change (guarded, paced by the shared
+    /// client gate, and rate-limited server-side too). Any failure path
+    /// clears the server numbers so the estimate takes back over.
+    private func refreshContextProjection() async {
+        guard !contextProjectionInFlight,
+              let conversationId,
+              let lastMessageId = messages.last?.messageId,
+              let agentId = selectedAgentId
+        else { return }
+        contextProjectionInFlight = true
+        defer { contextProjectionInFlight = false }
+        do {
+            var req = apiClient.request(
+                path: "api/endpoints/context-projection",
+                method: "POST",
+                authorized: true
+            )
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct Body: Codable {
+                let conversationId: String
+                let messageId: String
+                let endpoint: String
+                let agentId: String
+                let maxContextTokens: Int
+            }
+            req.httpBody = try JSONEncoder().encode(Body(
+                conversationId: conversationId,
+                messageId: lastMessageId,
+                endpoint: "agents",
+                agentId: agentId,
+                maxContextTokens: Self.effectiveContextTokens
+            ))
+            let (data, http) = try await apiClient.send(req)
+            guard http.statusCode == 200,
+                  let answer = try? JSONDecoder().decode(ContextProjectionAnswer.self, from: data)
+            else {
+                serverContextUsed = nil
+                serverContextBudget = nil
+                return
+            }
+            let budget = answer.contextBudget
+                ?? answer.breakdown?.maxContextTokens
+                ?? Self.effectiveContextTokens
+            var used: Int?
+            if let remaining = answer.remainingContextTokens {
+                used = max(0, budget - remaining)
+            } else if let breakdown = answer.breakdown,
+                      let msgTokens = breakdown.messageTokens {
+                used = msgTokens + (breakdown.instructionTokens ?? 0) + (breakdown.toolSchemaTokens ?? 0)
+            }
+            if let used, budget > 0 {
+                serverContextUsed = used
+                serverContextBudget = budget
+            } else {
+                serverContextUsed = nil
+                serverContextBudget = nil
+            }
+        } catch {
+            serverContextUsed = nil
+            serverContextBudget = nil
+        }
+    }
+
     @ViewBuilder
     private var contextMeter: some View {
-        let used = messages.reduce(0) { $0 + ($1.tokenCount ?? 0) }
-        let percent = used > 0
-            ? min(100, Int((Double(used) / Double(Self.effectiveContextTokens) * 100).rounded()))
+        // Server numbers when the projection answered; the old per-message
+        // sum otherwise. `measured` drives the wording -- "of" versus
+        // "about" -- so her ear can tell which meter is talking.
+        let estimate = messages.reduce(0) { $0 + ($1.tokenCount ?? 0) }
+        let measured = (serverContextUsed != nil && serverContextBudget != nil)
+        let used = serverContextUsed ?? estimate
+        let budget = serverContextBudget ?? Self.effectiveContextTokens
+        let percent = (used > 0 && budget > 0)
+            ? min(100, Int((Double(used) / Double(budget) * 100).rounded()))
             : 0
-        // Session 25 (Kade approved the audit list, "All four"): this
-        // gauge used to render from the very first token -- a permanent
-        // extra VoiceOver stop and a line of chrome on EVERY chat, almost
-        // always saying a number that needs no attention. Now it appears
-        // only once the window is genuinely filling (60%+), and keeps the
-        // existing orange urgency at 85. Below 60 the bottom stack is one
-        // element shorter on every swipe-through.
+        // Session 25 rule kept exactly: the gauge appears only once the
+        // window is genuinely filling (60%+), orange urgency at 85. Below
+        // 60 the bottom stack stays one element shorter on every
+        // swipe-through.
         if percent >= 60 {
             HStack(spacing: 6) {
                 Image(systemName: "gauge.with.needle")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text("Context: about \(used.formatted()) of \(Self.effectiveContextTokens.formatted()) tokens — \(percent)%")
-                    .font(.caption2)
-                    .foregroundStyle(percent >= 85 ? Color.orange : Color.secondary)
+                Text(
+                    measured
+                        ? "Context: \(used.formatted()) of \(budget.formatted()) tokens \u{2014} \(percent)%"
+                        : "Context: about \(used.formatted()) of \(budget.formatted()) tokens \u{2014} \(percent)%"
+                )
+                .font(.caption2)
+                .foregroundStyle(percent >= 85 ? Color.orange : Color.secondary)
             }
             .padding(.horizontal)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Context window about \(percent) percent full. Roughly \(used.formatted()) of \(Self.effectiveContextTokens.formatted()) tokens used.")
+            .accessibilityLabel(
+                measured
+                    ? "Context window \(percent) percent full, server measured. \(used.formatted()) of \(budget.formatted()) tokens used."
+                    : "Context window about \(percent) percent full. Roughly \(used.formatted()) of \(budget.formatted()) tokens used."
+            )
         }
     }
 

@@ -105,10 +105,14 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "Kade's Clubhouse went fully native — the rooms, the roster, the shared jukebox, the Hotel, and companion guests are all real app screens now, no web page in the middle. The Hotel also went dark on every device: rooms stay off the list, and checking in with your group's passcode is the only way in — or open a room of your own and pass the code around. And the Game Room moved in with the Parlor: family standings, highlights, and latest results now live on the Parlor menu, one door for everything cards and chips."
+                body: "Two new tiles on the home screen. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen, with add, rename and delete for the tags themselves. Prompts: your saved prompt library, straight from the web, now native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed, ready to send or edit. And the context meter grew up: when the gauge appears, the numbers now come from the server's own math \u{2014} the same counting the next reply will actually live under, instructions and tools included \u{2014} instead of the app's rough estimate. The meter says \u{2018}about\u{2019} only when it has to fall back."
             ),
             HelpEntry(
                 title: "The build before",
+                body: "Kade's Clubhouse went fully native — the rooms, the roster, the shared jukebox, the Hotel, and companion guests are all real app screens now, no web page in the middle. The Hotel also went dark on every device: rooms stay off the list, and checking in with your group's passcode is the only way in — or open a room of your own and pass the code around. And the Game Room moved in with the Parlor: family standings, highlights, and latest results now live on the Parlor menu, one door for everything cards and chips."
+            ),
+            HelpEntry(
+                title: "Two builds back",
                 body: "The Lounge grew up into Kade's Clubhouse — same tile, whole new party. The shared jukebox: one music player for the room where everybody holds the remote — play, pause, skip, jump back, queue a song politely or cut in rudely, and if somebody skips your jam, hit Back and fight for it. Your music volume is yours alone and starts low so talk rides over it; voices always come through full. The Hotel: private voice rooms with speakable passcodes so groups can group up — a Parlor table code works as a passcode too, one code for cards and voices. Companion guests: invite one into any room, press their talk button when it's their turn, and they answer out loud in their own voice, following along between turns by rough transcription — anyone can show them the door. Also from the build just before this one: The Parlor's party tables went native — join a friend's table by its four-character code and play your own hand — and the waiting ticks now duck politely under the reply sound."
             ),
             HelpEntry(
@@ -119,15 +123,23 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Getting around", entries: [
             HelpEntry(
                 title: "The home screen",
-                body: "Sign in once and the app remembers you. Everything is grouped in three sections you can jump between with the Headings rotor: Talk holds Call your Spotter, Your conversations, and Alerts. Tools holds Transcribe, Describe, Matchmaker, The Parlor (with the Game Room's standings inside it), Kade's Clubhouse, Debate Room, Agent Builder, My Creations, and the Wall of Fame. Settings and help holds Settings, this help, the full web app, and Sign out."
+                body: "Sign in once and the app remembers you. Everything is grouped in three sections you can jump between with the Headings rotor: Talk holds Call your Spotter, Your conversations, and Alerts. Tools holds Transcribe, Describe, Matchmaker, The Parlor (with the Game Room's standings inside it), Kade's Clubhouse, Debate Room, Agent Builder, The Marketplace, Bookmarks, The Prompt Library, My Creations, and the Wall of Fame. Settings and help holds Settings, this help, the full web app, and Sign out."
             ),
             HelpEntry(
                 title: "Your conversations",
                 body: "Every chat you've had, newest first, including the written version of every call. Double-tap a conversation to open it. There's a search field above the list that filters what's loaded, and the archive box button up top holds everything you've archived — restorable any time."
             ),
             HelpEntry(
+                title: "Bookmarks",
+                body: "Bookmarks are tags for conversations. Focus any conversation row, flick down through the Actions rotor to Bookmark, and check off the tags you want on it \u{2014} or type a brand-new one right there. The Bookmarks tile on the home screen lists every tag with a count, and opening a tag shows exactly the conversations carrying it. Deleting a bookmark never touches the conversations themselves."
+            ),
+            HelpEntry(
+                title: "The Prompt Library",
+                body: "The Prompts tile holds saved prompts \u{2014} yours and any shared with you. Open one to hear the whole text, then Use in a new chat: you land in a fresh conversation with the prompt already typed into the message box, ready to send as-is or edit first. Save a new prompt lives at the bottom of the library list; name and text are all it needs."
+            ),
+            HelpEntry(
                 title: "Actions on a conversation",
-                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Rename, Archive and Delete. Sighted users can swipe the row sideways for the same things. Archive tucks a chat away without deleting it — find it again under the archive box button, where Restore brings it home."
+                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Rename, Archive, Delete, Share and Bookmark. Sighted users can swipe the row sideways for the same things. Archive tucks a chat away without deleting it — find it again under the archive box button, where Restore brings it home."
             ),
             HelpEntry(
                 title: "Starting a new chat",

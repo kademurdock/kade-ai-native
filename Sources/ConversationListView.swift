@@ -10,10 +10,15 @@ import SwiftUI
 ///   fetch that a screen-reader user can't see coming.
 struct ConversationListView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
+    @EnvironmentObject private var apiClient: KadeAPIClient
     // Session 11: drives navigation programmatically now instead of via
     // NavigationLink(value:) -- see the row Button's doc comment in `list`
     // for why.
     @State private var selectedConversation: KadeConversation?
+    /// Bookmarks (session 33, leftovers item 3): which conversation the
+    /// tag-editor sheet is open FOR. Sheet-not-push, same reasoning as the
+    /// share sheet right below it.
+    @State private var taggingConversation: KadeConversation?
     // Session 11, cont. (Kade, right after confirming rows activate now:
     // "it puts you on a random conversation when you open them, like your
     // focus"): without this, VoiceOver's initial focus when this screen
@@ -301,6 +306,11 @@ struct ConversationListView: View {
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
+                    Button {
+                        taggingConversation = convo
+                    } label: {
+                        Label("Bookmark", systemImage: "bookmark")
+                    }
                 }
 
             }
@@ -319,6 +329,18 @@ struct ConversationListView: View {
         }
         .sheet(item: $sharingConversation) { convo in
             ShareExportView(conversation: convo)
+        }
+        .sheet(item: $taggingConversation) { convo in
+            // The sheet owns its own TagsService (@StateObject inside) and
+            // loads the shelf + this conversation's current tags in its
+            // own `.task` -- nothing shared across screens to keep in sync.
+            TagEditorSheet(
+                conversationId: convo.id,
+                conversationTitle: convo.displayTitle,
+                apiClient: apiClient
+            ) { spokenResult in
+                UIAccessibility.post(notification: .announcement, argument: spokenResult)
+            }
         }
         .alert(
             "Delete conversation?",
