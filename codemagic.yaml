@@ -48,7 +48,21 @@ workflows:
 
           ISSUER = os.environ["APP_STORE_CONNECT_ISSUER_ID"]
           KEY_ID = os.environ["APP_STORE_CONNECT_KEY_IDENTIFIER"]
-          PRIVATE_KEY = os.environ["APP_STORE_CONNECT_PRIVATE_KEY"]
+          # First run's lesson (build 6a692603..., MalformedFraming): the
+          # integration delivers the .p8 with literal backslash-n escapes,
+          # not real newlines -- Codemagic's own CLI normalizes internally,
+          # PyJWT does not. Normalize here; base64 fallback just in case a
+          # future integration format changes shape again.
+          _raw = os.environ["APP_STORE_CONNECT_PRIVATE_KEY"].strip()
+          _raw = _raw.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+          if "BEGIN" not in _raw:
+              import base64 as _b64
+              try:
+                  _raw = _b64.b64decode(_raw).decode()
+              except Exception:
+                  pass
+          PRIVATE_KEY = _raw.strip() + "\n"
+          print("ASC key header:", PRIVATE_KEY.splitlines()[0])
           GROUP = "group.com.kademurdock.kadeai"
           BUNDLES = ["com.kademurdock.kadeai", "com.kademurdock.kadeai.keyboard"]
           API = "https://api.appstoreconnect.apple.com"
