@@ -214,6 +214,8 @@ struct ContentView: View {
                     RoomListView(apiClient: apiClient)
                 case .agentBuilder:
                     AgentManagerView(apiClient: apiClient, currentUserId: currentUserIdOrEmpty)
+                case .marketplace:
+                    MarketplaceView(currentUserId: currentUserIdOrEmpty)
                 case .settings:
                     SettingsView(apiClient: apiClient)
                 case .alerts:
@@ -432,6 +434,7 @@ struct ContentView: View {
                 toolTile("Kade's Clubhouse", spoken: "Kade's Clubhouse", icon: "hifispeaker.2.fill", tint: .pink, hint: "Live family voice rooms with a shared jukebox anyone can drive, private Hotel rooms with passcodes, and companion guests you can invite in.", destination: .lounge)
                 toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
                 toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
+                toolTile("Marketplace", spoken: "The Marketplace", icon: "storefront", tint: .orange, hint: "Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.", destination: .marketplace)
                 toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
                 toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
             }
@@ -721,6 +724,7 @@ enum HomeRoute: Identifiable, Hashable {
     case gameRoom
     case debateRoom
     case agentBuilder
+    case marketplace
     case settings
     case alerts
     case myCreations
@@ -741,6 +745,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .gameRoom: return "gameRoom"
         case .debateRoom: return "debateRoom"
         case .agentBuilder: return "agentBuilder"
+        case .marketplace: return "marketplace"
         case .settings: return "settings"
         case .alerts: return "alerts"
         case .myCreations: return "myCreations"

@@ -11,6 +11,42 @@ struct KadeAgent: Codable, Identifiable, Hashable {
     let name: String
     let description: String?
     let category: String?
+    /// Marketplace additions (July 28 2026) — all OPTIONAL so every existing
+    /// consumer (picker, chat seeding, default-agent resolve) decodes exactly
+    /// as before. `mongoId` (raw "_id") is what the permissions routes key
+    /// publishing on; `author` gates the publish controls to your own
+    /// creations; `avatar.filepath` is a site-relative image path.
+    let mongoId: String?
+    let author: String?
+    let isPromoted: Bool?
+    let avatar: KadeAgentAvatar?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, category, author, avatar
+        case mongoId = "_id"
+        case isPromoted = "is_promoted"
+    }
+
+    /// Lenient by hand: `id` and `name` stay strict (a row without them is
+    /// genuinely unusable), everything else swallows odd/legacy shapes as
+    /// nil — one weird avatar field on one agent must never fail the WHOLE
+    /// roster decode (this list feeds the picker, chat seeding, and the
+    /// Marketplace alike). Encode side stays compiler-synthesized.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        description = try? c.decode(String.self, forKey: .description)
+        category = try? c.decode(String.self, forKey: .category)
+        mongoId = try? c.decode(String.self, forKey: .mongoId)
+        author = try? c.decode(String.self, forKey: .author)
+        isPromoted = try? c.decode(Bool.self, forKey: .isPromoted)
+        avatar = try? c.decode(KadeAgentAvatar.self, forKey: .avatar)
+    }
+}
+
+struct KadeAgentAvatar: Codable, Hashable {
+    let filepath: String?
 }
 
 /// GET /api/agents response envelope. Verified shape 2026-07-19: the request
