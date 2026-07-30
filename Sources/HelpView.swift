@@ -105,19 +105,19 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys phase two is wired in and waiting on one Apple-side switch: the app already mirrors your first dozen prompts for the keyboard, and the moment that switch flips in a coming build, Kade Keys types your real saved Prompt Library \u{2014} the six built-in phrases keep working exactly as before until then. There's a new Kade Keys section further down this Help screen."
+                body: "The Debate Room grew a voice and a will of its own. Every new line now plays out loud in that character's own voice; \u{2018}Play this line\u{2019} and \u{2018}Play from here\u{2019} on any line catch you up on demand; Keep it going runs the debate by itself in stretches of twelve turns, each clip finishing before the next begins; the brain toggle makes every turn a Deep Think turn; and you can add or remove characters mid-debate, with the Narrator noting arrivals and exits. Also in this build: when a reply dies on the server, the transcript now says so plainly \u{2014} \u{2018}the thinking engine was jammed up, ask again\u{2019} \u{2014} instead of blaming tool activity."
             ),
             HelpEntry(
                 title: "The build before",
-                body: "Kade Keys arrived: a custom keyboard with big, spoken quick phrases plus globe, space and delete \u{2014} add it under Settings, General, Keyboard. And the build before that brought two new home tiles. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen. Prompts: your saved prompt library, native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed. The context meter grew up too: when the gauge appears, the numbers come from the server's own math instead of the app's rough estimate."
+                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys phase two is wired in and waiting on one Apple-side switch: the app already mirrors your first dozen prompts for the keyboard, and the moment that switch flips in a coming build, Kade Keys types your real saved Prompt Library \u{2014} the six built-in phrases keep working exactly as before until then. There's a new Kade Keys section further down this Help screen."
             ),
             HelpEntry(
                 title: "Two builds back",
-                body: "Kade's Clubhouse went fully native \u{2014} the rooms, the roster, the shared jukebox, the Hotel, and companion guests are all real app screens now, no web page in the middle. The Hotel also went dark on every device: rooms stay off the list, and checking in with your group's passcode is the only way in. And the Game Room moved in with the Parlor: family standings, highlights, and latest results now live on the Parlor menu."
+                body: "Kade Keys arrived: a custom keyboard with big, spoken quick phrases plus globe, space and delete \u{2014} add it under Settings, General, Keyboard. And the build before that brought two new home tiles. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen. Prompts: your saved prompt library, native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed. The context meter grew up too: when the gauge appears, the numbers come from the server's own math instead of the app's rough estimate."
             ),
             HelpEntry(
                 title: "Earlier",
-                body: "The Clubhouse's shared jukebox with radio fights and personal volume, private Hotel rooms with speakable passcodes, and companion guests who talk in rooms. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Recording that stops itself only after ten silent seconds. Report a problem at the top of this Help screen. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
+                body: "Kade's Clubhouse went fully native, with hidden passcode-only Hotel rooms, and the Game Room folded into the Parlor. The Clubhouse's shared jukebox with radio fights and personal volume, private Hotel rooms with speakable passcodes, and companion guests who talk in rooms. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Recording that stops itself only after ten silent seconds. Report a problem at the top of this Help screen. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
             ),
         ]),
         HelpSection(title: "Getting around", entries: [
@@ -313,15 +313,31 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Running a room",
-                body: "Continue lets whoever's turn it is speak next. Choose who's next lets you pick a specific companion to jump in out of turn. You can type something yourself at any point — you don't have to wait for a turn."
+                body: "Continue lets whoever's turn it is speak next. Choose who's next lets you pick a specific companion to jump in out of turn. You can type something yourself at any point \u{2014} you don't have to wait for a turn."
+            ),
+            HelpEntry(
+                title: "Hearing the debate",
+                body: "Voices is on by default: every new line plays out loud in that character's own voice the moment it lands. Opening an old room never reads the whole backlog at you \u{2014} flick to \u{2018}Play this line\u{2019} or \u{2018}Play from here\u{2019} in the Actions rotor on any line (or long-press it) to catch up from wherever you like. The speaker toggle under the turn buttons turns voices off and on."
+            ),
+            HelpEntry(
+                title: "Keep it going",
+                body: "The forward toggle runs the debate by itself \u{2014} each character takes their turn, each clip finishes before the next turn starts, twelve turns at a stretch, then it pauses and says so before spending more. Any error or daily cap stops it immediately, out loud. Turn it off any time to take the wheel back."
+            ),
+            HelpEntry(
+                title: "Deep Think debates",
+                body: "The brain toggle makes every turn reason hard before speaking \u{2014} slower and a little costlier, but the arguments come back sharper. It remembers the setting per room."
+            ),
+            HelpEntry(
+                title: "Changing the cast",
+                body: "The person-with-a-plus button in the top corner adds or removes characters mid-debate \u{2014} a room holds two to six. The Narrator notes who joined or left right in the transcript, so returning characters know what they walked into."
             ),
             HelpEntry(
                 title: "Sharing to the Hall",
-                body: "The button in the top corner of a room lets you share it, with a title, to the Conversation Hall — where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
+                body: "The share button in the top corner of a room lets you share it, with a title, to the Conversation Hall \u{2014} where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
             ),
             HelpEntry(
                 title: "The Conversation Hall",
-                body: "Reached from Debate Room's Hall button. Every shared room, newest first — tap one to read the whole thing. Grown-up accounts only."
+                body: "Reached from Debate Room's Hall button. Every shared room, newest first \u{2014} tap one to read the whole thing. Grown-up accounts only."
             ),
         ]),
         HelpSection(title: "Agent Builder", entries: [
