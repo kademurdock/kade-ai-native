@@ -171,11 +171,15 @@ final class RoomService: ObservableObject {
     /// regardless of whose turn it technically is -- mirrors the web
     /// page's own "interject between any two turns" design, not a native
     /// invention.
-    func nextTurn(roomId: String, forcedAgentId: String?) async throws -> (line: RoomLine, nextIdx: Int, turnCount: Int) {
+    func nextTurn(roomId: String, forcedAgentId: String?, deepThink: Bool = false) async throws -> (line: RoomLine, nextIdx: Int, turnCount: Int) {
         var req = client.request(path: "api/kade/room/\(roomId)/next", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [:]
         if let forcedAgentId { body["agentId"] = forcedAgentId }
+        // Session 35 part 3 ("deep think debait option"): the server routes
+        // this through the gateway as reasoning effort high -- slower,
+        // deeper arguments, real cost metered like any turn.
+        if deepThink { body["deepThink"] = true }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
@@ -183,6 +187,22 @@ final class RoomService: ObservableObject {
         }
         let decoded = try decoder.decode(NextTurnResponse.self, from: data)
         return (decoded.message, decoded.nextIdx, decoded.turnCount)
+    }
+
+    /// Session 35 part 3 (her ask: "add and remove agents"): edit the cast
+    /// mid-room. Additions snapshot server-side exactly like create;
+    /// removals keep the room at two or more; the server writes Narrator
+    /// lines into the transcript so everyone -- humans and models -- knows
+    /// who walked in or out. Returns the full updated room.
+    func editCast(roomId: String, add: [String], remove: [String]) async throws -> DebateRoom {
+        var req = client.request(path: "api/kade/room/\(roomId)/cast", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["add": add, "remove": remove])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw RoomError(message: errorMessage(from: data, fallback: "Couldn't change the cast."))
+        }
+        return try decoder.decode(RoomResponse.self, from: data).room
     }
 
     private struct ShareResponse: Decodable { let shared: Bool }

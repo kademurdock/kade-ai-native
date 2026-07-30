@@ -56,7 +56,13 @@ final class VoiceService: NSObject, ObservableObject {
 
     private var currentPlayer: AVAudioPlayer?
     private var playbackContinuation: CheckedContinuation<Void, Never>?
-    private var speakQueue: [(text: String, agentId: String?, agentName: String?)] = []
+    /// Session 35 part 3 (the Debate Room's voices): items may carry an
+    /// EXPLICIT voice/rate (the room's cast snapshot already knows who
+    /// sounds like what — no per-line agent resolve needed) and an optional
+    /// completion so a caller can AWAIT one line finishing (auto-advance
+    /// paces itself on real playback, not guesses). Chat's enqueueSpeak
+    /// path is byte-identical in behavior: nil/nil/nil.
+    private var speakQueue: [(text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, completion: CheckedContinuation<Void, Never>?)] = []
     private var isPumping = false
 
     /// Playback rate for spoken replies. 1.0 is the voice's own natural
@@ -338,14 +344,33 @@ final class VoiceService: NSObject, ObservableObject {
     func enqueueSpeak(text: String, agentId: String?, agentName: String?) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        speakQueue.append((trimmed, agentId, agentName))
+        speakQueue.append((trimmed, agentId, agentName, nil, nil, nil))
         guard !isPumping else { return }
         Task { await pumpSpeakQueue() }
+    }
+
+    /// Session 35 part 3: speak ONE line in an explicit voice and return
+    /// only when it has finished playing (or failed, or been stopped).
+    /// The Debate Room's autoplay and auto-advance pace themselves on
+    /// this. Rides the same queue as enqueueSpeak, so a room line and a
+    /// chat reply can never talk over each other.
+    func speakLine(text: String, voiceId: String?, rate: Double?) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            speakQueue.append((trimmed, nil, nil, voiceId, rate, continuation))
+            guard !isPumping else { return }
+            Task { await self.pumpSpeakQueue() }
+        }
     }
 
     /// Stops any current playback and drops everything still queued --
     /// used when the user turns Read Aloud off mid-speech.
     func stopSpeaking() {
+        // Never strand an awaiting caller: resume any queued completions
+        // BEFORE dropping the items, or `speakLine` callers would hang
+        // forever on a continuation nobody owns anymore.
+        for item in speakQueue { item.completion?.resume() }
         speakQueue.removeAll()
         currentPlayer?.stop()
         currentPlayer = nil
@@ -379,7 +404,14 @@ final class VoiceService: NSObject, ObservableObject {
         isSpeaking = true
         while !speakQueue.isEmpty {
             let item = speakQueue.removeFirst()
-            await speakOne(text: item.text, agentId: item.agentId, agentName: item.agentName)
+            await speakOne(
+                text: item.text,
+                agentId: item.agentId,
+                agentName: item.agentName,
+                explicitVoice: item.explicitVoice,
+                explicitRate: item.explicitRate
+            )
+            item.completion?.resume()
         }
         isSpeaking = false
         isPumping = false
@@ -388,8 +420,22 @@ final class VoiceService: NSObject, ObservableObject {
     /// One clip failing to fetch or play never blocks the rest of the
     /// queue -- matches the web app's own `try{...}catch(e){ /* one bad
     /// clip never blocks the queue */ }` behavior exactly.
-    private func speakOne(text: String, agentId: String?, agentName: String?) async {
-        let (voice, speed) = await resolveVoice(agentId: agentId, agentName: agentName)
+    private func speakOne(
+        text: String,
+        agentId: String?,
+        agentName: String?,
+        explicitVoice: String? = nil,
+        explicitRate: Double? = nil
+    ) async {
+        // An explicit voice (Debate Room cast snapshot) skips the network
+        // resolve entirely; an empty-string voiceId means "uncast" and
+        // falls through to the resolver exactly like nil.
+        let (voice, speed): (String?, Double?)
+        if let explicitVoice, !explicitVoice.isEmpty {
+            (voice, speed) = (explicitVoice, explicitRate)
+        } else {
+            (voice, speed) = await resolveVoice(agentId: agentId, agentName: agentName)
+        }
 
         var fields: [(String, String)] = [("input", text)]
         if let voice { fields.append(("voice", voice)) }
