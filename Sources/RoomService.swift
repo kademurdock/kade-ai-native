@@ -172,7 +172,12 @@ final class RoomService: ObservableObject {
     /// page's own "interject between any two turns" design, not a native
     /// invention.
     func nextTurn(roomId: String, forcedAgentId: String?, deepThink: Bool = false) async throws -> (line: RoomLine, nextIdx: Int, turnCount: Int) {
-        var req = client.request(path: "api/kade/room/\(roomId)/next", method: "POST", authorized: true)
+        // 240s, not the 60s default: a debate turn is allowed to be SLOW
+        // (six casts, the anti-echo constitution, congestion re-asks, a
+        // possible echo-guard retry, Deep Think on top) — the server was
+        // landing 69–93s turns while the old default hung up at 60 and
+        // called them failures. Field receipts in PROJECT_STATUS s35p5.
+        var req = client.request(path: "api/kade/room/\(roomId)/next", method: "POST", authorized: true, timeout: 240)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [:]
         if let forcedAgentId { body["agentId"] = forcedAgentId }

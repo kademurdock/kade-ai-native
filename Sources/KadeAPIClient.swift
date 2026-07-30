@@ -75,7 +75,8 @@ final class KadeAPIClient: ObservableObject {
         path: String,
         method: String = "GET",
         authorized: Bool = false,
-        queryItems: [URLQueryItem]? = nil
+        queryItems: [URLQueryItem]? = nil,
+        timeout: TimeInterval? = nil
     ) -> URLRequest {
         var url = baseURL.appendingPathComponent(path)
         if let queryItems, !queryItems.isEmpty,
@@ -85,6 +86,17 @@ final class KadeAPIClient: ObservableObject {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
+        // Session 35 part 5 (build 169's first field report — "failing on a
+        // turn"): a per-request timeout for the few calls whose SERVER work
+        // legitimately outlives URLSession's 60-second default. Receipts: a
+        // six-seat Debate turn under the new room constitution ran 69–93s
+        // server-side and LANDED every time — the app just hung up at 60
+        // and called it a failure, which also knocked Keep-it-going off.
+        // An explicit URLRequest.timeoutInterval overrides the session
+        // default for that request only; everything else stays at 60.
+        if let timeout {
+            req.timeoutInterval = timeout
+        }
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(baseURL.absoluteString, forHTTPHeaderField: "Origin")
         if authorized, let token = Keychain.string(for: .accessToken) {
