@@ -61,6 +61,12 @@ struct RoomDetailView: View {
     private static let autoBatchLimit = 12
 
     @AccessibilityFocusState private var focusedLineIndex: Int?
+    /// Session 35 part 6: sighted-scroll WITHOUT VoiceOver focus. On voiced
+    /// turns the clip IS the delivery — grabbing VO focus made VoiceOver
+    /// read the row OVER the cast voice (her report: "talked over and
+    /// fucked over Sylvia"). This target scrolls the transcript for eyes
+    /// while ears get exactly one voice.
+    @State private var scrollTarget: Int?
     private enum Focus: Hashable { case status }
     @AccessibilityFocusState private var a11yFocus: Focus?
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
@@ -115,6 +121,10 @@ struct RoomDetailView: View {
                                    value: transcript.count)
                     }
                     .onChange(of: focusedLineIndex) { _, newValue in
+                        guard let newValue else { return }
+                        withAnimation { proxy.scrollTo(newValue, anchor: .bottom) }
+                    }
+                    .onChange(of: scrollTarget) { _, newValue in
                         guard let newValue else { return }
                         withAnimation { proxy.scrollTo(newValue, anchor: .bottom) }
                     }
@@ -349,7 +359,7 @@ struct RoomDetailView: View {
         let member = castMember(for: line)
         Task {
             await voiceService.speakLine(
-                text: "\(line.name). \(line.text)",
+                text: clipText(for: line),
                 voiceId: member?.voiceId,
                 rate: member?.rate
             )
@@ -364,11 +374,12 @@ struct RoomDetailView: View {
         voiceService.stopSpeaking()
         let lines = Array(transcript[index...])
         let members = lines.map { castMember(for: $0) }
+        let texts = lines.map { clipText(for: $0) }
         Task {
-            for (line, member) in zip(lines, members) {
+            for (i, member) in members.enumerated() {
                 if Task.isCancelled { return }
                 await voiceService.speakLine(
-                    text: "\(line.name). \(line.text)",
+                    text: texts[i],
                     voiceId: member?.voiceId,
                     rate: member?.rate
                 )
@@ -376,15 +387,25 @@ struct RoomDetailView: View {
         }
     }
 
-    /// Speak a line that JUST landed (autoplay path): no name prefix when
-    /// the focus announcement already carries it — but VoiceOver isn't
-    /// always running, so the name rides in the clip. Her own lines and
+    /// Session 35 part 6, HER RULE, verbatim intent: "vo doesn't say names,
+    /// it should, but speech voice clip should not." So: transcript ROWS
+    /// keep "Name. text" as their VoiceOver label (browsing always
+    /// attributes), and CLIPS are pure dialogue — no name prefix, ever, no
+    /// clever exceptions. (An earlier draft kept names when two cast
+    /// members share a voice; her call overrides — if a cast is ambiguous
+    /// by ear, the rows and Play-this-line carry the who.) Narrator lines
+    /// are self-attributing text anyway.
+    private func clipText(for line: RoomLine) -> String {
+        line.text
+    }
+
+    /// Speak a line that JUST landed (autoplay path). Her own lines and
     /// empty lines never read back.
     private func autoplaySpeak(_ line: RoomLine) async {
         guard voicesOn, line.speaker != "user" else { return }
         let member = castMember(for: line)
         await voiceService.speakLine(
-            text: "\(line.name). \(line.text)",
+            text: clipText(for: line),
             voiceId: member?.voiceId,
             rate: member?.rate
         )
@@ -467,12 +488,20 @@ struct RoomDetailView: View {
                 deepThink: deepThinkOn
             )
             await reload()
-            focusedLineIndex = transcript.indices.last
             Earcons.shared.play(.messageReceived)
             KadeHaptics.success()
-            // The voice half: the clip plays to the END before this
-            // returns, so auto-advance paces itself on real listening.
-            await autoplaySpeak(result.line)
+            if voicesOn && result.line.speaker != "user" {
+                // Session 35 part 6: the clip is the ONLY voice. No VO
+                // focus grab (that made VoiceOver read the row over the
+                // cast voice); eyes get a silent scroll instead, and the
+                // row is right there when she browses. The clip plays to
+                // the END before this returns, so auto-advance paces
+                // itself on real listening.
+                scrollTarget = transcript.indices.last
+                await autoplaySpeak(result.line)
+            } else {
+                focusedLineIndex = transcript.indices.last
+            }
             return true
         } catch {
             actionError = (error as? RoomService.RoomError)?.message ?? "That turn failed — give it another try."
