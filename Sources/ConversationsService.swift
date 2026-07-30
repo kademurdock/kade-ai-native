@@ -147,6 +147,17 @@ struct KadeMessage: Codable, Identifiable {
         if let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
             return t
         }
+        // Session 35: a server-side failure is NOT "tool activity" — say so.
+        // (Amber's live case: Moonshot 429 "engine overloaded" persisted an
+        // error block and the old fallback line blamed tools, so a blind
+        // user had no idea the move was simply "ask again.")
+        if let blocks = content, let errBlock = blocks.first(where: { $0.type == "error" }) {
+            let raw = (errBlock.errorText ?? "").lowercased()
+            let reason = (raw.contains("overloaded") || raw.contains("rate limit"))
+                ? "the thinking engine was jammed up for a moment"
+                : "something went wrong on the server"
+            return "(This reply didn't make it — \(reason). Ask your question again.)"
+        }
         return isCreatedByUser ? "" : "(No text in this reply — it looks like tool activity only.)"
     }
 
@@ -192,13 +203,19 @@ struct KadeMessage: Codable, Identifiable {
 struct ContentBlock: Codable {
     let type: String
     let text: String?
+    /// Session 35 (July 30 2026, Amber's armadillo debug): a turn that dies
+    /// server-side persists as `{type:"error", error:"..."}` — decode the
+    /// reason so the transcript can say what actually happened instead of
+    /// mislabeling a failed turn as "tool activity only."
+    let errorText: String?
 
-    enum CodingKeys: String, CodingKey { case type, text }
+    enum CodingKeys: String, CodingKey { case type, text, errorText = "error" }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.type = (try? c.decode(String.self, forKey: .type)) ?? "unknown"
         self.text = try? c.decode(String.self, forKey: .text)
+        self.errorText = try? c.decode(String.self, forKey: .errorText)
     }
 }
 
