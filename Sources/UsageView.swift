@@ -57,12 +57,15 @@ struct UsageView: View {
                 }
                 Section {
                     row("Balance", u.balanceUSD)
-                    if let paypal = u.paypal, let url = URL(string: paypal) {
-                        Link(destination: url) {
-                            Label("Chip in (opens PayPal in your browser)", systemImage: "heart")
-                        }
-                        .accessibilityHint("Opens the chip-in page in your browser. Nothing is charged from inside this app.")
-                    }
+                    // APP STORE (July 31 2026, the submission build): the
+                    // "Chip in" PayPal link is REMOVED from native, not
+                    // gated -- an external payment link next to a digital
+                    // balance is Guideline 3.1.1's single most common
+                    // rejection, and the family tops up through Kade
+                    // anyway. The WEB keeps its link (outside Apple's
+                    // walls); if native ever needs one back, it goes
+                    // through StoreKit External Purchase entitlements,
+                    // not a plain Link.
                 } header: {
                     Text("Balance")
                 }

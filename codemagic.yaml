@@ -53,18 +53,34 @@ workflows:
           xcode-project build-ipa \
             --project "KadeAI.xcodeproj" \
             --scheme "KadeAI"
-      - name: Simulator screenshot for visual review (blind-friendly loop)
+      - name: Simulator screenshots — the App Store tour (blind-friendly loop)
         script: |
           set -e
-          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(dev['udid'] for devs in d['devices'].values() for dev in devs if 'iPhone' in dev['name']))") || exit 0
+          # July 31 2026, the App Store sprint: prefer a Pro Max simulator so
+          # frames land at an accepted store size (1290x2796 / 1320x2868).
+          # The DEBUG sim build contains the tour (auto sign-in on the TEST
+          # seat + a timed walk of the best rooms); the Release archive
+          # above contains none of it.
+          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);devs=[dev for l in d['devices'].values() for dev in l if 'iPhone' in dev['name']];pm=[x for x in devs if 'Pro Max' in x['name']];print((pm or devs)[0]['udid'])") || exit 0
           xcrun simctl boot "$SIM" || true
           xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -destination "id=$SIM" -derivedDataPath /tmp/dd build || exit 0
           APP=$(find /tmp/dd -name "KadeAI.app" -path "*iphonesimulator*" | head -1)
-          xcrun simctl install "$SIM" "$APP" && xcrun simctl launch "$SIM" com.kademurdock.kadeai && sleep 5
-          xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/screenshot-home.png" || true
+          xcrun simctl install "$SIM" "$APP" || exit 0
+          SIMCTL_CHILD_KADE_TOUR=1 \
+          SIMCTL_CHILD_KADE_TOUR_EMAIL="kadeai.vischeck722@gmail.com" \
+          SIMCTL_CHILD_KADE_TOUR_PASS="T3st!Check722" \
+          xcrun simctl launch "$SIM" com.kademurdock.kadeai || exit 0
+          for i in 1 2 3 4 5 6 7; do
+            sleep 7
+            xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/tour-$i.png" || true
+          done
+          # One credential IDENTIFIER for the sandbox's direct ASC lane (the
+          # .p8 itself already lives with Kade; an issuer id is inert alone).
+          printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" > "$CM_BUILD_DIR/asc-issuer.txt" || true
     artifacts:
       - build/ios/ipa/*.ipa
-      - screenshot-home.png
+      - tour-*.png
+      - asc-issuer.txt
     publishing:
       app_store_connect:
         auth: integration

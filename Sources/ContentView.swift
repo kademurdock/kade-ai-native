@@ -249,6 +249,11 @@ struct ContentView: View {
                 route = .kadeKeysDictate
             }
         }
+        .onAppear {
+#if DEBUG
+            startScreenshotTourIfAsked()
+#endif
+        }
         .onChange(of: authStateID) { _, _ in
             handleStateChange()
             // A Siri phrase can easily land before a saved session has
@@ -601,6 +606,30 @@ struct ContentView: View {
         let e = email, p = password
         Task { await auth.signIn(email: e, password: p) }
     }
+
+#if DEBUG
+    /// SCREENSHOT TOUR (July 31 2026, the App Store sprint). Debug-only by
+    /// construction — the Release archive never contains this code. CI's
+    /// simulator step launches with SIMCTL_CHILD_KADE_TOUR=1 plus the test
+    /// seat's credentials, and this walks the app through its best rooms
+    /// on a timer while the workflow snaps 1290×2796 frames. Never runs
+    /// on a real device, never with real accounts.
+    private func startScreenshotTourIfAsked() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["KADE_TOUR"] == "1",
+              let tourEmail = env["KADE_TOUR_EMAIL"],
+              let tourPass = env["KADE_TOUR_PASS"] else { return }
+        Task {
+            await auth.signIn(email: tourEmail, password: tourPass)
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            let stops: [HomeRoute?] = [nil, .conversations, .debateRoom, .prompts, .settings]
+            for stop in stops {
+                if let stop { route = stop } else { route = nil }
+                try? await Task.sleep(nanoseconds: 7_000_000_000)
+            }
+        }
+    }
+#endif
 
     /// Runs whatever a Siri phrase asked for, but only once there is
     /// actually an account to run it against -- otherwise the request stays
