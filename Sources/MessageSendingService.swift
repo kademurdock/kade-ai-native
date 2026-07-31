@@ -103,7 +103,8 @@ final class MessageSendingService: ObservableObject {
         conversationId: String?,
         parentMessageId: String?,
         agentId: String?,
-        files: [[String: Any]]? = nil
+        files: [[String: Any]]? = nil,
+        onThink: ((String) -> Void)? = nil
     ) async throws -> String {
         let start = try await startGeneration(
             text: text,
@@ -114,7 +115,7 @@ final class MessageSendingService: ObservableObject {
         )
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
-        try await waitForFinal(streamId: start.streamId)
+        try await waitForFinal(streamId: start.streamId, onThink: onThink)
         return start.conversationId
     }
 
@@ -216,7 +217,30 @@ final class MessageSendingService: ObservableObject {
     private struct FinalFlag: Codable { let final: Bool? }
     private struct ErrorFrame: Codable { let error: String?; let message: String? }
 
-    private func waitForFinal(streamId: String) async throws {
+    /// Session 35 encore (her ask: "see the deepthink bubble as it's
+    /// generating... see the thoughts populate as they stream"): the
+    /// subscribe stream has ALWAYS carried on_reasoning_delta frames
+    /// (proven live July 31 — think-typed content parts on the wire);
+    /// this used to read past every one of them waiting for `final`.
+    /// `onThink` now hands each think chunk to the caller the moment it
+    /// arrives. Fail-soft: an unparseable frame is just skipped, exactly
+    /// as before.
+    private struct DeltaFrame: Decodable {
+        struct DataBox: Decodable {
+            struct Delta: Decodable {
+                struct Part: Decodable {
+                    let type: String?
+                    let think: String?
+                }
+                let content: [Part]?
+            }
+            let delta: Delta?
+        }
+        let event: String?
+        let data: DataBox?
+    }
+
+    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil) async throws {
         var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // Generous on purpose: the generation job lives server-side,
@@ -248,6 +272,17 @@ final class MessageSendingService: ObservableObject {
 
                 if let flag = try? decoder.decode(FinalFlag.self, from: jsonData), flag.final == true {
                     return
+                }
+
+                if let onThink,
+                   let frame = try? decoder.decode(DeltaFrame.self, from: jsonData),
+                   frame.event == "on_reasoning_delta",
+                   let parts = frame.data?.delta?.content {
+                    for part in parts where part.type == "think" {
+                        if let think = part.think, !think.isEmpty {
+                            onThink(think)
+                        }
+                    }
                 }
 
                 currentEvent = "message"

@@ -137,6 +137,13 @@ struct ConversationDetailView: View {
     // Send itself stays instant. Kept across a FAILED send on purpose --
     // Retry re-spends the same file_id.
     @State private var pendingAttachment: ChatAttachment?
+    // Session 35 encore — the LIVE THINKING BUBBLE (her ask: "see the
+    // thoughts populate as they stream"). Fills from on_reasoning_delta
+    // frames during a send; cleared when the real message (with its own
+    // permanent think part) replaces it at final.
+    @State private var liveThink = ""
+    @State private var liveThinkExpanded = false
+    @State private var announcedThinking = false
     @State private var attachmentUploading = false
     @State private var showingAttachMenu = false
     @State private var showingAttachPhotos = false
@@ -808,6 +815,9 @@ struct ConversationDetailView: View {
                         .id(message.id)
                         .accessibilityFocused($a11yFocus, equals: .message(message.id))
                     }
+                    if !liveThink.isEmpty, case .sending = sendState {
+                        liveThinkingBubble
+                    }
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
                     }
@@ -858,6 +868,35 @@ struct ConversationDetailView: View {
     }
 
     private static let replyingRowId = "replying-indicator"
+
+    /// Session 35 encore: the LIVE thinking bubble. Collapsed by default —
+    /// one tap (or VoiceOver double-tap) opens it and the thoughts pour in
+    /// as they stream. VoiceOver manners: ONE announcement when thinking
+    /// starts (in performSend), then silence — the group's value reads a
+    /// running length on focus instead of narrating every token, and the
+    /// streaming text never grabs focus. Cleared at final, when the real
+    /// message's own expandable think part takes over.
+    private var liveThinkingBubble: some View {
+        DisclosureGroup(isExpanded: $liveThinkExpanded) {
+            Text(liveThink)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("The thinking so far: \(liveThink)")
+        } label: {
+            Label("Thinking it through…", systemImage: "brain")
+                .font(.footnote.bold())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            Color(uiColor: .secondarySystemBackground).opacity(0.6),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .accessibilityValue("\(liveThink.count) characters of thought so far. \(liveThinkExpanded ? "Open." : "Closed.")")
+        .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to watch the thoughts pour in.")
+    }
 
     private var replyingRow: some View {
         let who = messages.last(where: { !$0.isCreatedByUser })?.speakerLabel ?? "The assistant"
@@ -1757,13 +1796,30 @@ struct ConversationDetailView: View {
             // includeAttachment:false -- a re-ask of an OLD question must
             // never quietly consume a file meant for the NEXT message.
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
+            liveThink = ""
+            announcedThinking = false
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
                 parentMessageId: parentId,
                 agentId: selectedAgentId,
-                files: files
+                files: files,
+                onThink: { chunk in
+                    // Session 35 encore: thoughts pour into the live bubble
+                    // as they stream. One spoken heads-up the first time,
+                    // then silence — the bubble narrates only on focus.
+                    liveThink += chunk
+                    if !announcedThinking {
+                        announcedThinking = true
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Deep thoughts are streaming — the thinking bubble is under the last message."
+                        )
+                    }
+                }
             )
+            liveThink = ""
+            announcedThinking = false
             conversationId = resolvedConversationId
             // Authoritative reload: replaces the optimistic placeholder with
             // whatever the server actually persisted (real ids, real content
@@ -1865,6 +1921,8 @@ struct ConversationDetailView: View {
             failedAttempt = FailedAttempt(text: text, parentId: parentId)
             a11yFocus = .composerError
         } catch {
+            liveThink = ""
+            announcedThinking = false
             // The optimistic message stays visible on purpose: it really was
             // sent from the user's point of view, only the "did the reply
             // come back" half failed.
