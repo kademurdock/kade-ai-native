@@ -279,6 +279,21 @@ struct RoomDetailView: View {
             // The listening controls. Real Toggles — visible state, one
             // swipe stop each, spoken hints that say what they cost.
             HStack(spacing: 16) {
+                // Session 35 part 11 (her ask): stop a clip once it's
+                // started. Constant address, disabled when silent. With
+                // Keep it going on, stopping SKIPS the rest of this clip
+                // and the debate rolls to the next turn (speakLine's
+                // continuation resumes on stop by design).
+                Button {
+                    voiceService.stopSpeaking()
+                    UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+                } label: {
+                    Image(systemName: "stop.circle")
+                }
+                .disabled(!(voiceService.isSpeaking || voiceService.isClipPlaying))
+                .accessibilityLabel("Stop this voice clip")
+                .accessibilityHint("Skips the rest of what's being spoken. With Keep it going on, the debate moves along to the next turn.")
+
                 Toggle(isOn: $voicesOn) {
                     Image(systemName: voicesOn ? "speaker.wave.2.fill" : "speaker.slash")
                         .accessibilityHidden(true)

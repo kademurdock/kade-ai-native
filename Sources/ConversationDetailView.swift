@@ -1198,10 +1198,31 @@ struct ConversationDetailView: View {
 
             Spacer()
 
+            stopVoiceButton
             speedButton
         }
         .padding(.horizontal)
         .padding(.top, 4)
+    }
+
+    /// Session 35 part 11 (her ask: "a way to make a voice message stop
+    /// playing once we've started it"). Always PRESENT, disabled when
+    /// nothing is playing — an appearing/vanishing control is a moving
+    /// target under VoiceOver; a constant one is a known address. Stopping
+    /// clears the whole spoken queue (stopSpeaking already resumes any
+    /// waiting continuations, so nothing upstream ever hangs).
+    private var stopVoiceButton: some View {
+        Button {
+            voiceService.stopSpeaking()
+            UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+        } label: {
+            Image(systemName: "stop.circle")
+                .font(.title3)
+        }
+        .buttonStyle(.plain)
+        .disabled(!(voiceService.isSpeaking || voiceService.isClipPlaying))
+        .accessibilityLabel("Stop the voice")
+        .accessibilityHint("Stops the voice message that's playing right now.")
     }
 
     /// Playback-speed control, sitting beside the voice-messages toggle
