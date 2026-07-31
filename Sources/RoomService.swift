@@ -171,27 +171,57 @@ final class RoomService: ObservableObject {
     /// regardless of whose turn it technically is -- mirrors the web
     /// page's own "interject between any two turns" design, not a native
     /// invention.
+    private struct JobStart: Decodable { let jobId: String }
+
+    /// Session 35 finale — ASYNC TURNS ("I want both"): start-and-poll,
+    /// the architectural fix under every timeout band-aid. The start
+    /// answers in a breath with a jobId; the server generates in the
+    /// background with a FIVE-MINUTE model window (her philosophy:
+    /// thinking gets room, waiting is fine); this polls every 2.5s until
+    /// the turn lands. Old servers that answer the start with a plain 200
+    /// still work — the sync decode is the graceful fallback, so this
+    /// client never strands against an un-deployed fork.
     func nextTurn(roomId: String, forcedAgentId: String?, deepThink: Bool = false) async throws -> (line: RoomLine, nextIdx: Int, turnCount: Int) {
-        // 240s, not the 60s default: a debate turn is allowed to be SLOW
-        // (six casts, the anti-echo constitution, congestion re-asks, a
-        // possible echo-guard retry, Deep Think on top) — the server was
-        // landing 69–93s turns while the old default hung up at 60 and
-        // called them failures. Field receipts in PROJECT_STATUS s35p5.
         var req = client.request(path: "api/kade/room/\(roomId)/next", method: "POST", authorized: true, timeout: 240)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = [:]
+        var body: [String: Any] = ["async": true]
         if let forcedAgentId { body["agentId"] = forcedAgentId }
-        // Session 35 part 3 ("deep think debait option"): the server routes
-        // this through the gateway as reasoning effort high -- slower,
-        // deeper arguments, real cost metered like any turn.
         if deepThink { body["deepThink"] = true }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let (data, http) = try await client.send(req)
-        guard http.statusCode == 200 else {
+        if http.statusCode == 200 {
+            // Pre-async server: the whole turn came back synchronously.
+            let decoded = try decoder.decode(NextTurnResponse.self, from: data)
+            return (decoded.message, decoded.nextIdx, decoded.turnCount)
+        }
+        guard http.statusCode == 202, let job = try? decoder.decode(JobStart.self, from: data) else {
             throw RoomError(message: errorMessage(from: data, fallback: "That turn failed — give it another try."))
         }
-        let decoded = try decoder.decode(NextTurnResponse.self, from: data)
-        return (decoded.message, decoded.nextIdx, decoded.turnCount)
+        // Poll. ~2.5s cadence, six-minute ceiling (the server's own window
+        // is five; the extra minute absorbs queue-and-pacing time).
+        let deadline = Date().addingTimeInterval(360)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 2_500_000_000)
+            if Task.isCancelled {
+                throw RoomError(message: "Stopped.")
+            }
+            let statusReq = client.request(
+                path: "api/kade/room/\(roomId)/next-status",
+                authorized: true,
+                queryItems: [URLQueryItem(name: "jobId", value: job.jobId)]
+            )
+            let (sData, sHttp) = try await client.send(statusReq)
+            if sHttp.statusCode == 200 {
+                struct Running: Decodable { let status: String }
+                if let r = try? decoder.decode(Running.self, from: sData), r.status == "running" {
+                    continue
+                }
+                let decoded = try decoder.decode(NextTurnResponse.self, from: sData)
+                return (decoded.message, decoded.nextIdx, decoded.turnCount)
+            }
+            throw RoomError(message: errorMessage(from: sData, fallback: "That turn failed — give it another try."))
+        }
+        throw RoomError(message: "That turn is taking longer than six minutes — something's stuck. Try again.")
     }
 
     /// Session 35 part 3 (her ask: "add and remove agents"): edit the cast
@@ -206,6 +236,31 @@ final class RoomService: ObservableObject {
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
             throw RoomError(message: errorMessage(from: data, fallback: "Couldn't change the cast."))
+        }
+        return try decoder.decode(RoomResponse.self, from: data).room
+    }
+
+    /// Host opens/closes the party doors. Returns the updated room (with
+    /// the minted code when opening).
+    func setParty(roomId: String, enable: Bool) async throws -> DebateRoom {
+        var req = client.request(path: "api/kade/room/\(roomId)/party", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["enable": enable])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw RoomError(message: errorMessage(from: data, fallback: "Couldn't change party mode."))
+        }
+        return try decoder.decode(RoomResponse.self, from: data).room
+    }
+
+    /// Join someone's debate by its four-character code.
+    func joinParty(code: String) async throws -> DebateRoom {
+        var req = client.request(path: "api/kade/room/join-party", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["code": code])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw RoomError(message: errorMessage(from: data, fallback: "Couldn't join that room."))
         }
         return try decoder.decode(RoomResponse.self, from: data).room
     }
@@ -288,6 +343,12 @@ struct RoomLine: Decodable, Hashable {
 /// no-transcript list view (`GET /api/kade/room`) -- the server sends
 /// exactly one of the two depending on context, never both, so both are
 /// optional here rather than modeling two separate types for one shape.
+/// One party guest, as the server lists them (names only — ids stay
+/// server-side). Session 35 finale.
+struct RoomGuest: Decodable, Hashable {
+    let name: String
+}
+
 struct DebateRoom: Decodable, Identifiable, Hashable {
     let id: String
     let topic: String
@@ -301,6 +362,13 @@ struct DebateRoom: Decodable, Identifiable, Hashable {
     let updatedAt: String
     let transcript: [RoomLine]?
     let lines: Int?
+    /// Party (session 35 finale): whose room is this (host controls), the
+    /// open-doors code ('' = closed), and who's joined. Optional with
+    /// defaults so pre-party servers and the ShareRoomSheet's rebuild both
+    /// stay compiling and correct.
+    var mine: Bool? = nil
+    var partyCode: String? = nil
+    var guests: [RoomGuest]? = nil
 
     var castNames: String {
         agents.map(\.name).joined(separator: ", ")

@@ -105,11 +105,11 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build",
-                body: "The Debate Room grew a voice and a will of its own. Every new line now plays out loud in that character's own voice; \u{2018}Play this line\u{2019} and \u{2018}Play from here\u{2019} on any line catch you up on demand; Keep it going runs the debate by itself in stretches of twelve turns, each clip finishing before the next begins; the brain toggle makes every turn a Deep Think turn; and you can add or remove characters mid-debate, with the Narrator noting arrivals and exits. Also in this build: when a reply dies on the server, the transcript now says so plainly \u{2014} \u{2018}the thinking engine was jammed up, ask again\u{2019} \u{2014} instead of blaming tool activity."
+                body: "Kade Keys learned to take dictation \u{2014} the keyboard's big Dictate key bounces into Kade-AI, you talk, Deepgram cleans it up, and one swipe back later the words type themselves right where your cursor was (Allow Full Access on; without it they land on the clipboard instead). Debate rooms throw parties now: the host opens the doors from the share button and hands out a four-character code, friends join from the Debate Room screen, talk in the room, ask for turns \u{2014} and every phone hears every line in the cast's own voices. And turns went patient for real: the app asks for a turn and checks back while the server thinks \u{2014} a Deep Think turn can reason for five whole minutes and nothing hangs up on it."
             ),
             HelpEntry(
                 title: "The build before",
-                body: "The paperclip earns its keep. Attach a photo or a file to a chat message and your companion now actually looks at it \u{2014} that lane was quietly broken platform-wide and got fixed server-side this same day. And attachments finally show in the transcript: photos as small previews, other files as named chips, spoken as part of the message \u{2014} \u{2018}Sent with a photo, porch.jpeg, attached.\u{2019} Kade Keys phase two is wired in and waiting on one Apple-side switch: the app already mirrors your first dozen prompts for the keyboard, and the moment that switch flips in a coming build, Kade Keys types your real saved Prompt Library \u{2014} the six built-in phrases keep working exactly as before until then. There's a new Kade Keys section further down this Help screen."
+                body: "A stop button for voices in chat and the Debate Room \u{2014} always in the same spot, skips ahead when the debate's running itself. Debate clips became pure dialogue (VoiceOver rows still say the names), slow turns stopped being called failures, and thinking got real room. Before that: The Debate Room grew a voice and a will of its own. Every new line now plays out loud in that character's own voice; \u{2018}Play this line\u{2019} and \u{2018}Play from here\u{2019} on any line catch you up on demand; Keep it going runs the debate by itself in stretches of twelve turns, each clip finishing before the next begins; the brain toggle makes every turn a Deep Think turn; and you can add or remove characters mid-debate, with the Narrator noting arrivals and exits. Also in this build: when a reply dies on the server, the transcript now says so plainly \u{2014} \u{2018}the thinking engine was jammed up, ask again\u{2019} \u{2014} instead of blaming tool activity."
             ),
             HelpEntry(
                 title: "Two builds back",
@@ -332,6 +332,10 @@ struct HelpSection: Identifiable {
                 body: "The person-with-a-plus button in the top corner adds or removes characters mid-debate \u{2014} a room holds two to six. The Narrator notes who joined or left right in the transcript, so returning characters know what they walked into."
             ),
             HelpEntry(
+                title: "Debate parties",
+                body: "The share button holds the party door: Open the doors mints a four-character code. Anyone signed in types it into \u{2018}Join a debate by code\u{2019} on the Debate Room screen and steps inside \u{2014} they can say their piece, ask for turns, and hear every line land in the cast's voices on their own phone. The Narrator notes who walks in. Hosts keep the keys: cast changes, Hall sharing, and closing the doors stay yours."
+            ),
+            HelpEntry(
                 title: "Sharing to the Hall",
                 body: "The share button in the top corner of a room lets you share it, with a title, to the Conversation Hall \u{2014} where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
             ),
@@ -426,8 +430,8 @@ struct HelpSection: Identifiable {
                 body: "Settings, General, Keyboard, Keyboards, Add New Keyboard, then pick Kade Keys. In any app, the globe key on the system keyboard switches between keyboards \u{2014} hold it and pick Kade Keys, or tap it to cycle. Everything on Kade Keys is a big labeled button: your phrases, then globe, space and delete along the bottom."
             ),
             HelpEntry(
-                title: "Your prompts on it",
-                body: "Coming in a near build: the keyboard will type your real saved prompts from the Prompt Library \u{2014} the app already loads the first dozen for it when you open the Prompts tile. Apple requires a one-time setup on their developer site before the sharing lane can switch on, so until then the keyboard keeps its six built-in phrases. When it lands, it will sit behind Allow Full Access \u{2014} Apple puts reading the app's own shared storage behind the same permission as network access, so the warning sounds broad, but this keyboard's code makes no network connections at all. It types, and that's the whole story."
+                title: "Dictating with Kade Keys",
+                body: "The big Dictate key opens Kade-AI listening (keyboards aren't allowed microphones \u{2014} every dictation keyboard does this dance). Say your piece, tap Stop, then swipe back to where you were \u{2014} the words type themselves. That self-typing needs Allow Full Access (Settings, General, Keyboard, Kade Keys); Apple gates shared storage behind the same switch as network access, but this keyboard makes no connections at all. Without the switch, your words wait on the clipboard \u{2014} one long-press paste. The six quick phrases sit under the Dictate key, same as ever."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [

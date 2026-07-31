@@ -1,34 +1,34 @@
 import UIKit
 
-/// KADE KEYS (July 28 2026) — phase 2: the real Prompt Library, offline.
+/// KADE KEYS (July 31 2026) — phase 2, HER PIVOT, verbatim: "I just want a
+/// deepgram dictate for the most part... I want the keyboard to be just
+/// like the [transcribe] part of my app." So: DICTATE IS THE HERO KEY.
 ///
-/// v1 (build 167) existed to prove the second-target signing pipe and
-/// shipped six canned phrases. Phase 2 wires the App Group
-/// (group.com.kademurdock.kadeai): the main app's Prompt Library mirrors
-/// its first prompts (title + live text) into the shared container
-/// (KadeKeysSharedStore, written when the Prompts screen is opened), and
-/// this keyboard reads them back and TYPES them — her actual saved
-/// prompts, in Messages or anywhere else, no round-trip to the app.
+/// The dance (the same one Wispr Flow pays for, because iOS hard-blocks
+/// microphones inside every keyboard extension, no exceptions):
+///   1. Dictate key → opens the Kade-AI app at kadeai://kadekeys-dictate
+///      (responder-chain openURL — the household trick every shipping
+///      dictation keyboard uses; extensionContext.open is a no-op in
+///      keyboards).
+///   2. The app lands on the Quick-Dictate lane in keyboard mode: already
+///      listening, Deepgram cleans it up, the finished text goes into the
+///      App Group container AND the clipboard.
+///   3. She swipes back (iOS 26.4 killed automatic hop-back — the one
+///      manual step, announced by the app so it's never a mystery).
+///   4. This keyboard, on becoming active again, finds the fresh
+///      dictation and TYPES it right where the cursor is, then clears it.
 ///
-/// Scope fences that still stand, and one that moved:
-/// - NO microphone, still: iOS hard-blocks mic access inside keyboard
-///   extensions at the OS level. Voice input stays Quick Dictate's job.
-/// - NO network CALLS, still: this code never opens a connection. But the
-///   OS gate for reading a shared container is the SAME switch as the
-///   network gate — RequestsOpenAccess is now true, and the person must
-///   flip "Allow Full Access" in Settings before the library shows up
-///   (Apple's capability table; there is no container-only permission).
-///   Without the switch — or before the library has ever been mirrored —
-///   the six built-in phrases below are the graceful floor, so the
-///   keyboard is never blank and never broken.
-/// - Every control is a real UIButton with a spoken label — no custom
-///   hit-testing, nothing clever. Saved prompts scroll in a plain
-///   UIScrollView (VoiceOver handles those natively) with the utility
-///   row pinned beneath, always reachable.
+/// Access truths: reading the App Group needs "Allow Full Access" (OS law
+/// — same switch as network, though this code never opens a connection).
+/// Without it, the dictation still lands on the CLIPBOARD and the keyboard
+/// says so — one long-press paste instead of auto-typing. Never blank,
+/// never broken.
+///
+/// The six quick phrases stay as compact secondary rows (her call: fine
+/// "if they help the sighted or whatever"); the Prompt Library does NOT
+/// ride the keyboard (her call, same breath).
 final class KeyboardViewController: UIInputViewController {
-    /// The v1 phrases — now the FALLBACK when the shared library is
-    /// unreadable (no full access, or never mirrored yet).
-    private let fallbackPhrases: [String] = [
+    private let phrases: [String] = [
         "Love you!",
         "On my way.",
         "Call me when you can.",
@@ -37,22 +37,26 @@ final class KeyboardViewController: UIInputViewController {
         "Thank you so much.",
     ]
 
-    /// Mirror of KadeKeysSharedStore.SharedPrompt — decoupled on purpose
-    /// (the store type lives in the app target; the JSON is the contract).
-    private struct SharedPrompt: Decodable {
-        let title: String
+    private struct SharedDictation: Decodable {
         let text: String
+        let at: Date
     }
 
-    private func loadSharedPrompts() -> [SharedPrompt] {
+    /// Fresh = written in the last 3 minutes. Older leftovers are stale
+    /// (she wandered off mid-dance) and get cleared without typing.
+    private func takePendingDictation() -> String? {
         guard hasFullAccess,
               let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai"),
-              let data = defaults.data(forKey: "kadeKeys.prompts.v1"),
-              let prompts = try? JSONDecoder().decode([SharedPrompt].self, from: data),
-              !prompts.isEmpty else {
-            return []
+              let data = defaults.data(forKey: "kadeKeys.dictation.v1") else {
+            return nil
         }
-        return prompts
+        defaults.removeObject(forKey: "kadeKeys.dictation.v1")
+        guard let dictation = try? JSONDecoder().decode(SharedDictation.self, from: data),
+              Date().timeIntervalSince(dictation.at) < 180,
+              !dictation.text.isEmpty else {
+            return nil
+        }
+        return dictation.text
     }
 
     override func viewDidLoad() {
@@ -64,60 +68,36 @@ final class KeyboardViewController: UIInputViewController {
         column.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(column)
 
-        let prompts = loadSharedPrompts()
-        if prompts.isEmpty {
-            // Fallback floor: the six built-ins, two rows of three, exactly
-            // as v1 shipped them.
-            for rowPhrases in stride(from: 0, to: fallbackPhrases.count, by: 3)
-                .map({ Array(fallbackPhrases[$0 ..< min($0 + 3, fallbackPhrases.count)]) }) {
-                let row = UIStackView()
-                row.axis = .horizontal
-                row.spacing = 8
-                row.distribution = .fillEqually
-                for phrase in rowPhrases {
-                    row.addArrangedSubview(phraseButton(title: phrase, inserts: phrase, hint: "Types this phrase."))
-                }
-                column.addArrangedSubview(row)
-            }
-        } else {
-            // The real library: prompt titles two to a row (titles run
-            // long), scrollable when the set outgrows the surface.
-            let promptColumn = UIStackView()
-            promptColumn.axis = .vertical
-            promptColumn.spacing = 8
-            promptColumn.translatesAutoresizingMaskIntoConstraints = false
+        // THE HERO: Dictate.
+        var dictateConfig = UIButton.Configuration.filled()
+        dictateConfig.title = "Dictate"
+        dictateConfig.image = UIImage(systemName: "mic.fill")
+        dictateConfig.imagePadding = 8
+        dictateConfig.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 8, bottom: 14, trailing: 8)
+        let dictate = UIButton(configuration: dictateConfig)
+        dictate.accessibilityLabel = "Dictate"
+        dictate.accessibilityHint = hasFullAccess
+            ? "Opens Kade-AI to take your words. Swipe back here after and they type themselves."
+            : "Opens Kade-AI to take your words. They'll land on your clipboard to paste here. Turn on Allow Full Access in Settings and they'll type themselves instead."
+        dictate.addAction(UIAction { [weak self] _ in
+            self?.openDictation()
+        }, for: .touchUpInside)
+        column.addArrangedSubview(dictate)
 
-            for rowPrompts in stride(from: 0, to: prompts.count, by: 2)
-                .map({ Array(prompts[$0 ..< min($0 + 2, prompts.count)]) }) {
-                let row = UIStackView()
-                row.axis = .horizontal
-                row.spacing = 8
-                row.distribution = .fillEqually
-                for prompt in rowPrompts {
-                    row.addArrangedSubview(
-                        phraseButton(title: prompt.title, inserts: prompt.text, hint: "Types this saved prompt.")
-                    )
-                }
-                promptColumn.addArrangedSubview(row)
+        // The six phrases, two compact rows of three.
+        for rowPhrases in stride(from: 0, to: phrases.count, by: 3)
+            .map({ Array(phrases[$0 ..< min($0 + 3, phrases.count)]) }) {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.spacing = 8
+            row.distribution = .fillEqually
+            for phrase in rowPhrases {
+                row.addArrangedSubview(phraseButton(phrase))
             }
-
-            let scroll = UIScrollView()
-            scroll.translatesAutoresizingMaskIntoConstraints = false
-            scroll.addSubview(promptColumn)
-            NSLayoutConstraint.activate([
-                promptColumn.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-                promptColumn.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-                promptColumn.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-                promptColumn.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-                promptColumn.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
-                scroll.heightAnchor.constraint(lessThanOrEqualToConstant: 236),
-                scroll.heightAnchor.constraint(equalTo: promptColumn.heightAnchor).withPriority(.defaultHigh),
-            ])
-            column.addArrangedSubview(scroll)
+            column.addArrangedSubview(row)
         }
 
-        // Utility row: globe (required), space, backspace — pinned under
-        // the phrases, never scrolled away.
+        // Utility row: globe (required), space, backspace.
         let utility = UIStackView()
         utility.axis = .horizontal
         utility.spacing = 8
@@ -146,22 +126,53 @@ final class KeyboardViewController: UIInputViewController {
             column.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             column.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
             column.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
-            column.heightAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            column.heightAnchor.constraint(greaterThanOrEqualToConstant: 216),
         ])
     }
 
-    private func phraseButton(title: String, inserts text: String, hint: String) -> UIButton {
+    /// Step 4 of the dance: back from the app, type what she said.
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if let dictation = takePendingDictation() {
+            textDocumentProxy.insertText(dictation)
+            UIAccessibility.post(notification: .announcement, argument: "Typed your dictation.")
+        }
+    }
+
+    /// Step 1: open the app. Keyboards get no UIApplication and no working
+    /// extensionContext.open, so this walks the responder chain for the
+    /// host's openURL: — the same move every shipping dictation keyboard
+    /// makes. If it fails (a host app that blocks it), the hint text has
+    /// already told her the manual road: open Kade-AI, use Quick Dictate.
+    private func openDictation() {
+        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
+        let selector = sel_registerName("openURL:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current.responds(to: selector), !(current is KeyboardViewController) {
+                _ = current.perform(selector, with: url)
+                return
+            }
+            responder = current.next
+        }
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Couldn't open Kade-AI from here. Open the app and use Quick Dictate."
+        )
+    }
+
+    private func phraseButton(_ phrase: String) -> UIButton {
         var config = UIButton.Configuration.gray()
-        config.title = title
+        config.title = phrase
         config.titleLineBreakMode = .byWordWrapping
         config.baseForegroundColor = .label
         config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 6, bottom: 10, trailing: 6)
         let button = UIButton(configuration: config)
         button.titleLabel?.adjustsFontSizeToFitWidth = true
-        button.accessibilityLabel = title
-        button.accessibilityHint = hint
+        button.accessibilityLabel = phrase
+        button.accessibilityHint = "Types this phrase."
         button.addAction(UIAction { [weak self] _ in
-            self?.textDocumentProxy.insertText(text)
+            self?.textDocumentProxy.insertText(phrase)
         }, for: .touchUpInside)
         return button
     }
@@ -177,14 +188,5 @@ final class KeyboardViewController: UIInputViewController {
         let button = UIButton(configuration: config)
         button.accessibilityLabel = label
         return button
-    }
-}
-
-private extension NSLayoutConstraint {
-    /// Fluent priority helper — lets the "hug the content when it's
-    /// short" height constraint yield to the 236pt cap when it isn't.
-    func withPriority(_ priority: UILayoutPriority) -> NSLayoutConstraint {
-        self.priority = priority
-        return self
     }
 }

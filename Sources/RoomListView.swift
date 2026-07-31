@@ -21,6 +21,10 @@ struct RoomListView: View {
     @State private var showingNewRoom = false
     @State private var openedRoom: DebateRoom?
     @State private var deletingRoom: DebateRoom?
+    // Session 35 finale (party rooms): join a friend's debate by its code.
+    @State private var joinCode = ""
+    @State private var isJoining = false
+    @State private var joinError: String?
     @State private var isDeleting = false
     @State private var openingHall = false
 
@@ -135,6 +139,27 @@ struct RoomListView: View {
 
     private var list: some View {
         List {
+            Section {
+                HStack {
+                    TextField("Join a debate by code", text: $joinCode)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Join a debate by code")
+                        .accessibilityHint("Four characters. Ask the host for theirs.")
+                    Button {
+                        Task { await joinByCode() }
+                    } label: {
+                        if isJoining { ProgressView() } else { Text("Join") }
+                    }
+                    .disabled(isJoining || joinCode.trimmingCharacters(in: .whitespaces).count != 4)
+                    .accessibilityLabel("Join")
+                }
+                if let joinError {
+                    Text(joinError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
             ForEach(rooms) { room in
                 Button {
                     openedRoom = room
@@ -165,6 +190,28 @@ struct RoomListView: View {
             Text(room.castNames)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Session 35 finale: join by code, then walk straight into the room.
+    private func joinByCode() async {
+        let code = joinCode.trimmingCharacters(in: .whitespaces).uppercased()
+        guard code.count == 4, !isJoining else { return }
+        isJoining = true
+        joinError = nil
+        defer { isJoining = false }
+        do {
+            let room = try await service.joinParty(code: code)
+            joinCode = ""
+            if !rooms.contains(where: { $0.id == room.id }) {
+                rooms.insert(room, at: 0)
+            }
+            KadeHaptics.success()
+            UIAccessibility.post(notification: .announcement, argument: "You're in. Opening the room.")
+            openedRoom = room
+        } catch {
+            joinError = (error as? RoomService.RoomError)?.message ?? "Couldn't join that room. Check the code."
+            KadeHaptics.error()
         }
     }
 

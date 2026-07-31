@@ -202,6 +202,8 @@ struct ContentView: View {
                     DescribeView(apiClient: apiClient)
                 case .quickDictate:
                     TranscribeView(apiClient: apiClient, quickMode: true)
+                case .kadeKeysDictate:
+                    TranscribeView(apiClient: apiClient, quickMode: true, keyboardMode: true)
                 case .matchmaker:
                     MatchmakerView(apiClient: apiClient)
                 case .parlor:
@@ -234,6 +236,17 @@ struct ContentView: View {
                 case .admin:
                     AdminView(apiClient: apiClient)
                 }
+            }
+        }
+        .onOpenURL { url in
+            // KADE KEYS dictate (July 31 2026): the keyboard's Dictate key
+            // opens kadeai://kadekeys-dictate — keyboards can't touch the
+            // mic (OS law, the Wispr dance), so the app records and hands
+            // the text back through the App Group container. Signed out,
+            // she just lands on sign-in; nothing to route.
+            guard url.scheme == "kadeai", isSignedIn else { return }
+            if url.host == "kadekeys-dictate" || url.path.contains("kadekeys-dictate") {
+                route = .kadeKeysDictate
             }
         }
         .onChange(of: authStateID) { _, _ in
@@ -727,6 +740,7 @@ enum HomeRoute: Identifiable, Hashable {
     case conversations
     case describe
     case quickDictate
+    case kadeKeysDictate
     case matchmaker
     case parlor
     case lounge
@@ -750,6 +764,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .conversations: return "conversations"
         case .describe: return "describe"
         case .quickDictate: return "quickDictate"
+        case .kadeKeysDictate: return "kadeKeysDictate"
         case .matchmaker: return "matchmaker"
         case .parlor: return "parlor"
         case .lounge: return "lounge"

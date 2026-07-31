@@ -24,6 +24,27 @@ enum KadeKeysSharedStore {
         let text: String
     }
 
+    // ── Dictation handoff (July 31 2026, her pivot: "I just want a
+    // deepgram dictate... I want the keyboard to be just like the
+    // [transcribe] part of my app") ────────────────────────────────────
+    static let dictationKey = "kadeKeys.dictation.v1"
+    struct SharedDictation: Codable {
+        let text: String
+        let at: Date
+    }
+
+    /// The app writes here when a keyboard-initiated dictation completes;
+    /// the keyboard types it on its next activation and clears it.
+    static func writeDictation(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let defaults = UserDefaults(suiteName: appGroupId),
+              let data = try? JSONEncoder().encode(SharedDictation(text: trimmed, at: Date())) else {
+            return
+        }
+        defaults.set(data, forKey: dictationKey)
+    }
+
     /// Replaces the mirrored set wholesale (the library is the source of
     /// truth; partial merges could resurrect deleted prompts). Fail-soft:
     /// if the suite or encode is unavailable, the keyboard simply keeps

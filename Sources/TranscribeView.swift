@@ -71,10 +71,16 @@ struct TranscribeView: View {
     /// surprise clipboard writes while she's mid-way through building up a
     /// longer note to organize.
     let quickMode: Bool
+    /// KADE KEYS dictate (July 31 2026): entered from the keyboard's
+    /// Dictate key (kadeai://kadekeys-dictate). Behaves exactly like
+    /// quickMode PLUS every completed take also lands in the App Group
+    /// container so Kade Keys types it the moment she swipes back.
+    let keyboardMode: Bool
 
-    init(apiClient: KadeAPIClient, quickMode: Bool = false) {
+    init(apiClient: KadeAPIClient, quickMode: Bool = false, keyboardMode: Bool = false) {
         _service = StateObject(wrappedValue: TranscribeService(client: apiClient))
-        self.quickMode = quickMode
+        self.quickMode = quickMode || keyboardMode
+        self.keyboardMode = keyboardMode
     }
 
     private var isRecording: Bool { voiceService.isRecording }
@@ -458,11 +464,21 @@ struct TranscribeView: View {
         // far -- never a stale partial copy of just the earlier piece.
         if quickMode {
             UIPasteboard.general.string = transcript
-            // High priority: must be heard even though the focus move above
-            // is about to start VoiceOver reading the transcript itself --
-            // she just SAID these words, the readback is skippable, the
-            // "it's on your clipboard" confirmation is not. See KadeAnnounce.
-            KadeAnnounce.high("Transcript copied. Ready to paste.")
+            if keyboardMode {
+                // The keyboard's half of the handoff: full transcript into
+                // the shared container (clipboard stays as the no-full-
+                // access fallback), and the announcement tells her the ONE
+                // move left -- iOS killed automatic hop-back in 26.4, so
+                // the swipe is hers (same toll Wispr Flow pays).
+                KadeKeysSharedStore.writeDictation(transcript)
+                KadeAnnounce.high("Got it. Swipe back to where you were typing and Kade Keys will type it for you.")
+            } else {
+                // High priority: must be heard even though the focus move above
+                // is about to start VoiceOver reading the transcript itself --
+                // she just SAID these words, the readback is skippable, the
+                // "it's on your clipboard" confirmation is not. See KadeAnnounce.
+                KadeAnnounce.high("Transcript copied. Ready to paste.")
+            }
         }
     }
 

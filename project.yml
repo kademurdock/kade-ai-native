@@ -46,6 +46,11 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
+        # KADE KEYS dictate (July 31 2026): the keyboard bounces here to
+        # record (iOS forbids keyboard microphones, the Wispr dance).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.kademurdock.kadeai
+            CFBundleURLSchemes: [kadeai]
         # Phase 5 (voice mode): push-to-talk records via AVAudioRecorder.
         # iOS hard-crashes on first mic access attempt without this key --
         # no on-device speech recognition is used (no NSSpeechRecognitionUsageDescription
@@ -128,8 +133,8 @@ targets:
         # then uncomment here AND on the KadeKeyboard target AND flip
         # RequestsOpenAccess to true below. The Swift halves already ship
         # dormant and fail soft. See docs/APP_GROUP_STEP_PARKED.md.
-        # com.apple.security.application-groups:
-        #   - group.com.kademurdock.kadeai
+        com.apple.security.application-groups:
+          - group.com.kademurdock.kadeai
   # KADE KEYS (July 28 2026) — typing-only custom keyboard, v1 = prove the
   # second-target signing pipeline (new bundle id + its own provisioning
   # profile via the same fetch-signing-files flow; see codemagic.yaml).
@@ -148,11 +153,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Manual
-    # entitlements:                    # PARKED with the App Group step --
-    #   path: KadeKeyboard.entitlements  # uncomment with the KadeAI block
-    #   properties:
-    #     com.apple.security.application-groups:
-    #       - group.com.kademurdock.kadeai
+    entitlements:
+      path: KadeKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.kademurdock.kadeai
     info:
       path: KeyboardExtension/Info.plist
       properties:
@@ -171,7 +176,7 @@ targets:
             # the App Group entitlement, which is PARKED on the manual
             # portal step (see the KadeAI target's comment). Flip this to
             # true in the same commit that uncomments the entitlements.
-            RequestsOpenAccess: false
+            RequestsOpenAccess: true
 
 schemes:
   KadeAI:

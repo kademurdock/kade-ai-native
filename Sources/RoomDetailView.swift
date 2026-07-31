@@ -57,6 +57,14 @@ struct RoomDetailView: View {
     @State private var deepThinkOn: Bool
     @State private var autoAdvanceOn = false
     @State private var autoTask: Task<Void, Never>?
+    // Session 35 finale (party rooms): a second quiet heartbeat while the
+    // doors are open — other people's lines land on their phones AND ours.
+    @State private var pollTask: Task<Void, Never>?
+    /// Lines at-or-below this index are already spoken (or arrived before
+    /// we did — history never reads itself AT you). The ONE counter that
+    /// makes own-turns, poll-arrivals, and say-interleaves all speak
+    /// exactly once.
+    @State private var lastSpokenCount = 0
     /// Auto-advance stretch counter; pauses (and says so) at this many.
     private static let autoBatchLimit = 12
 
@@ -136,29 +144,37 @@ struct RoomDetailView: View {
         .navigationTitle(room.topic)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingCastSheet = true
-                } label: {
-                    Image(systemName: "person.badge.plus")
+            // Host-only controls (party guests debate; hosts run the room).
+            if room.mine != false {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingCastSheet = true
+                    } label: {
+                        Image(systemName: "person.badge.plus")
+                    }
+                    .accessibilityLabel("Manage the cast")
+                    .accessibilityHint("Add or remove characters mid-debate.")
                 }
-                .accessibilityLabel("Manage the cast")
-                .accessibilityHint("Add or remove characters mid-debate.")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingShareSheet = true
-                } label: {
-                    Image(systemName: room.shared ? "person.2.fill" : "person.2")
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingShareSheet = true
+                    } label: {
+                        Image(systemName: room.shared ? "person.2.fill" : "person.2")
+                    }
+                    .accessibilityLabel(room.shared ? "Shared to Conversation Hall" : "Share and party options")
+                    .accessibilityHint("Sharing to the Hall, and opening the room to friends by code.")
                 }
-                .accessibilityLabel(room.shared ? "Shared to Conversation Hall" : "Share to Conversation Hall")
-                .accessibilityHint("Opens sharing options for this room.")
             }
         }
         .task {
-            guard !hasLoaded else { return }
-            await reload()
-            hasLoaded = true
+            if !hasLoaded {
+                await reload()
+                hasLoaded = true
+                // History never reads itself at you — speaking starts with
+                // whatever lands AFTER this moment.
+                lastSpokenCount = transcript.count
+            }
+            startPartyPolling()
         }
         .onDisappear {
             // Leaving the room stops the machinery cold: no auto turns
@@ -166,6 +182,8 @@ struct RoomDetailView: View {
             autoAdvanceOn = false
             autoTask?.cancel()
             autoTask = nil
+            pollTask?.cancel()
+            pollTask = nil
             voiceService.stopSpeaking()
         }
         .sheet(isPresented: $showingShareSheet) {
@@ -414,16 +432,54 @@ struct RoomDetailView: View {
         line.text
     }
 
-    /// Speak a line that JUST landed (autoplay path). Her own lines and
-    /// empty lines never read back.
-    private func autoplaySpeak(_ line: RoomLine) async {
-        guard voicesOn, line.speaker != "user" else { return }
-        let member = castMember(for: line)
-        await voiceService.speakLine(
-            text: clipText(for: line),
-            voiceId: member?.voiceId,
-            rate: member?.rate
-        )
+    /// Session 35 finale: THE speech funnel. Speaks every not-yet-spoken
+    /// line past `lastSpokenCount` (skipping the humans' own 'user' lines),
+    /// each in its cast voice, sequentially — whether the line came from
+    /// our tap, someone else's phone (party polling), or a say-interleave.
+    /// VoicesOff advances the counter silently and keeps the old
+    /// focus-the-freshest behavior instead.
+    private func speakNewLines() async {
+        let lines = transcript
+        guard lastSpokenCount < lines.count else { return }
+        let fresh = Array(lines[lastSpokenCount...])
+        lastSpokenCount = lines.count
+        if voicesOn {
+            scrollTarget = lines.indices.last
+            for line in fresh where line.speaker != "user" {
+                if Task.isCancelled { return }
+                let member = castMember(for: line)
+                await voiceService.speakLine(
+                    text: clipText(for: line),
+                    voiceId: member?.voiceId,
+                    rate: member?.rate
+                )
+            }
+        } else {
+            focusedLineIndex = lines.indices.last
+        }
+    }
+
+    /// Session 35 finale: the party heartbeat. While the screen is open
+    /// AND the room is party-shaped (doors open, or we're a guest, or
+    /// anyone's on the guest list), quietly reload every 3 seconds and
+    /// speak whatever landed from other phones. Never runs over a turn or
+    /// a send; poll failures stay silent (the next beat retries).
+    private func startPartyPolling() {
+        guard pollTask == nil else { return }
+        pollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { return }
+                let partyish = (room.partyCode?.isEmpty == false)
+                    || room.mine == false
+                    || !(room.guests?.isEmpty ?? true)
+                guard partyish, !isGeneratingTurn, !isSending else { continue }
+                if let fresh = try? await service.loadRoom(id: room.id) {
+                    room = fresh
+                    await speakNewLines()
+                }
+            }
+        }
     }
 
     // MARK: - Auto-advance
@@ -477,9 +533,13 @@ struct RoomDetailView: View {
             _ = try await service.say(roomId: room.id, text: text)
             draftText = ""
             await reload()
-            focusedLineIndex = transcript.indices.last
             Earcons.shared.play(.messageSent)
             KadeHaptics.tap()
+            // Her own line never reads back (speakNewLines skips 'user'
+            // lines) — but a party room may have landed OTHER lines in the
+            // meantime, and those should speak. VoicesOff keeps the old
+            // focus-the-last-line behavior inside the funnel.
+            await speakNewLines()
         } catch {
             actionError = (error as? RoomService.RoomError)?.message ?? "Couldn't post your message. Try again."
             Earcons.shared.play(.error)
@@ -502,21 +562,15 @@ struct RoomDetailView: View {
                 forcedAgentId: forcedAgentId,
                 deepThink: deepThinkOn
             )
+            _ = result
             await reload()
             Earcons.shared.play(.messageReceived)
             KadeHaptics.success()
-            if voicesOn && result.line.speaker != "user" {
-                // Session 35 part 6: the clip is the ONLY voice. No VO
-                // focus grab (that made VoiceOver read the row over the
-                // cast voice); eyes get a silent scroll instead, and the
-                // row is right there when she browses. The clip plays to
-                // the END before this returns, so auto-advance paces
-                // itself on real listening.
-                scrollTarget = transcript.indices.last
-                await autoplaySpeak(result.line)
-            } else {
-                focusedLineIndex = transcript.indices.last
-            }
+            // Session 35 finale: ALL speech funnels through speakNewLines —
+            // own turns, party arrivals, and say-interleaves each speak
+            // exactly once, paced on real playback (part-6 rules intact:
+            // silent scroll on voiced turns, no VO focus grab).
+            await speakNewLines()
             return true
         } catch {
             actionError = (error as? RoomService.RoomError)?.message ?? "That turn failed — give it another try."
@@ -631,7 +685,7 @@ private struct ManageCastSheet: View {
 /// (`POST .../share {share, title}`).
 private struct ShareRoomSheet: View {
     let service: RoomService
-    let room: DebateRoom
+    @State private var room: DebateRoom
     let onUpdated: (DebateRoom) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -641,14 +695,61 @@ private struct ShareRoomSheet: View {
 
     init(service: RoomService, room: DebateRoom, onUpdated: @escaping (DebateRoom) -> Void) {
         self.service = service
-        self.room = room
+        _room = State(initialValue: room)
         self.onUpdated = onUpdated
         _title = State(initialValue: room.sharedTitle.isEmpty ? room.topic : room.sharedTitle)
+    }
+
+    /// Session 35 finale: open/close the party doors. Updates BOTH this
+    /// sheet's copy (the code shows immediately) and the owner view.
+    private func setParty(_ enable: Bool) async {
+        guard !isWorking else { return }
+        isWorking = true
+        error = nil
+        defer { isWorking = false }
+        do {
+            let updated = try await service.setParty(roomId: room.id, enable: enable)
+            room = updated
+            onUpdated(updated)
+            KadeHaptics.success()
+            if let code = updated.partyCode, !code.isEmpty {
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: "Doors open. The code is \(code.map(String.init).joined(separator: " "))."
+                )
+            } else {
+                UIAccessibility.post(notification: .announcement, argument: "Doors closed.")
+            }
+        } catch {
+            self.error = (error as? RoomService.RoomError)?.message ?? "Couldn't change party mode. Try again."
+            KadeHaptics.error()
+        }
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                // Session 35 finale — THE PARTY DOOR. Host-only sheet, so
+                // no mine-check needed here.
+                Section("Debate party") {
+                    if let code = room.partyCode, !code.isEmpty {
+                        Text("Doors are open. Code: \(code)")
+                            .accessibilityLabel("Doors are open. The code is \(code.map(String.init).joined(separator: " ")).")
+                        Text("Anyone signed in joins from the Debate Room screen with that code — they can talk in the room and ask for turns. Everyone hears every line on their own phone.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button("Close the doors", role: .destructive) {
+                            Task { await setParty(false) }
+                        }
+                        .disabled(isWorking)
+                    } else {
+                        Button(isWorking ? "Opening…" : "Open the doors — get a join code") {
+                            Task { await setParty(true) }
+                        }
+                        .disabled(isWorking)
+                        .accessibilityHint("Mints a four-character code friends use to join this debate live.")
+                    }
+                }
                 if room.shared {
                     Section {
                         Text("This room is shared to the Conversation Hall.")
@@ -707,7 +808,10 @@ private struct ShareRoomSheet: View {
                 createdAt: room.createdAt,
                 updatedAt: room.updatedAt,
                 transcript: room.transcript,
-                lines: room.lines
+                lines: room.lines,
+                mine: room.mine,
+                partyCode: room.partyCode,
+                guests: room.guests
             )
             onUpdated(updated)
             dismiss()
