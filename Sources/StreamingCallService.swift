@@ -938,7 +938,28 @@ final class StreamingCallService: NSObject, ObservableObject {
     private func updateThinkingLoop() {
         let shouldLoop = (status == .thinking) && engineRunning
         if shouldLoop && !thinkingLooping {
-            if thinkingBuffer == nil { thinkingBuffer = makeThinkingBuffer() }
+            // August 1 2026 (her ask: the synth ticks' musical tones can
+            // mess with people): her real thought-bubbles loop first --
+            // the SAME bundled file the chat lane loops (EarconThinkingLoop
+            // .wav, replaced today with the tone-free master) -- through
+            // the same one-time decode/convert lane as the connect chime.
+            // This closes the July 22 deferral's last leg: Connected,
+            // Disconnected, AND Thinking are all her recordings on native
+            // calls now. Volume 0.3 for the mastered file (the web call
+            // lane plays it at 0.35); the synth ticks keep their baked-in
+            // ~0.06 peak at node volume 1.0 -- byte-identical fallback
+            // when the file is missing or undecodable.
+            if thinkingBuffer == nil {
+                if let bundled = Self.bundledEngineBuffer(
+                    named: "EarconThinkingLoop", ext: "wav", convertedTo: playerFormat
+                ) {
+                    thinkingBuffer = bundled
+                    thinkingNode.volume = 0.3
+                } else {
+                    thinkingBuffer = makeThinkingBuffer()
+                    thinkingNode.volume = 1.0
+                }
+            }
             guard let buffer = thinkingBuffer else { return }
             thinkingLooping = true
             thinkingNode.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
@@ -949,21 +970,26 @@ final class StreamingCallService: NSObject, ObservableObject {
         }
     }
 
-    /// One-time decode + format-convert of the bundled CallConnected.mp3
-    /// into `playerFormat` (24k mono float32) so `earconNode` sees the
+    /// One-time decode + format-convert of a bundled audio file into
+    /// `playerFormat` (24k mono float32) so the engine nodes see the
     /// exact same fixed format as every other node edge in this graph.
-    /// Cached after the first attempt -- including a FAILED attempt (nil
-    /// stays cached), so a missing file costs one bundle lookup per app
-    /// run, not one per call. Safe as statics on this @MainActor class
-    /// (same isolation story as Earcons.shared): `playerFormat` is a
-    /// fixed constant, identical across every call instance.
-    private static var connectToneCache: AVAudioPCMBuffer?
-    private static var connectToneLoadTried = false
+    /// August 1 2026: generalized from the connect-chime loader so the
+    /// call lane's thinking loop rides the same proven lane. Cache is
+    /// keyed by resource name; a FAILED attempt is remembered too (name
+    /// in the tried set, no cache entry), so a missing file costs one
+    /// bundle lookup per app run, not one per call. Safe as statics on
+    /// this @MainActor class (same isolation story as Earcons.shared):
+    /// `playerFormat` is a fixed constant, identical across every call
+    /// instance.
+    private static var engineBufferCache: [String: AVAudioPCMBuffer] = [:]
+    private static var engineBufferTried: Set<String> = []
 
-    private static func bundledConnectTone(convertedTo format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        if connectToneLoadTried { return connectToneCache }
-        connectToneLoadTried = true
-        guard let url = Bundle.main.url(forResource: "CallConnected", withExtension: "mp3"),
+    private static func bundledEngineBuffer(
+        named name: String, ext: String, convertedTo format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        if engineBufferTried.contains(name) { return engineBufferCache[name] }
+        engineBufferTried.insert(name)
+        guard let url = Bundle.main.url(forResource: name, withExtension: ext),
               let file = try? AVAudioFile(forReading: url),
               file.length > 0, file.length < 2_000_000,
               let source = AVAudioPCMBuffer(
@@ -993,7 +1019,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         guard status != .error, conversionError == nil, converted.frameLength > 0 else {
             return nil
         }
-        connectToneCache = converted
+        engineBufferCache[name] = converted
         return converted
     }
 
@@ -1021,7 +1047,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         // native convention for her ~-12.5 dBFS masters (Received plays
         // at 0.9 in KadeFeedback; the web plays this exact file at 0.75).
         // One constant, retune by ear right here.
-        if let chime = Self.bundledConnectTone(convertedTo: playerFormat) {
+        if let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
             earconNode.volume = 0.9
             earconNode.scheduleBuffer(chime, completionHandler: nil)
             earconNode.play()
