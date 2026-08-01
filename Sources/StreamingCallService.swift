@@ -188,6 +188,21 @@ final class StreamingCallService: NSObject, ObservableObject {
     private let thinkingNode = AVAudioPlayerNode()
     private var thinkingBuffer: AVAudioPCMBuffer?
     private var thinkingLooping = false
+    /// August 1 2026 -- Kade's own call cues reach the native lane (the
+    /// July 22 deferral, done). Her Connected.mp3 plays through THIS
+    /// dedicated node -- NOT `playerNode` -- because buffers on one
+    /// AVAudioPlayerNode play sequentially: a 4-second chime scheduled on
+    /// `playerNode` would queue the agent's greeting 4 seconds behind it.
+    /// (The web client never had this problem; Web Audio sources are
+    /// always parallel.) Same mixer, same output, so the connect cue
+    /// keeps its full diagnostic value as the engine self-test.
+    /// Disconnected.mp3 deliberately does NOT use the engine at all --
+    /// by the time a hangup cue should play, the engine is torn down; it
+    /// rides a plain AVAudioPlayer after teardown, the chat-earcon lane.
+    /// The synth blips remain the permanent fail-soft fallback: a
+    /// missing/undecodable file means the old sound (connect) or the old
+    /// silence (disconnect), never a broken call.
+    private let earconNode = AVAudioPlayerNode()
     /// Session 26 (call continuity): the conversation this call should
     /// continue, handed to `start()` by a call opened from inside one.
     private var pendingConversationId: String?
@@ -740,6 +755,8 @@ final class StreamingCallService: NSObject, ObservableObject {
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
         audioEngine.attach(thinkingNode)
         audioEngine.connect(thinkingNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        audioEngine.attach(earconNode)
+        audioEngine.connect(earconNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
         // FIX (live-tested): the first echo fix (enabling voice processing
         // above) broke mic capture entirely on the very next call -- Kiana
@@ -781,8 +798,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         engineRunning = true
         updateAudioDiagnostic()
         startNowPlaying()
-        // AUDIBLE SELF-TEST. A short, soft two-note tone pushed through the
-        // exact same `playerNode` -> mixer -> output path the agent's voice
+        // AUDIBLE SELF-TEST. Kade's Connected chime (her own recording;
+        // the old soft two-note tone remains as fail-soft fallback) pushed
+        // through the same engine -> mixer -> output path the agent's voice
         // uses. This is the single most valuable thing that can be added
         // without a device: it turns the next bug report into one clean bit
         // of information instead of another guess. If the caller HEARS the
@@ -931,7 +949,84 @@ final class StreamingCallService: NSObject, ObservableObject {
         }
     }
 
+    /// One-time decode + format-convert of the bundled CallConnected.mp3
+    /// into `playerFormat` (24k mono float32) so `earconNode` sees the
+    /// exact same fixed format as every other node edge in this graph.
+    /// Cached after the first attempt -- including a FAILED attempt (nil
+    /// stays cached), so a missing file costs one bundle lookup per app
+    /// run, not one per call. Safe as statics on this @MainActor class
+    /// (same isolation story as Earcons.shared): `playerFormat` is a
+    /// fixed constant, identical across every call instance.
+    private static var connectToneCache: AVAudioPCMBuffer?
+    private static var connectToneLoadTried = false
+
+    private static func bundledConnectTone(convertedTo format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        if connectToneLoadTried { return connectToneCache }
+        connectToneLoadTried = true
+        guard let url = Bundle.main.url(forResource: "CallConnected", withExtension: "mp3"),
+              let file = try? AVAudioFile(forReading: url),
+              file.length > 0, file.length < 2_000_000,
+              let source = AVAudioPCMBuffer(
+                  pcmFormat: file.processingFormat,
+                  frameCapacity: AVAudioFrameCount(file.length)
+              ),
+              (try? file.read(into: source)) != nil,
+              source.frameLength > 0,
+              let converter = AVAudioConverter(from: file.processingFormat, to: format)
+        else { return nil }
+        let ratio = format.sampleRate / file.processingFormat.sampleRate
+        let capacity = AVAudioFrameCount((Double(source.frameLength) * ratio).rounded(.up)) + 1024
+        guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+            return nil
+        }
+        var fed = false
+        var conversionError: NSError?
+        let status = converter.convert(to: converted, error: &conversionError) { _, outStatus in
+            if fed {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            fed = true
+            outStatus.pointee = .haveData
+            return source
+        }
+        guard status != .error, conversionError == nil, converted.frameLength > 0 else {
+            return nil
+        }
+        connectToneCache = converted
+        return converted
+    }
+
+    /// The hangup cue's player, retained statically so the sound OUTLIVES
+    /// the per-call service instance -- CallView builds a fresh service
+    /// per call and the screen can dismiss the moment a call ends, and an
+    /// AVAudioPlayer deallocated mid-play just stops. One slot, replaced
+    /// on the next call end (always more than one chime-length away in
+    /// practice; if it ever weren't, cutting the stale cue is the right
+    /// behavior anyway).
+    private static var disconnectPlayer: AVAudioPlayer?
+
+    private static func playDisconnectedTone() {
+        guard let url = Bundle.main.url(forResource: "CallDisconnected", withExtension: "mp3"),
+              let player = try? AVAudioPlayer(contentsOf: url) else { return }
+        player.volume = 0.9
+        player.prepareToPlay()
+        disconnectPlayer = player
+        player.play()
+    }
+
     private func playConnectTone() {
+        // Her real recording first (August 1 2026, same file-first/synth-
+        // fallback contract as Earcons). Volume 0.9 = the established
+        // native convention for her ~-12.5 dBFS masters (Received plays
+        // at 0.9 in KadeFeedback; the web plays this exact file at 0.75).
+        // One constant, retune by ear right here.
+        if let chime = Self.bundledConnectTone(convertedTo: playerFormat) {
+            earconNode.volume = 0.9
+            earconNode.scheduleBuffer(chime, completionHandler: nil)
+            earconNode.play()
+            return
+        }
         let sampleRate = playerFormat.sampleRate
         let noteFrames = Int(sampleRate * 0.11)
         let total = noteFrames * 2
@@ -1267,10 +1362,18 @@ final class StreamingCallService: NSObject, ObservableObject {
         // Everything below is a safe no-op on a partially-started engine
         // (removeTap with no tap, stop() on a stopped engine), so teardown is
         // now unconditional and idempotent -- never guard it again.
+        // August 1 2026: remember whether this teardown is ending a call
+        // that was actually LIVE, before the flag clears -- the hangup cue
+        // below must never play for a call that never got its engine
+        // running (a start() that threw midway), and because teardown is
+        // deliberately idempotent, this same capture is what makes the
+        // cue fire exactly once however many times teardown runs.
+        let endedALiveCall = engineRunning
         engineRunning = false
         // Session 26: the thinking loop must not survive teardown.
         thinkingLooping = false
         thinkingNode.stop()
+        earconNode.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         playerNode.stop()
         audioEngine.stop()
@@ -1285,6 +1388,18 @@ final class StreamingCallService: NSObject, ObservableObject {
         // right thing to do regardless, and covers anything else that plays
         // audio without asking first.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // August 1 2026 -- Kade's Disconnected.mp3, the audible "receiver
+        // going back down" (the web has played this exact file since July
+        // 22; the native lane finally catches up). AFTER the session
+        // handback on purpose: it rides a plain AVAudioPlayer under the
+        // fresh `.playback` category -- the chat-earcon lane -- so it
+        // comes out of the SPEAKER and cannot hold the record session
+        // open. Reconnects never pass through teardown, so the mid-call
+        // Live-cap dance stays silent except for its spoken
+        // announcements. No synth fallback here: the old behavior was
+        // silence, and status + VoiceOver still announce the end -- a
+        // missing file just means the old silence.
+        if endedALiveCall { Self.playDisconnectedTone() }
     }
 
     // MARK: - Lock screen controls
