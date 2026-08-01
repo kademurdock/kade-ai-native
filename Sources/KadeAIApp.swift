@@ -102,6 +102,15 @@ struct KadeAIApp: App {
     /// already answered (allow OR deny) -- safe to call unconditionally
     /// every launch rather than tracking "have we asked before" ourselves.
     private func requestPushAuthorization() {
+        // August 1 2026 (the App Store sprint, part 2): every tour frame
+        // from build 174 came back photobombed by this exact permission
+        // alert -- CI has no finger to tap it away, and Apple rejects
+        // store screenshots that show permission dialogs. In tour mode
+        // (debug simulator runs only; Release never sets KADE_TOUR), skip
+        // the ask entirely -- the tour seat has no use for push anyway.
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["KADE_TOUR"] == "1" { return }
+        #endif
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             // registerForRemoteNotifications() must run on the main thread;
