@@ -938,6 +938,13 @@ struct ConversationDetailView: View {
             KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
+            // Aug 4 2026: her hypnotic bubbles, native -- only in the pure
+            // waiting beat. The moment thoughts start pouring into the live
+            // bubble, that takes the visual job and these step aside (same
+            // rule as the web: never fight the streaming content).
+            if liveThink.isEmpty {
+                KadeThinkingBubbles()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)

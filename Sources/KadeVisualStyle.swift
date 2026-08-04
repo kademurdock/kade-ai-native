@@ -382,3 +382,79 @@ struct KadeSpeakerMonogram: View {
         .accessibilityHidden(true)
     }
 }
+
+
+// MARK: - Thinking bubbles (Aug 4 2026)
+
+/// Kade: "some kind of hypnotic bubbles visually to match the bubbling
+/// thoughts sound effect when waiting for them to finish thinking."
+/// Native twin of the web's ThinkingBubbles.tsx -- the SAME seven
+/// hand-tuned bubbles (left offset, size, delay, duration copied verbatim)
+/// rising and fading on loop during the pure waiting beat, so both
+/// surfaces breathe alike. Decorative ONLY: accessibilityHidden (the
+/// bubbling SOUND plus the replying row's label carry the non-visual cue),
+/// and it holds perfectly still as a faint static row under system Reduce
+/// Motion or the in-app motion override -- the same double gate as every
+/// other animation in this file. TimelineView computes each frame from the
+/// clock directly: no @State, nothing to cancel, nothing to leak when the
+/// row disappears.
+struct KadeThinkingBubbles: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
+    /// (left, size, delay, duration) -- hand-tuned on web so the drift
+    /// feels organic rather than a marching row; keep the two lists in
+    /// sync if either side is ever retuned.
+    private static let bubbles: [(left: CGFloat, size: CGFloat, delay: Double, dur: Double)] = [
+        (2, 6, 0.0, 2.4),
+        (12, 4, 0.5, 2.0),
+        (20, 7, 0.9, 2.7),
+        (30, 5, 0.2, 2.2),
+        (40, 4, 1.1, 2.5),
+        (48, 6, 0.7, 2.1),
+        (56, 4, 1.4, 2.6),
+    ]
+
+    var body: some View {
+        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
+        Group {
+            if reduce {
+                bubbleRow(at: nil)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    bubbleRow(at: context.date.timeIntervalSinceReferenceDate)
+                }
+            }
+        }
+        .frame(width: 64, height: 22, alignment: .bottomLeading)
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+
+    /// One frame. `t == nil` is the Reduce Motion branch: every bubble
+    /// sits still at its resting spot at the web's own reduced-motion
+    /// opacity (0.22), exactly like the CSS `prefers-reduced-motion` rule.
+    private func bubbleRow(at t: TimeInterval?) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            ForEach(0..<Self.bubbles.count, id: \.self) { i in
+                let b = Self.bubbles[i]
+                let phase: Double? = t.map { time in
+                    let raw = (time - b.delay).truncatingRemainder(dividingBy: b.dur)
+                    return (raw < 0 ? raw + b.dur : raw) / b.dur
+                }
+                let size = b.size * (phase.map { 0.6 + 0.4 * $0 } ?? 1.0)
+                Circle()
+                    .fill(Color.secondary.opacity(phase.map(Self.opacity(for:)) ?? 0.22))
+                    .frame(width: size, height: size)
+                    .offset(x: b.left, y: phase.map { 4 - 18 * $0 } ?? -4)
+            }
+        }
+    }
+
+    /// The web keyframes, piecewise: 0% -> 0, 25% -> 0.32, 60% -> 0.18,
+    /// 100% -> 0.
+    private static func opacity(for phase: Double) -> Double {
+        if phase < 0.25 { return 0.32 * (phase / 0.25) }
+        if phase < 0.60 { return 0.32 - 0.14 * ((phase - 0.25) / 0.35) }
+        return 0.18 * (1.0 - (phase - 0.60) / 0.40)
+    }
+}
