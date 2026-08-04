@@ -76,6 +76,7 @@ struct ConversationDetailView: View {
     @EnvironmentObject private var messageSendingService: MessageSendingService
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @EnvironmentObject private var apiClient: KadeAPIClient
     /// Only actually dismisses anything when this view is the root of a
     /// sheet-presented `NavigationStack` (see `isStandalonePresentation`
@@ -143,6 +144,13 @@ struct ConversationDetailView: View {
     // permanent think part) replaces it at final.
     @State private var liveThink = ""
     @State private var liveThinkExpanded = false
+    /// Aug 4 2026 (her pick): gentle spoken progress during LONG deep
+    /// thinks, about every 20 seconds -- "Still thinking, about 900
+    /// characters so far." Announcement-only (VoiceOver speech, never TTS:
+    /// her explicit rule is that thoughts are never read out loud by the
+    /// voice). Togglable under Settings > Speech.
+    @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
+    @State private var lastThinkProgressAnnounce = Date.distantPast
     @State private var announcedThinking = false
     @State private var attachmentUploading = false
     @State private var showingAttachMenu = false
@@ -896,9 +904,18 @@ struct ConversationDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel("The thinking so far: \(liveThink)")
         } label: {
+            // Aug 4: the brain gently pulses while thoughts pour in -- the
+            // sighted twin of the bubbling sound. Double-gated on system
+            // Reduce Motion AND the in-app motion override, decorative
+            // only (the symbol change is invisible to VoiceOver).
             Label("Thinking it through…", systemImage: "brain")
                 .font(.footnote.bold())
                 .foregroundStyle(.secondary)
+                .symbolEffect(
+                    .pulse,
+                    options: .repeating,
+                    isActive: !(systemReduceMotion || UserDefaults.standard.bool(forKey: "kade.feedback.reduceMotion"))
+                )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1849,6 +1866,7 @@ struct ConversationDetailView: View {
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
             liveThink = ""
             announcedThinking = false
+            liveThinkExpanded = false
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
@@ -1858,19 +1876,40 @@ struct ConversationDetailView: View {
                 onThink: { chunk in
                     // Session 35 encore: thoughts pour into the live bubble
                     // as they stream. One spoken heads-up the first time,
-                    // then silence — the bubble narrates only on focus.
+                    // then near-silence — the bubble narrates only on focus,
+                    // plus (Aug 4, her pick) an optional gentle progress
+                    // line about every 20 seconds so a screen-reader user
+                    // knows a LONG think is still moving. Progress is
+                    // VoiceOver announcement only; thoughts themselves are
+                    // never spoken by TTS (her explicit rule).
                     liveThink += chunk
                     if !announcedThinking {
                         announcedThinking = true
+                        // Aug 4 (her pick): the bubble opens itself so
+                        // sighted eyes watch thoughts pour in live -- no
+                        // tap needed. It collapses again when the reply
+                        // lands (the reset below), so the finished chat
+                        // never stays cluttered.
+                        liveThinkExpanded = true
+                        lastThinkProgressAnnounce = Date()
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: "Deep thoughts are streaming — the thinking bubble is under the last message."
+                        )
+                    } else if spokenThinkingProgress,
+                              Date().timeIntervalSince(lastThinkProgressAnnounce) >= 20 {
+                        lastThinkProgressAnnounce = Date()
+                        let rounded = max((liveThink.count / 100) * 100, 100)
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Still thinking — about \(rounded) characters so far."
                         )
                     }
                 }
             )
             liveThink = ""
             announcedThinking = false
+            liveThinkExpanded = false
             conversationId = resolvedConversationId
             // Authoritative reload: replaces the optimistic placeholder with
             // whatever the server actually persisted (real ids, real content
@@ -1975,6 +2014,7 @@ struct ConversationDetailView: View {
         } catch {
             liveThink = ""
             announcedThinking = false
+            liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was
             // sent from the user's point of view, only the "did the reply
             // come back" half failed.

@@ -28,6 +28,11 @@ import UIKit
 /// convention to preserve, so they use the same plain `Picker` this
 /// codebase already uses for Agent Builder's Category/Provider/Model.
 struct SettingsView: View {
+    /// Aug 4 2026 (her pick): VoiceOver-spoken progress during long deep
+    /// thinks ("Still thinking -- about 900 characters so far," roughly
+    /// every 20 seconds). Announcement-only; thoughts are never read by
+    /// TTS. Same key ConversationDetailView reads.
+    @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
     let apiClient: KadeAPIClient
 
     @EnvironmentObject private var voiceService: VoiceService
@@ -96,6 +101,11 @@ struct SettingsView: View {
                     Text("Voice messages by default")
                 }
                 .accessibilityHint("New conversations start with voice messages already on. You can still turn it off in any single conversation.")
+
+                Toggle(isOn: $spokenThinkingProgress) {
+                    Text("Spoken thinking progress")
+                }
+                .accessibilityHint("During a long Deep Think, VoiceOver quietly says how much thinking has streamed so far, about every twenty seconds. The thoughts themselves are never read out loud.")
 
                 speedRow
             } header: {
