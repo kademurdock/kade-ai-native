@@ -24,11 +24,16 @@ import UIKit
 /// says so — one long-press paste instead of auto-typing. Never blank,
 /// never broken.
 ///
-/// The six quick phrases stay as compact secondary rows (her call: fine
-/// "if they help the sighted or whatever"); the Prompt Library does NOT
-/// ride the keyboard (her call, same breath).
+/// Quick phrases (Aug 4 2026, her redesign): PERSONAL now — each account
+/// keeps its own list ("things they say all the time instead of canned
+/// crap"), managed in the app (Settings > Kade Keys), mirrored into the
+/// App Group, read here offline. The six built-ins survive only as the
+/// empty-state fallback so the keyboard is never blank. The hero key says
+/// TRANSCRIBE (was "Dictate" — collided with the iPhone's own Dictate
+/// button, her report). The Prompt Library still does NOT ride the
+/// keyboard (her call, reaffirmed: "I don't really care about prompts").
 final class KeyboardViewController: UIInputViewController {
-    private let phrases: [String] = [
+    private let builtinPhrases: [String] = [
         "Love you!",
         "On my way.",
         "Call me when you can.",
@@ -37,13 +42,36 @@ final class KeyboardViewController: UIInputViewController {
         "Thank you so much.",
     ]
 
+    /// Her own phrases, mirrored from the account by the main app
+    /// (kadeKeys.customPhrases.v1). Reading the container needs Full
+    /// Access (same OS gate as the dictation handoff); without it, or
+    /// before she's added any, the built-ins above keep the keyboard
+    /// useful.
+    private var phrases: [String] {
+        guard hasFullAccess,
+              let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai"),
+              let data = defaults.data(forKey: "kadeKeys.customPhrases.v1"),
+              let custom = try? JSONDecoder().decode([String].self, from: data),
+              !custom.isEmpty else {
+            return builtinPhrases
+        }
+        return Array(custom.prefix(12))
+    }
+
     private struct SharedDictation: Decodable {
         let text: String
         let at: Date
+        let id: String?
     }
 
     /// Fresh = written in the last 3 minutes. Older leftovers are stale
     /// (she wandered off mid-dance) and get cleared without typing.
+    /// Aug 4 2026: also refuses to type the same dictation SESSION twice
+    /// (`id` + the lastTyped marker) — the app writes the raw transcript
+    /// immediately and may overwrite it with the auto-cleaned version a
+    /// few seconds later; if she swiped back fast and this keyboard
+    /// already typed the raw take, the cleaned overwrite must not get
+    /// typed AGAIN into some later field.
     private func takePendingDictation() -> String? {
         guard hasFullAccess,
               let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai"),
@@ -55,6 +83,11 @@ final class KeyboardViewController: UIInputViewController {
               Date().timeIntervalSince(dictation.at) < 180,
               !dictation.text.isEmpty else {
             return nil
+        }
+        if let id = dictation.id {
+            let lastTypedKey = "kadeKeys.lastTypedTake.v1"
+            guard defaults.string(forKey: lastTypedKey) != id else { return nil }
+            defaults.set(id, forKey: lastTypedKey)
         }
         return dictation.text
     }
@@ -68,14 +101,17 @@ final class KeyboardViewController: UIInputViewController {
         column.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(column)
 
-        // THE HERO: Dictate.
+        // THE HERO: Transcribe (renamed from "Dictate" Aug 4 2026 — her
+        // report: "I can't tell the diff between that and my actual
+        // dictate button via system." One name for one feature: this key
+        // opens the app's own Transcribe tool.)
         var dictateConfig = UIButton.Configuration.filled()
-        dictateConfig.title = "Dictate"
-        dictateConfig.image = UIImage(systemName: "mic.fill")
+        dictateConfig.title = "Transcribe"
+        dictateConfig.image = UIImage(systemName: "waveform")
         dictateConfig.imagePadding = 8
         dictateConfig.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 8, bottom: 14, trailing: 8)
         let dictate = UIButton(configuration: dictateConfig)
-        dictate.accessibilityLabel = "Dictate"
+        dictate.accessibilityLabel = "Transcribe"
         dictate.accessibilityHint = hasFullAccess
             ? "Opens Kade-AI to take your words. Swipe back here after and they type themselves."
             : "Opens Kade-AI to take your words. They'll land on your clipboard to paste here. Turn on Allow Full Access in Settings and they'll type themselves instead."
@@ -157,7 +193,7 @@ final class KeyboardViewController: UIInputViewController {
         }
         UIAccessibility.post(
             notification: .announcement,
-            argument: "Couldn't open Kade-AI from here. Open the app and use Quick Dictate."
+            argument: "Couldn't open Kade-AI from here. Open the app and use Transcribe."
         )
     }
 

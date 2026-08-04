@@ -31,18 +31,48 @@ enum KadeKeysSharedStore {
     struct SharedDictation: Codable {
         let text: String
         let at: Date
+        /// Aug 4 2026: identifies the dictation SESSION this text came
+        /// from, so the keyboard can refuse to type the same session
+        /// twice. Scenario it exists for: the raw transcript is written
+        /// immediately (safety net), she swipes back fast and the keyboard
+        /// types it, THEN the auto-cleanup lands and overwrites the blob
+        /// with the polished version -- without the id, her next keyboard
+        /// activation would type the cleaned copy AGAIN into whatever
+        /// field she's in. Optional so blobs written by older app builds
+        /// still decode (they just skip the double-type guard).
+        let id: String?
     }
 
     /// The app writes here when a keyboard-initiated dictation completes;
-    /// the keyboard types it on its next activation and clears it.
-    static func writeDictation(_ text: String) {
+    /// the keyboard types it on its next activation and clears it. The
+    /// same `takeId` is passed for a raw write and its later cleaned
+    /// overwrite -- see `SharedDictation.id`.
+    static func writeDictation(_ text: String, takeId: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let defaults = UserDefaults(suiteName: appGroupId),
-              let data = try? JSONEncoder().encode(SharedDictation(text: trimmed, at: Date())) else {
+              let data = try? JSONEncoder().encode(SharedDictation(text: trimmed, at: Date(), id: takeId)) else {
             return
         }
         defaults.set(data, forKey: dictationKey)
+    }
+
+    // ── Custom quick phrases (Aug 4 2026, her call: "people should be
+    // able to customise their own prompt library just like their own
+    // dictionary... instead of canned crap") ───────────────────────────
+    /// Mirror of the account's /api/kade/keyboard-phrases list. The main
+    /// app refreshes it on the phrases screen and after every edit; the
+    /// keyboard reads it offline (Full Access gate, same as everything
+    /// else in this container) and falls back to its built-ins only when
+    /// this has never been written or is empty.
+    static let customPhrasesKey = "kadeKeys.customPhrases.v1"
+
+    static func writeCustomPhrases(_ phrases: [String]) {
+        guard let defaults = UserDefaults(suiteName: appGroupId),
+              let data = try? JSONEncoder().encode(Array(phrases.prefix(12))) else {
+            return
+        }
+        defaults.set(data, forKey: customPhrasesKey)
     }
 
     /// Replaces the mirrored set wholesale (the library is the source of

@@ -72,10 +72,26 @@ struct TranscribeView: View {
     /// longer note to organize.
     let quickMode: Bool
     /// KADE KEYS dictate (July 31 2026): entered from the keyboard's
-    /// Dictate key (kadeai://kadekeys-dictate). Behaves exactly like
+    /// Transcribe key (kadeai://kadekeys-dictate). Behaves exactly like
     /// quickMode PLUS every completed take also lands in the App Group
     /// container so Kade Keys types it the moment she swipes back.
     let keyboardMode: Bool
+
+    /// Aug 4 2026 (her redesign: "The main feature needs to be the
+    /// transcribe clean up... the keyboard version of that transcribe app
+    /// we built, whisprflow"): in keyboard mode, each finished take is
+    /// auto-run through the same PROSE cleanup as the manual "Clean up"
+    /// button -- fillers and false starts gone, grammar fixed, meaning
+    /// untouched -- and the CLEANED text is what Kade Keys types.
+    /// Fail-soft: the raw transcript is written to the App Group FIRST
+    /// (a cleanup that dies can never cost the recording), then the
+    /// cleaned version overwrites it under the same take id. Togglable
+    /// under Settings > Kade Keys; default on.
+    @AppStorage("kade.keyboard.autoClean") private var keyboardAutoClean = true
+    /// Serial number for keyboard cleanups: a new take invalidates any
+    /// still-running cleanup of the previous transcript state, so a slow
+    /// LLM answer can never overwrite newer speech with older text.
+    @State private var keyboardCleanupGeneration = 0
 
     init(apiClient: KadeAPIClient, quickMode: Bool = false, keyboardMode: Bool = false) {
         _service = StateObject(wrappedValue: TranscribeService(client: apiClient))
@@ -470,8 +486,20 @@ struct TranscribeView: View {
                 // access fallback), and the announcement tells her the ONE
                 // move left -- iOS killed automatic hop-back in 26.4, so
                 // the swipe is hers (same toll Wispr Flow pays).
-                KadeKeysSharedStore.writeDictation(transcript)
-                KadeAnnounce.high("Got it. Swipe back to where you were typing and Kade Keys will type it for you.")
+                // Aug 4: raw goes in IMMEDIATELY under a fresh take id
+                // (safety net), then the auto-cleanup overwrites it with
+                // the polished version and the swipe-back announcement
+                // waits for THAT -- so what gets typed is the clean text.
+                let takeId = UUID().uuidString
+                KadeKeysSharedStore.writeDictation(transcript, takeId: takeId)
+                keyboardCleanupGeneration += 1
+                if keyboardAutoClean {
+                    let generation = keyboardCleanupGeneration
+                    UIAccessibility.post(notification: .announcement, argument: "Cleaning it up…")
+                    Task { await keyboardAutoCleanPass(takeId: takeId, generation: generation) }
+                } else {
+                    KadeAnnounce.high("Got it. Swipe back to where you were typing and Kade Keys will type it for you.")
+                }
             } else {
                 // High priority: must be heard even though the focus move above
                 // is about to start VoiceOver reading the transcript itself --
@@ -479,6 +507,30 @@ struct TranscribeView: View {
                 // "it's on your clipboard" confirmation is not. See KadeAnnounce.
                 KadeAnnounce.high("Transcript copied. Ready to paste.")
             }
+        }
+    }
+
+    /// Aug 4 2026: the keyboard lane's automatic PROSE cleanup. Same
+    /// server organizer as the manual button, but hands-off: success
+    /// replaces the on-screen transcript, refreshes the clipboard, and
+    /// overwrites the App Group blob under the SAME take id (see
+    /// KadeKeysSharedStore.SharedDictation.id for why the id matters);
+    /// failure keeps the raw take everywhere -- she is never left with
+    /// nothing. Undo deliberately keeps the raw version, same contract as
+    /// the manual Clean up button.
+    private func keyboardAutoCleanPass(takeId: String, generation: Int) async {
+        let raw = transcript
+        do {
+            let cleaned = try await service.organize(text: raw, style: .prose)
+            guard generation == keyboardCleanupGeneration else { return }
+            undoBuffer = raw
+            transcript = cleaned
+            UIPasteboard.general.string = cleaned
+            KadeKeysSharedStore.writeDictation(cleaned, takeId: takeId)
+            KadeAnnounce.high("Cleaned up and ready. Swipe back to where you were typing and Kade Keys will type it for you.")
+        } catch {
+            guard generation == keyboardCleanupGeneration else { return }
+            KadeAnnounce.high("Got it as heard — the tidy-up didn't go through. Swipe back and Kade Keys will type it for you.")
         }
     }
 

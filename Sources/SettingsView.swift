@@ -55,6 +55,11 @@ struct SettingsView: View {
     @State private var showingPronunciationDictionary = false
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
+    /// Aug 4 2026: Kade Keys phrases screen, same Bool-push pattern.
+    @State private var showingKeyboardPhrases = false
+    /// Aug 4 2026 (her redesign): the keyboard lane's automatic transcript
+    /// cleanup. Same key TranscribeView reads.
+    @AppStorage("kade.keyboard.autoClean") private var keyboardAutoClean = true
     @State private var showingAccountSecurity = false
     /// Session 26 (her ask: "put a box to check or something, where people
     /// can choose their default agent"): sheet flag for the main-agent
@@ -112,6 +117,27 @@ struct SettingsView: View {
                 Text("Speech")
             } footer: {
                 Text("Voice message speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
+            }
+
+            // Aug 4 2026 (her keyboard redesign): Kade Keys' own home in
+            // Settings -- personal phrases + the auto-cleanup toggle.
+            Section {
+                Button {
+                    showingKeyboardPhrases = true
+                } label: {
+                    Label("My Keyboard Phrases", systemImage: "keyboard")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens your personal quick phrases -- the one-tap buttons on the Kade Keys keyboard.")
+
+                Toggle(isOn: $keyboardAutoClean) {
+                    Text("Clean up keyboard dictation")
+                }
+                .accessibilityHint("When the keyboard's Transcribe key takes your words, the transcript is tidied automatically -- filler words out, grammar fixed, your meaning untouched -- before it types. Turn off to type exactly what was heard.")
+            } header: {
+                Text("Kade Keys")
+            } footer: {
+                Text("The keyboard's big key is called Transcribe -- it opens Kade-AI to listen, cleans up what you said, and types it when you swipe back. Your phrases ride along; the keyboard needs Allow Full Access to read them.")
             }
 
             // Aug 4 2026: the crash catcher's user-facing half. Apple
@@ -272,6 +298,9 @@ struct SettingsView: View {
         }
         .navigationDestination(isPresented: $showingPronunciationDictionary) {
             PronunciationDictionaryView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingKeyboardPhrases) {
+            KeyboardPhrasesView(apiClient: apiClient)
         }
         .navigationDestination(isPresented: $showingUsage) {
             UsageView(apiClient: apiClient)
