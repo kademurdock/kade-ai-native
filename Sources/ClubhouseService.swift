@@ -1709,6 +1709,7 @@ extension ClubhouseService: RoomDelegate {
         Task { @MainActor in
             guard !self.isDj(identity) else { return }
             self.rebuildRoster()
+            Earcons.shared.playRoomChime(join: true)   // Aug 4: chime + announcement
             self.announceRoom("\(name) just walked in.", lane: .doors)
         }
     }
@@ -1727,8 +1728,10 @@ extension ClubhouseService: RoomDelegate {
                 let botName = bot.name
                 self.bot = nil
                 self.botBusy = false
+                Earcons.shared.playRoomChime(join: false)
                 self.announceRoom("\(name) left and took \(botName) with them.", lane: .doors)
             } else {
+                Earcons.shared.playRoomChime(join: false)
                 self.announceRoom("\(name) headed out.", lane: .doors)
             }
             self.rebuildRoster()

@@ -345,8 +345,10 @@ final class Earcons {
         if let url = Bundle.main.url(forResource: "EarconThinkingLoop", withExtension: "wav"),
            let player = try? AVAudioPlayer(contentsOf: url) {
             player.numberOfLoops = -1
-            // July 22 night, Kade: "could go quite a bit down in volume." 0.55 -> 0.22.
-            player.volume = 0.22
+            // July 22: 0.55 -> 0.22. Aug 4 2026 (Kade: bubbles "quieter than the
+            // received sound by quite a bit... turned up a bit"): 0.22 -> 0.4, to
+            // match the web loop. Still under the received bloop.
+            player.volume = 0.4
             player.prepareToPlay()
             player.play()
             waitingPlayer = player
@@ -385,6 +387,28 @@ final class Earcons {
         waitingPlayer = nil
     }
 
+    /// Clubhouse room chimes (Aug 4 2026, Kade: "make it play the connect and
+    /// disconnect chimes when people enter and leave clubhouse rooms. I still
+    /// want it to announce, but I like the chime also.") Reuses the call
+    /// connect/disconnect recordings; the PA announcement is separate and
+    /// unaffected. Gated on the Sound-effects switch. Mixes into the room the
+    /// same way the PA's TTS clips already do.
+    private var chimeCache: [String: Data] = [:]
+    func playRoomChime(join: Bool) {
+        guard FeedbackPrefs.shared.soundEffects else { return }
+        let name = join ? "CallConnected" : "CallDisconnected"
+        if chimeCache[name] == nil,
+           let url = Bundle.main.url(forResource: name, withExtension: "mp3") {
+            chimeCache[name] = try? Data(contentsOf: url)
+        }
+        guard let data = chimeCache[name], let player = try? AVAudioPlayer(data: data) else { return }
+        player.volume = 0.7
+        player.prepareToPlay()
+        players.removeAll { !$0.isPlaying }
+        players.append(player)
+        player.play()
+    }
+
     /// July 24 2026 (Kade: the thinking loop "continues playing to the
     /// finish of the file instead of stopping when the bloop starts") --
     /// native twin of the web duck: dip the loop to silence UNDER the reply
@@ -396,7 +420,7 @@ final class Earcons {
     func duckWaitingLoop(resume: Bool) {
         guard let player = waitingPlayer else { return }
         let restoreVolume = player.volume
-        player.setVolume(0.0, fadeDuration: 0.12)
+        player.setVolume(0.0, fadeDuration: 0.03)  // Aug 4: 0.12 -> 0.03, the louder 0.4 loop can't bleed under the reply bloop
         guard resume else { return }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 1_250_000_000)
