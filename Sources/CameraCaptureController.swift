@@ -39,6 +39,12 @@ final class CameraCaptureController: ObservableObject {
     /// so this is a fresh, deliberately minimal surface.
     let session = AVCaptureSession()
 
+    /// Aug 4 2026: flips the frame cadence between Spotter/Live speed and
+    /// the plain lane's web-parity pace -- see FrameSampler.liveMode.
+    func setLiveCadence(_ live: Bool) {
+        sampler.liveMode = live
+    }
+
     /// Called with an already-JPEG-encoded frame, off the main actor's
     /// critical path (only the call itself is hopped to MainActor -- see
     /// `FrameSampler` below for why).
@@ -205,7 +211,17 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
     /// answer it would burn battery on a call that is already expensive.
     var onBrightness: ((Double) -> Void)?
     private var lastSentAt: Date = .distantPast
-    private let minInterval: TimeInterval = 2.0 // matches ConversationMode.tsx's setInterval(...,2000)
+    /// Aug 4 2026 (her go: "fix frames"): while Spotter/Live is actually ON,
+    /// frames flow at ~1.4 per second instead of one every two -- follow-the-
+    /// action help (reading mail page by page, tracking a dropped thing)
+    /// stops missing the moment between frames. The plain video-sight lane
+    /// keeps the original 2s web-parity cadence. Cost truth: the Live lane
+    /// bills per MINUTE, not per frame, so this buys quality, not a bill --
+    /// bandwidth lands around ~100KB/s at 768px/0.65 JPEG. A Bool flag
+    /// rather than a settable Double: written on the main actor, read on
+    /// the capture queue, and a torn Bool is impossible.
+    var liveMode = false
+    private var minInterval: TimeInterval { liveMode ? 0.7 : 2.0 } // 2.0 matches ConversationMode.tsx's setInterval(...,2000)
     private let targetWidth: CGFloat = 768 // matches the web client's canvas width
     private let ciContext = CIContext()
 

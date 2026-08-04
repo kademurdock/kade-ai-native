@@ -122,6 +122,9 @@ struct CallView: View {
             camera.stop()
         }
         .onChange(of: callService.liveOn) { _, on in
+            // Aug 4 2026: Spotter/Live runs the faster frame cadence
+            // (~1.4/s); handing back drops to the plain lane's 2s pace.
+            camera.setLiveCadence(on)
             if on {
                 Task { await camera.start(facing: .back) }
                 UIAccessibility.post(
@@ -307,24 +310,60 @@ struct CallView: View {
     /// "description" of what the camera sees is the Spotter's own spoken
     /// commentary, not anything a raw video layer could usefully narrate.
     private var cameraPreview: some View {
-        CameraPreviewLayer(session: camera.session)
-            .frame(height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(alignment: .topTrailing) {
-                if camera.torchAvailable {
-                    Button {
-                        camera.setTorch(!camera.torchOn)
-                    } label: {
-                        Image(systemName: camera.torchOn ? "bolt.fill" : "bolt.slash")
-                            .padding(8)
-                            .background(.black.opacity(0.4), in: Circle())
-                            .foregroundStyle(.white)
+        VStack(spacing: 8) {
+            CameraPreviewLayer(session: camera.session)
+                // Aug 4 2026 (Spotter polish): the preview grows while the
+                // Spotter is actually the one looking -- sighted family
+                // helping aim the phone get a real viewfinder, not a strip.
+                .frame(height: callService.liveOn ? 300 : 220)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(alignment: .topTrailing) {
+                    if camera.torchAvailable {
+                        Button {
+                            camera.setTorch(!camera.torchOn)
+                        } label: {
+                            Image(systemName: camera.torchOn ? "bolt.fill" : "bolt.slash")
+                                .padding(8)
+                                .background(.black.opacity(0.4), in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                        .padding(8)
+                        .accessibilityLabel(camera.torchOn ? "Turn off flashlight" : "Turn on flashlight")
                     }
-                    .padding(8)
-                    .accessibilityLabel(camera.torchOn ? "Turn off flashlight" : "Turn on flashlight")
                 }
+                .accessibilityHidden(true)
+            // Aug 4 2026 -- REAL accessibility catch from this session's
+            // audit: the only torch control lived INSIDE the preview
+            // overlay above, and the whole preview is (correctly)
+            // accessibilityHidden -- so a VoiceOver user in a dark room,
+            // the exact person the auto-flash exists for, had NO manual
+            // flashlight control at all if the automation guessed wrong.
+            // This full-width button is the torch's accessible home; the
+            // overlay chip stays for sighted muscle memory. Toggling here
+            // counts as a manual set, so auto-flash stops overriding it
+            // (same respect-the-human rule as the chip).
+            if camera.torchAvailable {
+                Button {
+                    camera.setTorch(!camera.torchOn)
+                    KadeHaptics.tap()
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: camera.torchOn ? "Flashlight on." : "Flashlight off."
+                    )
+                } label: {
+                    Label(
+                        camera.torchOn ? "Flashlight On" : "Flashlight Off",
+                        systemImage: camera.torchOn ? "bolt.fill" : "bolt.slash"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(camera.torchOn ? .yellow : nil)
+                .accessibilityLabel("Flashlight")
+                .accessibilityValue(camera.torchOn ? "On" : "Off")
+                .accessibilityHint("Lights up what the camera sees. It also comes on by itself in the dark until you set it yourself.")
             }
-            .accessibilityHidden(true)
+        }
     }
 
     /// Read-out-loud audio diagnostic. Added after build 119: the call

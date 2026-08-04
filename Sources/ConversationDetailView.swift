@@ -1092,13 +1092,16 @@ struct ConversationDetailView: View {
     /// snapshots: system-prompt/tool overhead isn't counted. One plain
     /// accessibility element, no controls inside. If the yaml's cap ever
     /// changes, update the constant with it.
-    /// Aug 4 2026 (her ask: windows fit the model): the fork now clamps
-    /// every agent's effective window to the MODEL's real limit (the
-    /// token map -- kimi k2.6/k3 = 262,144), and the stale per-agent
-    /// 600K-950K configs no longer lie. This constant follows the fleet
-    /// model's true window; if the fleet ever swaps models, update it
-    /// with the map.
-    private static let effectiveContextTokens = 262_144
+    /// Aug 4 2026 (her ask: windows fit the model — and her correction:
+    /// kimi-k3 is a 1,048,576-token model, verified same day): the fork
+    /// clamps every agent's window to min(its configured value, the
+    /// model's real limit), and the context-projection endpoint now
+    /// resolves that AUTHORITATIVE number server-side per agent — so the
+    /// v2 gauge is exact regardless of this constant. This is only the
+    /// OFFLINE v1 estimate's denominator: 600,000 = the default agent's
+    /// (Kiana's) effective window on k3. "About" has never been more
+    /// literal; the projection corrects it the moment it answers.
+    private static let effectiveContextTokens = 600_000
 
     /// CONTEXT METER v2 (session 33, leftovers item 8): the server's own
     /// projection replaces the client-side sum when it's available. POST
