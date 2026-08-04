@@ -151,6 +151,14 @@ struct ConversationDetailView: View {
     /// voice). Togglable under Settings > Speech.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
     @State private var lastThinkProgressAnnounce = Date.distantPast
+    /// Aug 4 2026 evening (her report: "the stupid flashing still thinking
+    /// message interrupts the stream of thoughts being read out by
+    /// voiceover"): while the bubble is OPEN, its spoken text is a frozen
+    /// SNAPSHOT taken at the moment it opened -- live text that mutates
+    /// under VoiceOver mid-read invalidates the element and cuts the
+    /// readout off. Close and reopen for a fresh snapshot; the VISUAL text
+    /// keeps pouring for sighted eyes either way.
+    @State private var liveThinkVOSnapshot = ""
     @State private var announcedThinking = false
     @State private var attachmentUploading = false
     @State private var showingAttachMenu = false
@@ -902,7 +910,13 @@ struct ConversationDetailView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel("The thinking so far: \(liveThink)")
+                // The frozen snapshot, NOT the live text -- see
+                // liveThinkVOSnapshot's doc comment. Sighted eyes get the
+                // pour above; the screen reader gets a text that holds
+                // still long enough to actually be read.
+                .accessibilityLabel(
+                    "The thinking when you opened this: \(liveThinkVOSnapshot). More has arrived since — close and reopen for the newest."
+                )
         } label: {
             // Aug 4: the brain gently pulses while thoughts pour in -- the
             // sighted twin of the bubbling sound. Double-gated on system
@@ -923,8 +937,21 @@ struct ConversationDetailView: View {
             Color(uiColor: .secondarySystemBackground).opacity(0.6),
             in: RoundedRectangle(cornerRadius: 18, style: .continuous)
         )
-        .accessibilityValue("\(liveThink.count) characters of thought so far. \(liveThinkExpanded ? "Open." : "Closed.")")
-        .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to watch the thoughts pour in.")
+        // Aug 4 evening: while OPEN the value is a stable "Open." (a value
+        // that churns every chunk chatters over the readout); while closed
+        // the running count rounds to hundreds so it only ticks
+        // occasionally.
+        .accessibilityValue(
+            liveThinkExpanded
+                ? "Open."
+                : "Closed. About \(max((liveThink.count / 100) * 100, 100)) characters of thought so far."
+        )
+        .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to hear the thoughts so far.")
+        .onChange(of: liveThinkExpanded) { _, open in
+            if open {
+                liveThinkVOSnapshot = liveThink
+            }
+        }
     }
 
     private var replyingRow: some View {
@@ -1902,24 +1929,39 @@ struct ConversationDetailView: View {
                     liveThink += chunk
                     if !announcedThinking {
                         announcedThinking = true
-                        // Aug 4 (her pick): the bubble opens itself so
-                        // sighted eyes watch thoughts pour in live -- no
-                        // tap needed. It collapses again when the reply
-                        // lands (the reset below), so the finished chat
-                        // never stays cluttered.
-                        liveThinkExpanded = true
+                        // Aug 4 evening rework (her report + her instinct
+                        // "maybe it should just be closed by default"):
+                        // auto-open is for SIGHTED eyes only. Under
+                        // VoiceOver the bubble stays collapsed -- the
+                        // stable "open at will" control she named as the
+                        // pattern every other platform uses -- because an
+                        // auto-opened bubble full of live-mutating text is
+                        // exactly what kept cutting her readout off.
+                        if !UIAccessibility.isVoiceOverRunning {
+                            liveThinkExpanded = true
+                        }
                         lastThinkProgressAnnounce = Date()
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: "Deep thoughts are streaming — the thinking bubble is under the last message."
                         )
                     } else if spokenThinkingProgress,
+                              !liveThinkExpanded,
                               Date().timeIntervalSince(lastThinkProgressAnnounce) >= 20 {
+                        // Progress only speaks while the bubble is CLOSED
+                        // (open = she's reading it; talking over her was
+                        // the whole bug) and only politely: low-priority
+                        // announcements wait for silence instead of
+                        // interrupting whatever VoiceOver is mid-way
+                        // through.
                         lastThinkProgressAnnounce = Date()
                         let rounded = max((liveThink.count / 100) * 100, 100)
                         UIAccessibility.post(
                             notification: .announcement,
-                            argument: "Still thinking — about \(rounded) characters so far."
+                            argument: NSAttributedString(
+                                string: "Still thinking — about \(rounded) characters so far.",
+                                attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                            )
                         )
                     }
                 }

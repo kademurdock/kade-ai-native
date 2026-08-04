@@ -355,9 +355,32 @@ final class VoiceService: NSObject, ObservableObject {
     func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        supersedePausedClip()
         speakQueue.append((trimmed, agentId, agentName, nil, nil, key, nil))
         guard !isPumping else { return }
         Task { await pumpSpeakQueue() }
+    }
+
+    /// Aug 4 2026 evening (her report, same day the Pause button shipped:
+    /// a new reply "didn't play automatically when it was sent, and when I
+    /// pressed resume it just did the clip I was listening to before"):
+    /// a PAUSED clip parks the queue on purpose -- but a NEW voice message
+    /// arriving behind it turned that into a hostage situation, because the
+    /// pump sits awaiting the paused clip's continuation forever. The rule
+    /// now: pause means "hold that thought," never "block everything after
+    /// it" -- anything newly enqueued SUPERSEDES a paused clip. The paused
+    /// player is stopped, its parked continuation resumed (the pump wakes
+    /// and advances), and the new clip plays. A clip that's actually
+    /// PLAYING is untouched -- the new item queues behind it normally.
+    private func supersedePausedClip() {
+        guard isPaused else { return }
+        currentPlayer?.stop()
+        currentPlayer = nil
+        isPaused = false
+        isClipPlaying = false
+        nowPlayingKey = nil
+        playbackContinuation?.resume()
+        playbackContinuation = nil
     }
 
     /// Session 35 part 3: speak ONE line in an explicit voice and return
@@ -369,6 +392,7 @@ final class VoiceService: NSObject, ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            supersedePausedClip()
             speakQueue.append((trimmed, nil, nil, voiceId, rate, nil, continuation))
             guard !isPumping else { return }
             Task { await self.pumpSpeakQueue() }
