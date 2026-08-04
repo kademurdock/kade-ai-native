@@ -1863,6 +1863,7 @@ struct ConversationDetailView: View {
         )
         messages.append(optimisticMessage)
         sendState = .sending
+        KadeBreadcrumbs.drop("send started (\(selectedAgentId ?? "default"))")
 
         do {
             let wasNewConversation = conversationId == nil
@@ -1925,6 +1926,7 @@ struct ConversationDetailView: View {
             messages = try await conversationsService.fetchMessages(
                 conversationId: resolvedConversationId
             )
+            KadeBreadcrumbs.drop("reply landed (\(messages.count) msgs)")
             // Session 28: decide the autoplay handoff BEFORE sendState
             // flips -- the sendState watcher reads this flag to know whether
             // the waiting ticks survive past the received bloop. Same
@@ -2019,6 +2021,7 @@ struct ConversationDetailView: View {
             failedAttempt = FailedAttempt(text: text, parentId: parentId)
             a11yFocus = .composerError
         } catch {
+            KadeBreadcrumbs.drop("send failed: \(type(of: error))")
             liveThink = ""
             announcedThinking = false
             liveThinkExpanded = false

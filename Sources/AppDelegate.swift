@@ -41,6 +41,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Aug 4 2026: the crash catcher -- MetricKit subscription + the
+        // breadcrumb trail (see KadeDiagnostics.swift). First, so a crash
+        // ANYWHERE in launch still has yesterday's diagnostics captured.
+        KadeCrashWatch.shared.start()
         UNUserNotificationCenter.current().delegate = self
         // Cold launch (app wasn't already running) FROM a quick action
         // hands the item over here instead of through

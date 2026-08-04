@@ -273,6 +273,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// (ticket fetch fails -> throw; mic fails -> throw; socket fails ->
     /// throw), including tearing everything back down on any failure.
     func start(agentId: String?, displayName: String, spotterDirect: Bool, conversationId: String? = nil) async throws {
+        KadeBreadcrumbs.drop("call started (\(displayName))")
         // Session 26 (call continuity): stashed for the hello message below.
         pendingConversationId = conversationId
         guard webSocketTask == nil else { return }
@@ -349,6 +350,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// `graceful` is false (used internally when tearing down after an
     /// error, where the socket may already be gone).
     func stop(graceful: Bool = true) {
+        KadeBreadcrumbs.drop("call stopped (graceful: \(graceful))")
         stopping = true
         reconnectTask?.cancel()
         reconnectTask = nil

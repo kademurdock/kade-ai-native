@@ -114,6 +114,22 @@ struct SettingsView: View {
                 Text("Voice message speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
             }
 
+            // Aug 4 2026: the crash catcher's user-facing half. Apple
+            // writes a crash report the next time the app opens
+            // (MetricKit); this shares those reports plus the breadcrumb
+            // trail of recent app events -- see KadeDiagnostics.swift.
+            Section {
+                ShareLink(items: KadeCrashWatch.shared.shareableFiles()) {
+                    Label("Share diagnostics", systemImage: "stethoscope")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the share sheet with recent crash reports and a short trail of app events, so they can be sent for debugging. Conversations are never included.")
+            } header: {
+                Text("Support")
+            } footer: {
+                Text("If the app ever crashes, open it again and share diagnostics here -- the crash report plus a timeline of what the app was doing. Never your conversations.")
+            }
+
             // July 23 2026 (Maps/GPS slice 1, Kade-approved): opt-in
             // location ride-along for the kade_location tool. OFF by
             // default; flipping it on triggers the system permission prompt
