@@ -1085,14 +1085,20 @@ struct ConversationDetailView: View {
     /// Session 23 (Kade: "we need something in chat like that context
     /// window box on the web"). The essence of the web gauge, native: sum
     /// of the server's own per-message tokenCount over what's loaded,
-    /// against the fleet's EFFECTIVE window -- 120,000 tokens, pinned in
-    /// librechat.yaml (k2.6 itself takes 256K; the yaml caps it, so the
-    /// cap is the truth users live under). Labeled "about" because this is
+    /// against the fleet's EFFECTIVE window -- the model's real limit
+    /// (see the constant's Aug 4 note below; the old "yaml caps it at
+    /// 120K" story is retired). Labeled "about" because this is
     /// the same client-side estimate the web shows between authoritative
     /// snapshots: system-prompt/tool overhead isn't counted. One plain
     /// accessibility element, no controls inside. If the yaml's cap ever
     /// changes, update the constant with it.
-    private static let effectiveContextTokens = 120_000
+    /// Aug 4 2026 (her ask: windows fit the model): the fork now clamps
+    /// every agent's effective window to the MODEL's real limit (the
+    /// token map -- kimi k2.6/k3 = 262,144), and the stale per-agent
+    /// 600K-950K configs no longer lie. This constant follows the fleet
+    /// model's true window; if the fleet ever swaps models, update it
+    /// with the map.
+    private static let effectiveContextTokens = 262_144
 
     /// CONTEXT METER v2 (session 33, leftovers item 8): the server's own
     /// projection replaces the client-side sum when it's available. POST
