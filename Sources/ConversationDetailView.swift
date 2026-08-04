@@ -800,7 +800,19 @@ struct ConversationDetailView: View {
                             message: message,
                             canEdit: canEdit(message),
                             canRegenerate: canRegenerate(message),
+                            voicePlayback: voiceService.nowPlayingKey == message.id
+                                ? (voiceService.isPaused ? .paused : .playing)
+                                : .idle,
                             onReadAloud: { readAloud(message) },
+                            onPauseResume: {
+                                if voiceService.isPaused {
+                                    voiceService.resumeSpeaking()
+                                    UIAccessibility.post(notification: .announcement, argument: "Playing.")
+                                } else {
+                                    voiceService.pauseSpeaking()
+                                    UIAccessibility.post(notification: .announcement, argument: "Paused.")
+                                }
+                            },
                             onReadingView: message.isCreatedByUser ? nil : {
                                 readingReturnId = message.id
                                 readingMessage = message
@@ -1237,31 +1249,69 @@ struct ConversationDetailView: View {
 
             Spacer()
 
-            stopVoiceButton
+            voicePlaybackButton
             speedButton
         }
         .padding(.horizontal)
         .padding(.top, 4)
     }
 
-    /// Session 35 part 11 (her ask: "a way to make a voice message stop
-    /// playing once we've started it"). Always PRESENT, disabled when
-    /// nothing is playing — an appearing/vanishing control is a moving
-    /// target under VoiceOver; a constant one is a known address. Stopping
-    /// clears the whole spoken queue (stopSpeaking already resumes any
-    /// waiting continuations, so nothing upstream ever hangs).
-    private var stopVoiceButton: some View {
-        Button {
-            voiceService.stopSpeaking()
-            UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+    /// Session 35 part 11 built this as a Stop button; Aug 4 2026 (Kade:
+    /// "The stop button on voice messages should prob just be a pause
+    /// button... like the button can change maybe") it became ONE morphing
+    /// control at the same known address -- an appearing/vanishing control
+    /// is a moving target under VoiceOver, so the button never moves, only
+    /// its face changes: while a clip is PLAYING it's Pause; while PAUSED
+    /// it's Resume; while the voice is still being FETCHED (nothing to
+    /// pause yet) it stays Stop, which cancels the queue before the voice
+    /// ever starts -- the one thing pause can't do. A full "Stop and
+    /// clear" survives as a VoiceOver custom action and a long-press menu
+    /// item in every phase, so stopping is never more than one gesture
+    /// away.
+    private var voicePlaybackButton: some View {
+        let phase: VoicePlaybackPhase = voiceService.isPaused
+            ? .paused
+            : (voiceService.isClipPlaying ? .playing : .idle)
+        return Button {
+            switch phase {
+            case .paused:
+                voiceService.resumeSpeaking()
+                UIAccessibility.post(notification: .announcement, argument: "Playing.")
+            case .playing:
+                voiceService.pauseSpeaking()
+                UIAccessibility.post(notification: .announcement, argument: "Paused.")
+            case .idle:
+                voiceService.stopSpeaking()
+                UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+            }
         } label: {
-            Image(systemName: "stop.circle")
+            Image(systemName: phase == .paused
+                ? "play.circle"
+                : (phase == .playing ? "pause.circle" : "stop.circle"))
                 .font(.title3)
         }
         .buttonStyle(.plain)
         .disabled(!(voiceService.isSpeaking || voiceService.isClipPlaying))
-        .accessibilityLabel("Stop the voice")
-        .accessibilityHint("Stops the voice message that's playing right now.")
+        .accessibilityLabel(phase == .paused
+            ? "Resume the voice"
+            : (phase == .playing ? "Pause the voice" : "Stop the voice"))
+        .accessibilityHint(phase == .paused
+            ? "Continues the paused voice message where it left off."
+            : (phase == .playing
+                ? "Pauses the voice message. Double-tap again to resume."
+                : "Stops the voice before it starts playing."))
+        .accessibilityAction(named: "Stop and clear") {
+            voiceService.stopSpeaking()
+            UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                voiceService.stopSpeaking()
+                UIAccessibility.post(notification: .announcement, argument: "Stopped.")
+            } label: {
+                Label("Stop the Voice", systemImage: "stop.circle")
+            }
+        }
     }
 
     /// Playback-speed control, sitting beside the voice-messages toggle
@@ -1739,7 +1789,8 @@ struct ConversationDetailView: View {
         voiceService.enqueueSpeak(
             text: message.displayText,
             agentId: message.agentId ?? selectedAgentId,
-            agentName: message.speakerLabel
+            agentName: message.speakerLabel,
+            key: message.id
         )
     }
 
@@ -1883,7 +1934,8 @@ struct ConversationDetailView: View {
                 voiceService.enqueueSpeak(
                     text: reply.displayText,
                     agentId: reply.agentId ?? selectedAgentId,
-                    agentName: reply.speakerLabel
+                    agentName: reply.speakerLabel,
+                    key: reply.id
                 )
             }
             if wasNewConversation {
@@ -2045,6 +2097,11 @@ struct ConversationDetailView: View {
 /// `accessibilityRotor`s) is kept alongside this on purpose, it does a
 /// different job (fast navigation across many turns) than this (acting on
 /// one already-focused message).
+/// Aug 4 2026: which voice-playback phase a given message row is in, so its
+/// own actions can morph (Play -> Pause -> Resume) for exactly the message
+/// that is speaking. Computed by the parent from `VoiceService.nowPlayingKey`.
+enum VoicePlaybackPhase { case idle, playing, paused }
+
 private struct MessageRow: View {
     // Session 17: message text is this app's single highest-value reading
     // surface -- see AppearancePreferences.swift's own doc comment for why
@@ -2061,7 +2118,13 @@ private struct MessageRow: View {
     /// Only the last assistant message gets a Regenerate action; see
     /// `ConversationDetailView.canRegenerate(_:)`.
     let canRegenerate: Bool
+    /// Aug 4 2026 (Kade: "tuck it in the rotor with read aloud... the
+    /// button can change"): the phase THIS message is in. While it is the
+    /// one speaking, the row's "Play as voice message" action reads
+    /// "Pause voice message" (or "Resume..."), driven by `onPauseResume`.
+    let voicePlayback: VoicePlaybackPhase
     let onReadAloud: () -> Void
+    let onPauseResume: () -> Void
     /// Session 25: opens the full-screen distraction-free reader for this
     /// reply. Nil on USER messages (the web feature is AI-replies-only and
     /// this port keeps that) -- nil means neither the rotor action nor the
@@ -2188,7 +2251,14 @@ private struct MessageRow: View {
                     UIPasteboard.general.string = message.readableText
                     UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
                 }
-                Button("Play as voice message") { onReadAloud() }
+                switch voicePlayback {
+                case .playing:
+                    Button("Pause voice message") { onPauseResume() }
+                case .paused:
+                    Button("Resume voice message") { onPauseResume() }
+                case .idle:
+                    Button("Play as voice message") { onReadAloud() }
+                }
                 if let onReadingView {
                     Button("Open reading view") { onReadingView() }
                 }
@@ -2250,10 +2320,25 @@ private struct MessageRow: View {
             } label: {
                 Label("Copy Text", systemImage: "doc.on.doc")
             }
-            Button {
-                onReadAloud()
-            } label: {
-                Label("Play as Voice Message", systemImage: "speaker.wave.2")
+            switch voicePlayback {
+            case .playing:
+                Button {
+                    onPauseResume()
+                } label: {
+                    Label("Pause Voice Message", systemImage: "pause.circle")
+                }
+            case .paused:
+                Button {
+                    onPauseResume()
+                } label: {
+                    Label("Resume Voice Message", systemImage: "play.circle")
+                }
+            case .idle:
+                Button {
+                    onReadAloud()
+                } label: {
+                    Label("Play as Voice Message", systemImage: "speaker.wave.2")
+                }
             }
             if let onReadingView {
                 Button {

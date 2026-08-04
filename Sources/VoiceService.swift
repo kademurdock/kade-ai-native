@@ -38,6 +38,17 @@ final class VoiceService: NSObject, ObservableObject {
     /// ConversationDetailView's sendState watcher): the waiting ticks keep
     /// running through the TTS fetch and stop the instant the voice starts.
     @Published private(set) var isClipPlaying = false
+    /// Aug 4 2026 (Kade: "The stop button on voice messages should prob just
+    /// be a pause button"): true while the current clip is paused mid-play.
+    /// `isClipPlaying` deliberately STAYS true while paused -- the clip is
+    /// still "the thing on deck," which is what the composer button and the
+    /// row actions key off to stay enabled.
+    @Published private(set) var isPaused = false
+    /// The caller-supplied tag (chat uses the message id) of the item
+    /// currently playing, so a message row's own "Play as voice message"
+    /// action can morph into Pause/Resume for exactly the message that is
+    /// speaking. Nil when idle or when the item carried no tag.
+    @Published private(set) var nowPlayingKey: String?
     @Published var recordError: String?
 
     private let client: KadeAPIClient
@@ -62,7 +73,7 @@ final class VoiceService: NSObject, ObservableObject {
     /// completion so a caller can AWAIT one line finishing (auto-advance
     /// paces itself on real playback, not guesses). Chat's enqueueSpeak
     /// path is byte-identical in behavior: nil/nil/nil.
-    private var speakQueue: [(text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, completion: CheckedContinuation<Void, Never>?)] = []
+    private var speakQueue: [(text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)] = []
     private var isPumping = false
 
     /// Playback rate for spoken replies. 1.0 is the voice's own natural
@@ -341,10 +352,10 @@ final class VoiceService: NSObject, ObservableObject {
     /// repeatedly while a previous line is still playing -- lines speak in
     /// order, one at a time, same as the web app's own read-aloud queue
     /// (`kadeRoomPage.js`'s `speakQ`/`pumpSpeech`).
-    func enqueueSpeak(text: String, agentId: String?, agentName: String?) {
+    func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        speakQueue.append((trimmed, agentId, agentName, nil, nil, nil))
+        speakQueue.append((trimmed, agentId, agentName, nil, nil, key, nil))
         guard !isPumping else { return }
         Task { await pumpSpeakQueue() }
     }
@@ -358,7 +369,7 @@ final class VoiceService: NSObject, ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            speakQueue.append((trimmed, nil, nil, voiceId, rate, continuation))
+            speakQueue.append((trimmed, nil, nil, voiceId, rate, nil, continuation))
             guard !isPumping else { return }
             Task { await self.pumpSpeakQueue() }
         }
@@ -378,7 +389,34 @@ final class VoiceService: NSObject, ObservableObject {
         playbackContinuation = nil
         isSpeaking = false
         isClipPlaying = false
+        isPaused = false
+        nowPlayingKey = nil
         isPumping = false
+    }
+
+    /// Aug 4 2026: pause the clip that's playing right now, resumable with
+    /// `resumeSpeaking()`. A pause is NOT a stop -- the queue keeps waiting
+    /// (the playback continuation stays parked), so anything queued behind
+    /// this clip plays in order after a resume, and `isSpeaking` never
+    /// flickers (the chat lane's dead-air watcher must not mistake a pause
+    /// for "TTS finished"). No-op while nothing is actually playing --
+    /// pausing a clip that's still FETCHING has nothing to pause yet, and
+    /// the composer button routes that case to a full stop instead.
+    func pauseSpeaking() {
+        guard let player = currentPlayer, player.isPlaying else { return }
+        player.pause()
+        isPaused = true
+    }
+
+    /// Resumes a paused clip exactly where it left off. Re-prepares the
+    /// output session first -- the same defensive move `playAudio` makes --
+    /// because a call or recording may have re-routed audio while paused.
+    func resumeSpeaking() {
+        guard let player = currentPlayer, isPaused else { return }
+        prepareOutputSession()
+        if player.play() {
+            isPaused = false
+        }
     }
 
     /// The full TTS voice catalog ("Voice 1"..."Voice 326"), cached for the
@@ -409,9 +447,12 @@ final class VoiceService: NSObject, ObservableObject {
                 agentId: item.agentId,
                 agentName: item.agentName,
                 explicitVoice: item.explicitVoice,
-                explicitRate: item.explicitRate
+                explicitRate: item.explicitRate,
+                key: item.key
             )
             item.completion?.resume()
+            nowPlayingKey = nil
+            isPaused = false
         }
         isSpeaking = false
         isPumping = false
@@ -425,7 +466,8 @@ final class VoiceService: NSObject, ObservableObject {
         agentId: String?,
         agentName: String?,
         explicitVoice: String? = nil,
-        explicitRate: Double? = nil
+        explicitRate: Double? = nil,
+        key: String? = nil
     ) async {
         // An explicit voice (Debate Room cast snapshot) skips the network
         // resolve entirely; an empty-string voiceId means "uncast" and
@@ -451,7 +493,7 @@ final class VoiceService: NSObject, ObservableObject {
             Earcons.shared.play(.error)
             return
         }
-        await playAudio(data)
+        await playAudio(data, key: key)
     }
 
     /// FIX (Kade, session 14): "if the auto play is switched on in a text
@@ -484,7 +526,7 @@ final class VoiceService: NSObject, ObservableObject {
         try? session.setActive(true)
     }
 
-    private func playAudio(_ data: Data) async {
+    private func playAudio(_ data: Data, key: String? = nil) async {
         prepareOutputSession()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             do {
@@ -502,6 +544,8 @@ final class VoiceService: NSObject, ObservableObject {
                     continuation.resume()
                 } else {
                     isClipPlaying = true
+                    isPaused = false
+                    nowPlayingKey = key
                 }
             } catch {
                 continuation.resume()
