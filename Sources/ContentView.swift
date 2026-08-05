@@ -696,13 +696,28 @@ struct ContentView: View {
     /// from yesterday can never surprise her. Consume-once by removeObject
     /// BEFORE the freshness check.
     private func consumePendingKadeKeysRequest() {
-        guard isSignedIn,
-              let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai") else { return }
+        guard isSignedIn else { return }
+        // Round 5: the request rides TWO carriers — the shared defaults key
+        // AND an atomic file marker (the keyboard can get suspended before
+        // its defaults flush reaches disk; the file write is synchronous and
+        // survives). Whichever is freshest wins; both are cleared.
+        var stamp: Double = 0
         let key = "kadeKeys.transcribeRequest.v1"
-        let at = defaults.double(forKey: key)
-        guard at > 0 else { return }
-        defaults.removeObject(forKey: key)
-        guard Date().timeIntervalSince1970 - at < 180 else { return }
+        let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai")
+        if let defaults {
+            stamp = max(stamp, defaults.double(forKey: key))
+            defaults.removeObject(forKey: key)
+        }
+        if let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.kademurdock.kadeai"
+        ) {
+            let marker = container.appendingPathComponent("kadeKeysTranscribeRequest.txt")
+            if let text = try? String(contentsOf: marker, encoding: .utf8), let fileStamp = Double(text) {
+                stamp = max(stamp, fileStamp)
+            }
+            try? FileManager.default.removeItem(at: marker)
+        }
+        guard stamp > 0, Date().timeIntervalSince1970 - stamp < 180 else { return }
         route = .kadeKeysDictate
     }
 

@@ -243,44 +243,62 @@ final class KeyboardViewController: UIInputViewController {
         // so "switch to Kade-AI" is the whole manual step, exactly the
         // Wispr dance. Every tap now either opens the app or speaks;
         // silence is impossible by construction.
+        // ROUND 5 (Aug 5 evening, her report ON build 183: VO gets out "r—"
+        // and dies mid-syllable, and switching to the app finds nothing
+        // armed): the "r—" proves round 3 ran and the ARMED sentence began —
+        // then the responder walk's side effect SUSPENDED this keyboard
+        // (iOS starts a transition it later denies), which (a) killed the
+        // speech mid-syllable and (b) most likely killed the UserDefaults
+        // flush before it reached disk — extensions flush lazily, so the
+        // armed flag EVAPORATED with the suspension. Three consequences
+        // built in here:
+        //   1. The flag is now ALSO an atomic FILE in the App Group
+        //      container (synchronous write, suspension-proof), and
+        //      defaults.synchronize() forces the plist flush too.
+        //   2. The spoken instruction is scheduled BEFORE the walk runs —
+        //      a pending timer survives suspension and fires on resume, so
+        //      even a suspended keyboard finishes its sentence when iOS
+        //      hands the screen back.
+        //   3. The walk goes LAST, as a pure free-win attempt.
         var armed = false
-        if hasFullAccess, let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai") {
-            defaults.set(Date().timeIntervalSince1970, forKey: "kadeKeys.transcribeRequest.v1")
-            armed = true
+        if hasFullAccess {
+            let stamp = Date().timeIntervalSince1970
+            if let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai") {
+                defaults.set(stamp, forKey: "kadeKeys.transcribeRequest.v1")
+                defaults.synchronize()
+                armed = true
+            }
+            if let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: "group.com.kademurdock.kadeai"
+            ) {
+                let marker = container.appendingPathComponent("kadeKeysTranscribeRequest.txt")
+                try? String(stamp).write(to: marker, atomically: true, encoding: .utf8)
+                armed = true
+            }
         }
         guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
         let armedNow = armed
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // ROUND 4 (Aug 5, her report: tap-1 still silent, tap-2's speech
-            // cut off): the walk's return value is a LIAR — a responder can
-            // answer openURL: and return truthy without opening anything,
-            // which round 3 trusted as success = silence. The only honest
-            // proof of an open is this keyboard LEAVING THE SCREEN. So: try
-            // the walk for the real-open chance, ignore its verdict, and
-            // check back in 1.2 seconds — still visible means the open did
-            // not happen, and the instruction speaks (delayed past VO's own
-            // tap echo, queued so nothing gets cut mid-word). Exactly one
-            // of two outcomes now exists: the app is open, or you hear the
-            // way forward.
-            _ = self.performOpenURLWalk(url)
-            guard !self.instructionCheckScheduled else { return }
-            self.instructionCheckScheduled = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                guard let self else { return }
-                self.instructionCheckScheduled = false
-                guard self.view.window != nil else { return } // keyboard gone = app really opened
-                let instruction = armedNow
-                    ? "Ready to transcribe. Switch to Kade-AI — it starts listening the moment it opens. Then swipe back here and your words type themselves."
-                    : "Open the Kade-AI app and use Transcribe there. Your words will land on the clipboard to paste here."
-                UIAccessibility.post(
-                    notification: .announcement,
-                    argument: NSAttributedString(
-                        string: instruction,
-                        attributes: [.accessibilitySpeechQueueAnnouncement: true]
+            if !self.instructionCheckScheduled {
+                self.instructionCheckScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    guard let self else { return }
+                    self.instructionCheckScheduled = false
+                    guard self.view.window != nil else { return } // keyboard gone = app really opened
+                    let instruction = armedNow
+                        ? "Ready to transcribe. Switch to Kade-AI — it starts listening the moment it opens. Then swipe back here and your words type themselves."
+                        : "Open the Kade-AI app and use Transcribe there. Your words will land on the clipboard to paste here."
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: NSAttributedString(
+                            string: instruction,
+                            attributes: [.accessibilitySpeechQueueAnnouncement: true]
+                        )
                     )
-                )
+                }
             }
+            _ = self.performOpenURLWalk(url)
         }
     }
 
