@@ -48,6 +48,10 @@ final class KadeActivatableButton: UIButton {
 /// button, her report). The Prompt Library still does NOT ride the
 /// keyboard (her call, reaffirmed: "I don't really care about prompts").
 final class KeyboardViewController: UIInputViewController {
+    /// Round 4: one pending visibility-check at a time — tap spam queues one
+    /// instruction, not a chorus.
+    private var instructionCheckScheduled = false
+
     private let builtinPhrases: [String] = [
         "Love you!",
         "On my way.",
@@ -248,17 +252,35 @@ final class KeyboardViewController: UIInputViewController {
         let armedNow = armed
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if !self.performOpenURLWalk(url) { return }
-            let instruction = armedNow
-                ? "Ready to transcribe. Switch to Kade-AI — it starts listening the moment it opens. Then swipe back here and your words type themselves."
-                : "Open the Kade-AI app and use Transcribe there. Your words will land on the clipboard to paste here."
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: NSAttributedString(
-                    string: instruction,
-                    attributes: [.accessibilitySpeechQueueAnnouncement: true]
+            // ROUND 4 (Aug 5, her report: tap-1 still silent, tap-2's speech
+            // cut off): the walk's return value is a LIAR — a responder can
+            // answer openURL: and return truthy without opening anything,
+            // which round 3 trusted as success = silence. The only honest
+            // proof of an open is this keyboard LEAVING THE SCREEN. So: try
+            // the walk for the real-open chance, ignore its verdict, and
+            // check back in 1.2 seconds — still visible means the open did
+            // not happen, and the instruction speaks (delayed past VO's own
+            // tap echo, queued so nothing gets cut mid-word). Exactly one
+            // of two outcomes now exists: the app is open, or you hear the
+            // way forward.
+            _ = self.performOpenURLWalk(url)
+            guard !self.instructionCheckScheduled else { return }
+            self.instructionCheckScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self else { return }
+                self.instructionCheckScheduled = false
+                guard self.view.window != nil else { return } // keyboard gone = app really opened
+                let instruction = armedNow
+                    ? "Ready to transcribe. Switch to Kade-AI — it starts listening the moment it opens. Then swipe back here and your words type themselves."
+                    : "Open the Kade-AI app and use Transcribe there. Your words will land on the clipboard to paste here."
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: NSAttributedString(
+                        string: instruction,
+                        attributes: [.accessibilitySpeechQueueAnnouncement: true]
+                    )
                 )
-            )
+            }
         }
     }
 
