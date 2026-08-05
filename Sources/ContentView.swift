@@ -11,6 +11,9 @@ import SafariServices
 /// - On successful sign-in, focus jumps to the status line so the user hears
 ///   "Signed in as …" without hunting for it.
 struct ContentView: View {
+    // Round 3 of the Transcribe key: the foreground catcher needs to know
+    // when the app becomes active (see consumePendingKadeKeysRequest).
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var auth: AuthService
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var agentsService: AgentsService
@@ -246,13 +249,34 @@ struct ContentView: View {
             // she just lands on sign-in; nothing to route.
             guard url.scheme == "kadeai", isSignedIn else { return }
             if url.host == "kadekeys-dictate" || url.path.contains("kadekeys-dictate") {
+                // Round 3: the keyboard also ARMS an App-Group request in
+                // case this URL never fires (see consumePendingKadeKeys
+                // below). If it DID fire, clear the armed copy so the next
+                // ordinary foreground can't double-start a session.
+                UserDefaults(suiteName: "group.com.kademurdock.kadeai")?
+                    .removeObject(forKey: "kadeKeys.transcribeRequest.v1")
                 route = .kadeKeysDictate
             }
+        }
+        // Aug 5 2026 ROUND 3 of the Transcribe key (her tap-1-silence
+        // report): programmatic keyboard→app opening is dead on her iOS
+        // (extensionContext.open is a keyboard no-op; the responder-chain
+        // openURL walk gets refused), so the keyboard now ARMS a request in
+        // the App Group and tells her to switch apps — and THIS is the
+        // catcher: the moment the app foregrounds with a fresh request
+        // (under 3 minutes old), it consumes it and drops straight into
+        // keyboard-mode Transcribe, already listening. Consume-once by
+        // design: stale requests get cleared without firing so an armed tap
+        // from yesterday can never surprise her mid-week.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            consumePendingKadeKeysRequest()
         }
         .onAppear {
 #if DEBUG
             startScreenshotTourIfAsked()
 #endif
+            consumePendingKadeKeysRequest()
         }
         .onChange(of: authStateID) { _, _ in
             handleStateChange()
@@ -661,6 +685,25 @@ struct ContentView: View {
         case .settings:
             route = .settings
         }
+    }
+
+    /// Round 3 of the Kade Keys Transcribe flow (Aug 5 2026): the keyboard
+    /// ARMS a request in the App Group (programmatic keyboard→app opening
+    /// proved dead on her iOS — see the keyboard's openDictation comment);
+    /// this consumes a FRESH request (under 3 minutes) the moment the app
+    /// foregrounds and drops straight into keyboard-mode Transcribe,
+    /// already listening. Stale requests clear silently — an armed tap
+    /// from yesterday can never surprise her. Consume-once by removeObject
+    /// BEFORE the freshness check.
+    private func consumePendingKadeKeysRequest() {
+        guard isSignedIn,
+              let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai") else { return }
+        let key = "kadeKeys.transcribeRequest.v1"
+        let at = defaults.double(forKey: key)
+        guard at > 0 else { return }
+        defaults.removeObject(forKey: key)
+        guard Date().timeIntervalSince1970 - at < 180 else { return }
+        route = .kadeKeysDictate
     }
 
     private func handleStateChange() {

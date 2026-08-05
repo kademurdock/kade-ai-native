@@ -131,20 +131,16 @@ final class KeyboardViewController: UIInputViewController {
         // openURL: hop (below) can die silently there — a responder answers
         // the selector, quietly refuses, and the old code treated "someone
         // answered" as success, so VO users got a dead key with no sound.
-        // Fix, round 2 (Aug 5 later — her report on round 1: the spoken
-        // breadcrumb got cut off and the app still didn't open): explicit
-        // accessibilityActivate() path on the key (KadeActivatableButton —
-        // VO's canonical activation hook, no synthesized-touch dependence),
-        // NO speech on the happy path (the app opening IS the feedback,
-        // Wispr-style), extensionContext.open attempted first with its
-        // completion as truth, responder-chain walk as fallback, and one
-        // QUEUED teaching announcement only on real failure — see
-        // openDictation below.
+        // Rounds 2-3 (Aug 5, her live reports): explicit
+        // accessibilityActivate() stays (VO's canonical hook), and the key
+        // now ARMS an App-Group transcribe request + speaks the switch
+        // instruction when programmatic opening fails — the full story
+        // lives on openDictation below.
         let dictate = KadeActivatableButton(configuration: dictateConfig)
         dictate.accessibilityLabel = "Transcribe"
         dictate.accessibilityHint = hasFullAccess
-            ? "Opens Kade-AI to take your words. Swipe back here after and they type themselves."
-            : "Opens Kade-AI to take your words. They'll land on your clipboard to paste here. Turn on Allow Full Access in Settings and they'll type themselves instead."
+            ? "Double-tap, then switch to Kade-AI — it'll already be listening. Swipe back here after and your words type themselves."
+            : "Double-tap, then open Kade-AI and use Transcribe. Your words land on the clipboard to paste here. Turn on Allow Full Access in Settings and they'll type themselves instead."
         dictate.onActivate = { [weak self] in
             self?.openDictation()
         }
@@ -226,35 +222,44 @@ final class KeyboardViewController: UIInputViewController {
     ///     return counts — anything less falls through to the spoken
     ///     manual-road fallback instead of a dead key.
     private func openDictation() {
-        // Aug 5 2026, round 2 (her report: "voiceover wants to tell me
-        // something, but it gets interrupted, transcribe ends up not
-        // working"). Round 1's pre-announcement collided with the failure
-        // announcement and the app-open transition — so NO speech on the
-        // happy path at all now (the app opening and landing on Transcribe
-        // IS the feedback, Wispr-style). Attempt order: extensionContext
-        // .open first (some hosts allow it for the containing app's own
-        // scheme; its completion is authoritative), then the responder-chain
-        // walk, and only on REAL failure one queued announcement that
-        // teaches the manual road — queued, so VoiceOver finishes its
-        // current utterance instead of being cut off mid-word.
-        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
-        if let context = extensionContext {
-            context.open(url) { [weak self] success in
-                if success { return }
-                DispatchQueue.main.async { self?.fallBackToResponderWalk(url) }
-            }
-            return
+        // Aug 5 2026, ROUND 3 — her report on round 2: "I tap transcribe
+        // once and it doesn't do anything, and when tapped again it says it
+        // couldn't open the kade-ai app." Tap-1 silence convicted round 2's
+        // extensionContext.open attempt: in keyboards it's the documented
+        // no-op (this file's own June comment said so), and a no-op whose
+        // completion never fires means no fallback, no speech, dead air.
+        // Tap-2's announcement proved the responder walk honestly fails on
+        // this iOS too. So round 3 stops betting on URL magic and builds
+        // the flow she herself described from Wispr ("prompts you to swipe
+        // and dictate"): the key ARMS a transcribe request in the App Group,
+        // still tries the walk (free if some iOS lets it through — the app
+        // then opens instantly), and otherwise SPEAKS the switch
+        // instruction. The app consumes the armed request the moment it
+        // foregrounds (within 3 minutes) and starts listening right away —
+        // so "switch to Kade-AI" is the whole manual step, exactly the
+        // Wispr dance. Every tap now either opens the app or speaks;
+        // silence is impossible by construction.
+        var armed = false
+        if hasFullAccess, let defaults = UserDefaults(suiteName: "group.com.kademurdock.kadeai") {
+            defaults.set(Date().timeIntervalSince1970, forKey: "kadeKeys.transcribeRequest.v1")
+            armed = true
         }
-        DispatchQueue.main.async { [weak self] in self?.fallBackToResponderWalk(url) }
-    }
-
-    private func fallBackToResponderWalk(_ url: URL) {
-        if !performOpenURLWalk(url) { return }
-        let instruction = NSAttributedString(
-            string: "Transcribe couldn't open Kade-AI by itself. Open the Kade-AI app, use Transcribe there, then swipe back here — your words will type themselves.",
-            attributes: [.accessibilitySpeechQueueAnnouncement: true]
-        )
-        UIAccessibility.post(notification: .announcement, argument: instruction)
+        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
+        let armedNow = armed
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if !self.performOpenURLWalk(url) { return }
+            let instruction = armedNow
+                ? "Ready to transcribe. Switch to Kade-AI — it starts listening the moment it opens. Then swipe back here and your words type themselves."
+                : "Open the Kade-AI app and use Transcribe there. Your words will land on the clipboard to paste here."
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: NSAttributedString(
+                    string: instruction,
+                    attributes: [.accessibilitySpeechQueueAnnouncement: true]
+                )
+            )
+        }
     }
 
     /// Walks the responder chain trying openURL: on every responder that
