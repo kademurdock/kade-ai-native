@@ -143,6 +143,13 @@ struct ConversationDetailView: View {
     // frames during a send; cleared when the real message (with its own
     // permanent think part) replaces it at final.
     @State private var liveThink = ""
+    /// Aug 5 2026 crash hardening: raw think chunks accumulate here and get
+    /// sanitized + published to `liveThink` at most every 250ms. Deep thinks
+    /// stream ~34 chunks/second; sanitizing and re-laying-out a growing Text
+    /// on every chunk is watchdog bait. Coalescing cuts that to 4/second —
+    /// visually still "live," mechanically calm.
+    @State private var pendingThinkRaw = ""
+    @State private var thinkFlushScheduled = false
     @State private var liveThinkExpanded = false
     /// Aug 4 2026 (her pick): gentle spoken progress during LONG deep
     /// thinks, about every 20 seconds -- "Still thinking, about 900
@@ -1904,6 +1911,7 @@ struct ConversationDetailView: View {
             // never quietly consume a file meant for the NEXT message.
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
             liveThink = ""
+            pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
             let resolvedConversationId = try await messageSendingService.send(
@@ -1922,12 +1930,21 @@ struct ConversationDetailView: View {
                     // VoiceOver announcement only; thoughts themselves are
                     // never spoken by TTS (her explicit rule).
                     // Aug 5 2026 (the watermelon receipts): reasoning can
-                    // QUOTE tool output — including raw citation anchors
-                    // ("Anchor: \\ue202turn0search0") — and this bubble is a
-                    // surface VoiceOver reads. Re-sanitize the whole
-                    // accumulated text each chunk (not per-chunk: a token
-                    // split across chunks would dodge a per-chunk regex).
-                    liveThink = MessageTextSanitizer.forDisplay(liveThink + chunk)
+                    // QUOTE tool output — including raw citation anchors —
+                    // and this bubble is a surface VoiceOver reads, so the
+                    // published text is always sanitized over the FULL
+                    // accumulated raw (a token split across chunks can't
+                    // dodge a full-text pass). Same day, crash hardening:
+                    // sanitize+publish is COALESCED to one pass per 250ms
+                    // (see pendingThinkRaw) instead of per chunk.
+                    pendingThinkRaw += chunk
+                    if !thinkFlushScheduled {
+                        thinkFlushScheduled = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            thinkFlushScheduled = false
+                            liveThink = MessageTextSanitizer.forDisplay(pendingThinkRaw)
+                        }
+                    }
                     if !announcedThinking {
                         announcedThinking = true
                         // Aug 4 evening rework (her report + her instinct
@@ -1956,7 +1973,7 @@ struct ConversationDetailView: View {
                         // interrupting whatever VoiceOver is mid-way
                         // through.
                         lastThinkProgressAnnounce = Date()
-                        let rounded = max((liveThink.count / 100) * 100, 100)
+                        let rounded = max((pendingThinkRaw.count / 100) * 100, 100)
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: NSAttributedString(
@@ -1968,6 +1985,7 @@ struct ConversationDetailView: View {
                 }
             )
             liveThink = ""
+            pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
             conversationId = resolvedConversationId
@@ -2075,6 +2093,7 @@ struct ConversationDetailView: View {
         } catch {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
             liveThink = ""
+            pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was

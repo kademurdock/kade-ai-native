@@ -18,6 +18,15 @@ import UIKit
 ///    credentials -- event names and timestamps only, capped at 400 lines.
 ///
 /// Settings > Support > "Share diagnostics" hands both to a share sheet.
+///
+/// 3. (Aug 5 2026, queued after "the native app just crashed on me" — the
+///    on-device JSON existed but reaching it took her hands): unsent crash
+///    reports now ALSO auto-upload to the bridge's /diagnostics sink on the
+///    launch after a crash — Apple's crash JSON + the breadcrumb tail, never
+///    message content (same promise as the Share footer). Capped, marked
+///    uploaded once accepted, silent and fail-soft; the manual Share lane
+///    stays for everything else.
+///
 /// Everything here is fail-soft: a diagnostics feature that can itself
 /// crash the app would be a bad joke.
 enum KadeBreadcrumbs {
@@ -92,6 +101,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
             KadeBreadcrumbs.drop("MEMORY WARNING")
         }
+        uploadPendingReports()
     }
 
     /// MetricKit hands crash/hang/CPU diagnostics here on the launch after
@@ -107,6 +117,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         }
         KadeBreadcrumbs.drop("MetricKit delivered \(payloads.count) diagnostic payload(s)")
         pruneOldReports(in: dir)
+        uploadPendingReports()
     }
 
     private func pruneOldReports(in dir: URL) {
@@ -122,6 +133,67 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             }
         for stale in reports.dropFirst(Self.maxReports) {
             try? FileManager.default.removeItem(at: stale)
+        }
+    }
+
+    /// The auto-upload half (see the file header's item 3). Utility queue,
+    /// bounded work: at most two reports per call, 10s per request, first
+    /// failure stops the batch (network's down — next launch retries).
+    /// Reports too large for the sink's 64KB cap are marked uploaded
+    /// without sending so they can never wedge the queue; the Share lane
+    /// still carries them by hand.
+    private static let uploadedKey = "kade.diag.uploaded.v1"
+    private static let sinkURL = URL(string: "https://kade-ai-bridge-production.up.railway.app/diagnostics")!
+
+    private func uploadPendingReports() {
+        DispatchQueue.global(qos: .utility).async {
+            let dir = KadeBreadcrumbs.directory
+            guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+            let defaults = UserDefaults.standard
+            var uploaded = Set(defaults.stringArray(forKey: Self.uploadedKey) ?? [])
+            let crumbs = (try? String(contentsOf: KadeBreadcrumbs.logFile, encoding: .utf8))
+                .map { $0.split(separator: "\n").suffix(30).joined(separator: "\n") } ?? ""
+            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+            let device = UIDevice.current.model + " iOS " + UIDevice.current.systemVersion
+            var sent = 0
+            let candidates = files
+                .filter { $0.lastPathComponent.hasPrefix("crash-") && !uploaded.contains($0.lastPathComponent) }
+                .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            for file in candidates {
+                guard sent < 2 else { break }
+                let name = file.lastPathComponent
+                guard let payload = try? String(contentsOf: file, encoding: .utf8), payload.count < 60_000 else {
+                    uploaded.insert(name)
+                    continue
+                }
+                var req = URLRequest(url: Self.sinkURL)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.timeoutInterval = 10
+                let body: [String: Any] = [
+                    "build": build,
+                    "device": device,
+                    "kind": "crash",
+                    "payload": payload,
+                    "breadcrumbs": crumbs,
+                ]
+                req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                let gate = DispatchSemaphore(value: 0)
+                var accepted = false
+                URLSession.shared.dataTask(with: req) { _, response, _ in
+                    accepted = (response as? HTTPURLResponse).map { (200 ..< 300).contains($0.statusCode) } ?? false
+                    gate.signal()
+                }.resume()
+                _ = gate.wait(timeout: .now() + 12)
+                if accepted {
+                    uploaded.insert(name)
+                    sent += 1
+                } else {
+                    break
+                }
+            }
+            defaults.set(Array(uploaded), forKey: Self.uploadedKey)
+            if sent > 0 { KadeBreadcrumbs.drop("auto-uploaded \(sent) crash report(s)") }
         }
     }
 
