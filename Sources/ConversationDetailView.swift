@@ -158,7 +158,6 @@ struct ConversationDetailView: View {
     /// under VoiceOver mid-read invalidates the element and cuts the
     /// readout off. Close and reopen for a fresh snapshot; the VISUAL text
     /// keeps pouring for sighted eyes either way.
-    @State private var liveThinkVOSnapshot = ""
     @State private var announcedThinking = false
     @State private var attachmentUploading = false
     @State private var showingAttachMenu = false
@@ -906,17 +905,18 @@ struct ConversationDetailView: View {
     /// message's own expandable think part takes over.
     private var liveThinkingBubble: some View {
         DisclosureGroup(isExpanded: $liveThinkExpanded) {
+            // Aug 5 2026 (her call: "just be closed and then if you open,
+            // you can view the thoughts as they come in like you would a
+            // message"): the frozen-snapshot label is GONE. This Text is a
+            // plain live element — it grows append-only, never announces,
+            // never grabs focus; a screen reader reads whatever is there
+            // when she lands on it and can come back for more, exactly
+            // like reading a streaming message. The close/reopen dance is
+            // dead. (Progress lines still speak only while CLOSED.)
             Text(liveThink)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // The frozen snapshot, NOT the live text -- see
-                // liveThinkVOSnapshot's doc comment. Sighted eyes get the
-                // pour above; the screen reader gets a text that holds
-                // still long enough to actually be read.
-                .accessibilityLabel(
-                    "The thinking when you opened this: \(liveThinkVOSnapshot). More has arrived since — close and reopen for the newest."
-                )
         } label: {
             // Aug 4: the brain gently pulses while thoughts pour in -- the
             // sighted twin of the bubbling sound. Double-gated on system
@@ -946,12 +946,7 @@ struct ConversationDetailView: View {
                 ? "Open."
                 : "Closed. About \(max((liveThink.count / 100) * 100, 100)) characters of thought so far."
         )
-        .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to hear the thoughts so far.")
-        .onChange(of: liveThinkExpanded) { _, open in
-            if open {
-                liveThinkVOSnapshot = liveThink
-            }
-        }
+        .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to open and read the thoughts as they arrive.")
     }
 
     private var replyingRow: some View {
@@ -1926,7 +1921,13 @@ struct ConversationDetailView: View {
                     // knows a LONG think is still moving. Progress is
                     // VoiceOver announcement only; thoughts themselves are
                     // never spoken by TTS (her explicit rule).
-                    liveThink += chunk
+                    // Aug 5 2026 (the watermelon receipts): reasoning can
+                    // QUOTE tool output — including raw citation anchors
+                    // ("Anchor: \\ue202turn0search0") — and this bubble is a
+                    // surface VoiceOver reads. Re-sanitize the whole
+                    // accumulated text each chunk (not per-chunk: a token
+                    // split across chunks would dodge a per-chunk regex).
+                    liveThink = MessageTextSanitizer.forDisplay(liveThink + chunk)
                     if !announcedThinking {
                         announcedThinking = true
                         // Aug 4 evening rework (her report + her instinct

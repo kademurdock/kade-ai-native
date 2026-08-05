@@ -72,13 +72,13 @@ enum MessageTextSanitizer {
     /// attached anchor token, real PUA characters with any attached
     /// anchor token, then orphaned anchor tokens left behind by either.
     private static let literalCitationRegex = makeRegex(
-        "\\\\+u\\s?e?20[0-4](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
+        "\\\\+u\\s?e?20[0-9a-f](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
     )
     private static let puaCitationRegex = makeRegex(
-        "[\u{E200}-\u{E204}](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
+        "[\u{E200}-\u{E20F}](?:turn\\d{1,3}[a-z]{2,10}\\d{1,3})?", caseInsensitive: true
     )
     private static let orphanAnchorRegex = makeRegex(
-        "\\bturn\\d{1,3}(?:search|news|image|ref|view|fetch)\\d{1,3}\\b", caseInsensitive: true
+        "\\bturn\\d{1,3}(?:search|news|image|ref|view|fetch|video|file)\\d{1,3}\\b", caseInsensitive: true
     )
 
     private static let doubledSpaceOrTabRegex = makeRegex("[ \\t]{2,}")

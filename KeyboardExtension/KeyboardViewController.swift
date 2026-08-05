@@ -131,12 +131,15 @@ final class KeyboardViewController: UIInputViewController {
         // openURL: hop (below) can die silently there — a responder answers
         // the selector, quietly refuses, and the old code treated "someone
         // answered" as success, so VO users got a dead key with no sound.
-        // Three-part fix: an explicit accessibilityActivate() path on the
-        // key (KadeActivatableButton — VO's canonical activation hook, so
-        // activation never depends on synthesized touch delivery), an
-        // immediate spoken breadcrumb the moment the key fires (activation
-        // is never a mystery again), and openDictation now hops to the next
-        // run-loop tick + treats a refused perform as failure (see below).
+        // Fix, round 2 (Aug 5 later — her report on round 1: the spoken
+        // breadcrumb got cut off and the app still didn't open): explicit
+        // accessibilityActivate() path on the key (KadeActivatableButton —
+        // VO's canonical activation hook, no synthesized-touch dependence),
+        // NO speech on the happy path (the app opening IS the feedback,
+        // Wispr-style), extensionContext.open attempted first with its
+        // completion as truth, responder-chain walk as fallback, and one
+        // QUEUED teaching announcement only on real failure — see
+        // openDictation below.
         let dictate = KadeActivatableButton(configuration: dictateConfig)
         dictate.accessibilityLabel = "Transcribe"
         dictate.accessibilityHint = hasFullAccess
@@ -223,22 +226,42 @@ final class KeyboardViewController: UIInputViewController {
     ///     return counts — anything less falls through to the spoken
     ///     manual-road fallback instead of a dead key.
     private func openDictation() {
-        UIAccessibility.post(notification: .announcement, argument: "Opening Kade-AI to transcribe.")
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.performOpenURLWalk() else { return }
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: "Couldn't open Kade-AI from here. Open the app and use Transcribe."
-            )
+        // Aug 5 2026, round 2 (her report: "voiceover wants to tell me
+        // something, but it gets interrupted, transcribe ends up not
+        // working"). Round 1's pre-announcement collided with the failure
+        // announcement and the app-open transition — so NO speech on the
+        // happy path at all now (the app opening and landing on Transcribe
+        // IS the feedback, Wispr-style). Attempt order: extensionContext
+        // .open first (some hosts allow it for the containing app's own
+        // scheme; its completion is authoritative), then the responder-chain
+        // walk, and only on REAL failure one queued announcement that
+        // teaches the manual road — queued, so VoiceOver finishes its
+        // current utterance instead of being cut off mid-word.
+        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
+        if let context = extensionContext {
+            context.open(url) { [weak self] success in
+                if success { return }
+                DispatchQueue.main.async { self?.fallBackToResponderWalk(url) }
+            }
+            return
         }
+        DispatchQueue.main.async { [weak self] in self?.fallBackToResponderWalk(url) }
+    }
+
+    private func fallBackToResponderWalk(_ url: URL) {
+        if !performOpenURLWalk(url) { return }
+        let instruction = NSAttributedString(
+            string: "Transcribe couldn't open Kade-AI by itself. Open the Kade-AI app, use Transcribe there, then swipe back here — your words will type themselves.",
+            attributes: [.accessibilitySpeechQueueAnnouncement: true]
+        )
+        UIAccessibility.post(notification: .announcement, argument: instruction)
     }
 
     /// Walks the responder chain trying openURL: on every responder that
     /// answers it. Returns false when the URL provably went through (a
     /// truthy perform result), true when the caller should speak the
     /// fallback. (Inverted so the guard above reads naturally.)
-    private func performOpenURLWalk() -> Bool {
-        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return true }
+    private func performOpenURLWalk(_ url: URL) -> Bool {
         let selector = sel_registerName("openURL:")
         var responder: UIResponder? = self
         while let current = responder {
