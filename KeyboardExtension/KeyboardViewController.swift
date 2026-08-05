@@ -1,5 +1,20 @@
 import UIKit
 
+/// Aug 5 2026: a button whose VoiceOver activation is EXPLICIT. VO's
+/// double-tap calls accessibilityActivate() first; returning true consumes
+/// the activation, so the action never depends on synthesized-touch
+/// delivery into a keyboard extension (the Transcribe dead-key report).
+/// Real finger taps never enter this path — touchUpInside stays wired.
+final class KadeActivatableButton: UIButton {
+    var onActivate: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        guard let onActivate else { return super.accessibilityActivate() }
+        onActivate()
+        return true
+    }
+}
+
 /// KADE KEYS (July 31 2026) — phase 2, HER PIVOT, verbatim: "I just want a
 /// deepgram dictate for the most part... I want the keyboard to be just
 /// like the [transcribe] part of my app." So: DICTATE IS THE HERO KEY.
@@ -110,11 +125,26 @@ final class KeyboardViewController: UIInputViewController {
         dictateConfig.image = UIImage(systemName: "waveform")
         dictateConfig.imagePadding = 8
         dictateConfig.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 8, bottom: 14, trailing: 8)
-        let dictate = UIButton(configuration: dictateConfig)
+        // Aug 5 2026 — HER REPORT: "the kade keys transcribe button is not
+        // activatable by voiceover." A VO double-tap runs the action through
+        // an accessibility-activation context, and the responder-chain
+        // openURL: hop (below) can die silently there — a responder answers
+        // the selector, quietly refuses, and the old code treated "someone
+        // answered" as success, so VO users got a dead key with no sound.
+        // Three-part fix: an explicit accessibilityActivate() path on the
+        // key (KadeActivatableButton — VO's canonical activation hook, so
+        // activation never depends on synthesized touch delivery), an
+        // immediate spoken breadcrumb the moment the key fires (activation
+        // is never a mystery again), and openDictation now hops to the next
+        // run-loop tick + treats a refused perform as failure (see below).
+        let dictate = KadeActivatableButton(configuration: dictateConfig)
         dictate.accessibilityLabel = "Transcribe"
         dictate.accessibilityHint = hasFullAccess
             ? "Opens Kade-AI to take your words. Swipe back here after and they type themselves."
             : "Opens Kade-AI to take your words. They'll land on your clipboard to paste here. Turn on Allow Full Access in Settings and they'll type themselves instead."
+        dictate.onActivate = { [weak self] in
+            self?.openDictation()
+        }
         dictate.addAction(UIAction { [weak self] _ in
             self?.openDictation()
         }, for: .touchUpInside)
@@ -178,23 +208,49 @@ final class KeyboardViewController: UIInputViewController {
     /// Step 1: open the app. Keyboards get no UIApplication and no working
     /// extensionContext.open, so this walks the responder chain for the
     /// host's openURL: — the same move every shipping dictation keyboard
-    /// makes. If it fails (a host app that blocks it), the hint text has
-    /// already told her the manual road: open Kade-AI, use Quick Dictate.
+    /// makes.
+    ///
+    /// Aug 5 2026 (the VoiceOver dead-key fix, her report): three changes.
+    /// (1) Announce immediately — the key firing is never silent again.
+    /// (2) The walk runs on the NEXT run-loop tick: performing openURL:
+    ///     synchronously inside a VO accessibility-activation callback is
+    ///     the classic silent-rejection spot; deferring one tick puts the
+    ///     call back in an ordinary event context.
+    /// (3) Honesty about failure: the old code stopped at the FIRST
+    ///     responder that merely answered the selector and assumed success.
+    ///     Now every responder that answers gets tried, the perform's
+    ///     result is checked (openURL: returns a BOOL), and only a truthy
+    ///     return counts — anything less falls through to the spoken
+    ///     manual-road fallback instead of a dead key.
     private func openDictation() {
-        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return }
+        UIAccessibility.post(notification: .announcement, argument: "Opening Kade-AI to transcribe.")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.performOpenURLWalk() else { return }
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Couldn't open Kade-AI from here. Open the app and use Transcribe."
+            )
+        }
+    }
+
+    /// Walks the responder chain trying openURL: on every responder that
+    /// answers it. Returns false when the URL provably went through (a
+    /// truthy perform result), true when the caller should speak the
+    /// fallback. (Inverted so the guard above reads naturally.)
+    private func performOpenURLWalk() -> Bool {
+        guard let url = URL(string: "kadeai://kadekeys-dictate") else { return true }
         let selector = sel_registerName("openURL:")
         var responder: UIResponder? = self
         while let current = responder {
             if current.responds(to: selector), !(current is KeyboardViewController) {
-                _ = current.perform(selector, with: url)
-                return
+                let result = current.perform(selector, with: url)
+                if result != nil {
+                    return false
+                }
             }
             responder = current.next
         }
-        UIAccessibility.post(
-            notification: .announcement,
-            argument: "Couldn't open Kade-AI from here. Open the app and use Transcribe."
-        )
+        return true
     }
 
     private func phraseButton(_ phrase: String) -> UIButton {
