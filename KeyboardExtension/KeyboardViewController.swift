@@ -111,6 +111,30 @@ final class KeyboardViewController: UIInputViewController {
         return dictation.text
     }
 
+    /// Aug 6 2026: her "delete keys and stuff" ask. Deletes trailing
+    /// whitespace plus one whole word, mirroring the system's option-delete.
+    /// Empty context falls back to a single character delete so the key is
+    /// never a dead press.
+    private func deleteLastWord() {
+        let proxy = textDocumentProxy
+        guard let before = proxy.documentContextBeforeInput, !before.isEmpty else {
+            proxy.deleteBackward()
+            return
+        }
+        var count = 0
+        var sawWord = false
+        for ch in before.reversed() {
+            if ch.isWhitespace {
+                if sawWord { break }
+                count += 1
+            } else {
+                sawWord = true
+                count += 1
+            }
+        }
+        for _ in 0 ..< max(count, 1) { proxy.deleteBackward() }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -153,20 +177,12 @@ final class KeyboardViewController: UIInputViewController {
         }, for: .touchUpInside)
         column.addArrangedSubview(dictate)
 
-        // The six phrases, two compact rows of three.
-        for rowPhrases in stride(from: 0, to: phrases.count, by: 3)
-            .map({ Array(phrases[$0 ..< min($0 + 3, phrases.count)]) }) {
-            let row = UIStackView()
-            row.axis = .horizontal
-            row.spacing = 8
-            row.distribution = .fillEqually
-            for phrase in rowPhrases {
-                row.addArrangedSubview(phraseButton(phrase))
-            }
-            column.addArrangedSubview(row)
-        }
-
-        // Utility row: globe (required), space, backspace.
+        // Aug 6 2026 (her build-184 feedback: "the keyboard should have
+        // delete keys and stuff... it's just not super intuitive"): the
+        // utility row grew a RETURN key and a DELETE-WORD key, and it now
+        // sits directly under the hero key VISUALLY AND in VoiceOver order —
+        // she never found the old bottom row, so discoverability was the
+        // real gap. Phrases follow after.
         let utility = UIStackView()
         utility.axis = .horizontal
         utility.spacing = 8
@@ -182,13 +198,46 @@ final class KeyboardViewController: UIInputViewController {
         }, for: .touchUpInside)
         utility.addArrangedSubview(space)
 
+        let returnKey = utilityButton(symbol: "return", label: "Return")
+        returnKey.accessibilityHint = "Types a new line."
+        returnKey.addAction(UIAction { [weak self] _ in
+            self?.textDocumentProxy.insertText("\n")
+        }, for: .touchUpInside)
+        utility.addArrangedSubview(returnKey)
+
         let backspace = utilityButton(symbol: "delete.left", label: "Delete")
         backspace.addAction(UIAction { [weak self] _ in
             self?.textDocumentProxy.deleteBackward()
         }, for: .touchUpInside)
         utility.addArrangedSubview(backspace)
 
+        let deleteWord = utilityButton(symbol: "delete.left.fill", label: "Delete word")
+        deleteWord.accessibilityHint = "Deletes the whole last word."
+        deleteWord.addAction(UIAction { [weak self] _ in
+            self?.deleteLastWord()
+        }, for: .touchUpInside)
+        utility.addArrangedSubview(deleteWord)
+
         column.addArrangedSubview(utility)
+
+        // The phrases, rows of three, AFTER the controls.
+        var phraseRows: [UIStackView] = []
+        for rowPhrases in stride(from: 0, to: phrases.count, by: 3)
+            .map({ Array(phrases[$0 ..< min($0 + 3, phrases.count)]) }) {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.spacing = 8
+            row.distribution = .fillEqually
+            for phrase in rowPhrases {
+                row.addArrangedSubview(phraseButton(phrase))
+            }
+            column.addArrangedSubview(row)
+            phraseRows.append(row)
+        }
+
+        // VoiceOver walks: Transcribe first, the control row second, phrases
+        // last — controls are one swipe from the hero key now.
+        view.accessibilityElements = [dictate, utility] + phraseRows
 
         NSLayoutConstraint.activate([
             column.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
