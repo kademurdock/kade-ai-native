@@ -1311,71 +1311,19 @@ struct ConversationDetailView: View {
 
             Spacer()
 
-            voicePlaybackButton
             speedButton
         }
         .padding(.horizontal)
         .padding(.top, 4)
     }
 
-    /// Session 35 part 11 built this as a Stop button; Aug 4 2026 (Kade:
-    /// "The stop button on voice messages should prob just be a pause
-    /// button... like the button can change maybe") it became ONE morphing
-    /// control at the same known address -- an appearing/vanishing control
-    /// is a moving target under VoiceOver, so the button never moves, only
-    /// its face changes: while a clip is PLAYING it's Pause; while PAUSED
-    /// it's Resume; while the voice is still being FETCHED (nothing to
-    /// pause yet) it stays Stop, which cancels the queue before the voice
-    /// ever starts -- the one thing pause can't do. A full "Stop and
-    /// clear" survives as a VoiceOver custom action and a long-press menu
-    /// item in every phase, so stopping is never more than one gesture
-    /// away.
-    private var voicePlaybackButton: some View {
-        let phase: VoicePlaybackPhase = voiceService.isPaused
-            ? .paused
-            : (voiceService.isClipPlaying ? .playing : .idle)
-        return Button {
-            switch phase {
-            case .paused:
-                voiceService.resumeSpeaking()
-                UIAccessibility.post(notification: .announcement, argument: "Playing.")
-            case .playing:
-                voiceService.pauseSpeaking()
-                UIAccessibility.post(notification: .announcement, argument: "Paused.")
-            case .idle:
-                voiceService.stopSpeaking()
-                UIAccessibility.post(notification: .announcement, argument: "Stopped.")
-            }
-        } label: {
-            Image(systemName: phase == .paused
-                ? "play.circle"
-                : (phase == .playing ? "pause.circle" : "stop.circle"))
-                .font(.title3)
-        }
-        .buttonStyle(.plain)
-        .disabled(!(voiceService.isSpeaking || voiceService.isClipPlaying))
-        .accessibilityLabel(phase == .paused
-            ? "Resume the voice"
-            : (phase == .playing ? "Pause the voice" : "Stop the voice"))
-        .accessibilityHint(phase == .paused
-            ? "Continues the paused voice message where it left off."
-            : (phase == .playing
-                ? "Pauses the voice message. Double-tap again to resume."
-                : "Stops the voice before it starts playing."))
-        .accessibilityAction(named: "Stop and clear") {
-            voiceService.stopSpeaking()
-            UIAccessibility.post(notification: .announcement, argument: "Stopped.")
-        }
-        .contextMenu {
-            Button(role: .destructive) {
-                voiceService.stopSpeaking()
-                UIAccessibility.post(notification: .announcement, argument: "Stopped.")
-            } label: {
-                Label("Stop the Voice", systemImage: "stop.circle")
-            }
-        }
-    }
-
+    /// Aug 6 2026 (Kade: "seems redundant now to have that stop audio
+    /// button on native now that we've tucked it into the rotor"): the
+    /// standalone morphing Pause/Resume/Stop control is GONE. Its powers
+    /// live on where she actually uses them — each message's rotor carries
+    /// Play/Pause/Resume, "Stop and clear" rides as a custom action there,
+    /// and flipping Voice Messages off still kills playback instantly. If a
+    /// sighted family member misses a visible pause, revert THIS commit.
     /// Playback-speed control, sitting beside the voice-messages toggle
     /// because that is where someone already is when they decide a voice is
     /// too slow. Its own sibling accessibility element, never combined into

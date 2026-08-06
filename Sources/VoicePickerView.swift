@@ -168,8 +168,15 @@ struct VoicePickerView: View {
             .accessibilityValue(isSelected(v) ? "Selected" : "")
             .accessibilityHint("Picks this voice.")
             .accessibilityActions {
-                Button(previewing == v ? "Stop preview" : "Preview voice") {
-                    Task { await preview(v) }
+                // Aug 6 2026 (her premium-native pass): BOTH lengths, named
+                // honestly. Full audition = the steered four-mood monologue
+                // (same one the web builder plays); quick = a two-second
+                // hello for fast browsing.
+                Button(previewing == v ? "Stop preview" : "Play full audition") {
+                    Task { await preview(v, long: true) }
+                }
+                Button("Quick preview") {
+                    Task { await preview(v, long: false) }
                 }
             }
 
@@ -216,14 +223,14 @@ struct VoicePickerView: View {
         return cats.map { VoiceGroup(name: $0.name, voices: $0.voices) }
     }
 
-    private func preview(_ v: String) async {
-        if previewing == v {
+    private func preview(_ v: String, long: Bool = true) async {
+        if previewing == v, long {
             voice.stopSpeaking()
             previewing = nil
             return
         }
         previewing = v
-        await voice.previewVoice(v)
+        await voice.previewVoice(v, long: long)
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }
     }

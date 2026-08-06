@@ -453,7 +453,19 @@ final class VoiceService: NSObject, ObservableObject {
     /// play it, so a voice can be heard before it's assigned. Independent of
     /// the read-aloud queue; stops any current playback first so rapid
     /// previews never stack up.
-    func previewVoice(_ voiceId: String, sample: String = "Hi there. This is how I sound.") async {
+    /// Aug 6 2026 (her "native is my premium platform" pass): two lengths.
+    /// `long` (default) sends the sentinel the proxy swaps for the FULL
+    /// performed audition — steering beats, both providers' dialects, the
+    /// works. Quick sends a genuinely short line (deliberately NOT the
+    /// sentinel, so no swap fires).
+    func previewVoice(_ voiceId: String, long: Bool = true) async {
+        let sample = long
+            ? "Hi there. This is how I sound."
+            : "Hey — quick hello from this voice, right here with you."
+        await previewVoice(voiceId, sample: sample)
+    }
+
+    func previewVoice(_ voiceId: String, sample: String) async {
         stopSpeaking()
         let fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
