@@ -77,12 +77,23 @@ struct AgentPickerView: View {
         }
     }
 
+    /// Aug 6 2026 (her ask): the person's own most-talked-to companions,
+    /// pinned above everything — server-computed from THEIR conversation
+    /// counts (AgentsService.defaultAgentIds), so nobody sorts through the
+    /// alphabet to reach the one they talk to every day. Empty until the
+    /// fetch lands or if it fails: the picker is then exactly what it was.
+    private var yourAgents: [KadeAgent] {
+        let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return agentsService.defaultAgentIds.compactMap { byId[$0] }
+    }
+
     private var recentAgents: [KadeAgent] {
         // July 27 2026: uniquing form -- uniqueKeysWithValues TRAPS on a
         // duplicate id, and this map must never be able to take the app down
         // even if the roster de-dupe upstream ever regresses.
         let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        return RecentAgents.ids.compactMap { byId[$0] }
+        let pinned = Set(agentsService.defaultAgentIds)
+        return RecentAgents.ids.compactMap { byId[$0] }.filter { !pinned.contains($0.id) }
     }
 
     /// Session 26 (Kade on the marketplace: "almost a hundred pages of
@@ -226,6 +237,18 @@ struct AgentPickerView: View {
                     rowButton(for: agent)
                 }
             } else {
+                if !yourAgents.isEmpty {
+                    Section {
+                        ForEach(yourAgents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text("Yours")
+                            .accessibilityAddTraits(.isHeader)
+                    } footer: {
+                        Text("Who you talk to most, pinned first.")
+                    }
+                }
                 if !starterAgents.isEmpty {
                     Section {
                         ForEach(starterAgents) { agent in

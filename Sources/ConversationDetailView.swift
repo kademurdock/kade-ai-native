@@ -461,6 +461,7 @@ struct ConversationDetailView: View {
         .onChange(of: sendState) { old, new in
             if case .idle = old, case .sending = new {
                 Earcons.shared.play(.messageSent)
+                KadeHaptics.sentTick() // Aug 6 2026: felt twin of the send bloop
                 // Session 23 (Kade: "the space between the send sound and
                 // the thinking sound is huge"): the soft waiting ticks
                 // start a breath after the send bloop and run until the
@@ -475,6 +476,19 @@ struct ConversationDetailView: View {
             }
             else if case .sending = old, case .idle = new {
                 Earcons.shared.play(.messageReceived)
+                // Aug 6 2026 (her "haptics to match visuals" ask): the reply
+                // lands in the hand too — soft double-knock now, and any
+                // Game Parlor sound cues in the reply fire their FELT twins
+                // a breath later (the append needs a moment to land in
+                // `messages`; 700ms matches the projection-refresh pattern
+                // above and is imperceptible under the bloop + TTS start).
+                KadeHaptics.replyLanded()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if let raw = messages.last(where: { !$0.isCreatedByUser })?.displayText {
+                        KadeHaptics.gameCues(from: raw)
+                    }
+                }
                 // Context meter v2: re-project once the turn settles (a
                 // breath after idle, letting the reply's own append land
                 // first so the projection sees the branch tip it will

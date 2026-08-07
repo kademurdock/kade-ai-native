@@ -32,6 +32,13 @@ enum MessageTextSanitizer {
     /// performance tag delimiter.
     private static let voiceTagRegex = makeRegex("%%%([\\s\\S]*?)%%%")
 
+    /// Aug 6 2026 — multi-speaker voice SCENES (Part 32): "[[Deuce]] line" /
+    /// "[[Voice 214]] line" perform as true multi-voice audio server-side;
+    /// on every READ surface the tag renders as a screenplay cue, "Deuce:
+    /// line" — the native twin of voiceTags.ts's sceneTagsToScript. Double
+    /// brackets only; single-bracket spans are other machinery.
+    private static let sceneTagRegex = makeRegex("\\[\\[\\s*([^\\[\\]\\n]{1,58}?)[:\\s]*\\]\\][ \\t]*")
+
     /// Tag-typo tolerance: the model sometimes emits a malformed
     /// delimiter ("%%sigh%%" or "%%%sigh%%") the canonical regex above
     /// misses. Mirrors SLOPPY_VOICE_TAG_RE exactly, including its guard
@@ -118,8 +125,13 @@ enum MessageTextSanitizer {
     /// the very start of the whole string only -- a blank line in the
     /// MIDDLE of a message is a real paragraph break and stays untouched.
     static func stripVoiceTags(_ text: String) -> String {
-        guard text.contains("%%") else { return text }
         var result = text
+        // Scene tags first (Aug 6 2026): "[[Deuce]] " -> "Deuce: " so a saved
+        // scene reads as a script in the transcript and under VoiceOver.
+        if result.contains("[[") {
+            result = removingMatches(of: sceneTagRegex, in: result, replacement: "$1: ")
+        }
+        guard result.contains("%%") else { return result }
         result = removingMatches(of: voiceTagRegex, in: result)
         result = removingMatches(of: sloppyVoiceTagRegex, in: result)
         result = removingMatches(of: doubledSpaceOrTabRegex, in: result, replacement: " ")

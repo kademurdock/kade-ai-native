@@ -202,6 +202,12 @@ final class MessageSendingService: ObservableObject {
         if let userLocation = KadeLocationShare.shared.freshPayload() {
             body["userLocation"] = userLocation
         }
+        // Aug 6 2026: whisper mode ride-along — absent unless the Settings
+        // toggle is on, so the payload stays byte-identical when off (the
+        // exact userLocation discipline above).
+        if UserDefaults.standard.bool(forKey: "kade.speech.whisperMode") {
+            body["kadeWhisper"] = true
+        }
 
         var req = client.request(path: "api/agents/chat/agents", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

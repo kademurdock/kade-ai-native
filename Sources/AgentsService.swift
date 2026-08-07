@@ -79,6 +79,11 @@ final class AgentsService: ObservableObject {
     @Published private(set) var agents: [KadeAgent] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadError: String?
+    /// Aug 6 2026 (her ask: "pin the person's default agent at the top"):
+    /// this user's most-talked-to companion ids, most first, from
+    /// GET /api/kade/agent-default (conversation counts, server truth).
+    /// Empty until loaded or on any failure — pickers just stay alphabetical.
+    @Published private(set) var defaultAgentIds: [String] = []
 
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
@@ -101,8 +106,29 @@ final class AgentsService: ObservableObject {
     /// Called on sign-out so the next sign-in never shows a stale/wrong-account list.
     func reset() {
         agents = []
+        defaultAgentIds = []
         hasLoadedOnce = false
         loadError = nil
+    }
+
+    private struct AgentDefaultResponse: Decodable {
+        struct Row: Decodable { let agentId: String; let count: Int? }
+        let top: [Row]
+    }
+
+    /// Fail-soft fetch of the most-talked-to list. Piggybacks on
+    /// loadIfNeeded's lifecycle; a failure leaves the pin absent, never an
+    /// error surface — the picker's alphabetical order is the fallback.
+    private func loadDefaultAgents() async {
+        do {
+            let req = client.request(path: "api/kade/agent-default", authorized: true)
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return }
+            let parsed = try decoder.decode(AgentDefaultResponse.self, from: data)
+            defaultAgentIds = parsed.top.map { $0.agentId }
+        } catch {
+            // quiet by design
+        }
     }
 
     /// Loads once per sign-in; safe to call from every screen that needs the
@@ -138,6 +164,7 @@ final class AgentsService: ObservableObject {
             agents = page.data.filter { seenIds.insert($0.id).inserted }.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
+            await loadDefaultAgents()
             hasLoadedOnce = true
         } catch {
             loadError = "Couldn't load the agent list. Try again."

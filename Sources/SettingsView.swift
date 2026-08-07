@@ -33,6 +33,10 @@ struct SettingsView: View {
     /// every 20 seconds). Announcement-only; thoughts are never read by
     /// TTS. Same key ConversationDetailView reads.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
+    // Aug 6 2026: whisper mode — night-quiet delivery, the native twin of the
+    // web toggle that shipped in Part 32. Rides the send payload; the server
+    // appends the whisper head line while it's on.
+    @AppStorage("kade.speech.whisperMode") private var whisperMode = false
     let apiClient: KadeAPIClient
 
     @EnvironmentObject private var voiceService: VoiceService
@@ -111,6 +115,11 @@ struct SettingsView: View {
                     Text("Spoken thinking progress")
                 }
                 .accessibilityHint("During a long Deep Think, VoiceOver quietly says how much thinking has streamed so far, about every twenty seconds. The thoughts themselves are never read out loud.")
+
+                Toggle(isOn: $whisperMode) {
+                    Text("Whisper mode (night-quiet voices)")
+                }
+                .accessibilityHint("While this is on, companions deliver every voice reply hushed, slow, and gentle. Same words, night-quiet delivery. Flip it off and they go back to full life.")
 
                 speedRow
             } header: {

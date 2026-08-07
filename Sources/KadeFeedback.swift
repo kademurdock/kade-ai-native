@@ -126,7 +126,66 @@ enum KadeHaptics {
     /// (starting a Spotter call).
     static func press()     { play(pattern: .press)     { UIImpactFeedbackGenerator(style: .heavy).impactOccurred() } }
 
-    private enum Pattern { case success, warning, error, tap, pulseBeat, press }
+    // Aug 6 2026 (Kade: "interesting hapteks to match visuals or something"):
+    // the GAME TABLE vocabulary + message moments. Every Parlor sound cue
+    // ([sound:card_deal] and kin) now has a felt twin, fired as the reply
+    // lands — cards flick, dice rattle, chips knock, a battleship hit SLAMS,
+    // the win fanfare rises in the hand. Built to her session-23 spec:
+    // longer, harder, bassy. Same master Haptics switch; devices without a
+    // Taptic Engine fall back to polite UIKit taps like everything else.
+    /// Felt twin of the reply bloop — a soft double-knock, bass-forward.
+    static func replyLanded() { play(pattern: .replyLanded) { UIImpactFeedbackGenerator(style: .soft).impactOccurred() } }
+    /// Featherweight tick as a message leaves.
+    static func sentTick()   { play(pattern: .sentTick)   { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6) } }
+
+    /// Map one Parlor sound-cue name to a felt pattern. Unknown cue names
+    /// get a soft tick — never silence-by-crash, never a wrong big blast.
+    static func gameCue(_ name: String) {
+        let n = name.lowercased()
+        let pattern: Pattern
+        if n.hasPrefix("card_shuffle") { pattern = .cardShuffle }
+        else if n.hasPrefix("card_slap") || n.hasPrefix("battleship_boom") { pattern = .boom }
+        else if n.hasPrefix("card_") || n == "page_turn" { pattern = .cardFlick }
+        else if n.hasPrefix("dice_") { pattern = .diceRoll }
+        else if n.hasPrefix("chip_") || n.hasPrefix("bingo_") || n == "coin_flip" { pattern = .chipKnock }
+        else if n == "win_fanfare" || n == "jackpot_win" || n == "coin_shower" { pattern = .winRise }
+        else if n == "lose_trombone" || n == "draw_game" { pattern = .loseSlump }
+        else if n == "wrong_buzz" { pattern = .buzz }
+        else if n == "correct_ding" { pattern = .ding }
+        else if n == "your_turn" { pattern = .yourTurn }
+        else if n == "battleship_splash" { pattern = .splash }
+        else if n == "timer_up" { pattern = .gong }
+        else if n == "uno_sting" || n == "drumroll_short" { pattern = .sting }
+        else { pattern = .sentTick }
+        play(pattern: pattern) { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    }
+
+    /// Parse a raw (unsanitized) reply for [sound:x] cues and fire their felt
+    /// twins in reading order — staggered so they land as a little scene in
+    /// the hand, capped so a cue-spammy reply can't turn the phone into a
+    /// massage chair. Safe to call with any text; no cues = no-op.
+    static func gameCues(from rawText: String) {
+        guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
+        guard rawText.contains("[sound:") else { return }
+        let regex = try? NSRegularExpression(pattern: "\\[sound:([a-z0-9_]+)\\]", options: [.caseInsensitive])
+        guard let regex else { return }
+        let range = NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)
+        let names: [String] = regex.matches(in: rawText, range: range).prefix(4).compactMap { m in
+            guard let r = Range(m.range(at: 1), in: rawText) else { return nil }
+            return String(rawText[r])
+        }
+        for (i, name) in names.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45 * Double(i)) {
+                gameCue(name)
+            }
+        }
+    }
+
+    private enum Pattern {
+        case success, warning, error, tap, pulseBeat, press
+        case replyLanded, sentTick
+        case cardFlick, cardShuffle, diceRoll, chipKnock, winRise, loseSlump, buzz, ding, yourTurn, boom, splash, gong, sting
+    }
 
     private static func play(pattern: Pattern, fallback: () -> Void) {
         guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
@@ -151,6 +210,36 @@ enum KadeHaptics {
             return [(0, 0, 1.0, 0.7), (0.11, 0, 0.95, 0.4), (0.22, 0, 0.9, 0.2), (0.3, 0.4, 0.95, 0.05)]
         case .pulseBeat:
             return [(0, 0, 0.95, 0.25), (0.13, 0, 0.7, 0.15)]
+        case .replyLanded:
+            return [(0, 0, 0.75, 0.2), (0.11, 0, 1.0, 0.3), (0.2, 0.16, 0.55, 0.08)]
+        case .sentTick:
+            return [(0, 0, 0.6, 0.45)]
+        case .cardFlick:
+            return [(0, 0, 0.8, 0.7), (0.07, 0, 0.6, 0.5)]
+        case .cardShuffle:
+            return [(0, 0, 0.6, 0.6), (0.06, 0, 0.7, 0.55), (0.12, 0, 0.8, 0.5), (0.18, 0, 0.7, 0.45), (0.26, 0.14, 0.5, 0.2)]
+        case .diceRoll:
+            return [(0, 0, 0.9, 0.6), (0.08, 0, 0.75, 0.5), (0.17, 0, 0.6, 0.4), (0.27, 0, 0.5, 0.3), (0.36, 0.22, 0.65, 0.12)]
+        case .chipKnock:
+            return [(0, 0, 0.95, 0.35), (0.1, 0, 0.8, 0.3), (0.18, 0.18, 0.6, 0.1)]
+        case .winRise:
+            return [(0, 0, 0.6, 0.2), (0.12, 0, 0.8, 0.3), (0.24, 0, 1.0, 0.45), (0.34, 0.5, 0.95, 0.1)]
+        case .loseSlump:
+            return [(0, 0, 0.9, 0.4), (0.14, 0, 0.7, 0.25), (0.3, 0.45, 0.6, 0.05)]
+        case .buzz:
+            return [(0, 0.38, 1.0, 0.55)]
+        case .ding:
+            return [(0, 0, 0.9, 0.6), (0.09, 0.14, 0.6, 0.3)]
+        case .yourTurn:
+            return [(0, 0, 1.0, 0.3), (0.16, 0, 1.0, 0.3), (0.3, 0.2, 0.7, 0.1)]
+        case .boom:
+            return [(0, 0, 1.0, 0.4), (0.03, 0.55, 1.0, 0.05)]
+        case .splash:
+            return [(0, 0.42, 0.55, 0.08)]
+        case .gong:
+            return [(0, 0, 1.0, 0.25), (0.05, 0.6, 0.8, 0.05)]
+        case .sting:
+            return [(0, 0, 0.9, 0.65), (0.11, 0, 1.0, 0.7)]
         }
     }
 }
