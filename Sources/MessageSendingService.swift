@@ -104,6 +104,7 @@ final class MessageSendingService: ObservableObject {
         parentMessageId: String?,
         agentId: String?,
         files: [[String: Any]]? = nil,
+        onText: ((String) -> Void)? = nil,
         onThink: ((String) -> Void)? = nil
     ) async throws -> String {
         let start = try await startGeneration(
@@ -115,7 +116,7 @@ final class MessageSendingService: ObservableObject {
         )
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
-        try await waitForFinal(streamId: start.streamId, onThink: onThink)
+        try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText)
         return start.conversationId
     }
 
@@ -256,6 +257,7 @@ final class MessageSendingService: ObservableObject {
                 struct Part: Decodable {
                     let type: String?
                     let think: String?
+                    let text: String?
                 }
                 let content: [Part]?
             }
@@ -265,7 +267,7 @@ final class MessageSendingService: ObservableObject {
         let data: DataBox?
     }
 
-    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil) async throws {
+    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil) async throws {
         var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // Generous on purpose: the generation job lives server-side,
@@ -306,6 +308,23 @@ final class MessageSendingService: ObservableObject {
                     for part in parts where part.type == "think" {
                         if let think = part.think, !think.isEmpty {
                             onThink(think)
+                        }
+                    }
+                }
+
+                // Aug 7 2026 (her "even with deep think off it takes forever...
+                // still seems like she's thinking"): the reply TEXT was always
+                // streaming on this wire too (on_message_delta frames) — native
+                // just never rendered it, so a 40-second essay looked like 40
+                // seconds of thinking. onText hands each text chunk up the
+                // moment it arrives; the chat view grows a live reply from it.
+                if let onText,
+                   let frame = try? decoder.decode(DeltaFrame.self, from: jsonData),
+                   frame.event == "on_message_delta",
+                   let parts = frame.data?.delta?.content {
+                    for part in parts where part.type == "text" {
+                        if let text = part.text, !text.isEmpty {
+                            onText(text)
                         }
                     }
                 }

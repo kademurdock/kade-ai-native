@@ -158,6 +158,18 @@ struct ConversationDetailView: View {
     /// voice). Togglable under Settings > Speech.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
     @State private var lastThinkProgressAnnounce = Date.distantPast
+    // Aug 7 2026 (her "deep think off but still seems like she's thinking"):
+    // LIVE REPLY STREAMING. The reply text was always on the wire; native
+    // just waited for final. Now it grows on screen as she writes — and for
+    // the ear, an optional low-priority "still writing" line about every 20
+    // seconds (same toggle and manners as spoken thinking progress). The
+    // live view itself is VoiceOver-HIDDEN on purpose: live-mutating text is
+    // exactly the churn that kept cutting readouts off; the finished
+    // message announces and auto-reads exactly as before.
+    @State private var liveReply = ""
+    @State private var pendingReplyRaw = ""
+    @State private var replyFlushScheduled = false
+    @State private var lastWriteProgressAnnounce = Date.distantPast
     /// Aug 4 2026 evening (her report: "the stupid flashing still thinking
     /// message interrupts the stream of thoughts being read out by
     /// voiceover"): while the bubble is OPEN, its spoken text is a frozen
@@ -878,6 +890,9 @@ struct ConversationDetailView: View {
                     if !liveThink.isEmpty, case .sending = sendState {
                         liveThinkingBubble
                     }
+                    if !liveReply.isEmpty, case .sending = sendState {
+                        liveReplyBubble
+                    }
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
                     }
@@ -936,6 +951,22 @@ struct ConversationDetailView: View {
     /// running length on focus instead of narrating every token, and the
     /// streaming text never grabs focus. Cleared at final, when the real
     /// message's own expandable think part takes over.
+    /// The reply, growing live as the character writes it — the sighted twin
+    /// of hearing somebody talk instead of waiting for the letter to arrive.
+    /// Sanitized every flush (forDisplay), VoiceOver-hidden (see the state
+    /// block note), replaced by the real saved message the moment final lands.
+    private var liveReplyBubble: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(liveReply)
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .accessibilityHidden(true)
+        .transition(.opacity)
+    }
+
     private var liveThinkingBubble: some View {
         DisclosureGroup(isExpanded: $liveThinkExpanded) {
             // Aug 5 2026 (her call: "just be closed and then if you open,
@@ -1885,6 +1916,9 @@ struct ConversationDetailView: View {
             // never quietly consume a file meant for the NEXT message.
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
             liveThink = ""
+            liveReply = ""
+            pendingReplyRaw = ""
+            lastWriteProgressAnnounce = Date.distantPast
             pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
@@ -1894,6 +1928,35 @@ struct ConversationDetailView: View {
                 parentMessageId: parentId,
                 agentId: selectedAgentId,
                 files: files,
+                onText: { chunk in
+                    // Live reply streaming: coalesced to one sanitize+publish
+                    // per 250ms (the think lane's exact crash-hardening
+                    // discipline), plus the gentle spoken progress line for
+                    // long writes — low priority, waits for silence, same
+                    // Settings toggle as spoken thinking progress.
+                    pendingReplyRaw += chunk
+                    if !replyFlushScheduled {
+                        replyFlushScheduled = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            replyFlushScheduled = false
+                            liveReply = MessageTextSanitizer.forDisplay(pendingReplyRaw)
+                        }
+                    }
+                    if spokenThinkingProgress,
+                       UIAccessibility.isVoiceOverRunning,
+                       Date().timeIntervalSince(lastWriteProgressAnnounce) >= 20,
+                       pendingReplyRaw.count > 300 {
+                        lastWriteProgressAnnounce = Date()
+                        let words = max((pendingReplyRaw.split(separator: " ").count / 25) * 25, 25)
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: NSAttributedString(
+                                string: "Still writing — about \(words) words so far.",
+                                attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                            )
+                        )
+                    }
+                },
                 onThink: { chunk in
                     // Session 35 encore: thoughts pour into the live bubble
                     // as they stream. One spoken heads-up the first time,
@@ -1959,6 +2022,9 @@ struct ConversationDetailView: View {
                 }
             )
             liveThink = ""
+            liveReply = ""
+            pendingReplyRaw = ""
+            lastWriteProgressAnnounce = Date.distantPast
             pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
@@ -2067,6 +2133,9 @@ struct ConversationDetailView: View {
         } catch {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
             liveThink = ""
+            liveReply = ""
+            pendingReplyRaw = ""
+            lastWriteProgressAnnounce = Date.distantPast
             pendingThinkRaw = ""
             announcedThinking = false
             liveThinkExpanded = false
