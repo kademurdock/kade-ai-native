@@ -169,6 +169,52 @@ struct ConversationDetailView: View {
     @State private var liveReply = ""
     @State private var pendingReplyRaw = ""
     @State private var replyFlushScheduled = false
+
+    /// Aug 7 2026 — the 0x8BADF00D fix (two watchdog kills the same afternoon,
+    /// receipts in the bridge diagnostics ring): every live-stream flush
+    /// re-sanitizes and re-lays-out the ENTIRE accumulated text, and build 189
+    /// ran that each 250ms with no regard for scene state. Backgrounding
+    /// mid-stream left the main thread churning through a scene update until
+    /// iOS's 10-second watchdog killed the app. Rules now: ZERO heavy work
+    /// unless the app is actively on screen (a cheap 1-second retry loop
+    /// otherwise — the catch-up flush lands right after return to foreground,
+    /// and the loop dies with the stream), and the cadence stretches as the
+    /// text grows so a streamed essay does bounded work per second.
+    private func liveFlushDelay(forLength length: Int) -> TimeInterval {
+        if length < 4000 { return 0.25 }
+        if length < 16000 { return 0.6 }
+        return 1.2
+    }
+
+    private func scheduleLiveReplyFlush(retry: Bool = false) {
+        guard !replyFlushScheduled else { return }
+        replyFlushScheduled = true
+        let delay = retry ? 1.0 : liveFlushDelay(forLength: pendingReplyRaw.count)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            replyFlushScheduled = false
+            guard case .sending = sendState else { return }
+            guard UIApplication.shared.applicationState == .active else {
+                scheduleLiveReplyFlush(retry: true)
+                return
+            }
+            liveReply = MessageTextSanitizer.forDisplay(pendingReplyRaw)
+        }
+    }
+
+    private func scheduleLiveThinkFlush(retry: Bool = false) {
+        guard !thinkFlushScheduled else { return }
+        thinkFlushScheduled = true
+        let delay = retry ? 1.0 : liveFlushDelay(forLength: pendingThinkRaw.count)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            thinkFlushScheduled = false
+            guard case .sending = sendState else { return }
+            guard UIApplication.shared.applicationState == .active else {
+                scheduleLiveThinkFlush(retry: true)
+                return
+            }
+            liveThink = MessageTextSanitizer.forDisplay(pendingThinkRaw)
+        }
+    }
     @State private var lastWriteProgressAnnounce = Date.distantPast
     /// Aug 4 2026 evening (her report: "the stupid flashing still thinking
     /// message interrupts the stream of thoughts being read out by
@@ -1935,13 +1981,7 @@ struct ConversationDetailView: View {
                     // long writes — low priority, waits for silence, same
                     // Settings toggle as spoken thinking progress.
                     pendingReplyRaw += chunk
-                    if !replyFlushScheduled {
-                        replyFlushScheduled = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            replyFlushScheduled = false
-                            liveReply = MessageTextSanitizer.forDisplay(pendingReplyRaw)
-                        }
-                    }
+                    scheduleLiveReplyFlush()
                     if spokenThinkingProgress,
                        UIAccessibility.isVoiceOverRunning,
                        Date().timeIntervalSince(lastWriteProgressAnnounce) >= 20,
@@ -1975,13 +2015,7 @@ struct ConversationDetailView: View {
                     // sanitize+publish is COALESCED to one pass per 250ms
                     // (see pendingThinkRaw) instead of per chunk.
                     pendingThinkRaw += chunk
-                    if !thinkFlushScheduled {
-                        thinkFlushScheduled = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            thinkFlushScheduled = false
-                            liveThink = MessageTextSanitizer.forDisplay(pendingThinkRaw)
-                        }
-                    }
+                    scheduleLiveThinkFlush()
                     if !announcedThinking {
                         announcedThinking = true
                         // Aug 4 evening rework (her report + her instinct
