@@ -88,6 +88,22 @@ enum MessageTextSanitizer {
         "\\bturn\\d{1,3}(?:search|news|image|ref|view|fetch|video|file)\\d{1,3}\\b", caseInsensitive: true
     )
 
+    /// Aug 7 2026 (Kade: "what's with all the ## stuff") — markdown
+    /// DECORATION on the display surface. Models dress structured replies
+    /// for a screen (## headers, **bold**, bullet stars); the WEB renders
+    /// that as real formatting, and the TTS proxy strips it before speech —
+    /// native was the one surface showing the raw marks. Same rules as the
+    /// proxy's stripSpeechMarkdown: markers vanish, words survive. Applied
+    /// in forDisplay only, so copies of what the eye/ear gets stay in sync.
+    private static let mdHeaderRegex = makeRegex("^#{1,6}\\s+", caseInsensitive: false)
+    private static let mdBoldRegex = makeRegex("\\*\\*([^*]+)\\*\\*")
+    private static let mdUnderlineRegex = makeRegex("__([^_]+)__")
+    private static let mdStrikeRegex = makeRegex("~~([^~]+)~~")
+    private static let mdLinkRegex = makeRegex("\\[([^\\]]+)\\]\\(([^)]*)\\)")
+    private static let mdBulletRegex = makeRegex("^\\s*[-*\u{2022}]\\s+")
+    private static let mdInlineHashRunRegex = makeRegex("#{2,}")
+    private static let mdInlineStarRunRegex = makeRegex("\\*{2,}")
+
     private static let doubledSpaceOrTabRegex = makeRegex("[ \\t]{2,}")
     private static let leadingSpaceOrTabPerLineRegex = makeRegex(
         "^[ \\t]+", extraOptions: [.anchorsMatchLines]
@@ -178,6 +194,37 @@ enum MessageTextSanitizer {
     /// session-23 citation-anchor pass, which the web client doesn't need
     /// (it RENDERS those anchors as citation chips instead).
     static func forDisplay(_ text: String) -> String {
-        stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text)))
+        stripMarkdownDecoration(stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text))))
+    }
+
+    /// See the regex block above — display twin of the proxy's speech scrub.
+    /// Cheap guard first: the overwhelming majority of messages carry none
+    /// of these markers and skip every pass.
+    static func stripMarkdownDecoration(_ text: String) -> String {
+        guard text.contains("#") || text.contains("**") || text.contains("__")
+            || text.contains("~~") || text.contains("](") else { return text }
+        var result = text
+        result = replacingLinewise(of: mdHeaderRegex, in: result)
+        result = replacingLinewise(of: mdBulletRegex, in: result)
+        result = removingMatches(of: mdBoldRegex, in: result, replacement: "$1")
+        result = removingMatches(of: mdUnderlineRegex, in: result, replacement: "$1")
+        result = removingMatches(of: mdStrikeRegex, in: result, replacement: "$1")
+        result = removingMatches(of: mdLinkRegex, in: result, replacement: "$1")
+        result = removingMatches(of: mdInlineHashRunRegex, in: result)
+        result = removingMatches(of: mdInlineStarRunRegex, in: result)
+        result = removingMatches(of: doubledSpaceOrTabRegex, in: result, replacement: " ")
+        return result
+    }
+
+    /// NSRegularExpression has no multiline-anchor default; run the
+    /// line-anchored decoration rules per line so ^ means line start.
+    private static func replacingLinewise(of regex: NSRegularExpression, in text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                let s = String(line)
+                let range = NSRange(s.startIndex..<s.endIndex, in: s)
+                return regex.stringByReplacingMatches(in: s, range: range, withTemplate: "")
+            }
+            .joined(separator: "\n")
     }
 }
