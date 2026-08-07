@@ -57,6 +57,7 @@ struct SettingsView: View {
     /// (see `ConversationDetailView`'s `isStandalonePresentation` doc
     /// comment) was about.
     @State private var showingPronunciationDictionary = false
+    @State private var showingMemories = false
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
     /// Aug 4 2026: Kade Keys phrases screen, same Bool-push pattern.
@@ -98,6 +99,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Button {
+                    showingMemories = true
+                } label: {
+                    Label("Memories", systemImage: "brain.head.profile")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Every memory card your companions keep about you — hear them, edit them, forget them, or add one. New memories also announce themselves in chat the moment they're saved.")
+
                 Button {
                     showingPronunciationDictionary = true
                 } label: {
@@ -307,6 +316,9 @@ struct SettingsView: View {
         }
         .navigationDestination(isPresented: $showingPronunciationDictionary) {
             PronunciationDictionaryView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingMemories) {
+            MemoriesView(apiClient: apiClient)
         }
         .navigationDestination(isPresented: $showingKeyboardPhrases) {
             KeyboardPhrasesView(apiClient: apiClient)

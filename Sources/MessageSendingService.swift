@@ -231,6 +231,25 @@ final class MessageSendingService: ObservableObject {
     /// `onThink` now hands each think chunk to the caller the moment it
     /// arrives. Fail-soft: an unparseable frame is just skipped, exactly
     /// as before.
+    /// Aug 7 2026 (her ask: "I don't even know if you can tell when memories
+    /// are made on native") — the stream has ALWAYS carried memory-artifact
+    /// frames ({event:"attachment", data:{memory:{key,type}}}, emitted by the
+    /// platform's memory writer after its post-turn pass); native read past
+    /// them. Now each one lands as a NotificationCenter post the chat view
+    /// turns into a spoken + felt cue. Fail-soft: unparseable = skipped.
+    private struct AttachmentFrame: Decodable {
+        struct DataBox: Decodable {
+            struct MemoryArt: Decodable {
+                let key: String?
+                let type: String?
+            }
+            let memory: MemoryArt?
+        }
+        let event: String?
+        let data: DataBox?
+    }
+    static let memoryArtifactNotification = Notification.Name("kadeMemoryArtifact")
+
     private struct DeltaFrame: Decodable {
         struct DataBox: Decodable {
             struct Delta: Decodable {
@@ -288,6 +307,19 @@ final class MessageSendingService: ObservableObject {
                         if let think = part.think, !think.isEmpty {
                             onThink(think)
                         }
+                    }
+                }
+
+                if let frame = try? decoder.decode(AttachmentFrame.self, from: jsonData),
+                   frame.event == "attachment",
+                   let memory = frame.data?.memory,
+                   let type = memory.type {
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: Self.memoryArtifactNotification,
+                            object: nil,
+                            userInfo: ["type": type, "key": memory.key ?? ""]
+                        )
                     }
                 }
 

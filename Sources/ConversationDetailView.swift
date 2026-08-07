@@ -380,6 +380,18 @@ struct ConversationDetailView: View {
                 .accessibilityHint("Starts a live voice call.")
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: MessageSendingService.memoryArtifactNotification)) { note in
+            // Aug 7 2026 — the memory-saved cue: spoken + felt the moment
+            // the platform's memory keeper files or forgets a card
+            // mid-conversation. Deletions read as "forgotten."
+            let type = (note.userInfo?["type"] as? String) ?? ""
+            guard type == "update" || type == "delete" else { return }
+            KadeHaptics.success()
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: type == "delete" ? "A memory was forgotten." : "Memory saved."
+            )
+        }
         .task {
             // Session 17 (Kade: "a native way to access settings like
             // speech and whatnot"): seed this view's own "Voice messages"
