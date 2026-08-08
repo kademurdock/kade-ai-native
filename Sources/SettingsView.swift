@@ -58,6 +58,8 @@ struct SettingsView: View {
     /// comment) was about.
     @State private var showingPronunciationDictionary = false
     @State private var showingMemories = false
+    @State private var showingLogbook = false
+    @State private var showingWorld = false
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
     /// Aug 4 2026: Kade Keys phrases screen, same Bool-push pattern.
@@ -106,6 +108,22 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Every memory card your companions keep about you — hear them, edit them, forget them, or add one. New memories also announce themselves in chat the moment they're saved.")
+
+                Button {
+                    showingLogbook = true
+                } label: {
+                    Label("Your Logbook", systemImage: "book.closed")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("The dated record your companions keep of your days — browse by day, add a line by voice, or forget entries for good.")
+
+                Button {
+                    showingWorld = true
+                } label: {
+                    Label("The World", systemImage: "map")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("The city beyond the Threshold Gate — a living text world. Type or dictate commands, hear the ground answer in sound.")
 
                 Button {
                     showingPronunciationDictionary = true
@@ -319,6 +337,12 @@ struct SettingsView: View {
         }
         .navigationDestination(isPresented: $showingMemories) {
             MemoriesView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingLogbook) {
+            LogbookView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingWorld) {
+            WorldView(apiClient: apiClient)
         }
         .navigationDestination(isPresented: $showingKeyboardPhrases) {
             KeyboardPhrasesView(apiClient: apiClient)
