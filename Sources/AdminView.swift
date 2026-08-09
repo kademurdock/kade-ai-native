@@ -277,7 +277,7 @@ struct AdminView: View {
     let apiClient: KadeAPIClient
 
     private enum Route: String, Identifiable, Hashable {
-        case usage, feedback, logs, world
+        case usage, feedback, logs, world, accessRequests
         var id: String { rawValue }
     }
     @State private var route: Route?
@@ -299,6 +299,14 @@ struct AdminView: View {
                     Label("Activity logs", systemImage: "doc.text.magnifyingglass")
                 }
                 .accessibilityHint("Read-only: everyone on the instance, their conversations, and what was said.")
+
+                // Build 193 — the FRONT DOOR's native answer surface: the
+                // doorbell push says someone is asking in; this is where
+                // the ask gets a yes or a no without opening Safari.
+                Button { route = .accessRequests } label: {
+                    Label("Access Requests", systemImage: "bell.badge")
+                }
+                .accessibilityHint("People asking to join, from the login page's request form or the phone line. Approve as an adult or a kid — approval hands you the welcome text to send yourself.")
             } footer: {
                 Text("Admin only. Everything here is also on the web dashboards; this is the native, screen-reader-first version.")
             }
@@ -324,6 +332,7 @@ struct AdminView: View {
             case .feedback: AdminFeedbackView(service: AdminService(client: apiClient))
             case .logs: AdminLogsUsersView(service: AdminService(client: apiClient))
             case .world: WorldView(apiClient: apiClient)
+            case .accessRequests: AccessRequestsView(apiClient: apiClient)
             }
         }
     }

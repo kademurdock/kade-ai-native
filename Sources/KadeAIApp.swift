@@ -111,6 +111,25 @@ struct KadeAIApp: App {
         #if DEBUG
         if ProcessInfo.processInfo.environment["KADE_TOUR"] == "1" { return }
         #endif
+        // Build 193: declare the KADE_BRIEF category BEFORE asking for
+        // authorization — iOS matches a push's category string against
+        // whatever was registered most recently, and registering every
+        // launch is the documented pattern (idempotent, cheap). LISTEN and
+        // READ both open the app (.foreground): the brief speaks through
+        // the app's own voice pipeline, not a sound file in the push, so
+        // there is nothing useful a background action could do. A brief
+        // push on a build that predates this registration just shows no
+        // buttons — nothing breaks.
+        let listen = UNNotificationAction(
+            identifier: "KADE_BRIEF_LISTEN", title: "Listen", options: [.foreground]
+        )
+        let read = UNNotificationAction(
+            identifier: "KADE_BRIEF_READ", title: "Read", options: [.foreground]
+        )
+        let briefCategory = UNNotificationCategory(
+            identifier: "KADE_BRIEF", actions: [listen, read], intentIdentifiers: [], options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([briefCategory])
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             // registerForRemoteNotifications() must run on the main thread;

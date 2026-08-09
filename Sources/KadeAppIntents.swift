@@ -66,6 +66,11 @@ final class IntentRouter: ObservableObject {
         case debateRoom
         case agentBuilder
         case settings
+        // Build 193: the morning-brief notification's LISTEN/READ action
+        // buttons land here from AppDelegate's didReceive — same plumbing
+        // as every Siri phrase, one consumer in ContentView.
+        case brief
+        case briefListen
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a

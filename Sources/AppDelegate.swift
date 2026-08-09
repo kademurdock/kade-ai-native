@@ -109,6 +109,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // shipped don't depend on it.
     }
 
+    /// Build 193: a tap on the morning-brief notification (or its LISTEN /
+    /// READ action buttons) routes to the Brief screen through the same
+    /// IntentRouter every Siri phrase uses — one piece of plumbing, one
+    /// consumer in ContentView, exhaustive-switch enforced. LISTEN arms
+    /// autoListen so the brief starts speaking the moment the screen loads;
+    /// READ and a plain tap open it quiet. Unknown categories fall through
+    /// untouched (every other push keeps its current open-the-app behavior).
+    /// Same isolation pattern as the device-token callback above: this
+    /// delegate is not @MainActor, so the router call hops explicitly.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let category = response.notification.request.content.categoryIdentifier
+        if category == "KADE_BRIEF" {
+            let listen = response.actionIdentifier == "KADE_BRIEF_LISTEN"
+            Task { @MainActor in
+                IntentRouter.shared.request(listen ? .briefListen : .brief)
+            }
+        }
+        completionHandler()
+    }
+
     /// Foreground presentation: without this, iOS shows NOTHING while the
     /// app is open (banner-and-sound only fires by default when the app is
     /// backgrounded/killed). Matches the Capacitor shell app's own earlier

@@ -67,6 +67,15 @@ struct SettingsView: View {
     /// cleanup. Same key TranscribeView reads.
     @AppStorage("kade.keyboard.autoClean") private var keyboardAutoClean = true
     @State private var showingAccountSecurity = false
+    /// Build 193: morning-brief settings screen, same Bool-push pattern.
+    @State private var showingBrief = false
+    /// Build 193 — OWN YOUR DATA: /api/export/mine downloads a zip of
+    /// everything that's theirs; the share sheet hands it wherever they
+    /// want it (Files, AirDrop, mail to themselves). `exportItem != nil`
+    /// presents the sheet — prepared-state shape, same as voice messages.
+    @State private var exportBusy = false
+    @State private var exportItem: ShareItem?
+    @State private var exportStatus: String?
     /// Session 26 (her ask: "put a box to check or something, where people
     /// can choose their default agent"): sheet flag for the main-agent
     /// picker, plus a mirror of the stored name so the row re-renders the
@@ -311,8 +320,39 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Change your password, or permanently delete this account.")
+
+                // Build 193: the morning brief — per-account, written by
+                // your own companion, delivered as a push with LISTEN/READ
+                // buttons. Settings for it live one push away.
+                Button {
+                    showingBrief = true
+                } label: {
+                    Label("Morning brief", systemImage: "sun.horizon")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Your companion's morning rundown — turn it on, pick the time, choose what's in it, and hear today's.")
+
+                // Build 193 — OWN YOUR DATA (her spec: "so people can take
+                // ownership of their own data"). One tap, one zip: memory
+                // cards, logbook, every conversation — readable text first,
+                // machine JSON beside it. Own account only, by construction
+                // (the JWT is the only key the server uses).
+                Button {
+                    Task { await downloadMyData() }
+                } label: {
+                    Label(exportBusy ? "Gathering your data…" : "Download your data", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Builds a zip of your memories, logbook, and conversations, then opens the share sheet to save it wherever you like.")
+                if let exportStatus {
+                    Text(exportStatus)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Text("Account")
+            } footer: {
+                Text("Your words belong to you. The download is everything this account has — readable text plus the raw data.")
             }
         }
         .navigationTitle("Settings")
@@ -345,6 +385,12 @@ struct SettingsView: View {
         .navigationDestination(isPresented: $showingAccountSecurity) {
             AccountSecurityView(apiClient: apiClient)
         }
+        .navigationDestination(isPresented: $showingBrief) {
+            BriefView(apiClient: apiClient)
+        }
+        .sheet(item: $exportItem) { item in
+            ShareSheet(item: item)
+        }
         .confirmationDialog(
             "Voice message speed",
             isPresented: $showingSpeedPicker,
@@ -360,6 +406,39 @@ struct SettingsView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Build 193: fetch the export zip WITH the bearer token (a naked link
+    /// can't ride JWT — the web side learned the same lesson at build time),
+    /// land it in a real dated file, then hand it to the share sheet.
+    private func downloadMyData() async {
+        guard !exportBusy else { return } // politely decline the double-tap
+        exportBusy = true
+        exportStatus = nil
+        defer { exportBusy = false }
+        // The server zips a whole account in one breath — give it a longer
+        // leash than the 60-second default, same mechanism as the long
+        // Debate turns.
+        let req = apiClient.request(path: "api/export/mine", authorized: true, timeout: 180)
+        do {
+            let (data, http) = try await apiClient.send(req)
+            guard http.statusCode == 200, !data.isEmpty else {
+                exportStatus = "The export didn't come back — try again in a moment."
+                UIAccessibility.post(notification: .announcement, argument: "The export didn't come back.")
+                return
+            }
+            let stamp = String(KadeDateFormatting.isoNow().prefix(10)) // yyyy-MM-dd
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kade-ai-export-\(stamp).zip")
+            try data.write(to: url)
+            exportItem = ShareItem(fileURL: url)
+            let mb = String(format: "%.1f", Double(data.count) / 1_048_576)
+            exportStatus = "Your export is ready — \(mb) megabytes."
+            UIAccessibility.post(notification: .announcement, argument: "Export ready. The share sheet is open — save it wherever you like.")
+        } catch {
+            exportStatus = "Couldn't download the export. Check the connection and try again."
+            UIAccessibility.post(notification: .announcement, argument: "Couldn't download the export.")
         }
     }
 

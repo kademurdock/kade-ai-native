@@ -45,6 +45,12 @@ struct ContentView: View {
     // announced by VoiceOver) replaces whatever Safari's own error page
     // would have shown.
     @State private var webLoadFailed = false
+    /// Build 193: the front door from the sign-in screen (web login's "New
+    /// here without a code? Ask to join" twin) — Safari onto /request-access.
+    @State private var showingAskToJoin = false
+    /// Build 193: true when a lock-screen LISTEN action routed to the Brief
+    /// screen — BriefView starts speaking on load.
+    @State private var briefAutoListen = false
     @State private var showWebLoadAlert = false
     @State private var email = ""
     @State private var password = ""
@@ -230,6 +236,11 @@ struct ContentView: View {
                     )
                 case .settings:
                     SettingsView(apiClient: apiClient)
+                case .brief:
+                    // Build 193: reachable three ways — Settings row, the
+                    // morning push's action buttons (autoListen from the
+                    // lock-screen LISTEN), and a plain tap on the push.
+                    BriefView(apiClient: apiClient, autoListen: briefAutoListen)
                 case .alerts:
                     AlertsView(apiClient: apiClient)
                 case .myCreations:
@@ -349,6 +360,23 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .disabled(isSigningIn)
             .accessibilityHint("Signs in to your Kade-AI account on kademurdock.com.")
+
+            // Build 193 — the FRONT DOOR (web login shipped its twin Aug 9):
+            // accounts here are personal invites, and this is how a new
+            // person asks for one. Opens the site's own /request-access page
+            // rather than re-implementing the form: the page already carries
+            // the honeypot + rate limiting, and a request rings Kade's phone
+            // either way.
+            Button {
+                showingAskToJoin = true
+            } label: {
+                Text("New here without a code? Ask to join")
+                    .font(.subheadline)
+            }
+            .accessibilityHint("Opens the request page. Kade approves people herself — if she knows you, expect to hear back.")
+            .sheet(isPresented: $showingAskToJoin) {
+                SafariView(url: URL(string: "https://kademurdock.com/request-access")!, loadFailed: $webLoadFailed)
+            }
         }
     }
 
@@ -684,6 +712,12 @@ struct ContentView: View {
             route = .agentBuilder
         case .settings:
             route = .settings
+        case .brief:
+            briefAutoListen = false
+            route = .brief
+        case .briefListen:
+            briefAutoListen = true
+            route = .brief
         }
     }
 
@@ -842,6 +876,7 @@ enum HomeRoute: Identifiable, Hashable {
     case myCreations
     case wallOfFame
     case admin
+    case brief
 
     var id: String {
         switch self {
@@ -866,6 +901,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"
+        case .brief: return "brief"
         }
     }
 }
