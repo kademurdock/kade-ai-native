@@ -989,8 +989,13 @@ final class StreamingCallService: NSObject, ObservableObject {
     private static func bundledEngineBuffer(
         named name: String, ext: String, convertedTo format: AVAudioFormat
     ) -> AVAudioPCMBuffer? {
-        if engineBufferTried.contains(name) { return engineBufferCache[name] }
-        engineBufferTried.insert(name)
+        // Aug 8 2026 (her bug report: connect still BEEPS while disconnect
+        // chimes): this used to mark `tried` up-front, so ONE failed
+        // conversion — e.g. a first call racing audio-session setup —
+        // poisoned the cache with nil for the entire app lifetime, and every
+        // later call fell through to the synth beep. Success is cached;
+        // failure now RETRIES on the next call instead of being remembered.
+        if let cached = engineBufferCache[name] { return cached }
         guard let url = Bundle.main.url(forResource: name, withExtension: ext),
               let file = try? AVAudioFile(forReading: url),
               file.length > 0, file.length < 2_000_000,
@@ -1022,6 +1027,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             return nil
         }
         engineBufferCache[name] = converted
+        engineBufferTried.insert(name)
         return converted
     }
 
@@ -1043,6 +1049,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         player.play()
     }
 
+    /// Retained like disconnectPlayer so the chime survives the setup window.
+    private static var connectPlayer: AVAudioPlayer?
+
     private func playConnectTone() {
         // Her real recording first (August 1 2026, same file-first/synth-
         // fallback contract as Earcons). Volume 0.9 = the established
@@ -1053,6 +1062,17 @@ final class StreamingCallService: NSObject, ObservableObject {
             earconNode.volume = 0.9
             earconNode.scheduleBuffer(chime, completionHandler: nil)
             earconNode.play()
+            return
+        }
+        // Aug 8 2026: engine conversion unhappy this call — play the SAME
+        // file the proven disconnect way (plain AVAudioPlayer under the
+        // active call session) before ever settling for the synth beep.
+        if let url = Bundle.main.url(forResource: "CallConnected", withExtension: "mp3"),
+           let player = try? AVAudioPlayer(contentsOf: url) {
+            player.volume = 0.9
+            player.prepareToPlay()
+            Self.connectPlayer = player
+            player.play()
             return
         }
         let sampleRate = playerFormat.sampleRate
