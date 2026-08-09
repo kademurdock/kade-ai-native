@@ -277,7 +277,7 @@ struct AdminView: View {
     let apiClient: KadeAPIClient
 
     private enum Route: String, Identifiable, Hashable {
-        case usage, feedback, logs
+        case usage, feedback, logs, world
         var id: String { rawValue }
     }
     @State private var route: Route?
@@ -302,6 +302,19 @@ struct AdminView: View {
             } footer: {
                 Text("Admin only. Everything here is also on the web dashboards; this is the native, screen-reader-first version.")
             }
+
+            // Aug 9 2026 — REVERIE, admin door (her word: the World lives here,
+            // out of the family's casual reach, until it becomes a public asset.
+            // Full wizard powers ride the same lane — the engine gates @verbs by
+            // role, so the admin account can build from the phone).
+            Section {
+                Button { route = .world } label: {
+                    Label("Reverie — The World", systemImage: "map")
+                }
+                .accessibilityHint("The living text world, admin door. Walk it, and use the wizard commands to build. Family can't see this yet — it opens to everyone when the world is ready.")
+            } footer: {
+                Text("The city beyond the Threshold Gate. Admin-only for now, on purpose.")
+            }
         }
         .navigationTitle("Admin")
         .navigationBarTitleDisplayMode(.inline)
@@ -310,6 +323,7 @@ struct AdminView: View {
             case .usage: AdminUsageView(service: AdminService(client: apiClient))
             case .feedback: AdminFeedbackView(service: AdminService(client: apiClient))
             case .logs: AdminLogsUsersView(service: AdminService(client: apiClient))
+            case .world: WorldView(apiClient: apiClient)
             }
         }
     }
