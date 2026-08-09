@@ -96,6 +96,19 @@ final class LogbookService: ObservableObject {
         }
     }
 
+    /// Aug 9 2026 — MEMORY QUALITY PACK: fix an entry's wording in place.
+    /// PATCH /api/diary/:id { text } — the server re-embeds so search keeps
+    /// working on the new words; the date and who-holds-it never change.
+    func edit(entry: LogbookEntry, newText: String) async throws {
+        var req = client.request(path: "api/diary/\(entry.id)", method: "PATCH", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": newText])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw LogbookError(message: message(from: data, fallback: "Could not update the entry (\(http.statusCode))."))
+        }
+    }
+
     func forget(entry: LogbookEntry) async throws {
         let req = client.request(path: "api/diary/\(entry.id)", method: "DELETE", authorized: true)
         let (data, http) = try await client.send(req)

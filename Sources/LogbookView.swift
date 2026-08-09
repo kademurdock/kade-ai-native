@@ -15,6 +15,8 @@ struct LogbookView: View {
     @State private var addingNew = false
     @State private var newText = ""
     @State private var entryPendingForget: LogbookService.LogbookEntry?
+    @State private var entryEditing: LogbookService.LogbookEntry?
+    @State private var editText = ""
     @State private var busy = false
 
     init(apiClient: KadeAPIClient) {
@@ -64,8 +66,21 @@ struct LogbookView: View {
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(entry.text). \(entry.holder).")
+                        .accessibilityAction(named: "Edit this entry") {
+                            editText = entry.text
+                            entryEditing = entry
+                        }
                         .accessibilityAction(named: "Forget this entry") {
                             entryPendingForget = entry
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                editText = entry.text
+                                entryEditing = entry
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
@@ -128,6 +143,33 @@ struct LogbookView: View {
                 }
             }
         }
+        .sheet(item: $entryEditing) { entry in
+            NavigationStack {
+                Form {
+                    Section {
+                        TextEditor(text: $editText)
+                            .frame(minHeight: 120)
+                            .accessibilityLabel("Entry text")
+                            .accessibilityHint("Fix the wording. Dictation works here. The entry keeps its date and who holds it.")
+                    } footer: {
+                        Text("From \(entry.spokenDate). Only the wording changes — the date and who holds the entry stay put.")
+                    }
+                }
+                .navigationTitle("Edit entry")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { entryEditing = nil }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task { await saveEdit(entry) }
+                        }
+                        .disabled(editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                    }
+                }
+            }
+        }
         .confirmationDialog(
             "Forget this entry for good?",
             isPresented: Binding(
@@ -161,6 +203,22 @@ struct LogbookView: View {
             addingNew = false
             KadeHaptics.success()
             UIAccessibility.post(notification: .announcement, argument: "Saved to your logbook.")
+            await reload()
+        } catch {
+            UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
+        }
+    }
+
+    private func saveEdit(_ entry: LogbookService.LogbookEntry) async {
+        let text = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await service.edit(entry: entry, newText: text)
+            entryEditing = nil
+            KadeHaptics.success()
+            UIAccessibility.post(notification: .announcement, argument: "Entry updated.")
             await reload()
         } catch {
             UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
