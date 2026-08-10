@@ -129,7 +129,14 @@ struct KadeAIApp: App {
         let briefCategory = UNNotificationCategory(
             identifier: "KADE_BRIEF", actions: [listen, read], intentIdentifiers: [], options: []
         )
-        UNUserNotificationCenter.current().setNotificationCategories([briefCategory])
+        // Build 195: the doorbell category — no action buttons, a plain tap
+        // routes to Access Requests via AppDelegate.didReceive. Registered
+        // here because iOS only honors categories from the most recent
+        // setNotificationCategories call (it replaces, never merges).
+        let doorbellCategory = UNNotificationCategory(
+            identifier: "KADE_DOORBELL", actions: [], intentIdentifiers: [], options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([briefCategory, doorbellCategory])
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             // registerForRemoteNotifications() must run on the main thread;

@@ -241,6 +241,10 @@ struct ContentView: View {
                     // morning push's action buttons (autoListen from the
                     // lock-screen LISTEN), and a plain tap on the push.
                     BriefView(apiClient: apiClient, autoListen: briefAutoListen)
+                case .accessRequests:
+                    // Build 195: the doorbell push deep-link — "Front door:
+                    // someone is asking in" opens the review screen itself.
+                    AccessRequestsView(apiClient: apiClient)
                 case .alerts:
                     AlertsView(apiClient: apiClient)
                 case .myCreations:
@@ -718,6 +722,8 @@ struct ContentView: View {
         case .briefListen:
             briefAutoListen = true
             route = .brief
+        case .accessRequests:
+            route = .accessRequests
         }
     }
 
@@ -877,6 +883,7 @@ enum HomeRoute: Identifiable, Hashable {
     case wallOfFame
     case admin
     case brief
+    case accessRequests
 
     var id: String {
         switch self {
@@ -902,6 +909,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"
         case .brief: return "brief"
+        case .accessRequests: return "accessRequests"
         }
     }
 }

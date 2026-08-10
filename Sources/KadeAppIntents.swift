@@ -71,6 +71,9 @@ final class IntentRouter: ObservableObject {
         // as every Siri phrase, one consumer in ContentView.
         case brief
         case briefListen
+        // Build 195: a tap on the front-door doorbell push lands on the
+        // Access Requests screen instead of a blank app bounce.
+        case accessRequests
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a

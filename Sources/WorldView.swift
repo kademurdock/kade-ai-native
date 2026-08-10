@@ -14,6 +14,10 @@ struct WorldView: View {
     @State private var command = ""
     @State private var history: [String] = []
     @State private var soundsOn = UserDefaults.standard.object(forKey: "kade.world.sounds") as? Bool ?? true
+    /// Build 195: the sound manifest — district (ward-bed) ambience urls and
+    /// the district she currently stands in.
+    @State private var districtSounds: [String: String] = [:]
+    @State private var currentDistrict: String?
     @FocusState private var inputFocused: Bool
 
     init(apiClient: KadeAPIClient) {
@@ -35,6 +39,11 @@ struct WorldView: View {
         ("West", "w", "Go west"),
         ("Inventory", "inventory", "What you are carrying"),
         ("Who", "who", "Who is here with you"),
+        // Build 195 — the Reverie verbs, one tap each (Aug 10 city).
+        ("Map", "map", "How this ward hangs together"),
+        ("Status", "status", "How you are doing — fed, rested, coin"),
+        ("Weather", "weather", "What the sky is doing"),
+        ("Recap", "recap", "Replay your last meanwhile"),
     ]
 
     var body: some View {
@@ -73,7 +82,12 @@ struct WorldView: View {
                     Button(soundsOn ? "Sounds on" : "Sounds off") {
                         soundsOn.toggle()
                         UserDefaults.standard.set(soundsOn, forKey: "kade.world.sounds")
-                        if soundsOn { WorldTones.shared.play("say") }
+                        if soundsOn {
+                            WorldTones.shared.play("say")
+                            Task { await refreshAmbience() }
+                        } else {
+                            WorldTones.shared.setAmbience(key: nil, fileURL: nil)
+                        }
                     }
                     .buttonStyle(.bordered)
                     .accessibilityHint("Earcons that mark movement, pickups, speech, and arrivals.")
@@ -110,6 +124,7 @@ struct WorldView: View {
             if log.isEmpty {
                 append("The gate knows you. Type look, or press the Look button.", .world)
                 await send("look")
+                await loadWorldSounds()
             }
         }
         .onDisappear {
@@ -169,11 +184,16 @@ struct WorldView: View {
                 append(extras, .world)
                 spoken.append("\(room.name). \(room.desc) \(extras)")
             }
+            let d = result.district ?? result.room?.district
+            if let d, d != currentDistrict {
+                currentDistrict = d
+                await refreshAmbience()
+            }
             let kinds = result.kinds ?? []
             if result.ok != true && kinds.isEmpty {
                 playFeedback("err")
             }
-            for (i, kind) in kinds.enumerated() {
+            for (i, kind) in kinds.prefix(6).enumerated() {
                 let delay = Double(i) * 0.14
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     playFeedback(kind)
@@ -188,6 +208,30 @@ struct WorldView: View {
             playFeedback("err")
             UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
         }
+    }
+
+    /// Build 195 — the sound manifest lands on native (the queued "195
+    /// material"): fetch once per screen open, cache files locally, swap
+    /// synth earcons for her real sounds where they exist, and start the
+    /// ward-bed ambience for wherever she is standing.
+    private func loadWorldSounds() async {
+        guard let manifest = await service.fetchSoundManifest() else { return }
+        for (kind, urlStr) in manifest.event ?? [:] {
+            if let local = await WorldService.cachedSoundFile(for: urlStr) {
+                WorldTones.shared.installEventSound(kind: kind, fileURL: local)
+            }
+        }
+        districtSounds = manifest.district ?? [:]
+        await refreshAmbience()
+    }
+
+    private func refreshAmbience() async {
+        guard soundsOn, let d = currentDistrict, let urlStr = districtSounds[d] else {
+            WorldTones.shared.setAmbience(key: nil, fileURL: nil)
+            return
+        }
+        let local = await WorldService.cachedSoundFile(for: urlStr)
+        WorldTones.shared.setAmbience(key: d, fileURL: local)
     }
 
     private func playFeedback(_ kind: String) {

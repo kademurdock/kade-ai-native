@@ -130,6 +130,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 IntentRouter.shared.request(listen ? .briefListen : .brief)
             }
         }
+        /* Build 195: the front-door doorbell (bridge stamps KADE_DOORBELL on
+         * "Front door" pushes) opens the Access Requests screen directly —
+         * the Part 42 seed, landed. Unknown categories still fall through. */
+        if category == "KADE_DOORBELL" {
+            Task { @MainActor in
+                IntentRouter.shared.request(.accessRequests)
+            }
+        }
         completionHandler()
     }
 
