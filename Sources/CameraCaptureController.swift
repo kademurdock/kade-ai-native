@@ -236,7 +236,11 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
         let scale = targetWidth / ciImage.extent.width
         let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
-        guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.65) else { return }
+        // Aug 9 2026 (her ask: best quality on the live lane): Spotter/Live
+        // frames encode at 0.78 — noticeably cleaner text and edges for the
+        // small-print reads Spotters do, ~40% more bytes ONLY while live is
+        // on. The plain snapshot lane keeps 0.65 (web parity, cheap).
+        guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: liveMode ? 0.78 : 0.65) else { return }
         lastSentAt = now
         onEncodedFrame?(jpeg)
         if let brightness = meanLuminance(of: ciImage) {

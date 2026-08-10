@@ -147,6 +147,14 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// and "played" are no longer conflated here), conversion failures, the
     /// live output route, and the system output volume.
     @Published private(set) var audioDiagnostic: String = "No audio received yet."
+    /// Aug 9 2026 (her housekeeping pass: "do we really still need that test
+    /// checker… visible?"): the readout earned its keep in build 119 by
+    /// turning silent calls into answerable bug reports — but a HEALTHY call
+    /// doesn't need a lab instrument on screen. True only in the one state
+    /// the instrument exists for: clips arriving off the wire with none
+    /// confirmed played (or decode failures piling up). CallView shows the
+    /// readout only then; every working call stays clean.
+    @Published private(set) var audioTrouble = false
 
     private var clipsReceived = 0
     private var clipsScheduled = 0
@@ -158,6 +166,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// confirmation tone distinct from the whole-call connect tone -- see
     /// `playLiveStartTone()`.
     private var liveTonePlayed = false
+    /// Aug 9 2026: when the connect chime last actually played — the live
+    /// arm skips its own chime inside this window so a Spotter-DIRECT call
+    /// (engine start and live arm seconds apart) chimes once, not twice.
+    private var lastChimeAt: Date = .distantPast
     private var routeObserver: NSObjectProtocol?
     private var engineConfigObserver: NSObjectProtocol?
     /// When this call started, used by the post-call handoff to make sure it
@@ -1062,6 +1074,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             earconNode.volume = 0.9
             earconNode.scheduleBuffer(chime, completionHandler: nil)
             earconNode.play()
+            lastChimeAt = Date()
             return
         }
         // Aug 8 2026: engine conversion unhappy this call — play the SAME
@@ -1073,6 +1086,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             player.prepareToPlay()
             Self.connectPlayer = player
             player.play()
+            lastChimeAt = Date()
             return
         }
         let sampleRate = playerFormat.sampleRate
@@ -1112,6 +1126,32 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// reason to expose it to the same timing math this session's other
     /// fix was about.
     private func playLiveStartTone() {
+        // Aug 9 2026 (her housekeeping pass: "still no chime, just a beep
+        // right before it turns my flashlight on"): the Spotter arming cue
+        // was still the session-17 synth blip — a lab instrument sound —
+        // while regular calls got her real recorded chime. The Spotter now
+        // plays the SAME chime; with the bridge's spoken greeting retired
+        // the chime IS the introduction. On a Spotter-DIRECT call the
+        // engine-start chime fired seconds ago, so a second one inside the
+        // window is skipped — one chime per arming, never a double. The
+        // synth blip below survives only as the no-bundle fail-soft.
+        if Date().timeIntervalSince(lastChimeAt) < 2.5 { return }
+        if let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
+            earconNode.volume = 0.9
+            earconNode.scheduleBuffer(chime, completionHandler: nil)
+            earconNode.play()
+            lastChimeAt = Date()
+            return
+        }
+        if let url = Bundle.main.url(forResource: "CallConnected", withExtension: "mp3"),
+           let player = try? AVAudioPlayer(contentsOf: url) {
+            player.volume = 0.9
+            player.prepareToPlay()
+            Self.connectPlayer = player
+            player.play()
+            lastChimeAt = Date()
+            return
+        }
         let sampleRate = playerFormat.sampleRate
         let total = Int(sampleRate * 0.09)
         guard let buffer = AVAudioPCMBuffer(
@@ -1150,6 +1190,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             "\(clipsReceived) clips received, \(clipsScheduled) scheduled, \(clipsPlayed) confirmed played."
         ]
         if clipFailures > 0 { parts.append("\(clipFailures) could not be decoded.") }
+        audioTrouble = (clipsReceived >= 3 && clipsPlayed == 0) || clipFailures >= 3
         // A gap between "scheduled" and "confirmed played" that keeps
         // growing (rather than just trailing behind by the last clip or
         // two, which is normal -- playback confirmation lags scheduling

@@ -79,7 +79,12 @@ struct CallView: View {
                 if wrappingUp {
                     wrapUpPanel
                 }
-                audioCheck
+                // Aug 9 2026 (her call): the audio-check readout only
+                // appears when something is actually wrong — see
+                // audioTrouble's doc comment in the service.
+                if callService.audioTrouble {
+                    audioCheck
+                }
                 // The plain camera-describe lane belongs to the CURRENT
                 // conversation agent. Once Spotter/Live is on, the Spotter
                 // is who's actually holding the call and already owns the
