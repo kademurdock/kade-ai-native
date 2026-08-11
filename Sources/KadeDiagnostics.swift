@@ -162,9 +162,19 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             for file in candidates {
                 guard sent < 2 else { break }
                 let name = file.lastPathComponent
-                guard let payload = try? String(contentsOf: file, encoding: .utf8), payload.count < 60_000 else {
+                guard var payload = try? String(contentsOf: file, encoding: .utf8) else {
                     uploaded.insert(name)
                     continue
+                }
+                // Build 196 (the "why did the system never tell me?" audit):
+                // real MetricKit crash payloads routinely run 100-300KB, and
+                // the old 60KB guard marked them uploaded WITHOUT SENDING —
+                // the exact crashes worth reporting were the ones silently
+                // dropped. The bridge accepts 600KB now; send whole payloads
+                // up to 400KB and truncate the rare monster instead of
+                // dropping it (a cut-off stack beats no stack).
+                if payload.count > 400_000 {
+                    payload = String(payload.prefix(400_000)) + "…[truncated at 400KB of \(payload.count)]"
                 }
                 var req = URLRequest(url: Self.sinkURL)
                 req.httpMethod = "POST"

@@ -1070,9 +1070,14 @@ final class StreamingCallService: NSObject, ObservableObject {
         // native convention for her ~-12.5 dBFS masters (Received plays
         // at 0.9 in KadeFeedback; the web plays this exact file at 0.75).
         // One constant, retune by ear right here.
-        if let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
-            earconNode.volume = 0.9
+        if audioEngine.isRunning,
+           let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
+            // Build 196 GUARD (same crash class as 195's WorldTones fix):
+            // play() on an engine iOS stopped behind our back is an
+            // uncatchable ObjC throw. Engine down -> fall through to the
+            // AVAudioPlayer lane below, which is immune by construction.
             earconNode.scheduleBuffer(chime, completionHandler: nil)
+            earconNode.volume = 0.9
             earconNode.play()
             lastChimeAt = Date()
             return
@@ -1106,7 +1111,9 @@ final class StreamingCallService: NSObject, ObservableObject {
             let fade = min(1.0, Double(min(localIndex, noteFrames - localIndex)) / (sampleRate * 0.01))
             dst[i] = Float(sin(phase) * 0.22 * fade)
         }
-        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        if audioEngine.isRunning {
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        }
     }
 
     /// Session 17/18 (Kade, after a Spotter call went silent: "Spotter
@@ -1136,9 +1143,14 @@ final class StreamingCallService: NSObject, ObservableObject {
         // window is skipped — one chime per arming, never a double. The
         // synth blip below survives only as the no-bundle fail-soft.
         if Date().timeIntervalSince(lastChimeAt) < 2.5 { return }
-        if let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
-            earconNode.volume = 0.9
+        if audioEngine.isRunning,
+           let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
+            // Build 196 GUARD (same crash class as 195's WorldTones fix):
+            // play() on an engine iOS stopped behind our back is an
+            // uncatchable ObjC throw. Engine down -> fall through to the
+            // AVAudioPlayer lane below, which is immune by construction.
             earconNode.scheduleBuffer(chime, completionHandler: nil)
+            earconNode.volume = 0.9
             earconNode.play()
             lastChimeAt = Date()
             return
@@ -1165,7 +1177,9 @@ final class StreamingCallService: NSObject, ObservableObject {
             let fade = min(1.0, Double(min(i, total - i)) / (sampleRate * 0.01))
             dst[i] = Float(sin(phase) * 0.22 * fade)
         }
-        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        if audioEngine.isRunning {
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        }
     }
 
     /// Rebuilds the human-readable diagnostic string. Cheap, and only ever
