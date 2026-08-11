@@ -22,6 +22,11 @@ final class WorldService: ObservableObject {
     }
 
     struct WorldRoom: Decodable, Equatable {
+        /// Build 197: the room's own id, so the manifest's `room` scope can
+        /// finally be reached. Optional because older servers don't send it —
+        /// a phone on build 197 talking to a pre-197 server just gets no room
+        /// tone, never a crash.
+        let roomId: String?
         let name: String
         let desc: String
         let district: String?
@@ -116,6 +121,12 @@ final class WorldTones {
     private var filePlayers: [String: AVAudioPlayer] = [:]
     private var ambiencePlayer: AVAudioPlayer?
     private var ambienceKey: String?
+    /// Build 197 — LAYER TWO of 16.1's three-layer design. The ward bed says
+    /// which part of town you're in; the room tone says which room. They play
+    /// together, the room tone quieter, because that is how a real room sounds
+    /// on top of a real neighbourhood.
+    private var roomTonePlayer: AVAudioPlayer?
+    private var roomToneKey: String?
 
     private init() {
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
@@ -214,6 +225,23 @@ final class WorldTones {
         ambiencePlayer = p
     }
 
+    /// The room tone — layer two, under the ward bed. Same contract as
+    /// setAmbience: same key = leave it alone, nil = silence.
+    func setRoomTone(key: String?, fileURL: URL?) {
+        guard roomToneKey != key else { return }
+        roomToneKey = key
+        roomTonePlayer?.stop()
+        roomTonePlayer = nil
+        guard let fileURL, let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
+        p.numberOfLoops = -1
+        // Quieter than the ward bed (0.22) on purpose: the room sits INSIDE
+        // the ward, so it must never drown the neighbourhood out.
+        p.volume = 0.16
+        p.prepareToPlay()
+        p.play()
+        roomTonePlayer = p
+    }
+
     func play(_ kind: String) {
         // Real file first: independent player, immune to engine state.
         if let file = filePlayers[kind] {
@@ -243,6 +271,9 @@ final class WorldTones {
         ambiencePlayer?.stop()
         ambiencePlayer = nil
         ambienceKey = nil
+        roomTonePlayer?.stop()
+        roomTonePlayer = nil
+        roomToneKey = nil
         if engine.isRunning {
             player.stop()
         }
@@ -254,20 +285,13 @@ final class WorldTones {
 /// Kind -> haptic, respecting the app-wide haptics switch (same UserDefaults
 /// key KadeFeedback writes). Sound and touch land together; either alone
 /// still tells the story.
+///
+/// Build 197: the shape now comes from the SOUND ITSELF where one has been
+/// installed (WorldHapticsEngine measures the file's envelope), and from the
+/// old fixed table everywhere else. Call sites are unchanged on purpose —
+/// every `WorldHaptics.play(kind)` in the app got the upgrade for free.
 enum WorldHaptics {
     static func play(_ kind: String) {
-        guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
-        switch kind {
-        case "move":
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        case "take", "drop":
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        case "enter", "leave":
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-        case "err":
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        default:
-            break
-        }
+        WorldHapticsEngine.shared.play(kind)
     }
 }

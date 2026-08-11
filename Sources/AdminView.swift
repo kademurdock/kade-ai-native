@@ -277,7 +277,7 @@ struct AdminView: View {
     let apiClient: KadeAPIClient
 
     private enum Route: String, Identifiable, Hashable {
-        case usage, feedback, logs, world, accessRequests
+        case usage, feedback, logs, world, accessRequests, frontDesk, appCrashes
         var id: String { rawValue }
     }
     @State private var route: Route?
@@ -307,6 +307,20 @@ struct AdminView: View {
                     Label("Access Requests", systemImage: "bell.badge")
                 }
                 .accessibilityHint("People asking to join, from the login page's request form or the phone line. Approve as an adult or a kid — approval hands you the welcome text to send yourself.")
+
+                // Build 197 — the desk has been taking messages since Aug 9
+                // and there was nowhere on the phone to go read them.
+                Button { route = .frontDesk } label: {
+                    Label("Front Desk", systemImage: "tray.full")
+                }
+                .accessibilityHint("Messages the front desk took from callers the phone doesn't recognize. Reading only — nothing here can be changed.")
+
+                // Build 197 — the crash catcher has filed stacks since Aug 4
+                // and only a terminal could read them.
+                Button { route = .appCrashes } label: {
+                    Label("Crash Reports", systemImage: "ant")
+                }
+                .accessibilityHint("What the app has told on itself about, newest first. Reading only, and nothing here needs doing.")
             } footer: {
                 Text("Admin only. Everything here is also on the web dashboards; this is the native, screen-reader-first version.")
             }
@@ -333,6 +347,8 @@ struct AdminView: View {
             case .logs: AdminLogsUsersView(service: AdminService(client: apiClient))
             case .world: WorldView(apiClient: apiClient)
             case .accessRequests: AccessRequestsView(apiClient: apiClient)
+            case .frontDesk: FrontDeskView(apiClient: apiClient)
+            case .appCrashes: AppCrashesView(apiClient: apiClient)
             }
         }
     }

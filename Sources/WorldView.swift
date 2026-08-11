@@ -17,6 +17,11 @@ struct WorldView: View {
     /// Build 195: the sound manifest — district (ward-bed) ambience urls and
     /// the district she currently stands in.
     @State private var districtSounds: [String: String] = [:]
+    /// Build 197 — layer two: room-scoped tones, keyed by the roomId the
+    /// engine now sends. The manifest has always had this scope; nothing
+    /// could reach it until the room started saying its own name.
+    @State private var roomSounds: [String: String] = [:]
+    @State private var currentRoomId: String?
     @State private var currentDistrict: String?
     @FocusState private var inputFocused: Bool
 
@@ -84,9 +89,13 @@ struct WorldView: View {
                         UserDefaults.standard.set(soundsOn, forKey: "kade.world.sounds")
                         if soundsOn {
                             WorldTones.shared.play("say")
-                            Task { await refreshAmbience() }
+                            Task {
+                                await refreshAmbience()
+                                await refreshRoomTone()
+                            }
                         } else {
                             WorldTones.shared.setAmbience(key: nil, fileURL: nil)
+                            WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
                         }
                     }
                     .buttonStyle(.bordered)
@@ -189,6 +198,10 @@ struct WorldView: View {
                 currentDistrict = d
                 await refreshAmbience()
             }
+            if let r = result.room?.roomId, r != currentRoomId {
+                currentRoomId = r
+                await refreshRoomTone()
+            }
             let kinds = result.kinds ?? []
             if result.ok != true && kinds.isEmpty {
                 playFeedback("err")
@@ -219,10 +232,16 @@ struct WorldView: View {
         for (kind, urlStr) in manifest.event ?? [:] {
             if let local = await WorldService.cachedSoundFile(for: urlStr) {
                 WorldTones.shared.installEventSound(kind: kind, fileURL: local)
+                // Build 197: the same file, measured for its haptic shape.
+                // Sound and touch are installed together from one source, so
+                // they can never end up describing two different events.
+                await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
             }
         }
         districtSounds = manifest.district ?? [:]
+        roomSounds = manifest.room ?? [:]
         await refreshAmbience()
+        await refreshRoomTone()
     }
 
     private func refreshAmbience() async {
@@ -232,6 +251,15 @@ struct WorldView: View {
         }
         let local = await WorldService.cachedSoundFile(for: urlStr)
         WorldTones.shared.setAmbience(key: d, fileURL: local)
+    }
+
+    private func refreshRoomTone() async {
+        guard soundsOn, let r = currentRoomId, let urlStr = roomSounds[r] else {
+            WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
+            return
+        }
+        let local = await WorldService.cachedSoundFile(for: urlStr)
+        WorldTones.shared.setRoomTone(key: r, fileURL: local)
     }
 
     private func playFeedback(_ kind: String) {
