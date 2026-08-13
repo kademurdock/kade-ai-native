@@ -46,6 +46,16 @@ struct SettingsView: View {
     /// outlive this screen, so it's observed here, never owned here).
     @ObservedObject private var locationShare = KadeLocationShare.shared
 
+    /// Aug 13 2026 — LONG-TASK PING. Server-side preference, not @AppStorage:
+    /// the fork is what watches the clock and the subscriber count, so the
+    /// fork is what has to know the answer. Lives on the same per-user
+    /// KadeNudgePref doc as the reminder channels, read and written through
+    /// the existing GET/POST /api/kade/nudges/prefs pair.
+    @State private var longTaskPing = false
+    /// Until the real value lands, the switch is disabled rather than shown
+    /// as OFF — a toggle that reads "off" before it has loaded is a lie, and
+    /// under VoiceOver it's a lie the user acts on.
+    @State private var longTaskPingLoaded = false
     @State private var showingSpeedPicker = false
     /// Bool-based (not a `NavigationLink`, matching this app's own house
     /// rule -- see `RoomListView`'s doc comment) push onto the SAME
@@ -194,6 +204,35 @@ struct SettingsView: View {
                 Text("Support")
             } footer: {
                 Text("If the app ever crashes, open it again and share diagnostics here -- the crash report plus a timeline of what the app was doing. Never your conversations.")
+            }
+
+            // Aug 13 2026 (her ask: "you know how claude sends you a
+            // notification when it's been thinking a long time"): the
+            // long-task ping. OFF by default, per person, decided server-side
+            // — the fork fires it only when the turn ran past 30 seconds AND
+            // nobody was still attached to the stream when the reply landed.
+            Section {
+                Toggle(isOn: Binding(
+                    get: { longTaskPing },
+                    set: { newValue in
+                        longTaskPing = newValue
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: newValue
+                                ? "You'll be told when a slow reply lands."
+                                : "Long reply notifications off."
+                        )
+                        Task { await saveLongTaskPing(newValue) }
+                    }
+                )) {
+                    Text("Tell me when a slow reply lands")
+                }
+                .disabled(!longTaskPingLoaded)
+                .accessibilityHint("Sends a notification if a reply takes more than about half a minute and you've already left the app.")
+            } header: {
+                Text("Long replies")
+            } footer: {
+                Text("Only when you've actually walked away -- if you're still in the conversation watching it arrive, nothing is sent. Quiet hours still apply, so a reply that finishes overnight waits for morning.")
             }
 
             // July 23 2026 (Maps/GPS slice 1, Kade-approved): opt-in
@@ -357,6 +396,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadLongTaskPing() }
         .sheet(isPresented: $showingMainAgentPicker) {
             AgentPickerView(currentAgentId: DefaultAgentStore.storedId) { agent in
                 DefaultAgentStore.set(agent)
@@ -406,6 +446,39 @@ struct SettingsView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// The long-task preference lives on the same per-user prefs doc as the
+    /// reminder channels. Read-only failure is deliberately silent: a settings
+    /// screen that shouts about a network hiccup teaches people to distrust
+    /// every switch on it. The toggle simply stays disabled until a real value
+    /// arrives, so it can never show a state the server doesn't agree with.
+    private func loadLongTaskPing() async {
+        guard !longTaskPingLoaded else { return }
+        let req = apiClient.request(path: "api/kade/nudges/prefs", method: "GET", authorized: true)
+        guard let result = try? await apiClient.send(req),
+              result.1.statusCode == 200,
+              let parsed = try? JSONDecoder().decode(NudgePrefsEnvelope.self, from: result.0)
+        else { return }
+        longTaskPing = parsed.prefs?.longTaskPing ?? false
+        longTaskPingLoaded = true
+    }
+
+    /// Write-back. A failure here DOES get spoken — the user just made a
+    /// choice and deserves to know it didn't take, and the switch snaps back
+    /// so the screen never claims a setting that isn't saved.
+    private func saveLongTaskPing(_ enabled: Bool) async {
+        var req = apiClient.request(path: "api/kade/nudges/prefs", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["longTaskPing": enabled])
+        let ok = (try? await apiClient.send(req)).map { (200 ..< 300).contains($0.1.statusCode) } ?? false
+        if !ok {
+            longTaskPing = !enabled
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "That didn't save. Check your connection and try again."
+            )
         }
     }
 
@@ -501,4 +574,15 @@ struct SettingsView: View {
     .environmentObject(AppearancePreferences())
     .environmentObject(VoiceService(client: KadeAPIClient()))
     .environmentObject(FeedbackPrefs.shared)
+}
+
+/// Just the sliver of GET /api/kade/nudges/prefs this screen needs. Every
+/// field optional on purpose: that route serves reminder channels, birthday
+/// settings and a phone number too, and this screen must not care when any of
+/// them change shape.
+private struct NudgePrefsEnvelope: Decodable {
+    struct Prefs: Decodable {
+        let longTaskPing: Bool?
+    }
+    let prefs: Prefs?
 }
