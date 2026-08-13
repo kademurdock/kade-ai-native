@@ -187,6 +187,39 @@ enum MessageTextSanitizer {
         return result
     }
 
+    /// Aug 13 2026 — THE MEMO, and the receipts that bought it. `readableText`
+    /// is a COMPUTED property, so every single access re-ran this entire
+    /// chain: four strippers, roughly nine regex passes, plus a linewise
+    /// split/join. `ConversationDetailView` hangs TWO `.accessibilityRotor`
+    /// modifiers off the transcript, and each one filters the full message
+    /// array and calls `rotorLabel(for:)` -> `readableText` on EVERY message.
+    /// Those rotor bodies rebuild on every view-body evaluation, and during a
+    /// live stream that is every 250ms. Amber A took FIVE 0x8BADF00D watchdog
+    /// kills in 55 minutes on build 197 (bridge diagnostics ring, Aug 13
+    /// 16:52–17:47Z), main thread buried up to 80 frames deep in SwiftUICore
+    /// with AttributeGraph and the update cycle underneath it — a view-update
+    /// storm, not a network wait. The Aug 7 fix coalesced the LIVE text flush
+    /// and gated it on scene state; it never touched the rotors, which chew
+    /// the whole history rather than just the growing tail.
+    ///
+    /// NSCache and not a Dictionary for two reasons: it is thread-safe (this
+    /// is called from view bodies and from background decode alike, and a
+    /// plain dictionary here would be a data race waiting to happen), and it
+    /// evicts itself under memory pressure — a display cache must never be
+    /// the reason iOS jetsams the app. `countLimit` is deliberately generous:
+    /// a live stream burns one new key per flush as the text grows, and the
+    /// history entries have to survive that churn to be worth anything. They
+    /// do — the rotors touch them constantly, so they stay hot and NSCache
+    /// sheds the cold streaming intermediates first.
+    ///
+    /// Semantics are unchanged: same input, same output, same call sites.
+    /// This is purely "stop recomputing the identical answer."
+    private static let displayCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 1024
+        return cache
+    }()
+
     /// The one function call sites should actually use for anything a
     /// human reads or VoiceOver speaks. Mirrors the web client's own
     /// `stripGameSoundTags(stripVoiceTags(text))` call order
@@ -194,7 +227,14 @@ enum MessageTextSanitizer {
     /// session-23 citation-anchor pass, which the web client doesn't need
     /// (it RENDERS those anchors as citation chips instead).
     static func forDisplay(_ text: String) -> String {
-        stripMarkdownDecoration(stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text))))
+        guard !text.isEmpty else { return text }
+        let key = text as NSString
+        if let cached = displayCache.object(forKey: key) {
+            return cached as String
+        }
+        let cleaned = stripMarkdownDecoration(stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text))))
+        displayCache.setObject(cleaned as NSString, forKey: key)
+        return cleaned
     }
 
     /// See the regex block above — display twin of the proxy's speech scrub.
