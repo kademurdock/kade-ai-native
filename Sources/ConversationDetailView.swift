@@ -148,8 +148,6 @@ struct ConversationDetailView: View {
     /// stream ~34 chunks/second; sanitizing and re-laying-out a growing Text
     /// on every chunk is watchdog bait. Coalescing cuts that to 4/second —
     /// visually still "live," mechanically calm.
-    @State private var pendingThinkRaw = ""
-    @State private var thinkFlushScheduled = false
     @State private var liveThinkExpanded = false
     /// Aug 4 2026 (her pick): gentle spoken progress during LONG deep
     /// thinks, about every 20 seconds -- "Still thinking, about 900
@@ -157,7 +155,6 @@ struct ConversationDetailView: View {
     /// her explicit rule is that thoughts are never read out loud by the
     /// voice). Togglable under Settings > Speech.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
-    @State private var lastThinkProgressAnnounce = Date.distantPast
     // Aug 7 2026 (her "deep think off but still seems like she's thinking"):
     // LIVE REPLY STREAMING. The reply text was always on the wire; native
     // just waited for final. Now it grows on screen as she writes — and for
@@ -167,8 +164,31 @@ struct ConversationDetailView: View {
     // exactly the churn that kept cutting readouts off; the finished
     // message announces and auto-reads exactly as before.
     @State private var liveReply = ""
-    @State private var pendingReplyRaw = ""
-    @State private var replyFlushScheduled = false
+
+    /// Aug 13 2026 — THE PER-CHUNK STATE WRITE, and why the Aug 7 coalescing
+    /// only got half the job. Seven of this view's `@State` properties were
+    /// pure bookkeeping — accumulation buffers, two scheduled-flush guards,
+    /// three announcement timers. NOTHING in any view builder reads a single
+    /// one of them (verified by grep before this change). But they were
+    /// written on the hot path: `replyRaw += chunk` fired on EVERY streamed
+    /// chunk, and deep thinks arrive around 34 chunks a second. Every one of
+    /// those writes is a `@State` write, which means a trip through
+    /// AttributeGraph whether or not the body ever reads the value.
+    ///
+    /// The Aug 7 fix coalesced the SANITIZE to 4/second and correctly gated
+    /// it on scene state. It never touched the WRITES underneath, so the
+    /// graph churn stayed at chunk rate — and a crash-and-resubscribe replay
+    /// burst (Amber caught 56 events in one go on Aug 13, then 43) lands that
+    /// churn back-to-back in a single runloop turn.
+    ///
+    /// A plain class in `@State` is the fix and the whole fix: SwiftUI holds
+    /// the reference, mutating the object's PROPERTIES never touches the
+    /// `@State` storage, so the hot path costs a string append and nothing
+    /// else. Deliberately NOT an ObservableObject — publishing is exactly the
+    /// behaviour being removed here.
+    @State private var live = LiveStreamBuffers()
+    @State private var userRotorItems: [RotorItem] = []
+    @State private var replyRotorItems: [RotorItem] = []
 
     /// Aug 7 2026 — the 0x8BADF00D fix (two watchdog kills the same afternoon,
     /// receipts in the bridge diagnostics ring): every live-stream flush
@@ -187,35 +207,34 @@ struct ConversationDetailView: View {
     }
 
     private func scheduleLiveReplyFlush(retry: Bool = false) {
-        guard !replyFlushScheduled else { return }
-        replyFlushScheduled = true
-        let delay = retry ? 1.0 : liveFlushDelay(forLength: pendingReplyRaw.count)
+        guard !live.replyFlushScheduled else { return }
+        live.replyFlushScheduled = true
+        let delay = retry ? 1.0 : liveFlushDelay(forLength: live.replyRaw.count)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            replyFlushScheduled = false
+            live.replyFlushScheduled = false
             guard case .sending = sendState else { return }
             guard UIApplication.shared.applicationState == .active else {
                 scheduleLiveReplyFlush(retry: true)
                 return
             }
-            liveReply = MessageTextSanitizer.forDisplay(pendingReplyRaw)
+            liveReply = MessageTextSanitizer.forDisplay(live.replyRaw)
         }
     }
 
     private func scheduleLiveThinkFlush(retry: Bool = false) {
-        guard !thinkFlushScheduled else { return }
-        thinkFlushScheduled = true
-        let delay = retry ? 1.0 : liveFlushDelay(forLength: pendingThinkRaw.count)
+        guard !live.thinkFlushScheduled else { return }
+        live.thinkFlushScheduled = true
+        let delay = retry ? 1.0 : liveFlushDelay(forLength: live.thinkRaw.count)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            thinkFlushScheduled = false
+            live.thinkFlushScheduled = false
             guard case .sending = sendState else { return }
             guard UIApplication.shared.applicationState == .active else {
                 scheduleLiveThinkFlush(retry: true)
                 return
             }
-            liveThink = MessageTextSanitizer.forDisplay(pendingThinkRaw)
+            liveThink = MessageTextSanitizer.forDisplay(live.thinkRaw)
         }
     }
-    @State private var lastWriteProgressAnnounce = Date.distantPast
     /// Aug 4 2026 evening (her report: "the stupid flashing still thinking
     /// message interrupts the stream of thoughts being read out by
     /// voiceover"): while the bubble is OPEN, its spoken text is a frozen
@@ -223,7 +242,6 @@ struct ConversationDetailView: View {
     /// under VoiceOver mid-read invalidates the element and cuts the
     /// readout off. Close and reopen for a fresh snapshot; the VISUAL text
     /// keeps pouring for sighted eyes either way.
-    @State private var announcedThinking = false
     @State private var attachmentUploading = false
     @State private var showingAttachMenu = false
     @State private var showingAttachPhotos = false
@@ -945,7 +963,10 @@ struct ConversationDetailView: View {
                 }
                 .padding()
             }
-            .onAppear { scrollToBottom(proxy) }
+            .onAppear {
+                scrollToBottom(proxy)
+                rebuildRotorItems()
+            }
             .fullScreenCover(item: $readingMessage, onDismiss: {
                 // Hand VoiceOver focus back to the message the reader was
                 // opened from -- the same focus-restoration promise the
@@ -963,7 +984,16 @@ struct ConversationDetailView: View {
                 )
             }
             .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: sendState) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: sendState) { _, _ in
+                scrollToBottom(proxy)
+                // Covers the cases the cheap signature can't see on its own:
+                // an edit or a regenerate rewrites a message IN PLACE, so the
+                // count and the last id both stay put while the text changes.
+                // Every one of those paths moves sendState, so rebuilding here
+                // closes the staleness gap without watching message bodies.
+                rebuildRotorItems()
+            }
+            .onChange(of: rotorSignature) { _, _ in rebuildRotorItems() }
             // Phase 7 (accessibility polish): two custom VoiceOver rotors so
             // a long back-and-forth can be crossed by sender instead of
             // swiping every row one at a time -- a genuinely useful shortcut
@@ -975,14 +1005,22 @@ struct ConversationDetailView: View {
             // documented-safe pattern that needs no separate Namespace /
             // accessibilityRotorEntry wiring, since SwiftUI matches rotor
             // entries to on-screen elements by that shared id.
+            // Aug 13 2026 — these two used to be the most expensive thing on
+            // the screen. Each one filtered the ENTIRE message array and
+            // called rotorLabel -> readableText per message, and rotor bodies
+            // rebuild on every view-body evaluation — which during a live
+            // stream was every 250ms, on top of a sanitizer that cached
+            // nothing. Now they read two precomputed arrays and do no work
+            // beyond handing SwiftUI strings it already has. See
+            // rebuildRotorItems for when those arrays refresh.
             .accessibilityRotor("Your messages") {
-                ForEach(visibleMessages.filter { $0.isCreatedByUser }) { message in
-                    AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
+                ForEach(userRotorItems) { item in
+                    AccessibilityRotorEntry(item.label, id: item.id)
                 }
             }
             .accessibilityRotor("Replies") {
-                ForEach(visibleMessages.filter { !$0.isCreatedByUser }) { message in
-                    AccessibilityRotorEntry(rotorLabel(for: message), id: message.id)
+                ForEach(replyRotorItems) { item in
+                    AccessibilityRotorEntry(item.label, id: item.id)
                 }
             }
         }
@@ -1104,6 +1142,34 @@ struct ConversationDetailView: View {
     /// messages" vs "Replies") tells VoiceOver which voice it's about to
     /// land on, so repeating "You said" / "X said" on every entry would
     /// just be noise while dialing through the rotor.
+    /// One VoiceOver rotor entry, precomputed. `label` is built ONCE per
+    /// transcript change rather than per view-body evaluation — see the
+    /// accessibilityRotor pair in `messageList` for what that replaced.
+    struct RotorItem: Identifiable {
+        let id: String
+        let label: String
+    }
+
+    /// Cheap change-detector for the transcript. Deliberately O(1): a count,
+    /// the last id, and the search text. It cannot see an in-place edit of an
+    /// older message — that gap is covered by the sendState hook instead, and
+    /// the two together are still far cheaper than walking every message on
+    /// every body evaluation.
+    private var rotorSignature: String {
+        let search = messageSearchActive ? messageSearchText : ""
+        return "\(messages.count)|\(messages.last?.id ?? "")|\(search)"
+    }
+
+    private func rebuildRotorItems() {
+        let source = visibleMessages
+        userRotorItems = source
+            .filter { $0.isCreatedByUser }
+            .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
+        replyRotorItems = source
+            .filter { !$0.isCreatedByUser }
+            .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
+    }
+
     private func rotorLabel(for message: KadeMessage) -> String {
         let time = KadeDateFormatting.time(from: message.createdAt) ?? ""
         let preview = message.readableText.isEmpty ? "…" : message.readableText
@@ -1963,10 +2029,7 @@ struct ConversationDetailView: View {
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
             liveThink = ""
             liveReply = ""
-            pendingReplyRaw = ""
-            lastWriteProgressAnnounce = Date.distantPast
-            pendingThinkRaw = ""
-            announcedThinking = false
+            live.resetTurn()
             liveThinkExpanded = false
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
@@ -1980,14 +2043,14 @@ struct ConversationDetailView: View {
                     // discipline), plus the gentle spoken progress line for
                     // long writes — low priority, waits for silence, same
                     // Settings toggle as spoken thinking progress.
-                    pendingReplyRaw += chunk
+                    live.replyRaw += chunk
                     scheduleLiveReplyFlush()
                     if spokenThinkingProgress,
                        UIAccessibility.isVoiceOverRunning,
-                       Date().timeIntervalSince(lastWriteProgressAnnounce) >= 20,
-                       pendingReplyRaw.count > 300 {
-                        lastWriteProgressAnnounce = Date()
-                        let words = max((pendingReplyRaw.split(separator: " ").count / 25) * 25, 25)
+                       Date().timeIntervalSince(live.lastWriteProgressAnnounce) >= 20,
+                       live.replyRaw.count > 300 {
+                        live.lastWriteProgressAnnounce = Date()
+                        let words = max((live.replyRaw.split(separator: " ").count / 25) * 25, 25)
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: NSAttributedString(
@@ -2013,11 +2076,11 @@ struct ConversationDetailView: View {
                     // accumulated raw (a token split across chunks can't
                     // dodge a full-text pass). Same day, crash hardening:
                     // sanitize+publish is COALESCED to one pass per 250ms
-                    // (see pendingThinkRaw) instead of per chunk.
-                    pendingThinkRaw += chunk
+                    // (see live.thinkRaw) instead of per chunk.
+                    live.thinkRaw += chunk
                     scheduleLiveThinkFlush()
-                    if !announcedThinking {
-                        announcedThinking = true
+                    if !live.announcedThinking {
+                        live.announcedThinking = true
                         // Aug 4 evening rework (her report + her instinct
                         // "maybe it should just be closed by default"):
                         // auto-open is for SIGHTED eyes only. Under
@@ -2029,22 +2092,22 @@ struct ConversationDetailView: View {
                         if !UIAccessibility.isVoiceOverRunning {
                             liveThinkExpanded = true
                         }
-                        lastThinkProgressAnnounce = Date()
+                        live.lastThinkProgressAnnounce = Date()
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: "Deep thoughts are streaming — the thinking bubble is under the last message."
                         )
                     } else if spokenThinkingProgress,
                               !liveThinkExpanded,
-                              Date().timeIntervalSince(lastThinkProgressAnnounce) >= 20 {
+                              Date().timeIntervalSince(live.lastThinkProgressAnnounce) >= 20 {
                         // Progress only speaks while the bubble is CLOSED
                         // (open = she's reading it; talking over her was
                         // the whole bug) and only politely: low-priority
                         // announcements wait for silence instead of
                         // interrupting whatever VoiceOver is mid-way
                         // through.
-                        lastThinkProgressAnnounce = Date()
-                        let rounded = max((pendingThinkRaw.count / 100) * 100, 100)
+                        live.lastThinkProgressAnnounce = Date()
+                        let rounded = max((live.thinkRaw.count / 100) * 100, 100)
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: NSAttributedString(
@@ -2057,10 +2120,7 @@ struct ConversationDetailView: View {
             )
             liveThink = ""
             liveReply = ""
-            pendingReplyRaw = ""
-            lastWriteProgressAnnounce = Date.distantPast
-            pendingThinkRaw = ""
-            announcedThinking = false
+            live.resetTurn()
             liveThinkExpanded = false
             conversationId = resolvedConversationId
             // Authoritative reload: replaces the optimistic placeholder with
@@ -2168,10 +2228,7 @@ struct ConversationDetailView: View {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
             liveThink = ""
             liveReply = ""
-            pendingReplyRaw = ""
-            lastWriteProgressAnnounce = Date.distantPast
-            pendingThinkRaw = ""
-            announcedThinking = false
+            live.resetTurn()
             liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was
             // sent from the user's point of view, only the "did the reply
@@ -2744,5 +2801,35 @@ private struct MessageAttachmentView: View {
             in: Capsule()
         )
         .foregroundStyle(.secondary)
+    }
+}
+
+
+/// Bookkeeping for one in-flight streamed turn. Reference type on purpose —
+/// see `ConversationDetailView.live`. Nothing here is ever read by a view
+/// builder; if that ever stops being true, this needs to become observable
+/// and the hot-path cost comes back with it.
+private final class LiveStreamBuffers {
+    /// Raw, UNSANITIZED accumulation. Sanitizing happens once per flush over
+    /// the FULL accumulated text (a tag split across two chunks can't dodge a
+    /// full-text pass) — see `scheduleLiveReplyFlush`.
+    var replyRaw = ""
+    var thinkRaw = ""
+    var replyFlushScheduled = false
+    var thinkFlushScheduled = false
+    var lastWriteProgressAnnounce = Date.distantPast
+    var lastThinkProgressAnnounce = Date.distantPast
+    var announcedThinking = false
+
+    /// Exactly the four fields the old inline reset cleared, no more: the two
+    /// buffers, the write-progress timer, and the thinking-announced latch.
+    /// The flush-scheduled guards are deliberately LEFT ALONE — an
+    /// `asyncAfter` may already be in flight, and clearing its guard here
+    /// would let a second one stack on top of it.
+    func resetTurn() {
+        replyRaw = ""
+        thinkRaw = ""
+        lastWriteProgressAnnounce = .distantPast
+        announcedThinking = false
     }
 }
