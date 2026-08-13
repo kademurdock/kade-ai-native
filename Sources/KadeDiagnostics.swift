@@ -145,6 +145,22 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     private static let uploadedKey = "kade.diag.uploaded.v1"
     private static let sinkURL = URL(string: "https://kade-ai-bridge-production.up.railway.app/diagnostics")!
 
+    /// The signed-in account this crash belongs to, or "" if nobody is signed
+    /// in (a crash on the sign-in screen is still worth having, just anonymous).
+    ///
+    /// Reads the Keychain copy AuthService already caches rather than reaching
+    /// for AuthService itself: this runs on a utility queue during launch,
+    /// AuthService is @MainActor, and a diagnostics uploader must never be the
+    /// reason launch waits on the main thread. Fail-soft like everything else
+    /// in this file — no account, no field, upload proceeds regardless.
+    private static func signedInAccount() -> String {
+        guard let data = Keychain.data(for: .user),
+              let user = try? JSONDecoder().decode(KadeUser.self, from: data)
+        else { return "" }
+        let name = user.displayName
+        return name == user.email ? user.email : "\(name) <\(user.email)>"
+    }
+
     private func uploadPendingReports() {
         DispatchQueue.global(qos: .utility).async {
             let dir = KadeBreadcrumbs.directory
@@ -155,6 +171,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
                 .map { $0.split(separator: "\n").suffix(30).joined(separator: "\n") } ?? ""
             let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
             let device = UIDevice.current.model + " iOS " + UIDevice.current.systemVersion
+            let who = Self.signedInAccount()
             var sent = 0
             let candidates = files
                 .filter { $0.lastPathComponent.hasPrefix("crash-") && !uploaded.contains($0.lastPathComponent) }
@@ -180,13 +197,20 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 req.timeoutInterval = 10
-                let body: [String: Any] = [
+                var body: [String: Any] = [
                     "build": build,
                     "device": device,
                     "kind": "crash",
                     "payload": payload,
                     "breadcrumbs": crumbs,
                 ]
+                // Build 199 (Aug 13 2026) — WHO. Amber took five watchdog
+                // kills on 197 and the alert, had it worked at all, could
+                // only have said "build 197, iPhone iOS 26.6." Finding out it
+                // was Amber meant hand-correlating the crash ring against
+                // LibreChat's server logs by timestamp. The report now names
+                // its own account, so the push can too.
+                if !who.isEmpty { body["who"] = who }
                 req.httpBody = try? JSONSerialization.data(withJSONObject: body)
                 let gate = DispatchSemaphore(value: 0)
                 var accepted = false
