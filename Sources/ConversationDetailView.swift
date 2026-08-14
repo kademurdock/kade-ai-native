@@ -255,6 +255,24 @@ struct ConversationDetailView: View {
     // Think markers can never make an invisible match.
     @State private var messageSearchActive = false
     @State private var messageSearchText: String = ""
+
+    /// Aug 14 2026 — THE TRANSCRIPT WINDOW, bought by Amber's build-202
+    /// crash loop (bridge diagnostics ring, 15:38–16:35Z: launch → send →
+    /// 0x8BADF00D scene-update watchdog, three relaunches in 17 minutes,
+    /// same signature as her five 197-era kills). Build 202 already made
+    /// each row CHEAP (the sanitizer memo + precomputed rotor arrays) —
+    /// but every 250ms live-stream flush still re-evaluates this body and
+    /// asks AttributeGraph to diff EVERY row of a 164-message thread, and
+    /// launch's scroll-to-bottom materializes the lot. The cost that
+    /// remained was O(all messages); this caps it. Only the newest
+    /// `transcriptWindow` rows render; a clearly-labeled button above the
+    /// transcript loads earlier history in steps. Search still sweeps the
+    /// FULL thread on purpose (explicit intent, rare, and it renders only
+    /// the matches). VoiceOver wins twice: fewer swipe stops by default in
+    /// a giant thread, and the rotors now navigate exactly what is on
+    /// screen.
+    @State private var transcriptWindow = ConversationDetailView.transcriptWindowStep
+    private static let transcriptWindowStep = 60
     @FocusState private var messageSearchFocused: Bool
 
     /// What a FAILED send was trying to do -- captured so "Retry" can
@@ -849,10 +867,25 @@ struct ConversationDetailView: View {
     /// everything, unless an in-conversation search is narrowing things.
     private var visibleMessages: [KadeMessage] {
         let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard messageSearchActive, !query.isEmpty else { return messages }
+        guard messageSearchActive, !query.isEmpty else {
+            // The window (see transcriptWindow's doc comment). suffix keeps
+            // the NEWEST rows — the conversation's living end.
+            if messages.count > transcriptWindow {
+                return Array(messages.suffix(transcriptWindow))
+            }
+            return messages
+        }
         return messages.filter {
             $0.readableText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
+    }
+
+    /// How many older messages the window is hiding (0 while searching —
+    /// search renders its matches, not the window).
+    private var hiddenEarlierCount: Int {
+        let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if messageSearchActive && !query.isEmpty { return 0 }
+        return max(0, messages.count - transcriptWindow)
     }
 
     private var messageSearchSummary: String {
@@ -919,6 +952,9 @@ struct ConversationDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if hiddenEarlierCount > 0 {
+                        showEarlierButton(proxy)
+                    }
                     ForEach(visibleMessages) { message in
                         MessageRow(
                             message: message,
@@ -1157,7 +1193,7 @@ struct ConversationDetailView: View {
     /// every body evaluation.
     private var rotorSignature: String {
         let search = messageSearchActive ? messageSearchText : ""
-        return "\(messages.count)|\(messages.last?.id ?? "")|\(search)"
+        return "\(messages.count)|\(messages.last?.id ?? "")|\(search)|\(transcriptWindow)"
     }
 
     private func rebuildRotorItems() {
@@ -1175,6 +1211,35 @@ struct ConversationDetailView: View {
         let preview = message.readableText.isEmpty ? "…" : message.readableText
         let truncated = preview.count > 60 ? String(preview.prefix(60)) + "…" : preview
         return time.isEmpty ? truncated : "\(time): \(truncated)"
+    }
+
+    /// The window's one control: a single, clearly-labeled button above the
+    /// transcript. Expanding keeps the reader's place (the previously-oldest
+    /// visible row is re-anchored to the top) and tells VoiceOver what
+    /// happened in plain words.
+    private func showEarlierButton(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            let anchorId = visibleMessages.first?.id
+            transcriptWindow += Self.transcriptWindowStep * 2
+            rebuildRotorItems()
+            if let anchorId {
+                DispatchQueue.main.async { proxy.scrollTo(anchorId, anchor: .top) }
+            }
+            let remaining = max(0, messages.count - transcriptWindow)
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: remaining > 0
+                    ? "Loaded earlier messages. \(remaining) older messages still folded away."
+                    : "Loaded the whole conversation."
+            )
+        } label: {
+            Text("Show earlier messages (\(hiddenEarlierCount) more)")
+                .font(.footnote.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityHint("The newest part of the conversation is shown. Loads older messages above it.")
     }
 
     private func errorState(_ message: String) -> some View {
