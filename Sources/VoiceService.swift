@@ -207,7 +207,32 @@ final class VoiceService: NSObject, ObservableObject {
         }
 
         do {
-            try session.setCategory(.playAndRecord, options: [.defaultToSpeaker])
+            // Aug 13 2026 — AMBER'S AIRPODS BUG, root-caused. `.playAndRecord`
+            // with ONLY `.defaultToSpeaker` makes a Bluetooth headset
+            // ineligible for the session: no `.allowBluetooth` means no HFP,
+            // and A2DP is output-only so it can't serve a record category at
+            // all. The moment she hit record with AirPods in, iOS had no
+            // choice but built-in mic + built-in speaker — sound "kept
+            // pushing out the speaker," and her voice note wasn't even using
+            // the AirPods mic she thought she was talking into. Every retry
+            // re-broke the route, which read as "can't get it back at all."
+            //
+            // `.allowBluetooth` (HFP) fixes both halves: with AirPods in, the
+            // mic is the AirPods and the audio stays in her ears. Voice drops
+            // to phone-call quality while recording — that's Bluetooth
+            // physics, same as Siri and every phone call, and it recovers the
+            // moment the session is restored below.
+            //
+            // `.allowBluetoothA2DP` is deliberately NOT added, on the call
+            // lane's own paid-for lesson (StreamingCallService, build 119):
+            // A2DP is output-only, and combining it with a record category is
+            // a known source of odd route selection.
+            //
+            // `.defaultToSpeaker` stays: with NO headset connected, output
+            // belongs on the loud speaker, not the earpiece — unchanged
+            // behavior for the no-AirPods case (the option only applies when
+            // no external route exists, so it never fights a headset).
+            try session.setCategory(.playAndRecord, options: [.allowBluetooth, .defaultToSpeaker])
             try session.setActive(true)
         } catch {
             recordError = "Couldn't access the microphone. Try again."
@@ -244,6 +269,10 @@ final class VoiceService: NSObject, ObservableObject {
             newRecorder.isMeteringEnabled = true
             guard newRecorder.record() else {
                 recordError = "Couldn't start recording. Try again."
+                // The session was already activated as .playAndRecord above;
+                // bail without restoring and the speaker-routing bug comes
+                // back through the failure door.
+                restorePlaybackSession()
                 return false
             }
             recorder = newRecorder
@@ -253,6 +282,7 @@ final class VoiceService: NSObject, ObservableObject {
             return true
         } catch {
             recordError = "Couldn't start recording. Try again."
+            restorePlaybackSession()
             return false
         }
     }
@@ -301,7 +331,26 @@ final class VoiceService: NSObject, ObservableObject {
         recorder?.stop()
         recorder = nil
         isRecording = false
+        // Aug 13 2026, the second half of Amber's AirPods bug: this method
+        // stopped the RECORDER but never touched the SESSION, so
+        // `.playAndRecord + .defaultToSpeaker` stayed the live category for
+        // the rest of the app's life — every earcon and reply after one
+        // voice note played out the phone speaker instead of her AirPods.
+        // Same restore shape as StreamingCallService's call teardown:
+        // deactivate (with the courtesy flag so backgrounded audio apps get
+        // their session back), then park the category on `.playback` so the
+        // next reply routes to A2DP — which is the AirPods again.
+        restorePlaybackSession()
         return recordingURL
+    }
+
+    /// The record session's exit door. Fail-soft like every session call in
+    /// this file: a restore hiccup must never eat the recording that was
+    /// just made — the file URL is already in hand when this runs.
+    private func restorePlaybackSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
     }
 
     /// Uploads a recorded file to `/api/files/speech/stt` and returns the
