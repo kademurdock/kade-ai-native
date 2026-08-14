@@ -217,6 +217,14 @@ enum MessageTextSanitizer {
     private static let displayCache: NSCache<NSString, NSString> = {
         let cache = NSCache<NSString, NSString>()
         cache.countLimit = 1024
+        // Aug 13 review pass: a count limit alone lets 1024 ENTRIES mean
+        // anything from kilobytes to tens of megabytes — live streaming
+        // caches every growing snapshot of the reply, so a long essay can
+        // stack hundreds of near-duplicate prefixes at full length each. A
+        // cost ceiling bounds the worst case; NSCache sheds cold entries
+        // first, and streaming intermediates go cold the instant the next
+        // snapshot supersedes them.
+        cache.totalCostLimit = 4_000_000
         return cache
     }()
 
@@ -233,7 +241,7 @@ enum MessageTextSanitizer {
             return cached as String
         }
         let cleaned = stripMarkdownDecoration(stripCitationAnchors(stripGameSoundTags(stripVoiceTags(text))))
-        displayCache.setObject(cleaned as NSString, forKey: key)
+        displayCache.setObject(cleaned as NSString, forKey: key, cost: cleaned.utf16.count)
         return cleaned
     }
 
