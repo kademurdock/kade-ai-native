@@ -325,8 +325,37 @@ struct ConversationDetailView: View {
     /// wrong kind of surprise. Display side needs nothing new: the
     /// sanitizer has stripped [DEEP THINK] markers since the web feature
     /// shipped.
-    @MainActor private static var deepThinkArmedGlobal = false
-    @State private var deepThinkArmed = false
+    /// Build 204 — HER DESIGN, verbatim: "it auto decides between deepthink
+    /// and instant for you... Everything on everybody should be auto by
+    /// default, with choices for instant and deep if desired." The two-state
+    /// Deep Think toggle grew into a three-mode thinking picker:
+    ///   auto    -> send unmarked; the reframe proxy's router reads the
+    ///              question and picks instant / quick-think / deep itself
+    ///   deep    -> every send stamped [DEEP THINK <ms>] (exactly the old
+    ///              armed behavior)
+    ///   instant -> every send stamped [INSTANT <ms>] — the proxy's forced
+    ///              fast lane (marker machinery shipped reframe-side first)
+    /// Persistence splits on purpose: instant SURVIVES relaunch (a person
+    /// who always wants the quick answer shouldn't re-pick it every day)
+    /// but deep RESETS to auto on launch — the Session-23 rule that "why is
+    /// she slow today, days later" is the wrong kind of surprise, kept.
+    enum ThinkMode: String {
+        case auto, deep, instant
+        var spoken: String {
+            switch self {
+            case .auto: return "Thinking: automatic. She decides per question."
+            case .deep: return "Thinking: deep. Always takes her time."
+            case .instant: return "Thinking: instant. Always the quick answer."
+            }
+        }
+    }
+    private static let thinkModeKey = "kadeThinkMode"
+    @MainActor private static var thinkModeGlobal: ThinkMode = {
+        let raw = UserDefaults.standard.string(forKey: ConversationDetailView.thinkModeKey) ?? ThinkMode.auto.rawValue
+        let stored = ThinkMode(rawValue: raw) ?? .auto
+        return stored == .deep ? .auto : stored
+    }()
+    @State private var thinkMode: ThinkMode = .auto
 
     // Session 14 additions. `ShareItem` wraps either plain text or a
     // prepared audio file so ONE share sheet serves both "Share Text" and
@@ -495,7 +524,7 @@ struct ConversationDetailView: View {
             // so there is no existing per-conversation choice this could
             // ever clobber; it only changes what the starting point is.
             readAloudEnabled = voiceService.defaultReadAloudOn
-            deepThinkArmed = Self.deepThinkArmedGlobal
+            thinkMode = Self.thinkModeGlobal
             // Prompt Library handoff: pre-type the chosen prompt. Empty
             // check = the never-clobber guarantee promised at the
             // declaration; a re-appear after a push-pop also lands here,
@@ -989,6 +1018,7 @@ struct ConversationDetailView: View {
                     }
                     if !liveThink.isEmpty, case .sending = sendState {
                         liveThinkingBubble
+                        answerNowButton
                     }
                     if !liveReply.isEmpty, case .sending = sendState {
                         liveReplyBubble
@@ -1811,31 +1841,33 @@ struct ConversationDetailView: View {
     /// an announcement here), because the visual state change is silent.
     private var deepThinkButton: some View {
         Button {
-            deepThinkArmed.toggle()
-            Self.deepThinkArmedGlobal = deepThinkArmed
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: deepThinkArmed ? "Deep think on." : "Deep think off."
-            )
+            let next: ThinkMode = thinkMode == .auto ? .deep : thinkMode == .deep ? .instant : .auto
+            thinkMode = next
+            Self.thinkModeGlobal = next
+            // Instant persists across launches; deep deliberately does not
+            // (it's stored, but the launch-time reader resets deep -> auto).
+            UserDefaults.standard.set(next.rawValue, forKey: Self.thinkModeKey)
+            UIAccessibility.post(notification: .announcement, argument: next.spoken)
         } label: {
-            Image(systemName: "brain.head.profile")
+            Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
                 .font(.title3)
-                .foregroundStyle(deepThinkArmed ? Color.accentColor : Color.secondary)
+                .foregroundStyle(thinkMode == .auto ? Color.secondary : Color.accentColor)
                 .padding(6)
                 .background(
                     Circle().strokeBorder(
-                        deepThinkArmed ? Color.accentColor : Color.secondary.opacity(0.4),
-                        lineWidth: deepThinkArmed ? 2 : 1
+                        thinkMode == .auto ? Color.secondary.opacity(0.4) : Color.accentColor,
+                        lineWidth: thinkMode == .auto ? 1 : 2
                     )
                 )
         }
         .buttonStyle(.plain)
         .disabled(isSending)
-        .accessibilityLabel("Deep think")
-        .accessibilityValue(deepThinkArmed ? "On" : "Off")
-        .accessibilityHint("Slower, more careful answers for hard questions. Stays on for every message until you turn it off.")
-        .accessibilityAddTraits(.isToggle)
-        .sensoryFeedback(trigger: deepThinkArmed) { _, _ in
+        .accessibilityLabel("Thinking")
+        .accessibilityValue(
+            thinkMode == .auto ? "Automatic" : thinkMode == .deep ? "Deep" : "Instant"
+        )
+        .accessibilityHint("Automatic decides per question. Deep always takes longer for careful answers. Instant always answers fast. Applies to every message until changed.")
+        .sensoryFeedback(trigger: thinkMode) { _, _ in
             FeedbackPrefs.gate(.selection)
         }
     }
@@ -1925,9 +1957,13 @@ struct ConversationDetailView: View {
         // to plain sends and edit-and-resend alike (both are human-authored
         // composer sends); regenerate deliberately not -- it reuses the
         // already-stripped displayText of an old message.
-        let stamped = deepThinkArmed
-            ? trimmed + " [DEEP THINK \(Int(Date().timeIntervalSince1970 * 1000))]"
-            : trimmed
+        let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+        let stamped: String
+        switch thinkMode {
+        case .deep: stamped = trimmed + " [DEEP THINK \(nowMs)]"
+        case .instant: stamped = trimmed + " [INSTANT \(nowMs)]"
+        case .auto: stamped = trimmed
+        }
         await performSend(text: stamped, parentId: parentId)
     }
 
@@ -1951,6 +1987,52 @@ struct ConversationDetailView: View {
         Task {
             await messageSendingService.abortActive()
             sendTask?.cancel()
+        }
+    }
+
+    /// Build 204 — HER ESCAPE HATCH, her design: "when it chooses deepthink,
+    /// some kind of get an instant answer now type button pops up where you
+    /// can change it to instant if you don't have time for all the deepthink
+    /// crap." Shows only while the thinking bubble is up. Stops the thinking
+    /// turn exactly the way Stop does (server abort first, then local
+    /// cancel — the Session 17 ordering), waits a beat for the abort to
+    /// land, then re-asks the SAME question as a fresh sibling send stamped
+    /// [INSTANT <ms>] — the proxy's forced fast lane. Same branch shape as
+    /// Regenerate (the documented repeated-question tradeoff of this flat
+    /// client applies here too, and it's worth it).
+    private var answerNowButton: some View {
+        Button {
+            answerNowInstead()
+        } label: {
+            Label("Answer now instead", systemImage: "hare")
+                .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityHint("Stops the deep thinking and asks for a quick answer to the same question.")
+    }
+
+    private func answerNowInstead() {
+        guard case .sending = sendState else { return }
+        guard let lastUser = messages.last(where: { $0.isCreatedByUser }) else { return }
+        // readableText: the same strip the transcript shows — Deep Think and
+        // Instant markers both come off, so markers never stack on a re-ask.
+        let baseText = lastUser.readableText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseText.isEmpty else { return }
+        let parentId = lastUser.parentMessageId
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Skipping the deep thinking. Getting the quick answer."
+        )
+        Task {
+            await messageSendingService.abortActive()
+            sendTask?.cancel()
+            // Let the abort land server-side and the cancelled task settle
+            // before the fresh send flips state back to sending.
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            let stamped = baseText + " [INSTANT \(Int(Date().timeIntervalSince1970 * 1000))]"
+            sendTask = Task { await performSend(text: stamped, parentId: parentId, includeAttachment: false) }
         }
     }
 

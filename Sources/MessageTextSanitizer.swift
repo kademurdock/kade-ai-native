@@ -65,6 +65,14 @@ enum MessageTextSanitizer {
         "\\[DEEP THINK(?:\\s+\\d{10,17})?\\]", caseInsensitive: true
     )
 
+    /// Build 204: the Instant marker — Deep Think's mirror twin. Appended by
+    /// the thinking picker's Instant mode and the "Answer now instead"
+    /// button; reframe-proxy honors a fresh one by forcing the fast lane.
+    /// Stripped from display/VoiceOver exactly like [DEEP THINK].
+    private static let instantRegex = makeRegex(
+        "\\[INSTANT(?:\\s+\\d{10,17})?\\]", caseInsensitive: true
+    )
+
     /// Session 23 (Kade: "\\u200 searchtern spam in the text of Kiana's
     /// replies... they didn't show up in audio but they need to be gone
     /// from the text"): WEB-SEARCH CITATION ANCHORS. The web-search tool
@@ -158,13 +166,14 @@ enum MessageTextSanitizer {
 
     /// Mirrors `stripGameSoundTags` (gameSounds.ts) exactly.
     static func stripGameSoundTags(_ text: String) -> String {
-        guard text.contains("[sound:") || text.contains("[table:") || text.contains("[DEEP THINK") else {
+        guard text.contains("[sound:") || text.contains("[table:") || text.contains("[DEEP THINK") || text.contains("[INSTANT") else {
             return text
         }
         var result = text
         result = removingMatches(of: gameSoundRegex, in: result)
         result = removingMatches(of: gameTableRegex, in: result)
         result = removingMatches(of: deepThinkRegex, in: result)
+        result = removingMatches(of: instantRegex, in: result)
         result = removingMatches(of: doubledSpaceOrTabRegex, in: result, replacement: " ")
         result = removingMatches(of: leadingWhitespaceRegex, in: result)
         return result
