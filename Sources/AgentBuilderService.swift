@@ -472,80 +472,6 @@ final class AgentBuilderService: ObservableObject {
             throw AgentBuilderError(message: uploadErrorMessage(from: data))
         }
     }
-}
-
-/// One category from `GET /api/agents/categories`. `count`/`description`
-/// are absent on the two synthetic entries ("promoted"/"all") the server
-/// adds itself, so both stay optional.
-struct AgentCategory: Decodable, Identifiable, Hashable {
-    let value: String
-    let label: String
-    let count: Int?
-    let description: String?
-    var id: String { value }
-}
-
-/// One of HER agents, as listed by `GET /api/agents` — a richer decode
-/// than `KadeAgent` (`AgentsService`'s type) specifically because this
-/// screen needs `author` to filter to her own; `KadeAgent` deliberately
-/// never needed it (the chat switcher shows everyone's).
-struct AgentSummary: Decodable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String?
-    let category: String?
-    let author: String?
-}
-
-/// The full-enough detail for editing — decoded from `GET /api/agents/:id
-/// /expanded`'s raw agent document, keeping only the fields this app's
-/// Phase 1 editor actually shows. Everything else on that response
-/// (tools, tool_resources, edges, tts, conversation_starters, ...) is
-/// silently ignored, same treatment `KadeAgent`'s own doc comment
-/// describes for the marketplace list.
-struct AgentDetail: Decodable, Identifiable, Hashable {
-    struct TTSInfo: Decodable, Hashable { let voiceId: String? }
-    let id: String
-    let name: String?
-    let description: String?
-    let instructions: String?
-    let category: String?
-    let provider: String?
-    let model: String?
-    let author: String?
-    /// The agent's configured TTS voice, if any (same `tts.voiceId` shape
-    /// `VoiceService.resolveVoice` reads). Lets the editor show and keep the
-    /// current voice instead of silently resetting it on save.
-    let tts: TTSInfo?
-    /// Tappable opening lines, editable in Phase 2.
-    let conversation_starters: [String]?
-    /// The agent's enabled tool keys (kade_notify, flux, ...), editable in
-    /// Phase 2. Unknown entries are preserved by the editor, never dropped.
-    let tools: [String]?
-    /// Prior saved states, oldest first — every save pushes the pre-save
-    /// snapshot here server-side. Lenient subset: a snapshot carries the
-    /// full agent document, but only these fields are needed to label a
-    /// history row and pick one to restore.
-    let versions: [AgentVersion]?
-}
-
-/// One entry of an agent's `versions` array (a full prior snapshot,
-/// decoded leniently — every field optional on purpose).
-struct AgentVersion: Decodable, Hashable {
-    let name: String?
-    let description: String?
-    let model: String?
-    let updatedAt: String?
-}
-
-/// One entry from `GET /api/agents/tools` — see loadAvailableTools.
-struct AvailableTool: Decodable, Identifiable, Hashable {
-    let pluginKey: String
-    let name: String
-    let description: String?
-    let isAuthRequired: Bool?
-    var id: String { pluginKey }
-
     // MARK: - The Create-a-Character brain (Aug 14 2026, build 202)
     //
     // Web and native deliberately consume the SAME routes — the quiz, the
@@ -640,3 +566,75 @@ struct AvailableTool: Decodable, Identifiable, Hashable {
     }
 }
 
+/// One category from `GET /api/agents/categories`. `count`/`description`
+/// are absent on the two synthetic entries ("promoted"/"all") the server
+/// adds itself, so both stay optional.
+struct AgentCategory: Decodable, Identifiable, Hashable {
+    let value: String
+    let label: String
+    let count: Int?
+    let description: String?
+    var id: String { value }
+}
+
+/// One of HER agents, as listed by `GET /api/agents` — a richer decode
+/// than `KadeAgent` (`AgentsService`'s type) specifically because this
+/// screen needs `author` to filter to her own; `KadeAgent` deliberately
+/// never needed it (the chat switcher shows everyone's).
+struct AgentSummary: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String?
+    let category: String?
+    let author: String?
+}
+
+/// The full-enough detail for editing — decoded from `GET /api/agents/:id
+/// /expanded`'s raw agent document, keeping only the fields this app's
+/// Phase 1 editor actually shows. Everything else on that response
+/// (tools, tool_resources, edges, tts, conversation_starters, ...) is
+/// silently ignored, same treatment `KadeAgent`'s own doc comment
+/// describes for the marketplace list.
+struct AgentDetail: Decodable, Identifiable, Hashable {
+    struct TTSInfo: Decodable, Hashable { let voiceId: String? }
+    let id: String
+    let name: String?
+    let description: String?
+    let instructions: String?
+    let category: String?
+    let provider: String?
+    let model: String?
+    let author: String?
+    /// The agent's configured TTS voice, if any (same `tts.voiceId` shape
+    /// `VoiceService.resolveVoice` reads). Lets the editor show and keep the
+    /// current voice instead of silently resetting it on save.
+    let tts: TTSInfo?
+    /// Tappable opening lines, editable in Phase 2.
+    let conversation_starters: [String]?
+    /// The agent's enabled tool keys (kade_notify, flux, ...), editable in
+    /// Phase 2. Unknown entries are preserved by the editor, never dropped.
+    let tools: [String]?
+    /// Prior saved states, oldest first — every save pushes the pre-save
+    /// snapshot here server-side. Lenient subset: a snapshot carries the
+    /// full agent document, but only these fields are needed to label a
+    /// history row and pick one to restore.
+    let versions: [AgentVersion]?
+}
+
+/// One entry of an agent's `versions` array (a full prior snapshot,
+/// decoded leniently — every field optional on purpose).
+struct AgentVersion: Decodable, Hashable {
+    let name: String?
+    let description: String?
+    let model: String?
+    let updatedAt: String?
+}
+
+/// One entry from `GET /api/agents/tools` — see loadAvailableTools.
+struct AvailableTool: Decodable, Identifiable, Hashable {
+    let pluginKey: String
+    let name: String
+    let description: String?
+    let isAuthRequired: Bool?
+    var id: String { pluginKey }
+}
