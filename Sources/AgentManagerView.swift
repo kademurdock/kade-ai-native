@@ -33,10 +33,12 @@ struct AgentManagerView: View {
 
     private enum AgentSheet: Identifiable {
         case new
+        case quiz
         case edit(String)
         var id: String {
             switch self {
             case .new: return "new"
+            case .quiz: return "quiz"
             case .edit(let agentId): return "edit:\(agentId)"
             }
         }
@@ -68,6 +70,18 @@ struct AgentManagerView: View {
                 .accessibilityLabel("New agent")
                 .accessibilityHint("Create a new companion from scratch.")
             }
+            // Build 202 — the quiz door. Eight questions, no wrong answers,
+            // a painted portrait at the end. Same brain as the website's
+            // /create-a-character page.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    activeSheet = .quiz
+                } label: {
+                    Image(systemName: "wand.and.stars")
+                }
+                .accessibilityLabel("Create with the quiz")
+                .accessibilityHint("Eight easy questions build a whole character for you — personality, engine, and a painted portrait. No experience needed.")
+            }
         }
         .task {
             guard !hasLoaded else { return }
@@ -77,6 +91,10 @@ struct AgentManagerView: View {
         .refreshable { await reload() }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .quiz:
+                CharacterQuizView(service: service) { _ in
+                    Task { await reload() }
+                }
             case .new:
                 AgentEditorView(apiClient: apiClient, existingId: nil) {
                     Task { await reload() }

@@ -63,6 +63,15 @@ struct AgentEditorView: View {
     @State private var showingActions = false
     @State private var loadedVersions: [AgentVersion] = []
     @State private var avatarPickerItem: PhotosPickerItem?
+    /// Aug 14 2026 (build 202) — the plain-language engine menu and the
+    /// portrait painter, both riding the same fork routes the web quiz page
+    /// uses. The menu shows choices a person can hear ("The all-rounder —
+    /// quick, warm, good memory"); the raw provider/model pickers stay one
+    /// toggle away so an expert loses nothing.
+    @State private var modelMenu: [AgentBuilderService.ModelMenuEntry] = []
+    @State private var showTechnicalModels = false
+    @State private var isPainting = false
+    @State private var paintNote: String?
     @State private var pendingAvatarJpeg: Data?
     @State private var avatarNote: String?
 
@@ -119,8 +128,44 @@ struct AgentEditorView: View {
                             .accessibilityLabel("Category")
                         }
                     }
-                    Section("Model") {
-                        if sortedProviders.isEmpty {
+                    Section {
+                        if !modelMenu.isEmpty && !showTechnicalModels {
+                            // The friendly menu. Selection is matched on the
+                            // (provider, model) pair; an agent running
+                            // something off-menu simply shows no checkmark
+                            // and the technical toggle is right below.
+                            ForEach(modelMenu) { entry in
+                                Button {
+                                    provider = entry.provider
+                                    model = entry.model
+                                    UIAccessibility.post(notification: .announcement, argument: "\(entry.plainName) picked.")
+                                } label: {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(entry.plainName).fontWeight(.semibold)
+                                                .foregroundStyle(Color.primary)
+                                            Text(entry.blurb)
+                                                .font(.footnote)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if provider == entry.provider && model == entry.model {
+                                            Image(systemName: "checkmark")
+                                                .accessibilityHidden(true)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(entry.plainName). \(entry.blurb) Good for \(entry.goodFor).")
+                                .accessibilityValue(provider == entry.provider && model == entry.model ? "Picked" : "")
+                                .accessibilityHint("Makes this their thinking engine.")
+                            }
+                            Button("Show technical names") {
+                                showTechnicalModels = true
+                                UIAccessibility.post(notification: .announcement, argument: "Technical model pickers shown.")
+                            }
+                            .font(.footnote)
+                        } else if sortedProviders.isEmpty {
                             Text("No models available.").foregroundStyle(.secondary)
                         } else {
                             Picker("Provider", selection: $provider) {
@@ -144,7 +189,20 @@ struct AgentEditorView: View {
                                 }
                                 .accessibilityLabel("Model")
                             }
+                            if !modelMenu.isEmpty {
+                                Button("Use plain choices instead") {
+                                    showTechnicalModels = false
+                                    UIAccessibility.post(notification: .announcement, argument: "Plain engine choices shown.")
+                                }
+                                .font(.footnote)
+                            }
                         }
+                    } header: {
+                        Text("Their engine")
+                    } footer: {
+                        Text(showTechnicalModels || modelMenu.isEmpty
+                            ? "The exact machinery, for those who want it."
+                            : "The machinery that does their thinking, in plain words. Technical names are one tap away and nothing is hidden.")
                     }
                     Section("Voice") {
                         Button {
@@ -233,6 +291,28 @@ struct AgentEditorView: View {
                             .accessibilityHint("Picks a photo from your library to use as this agent's picture.")
                             if let avatarNote {
                                 Text(avatarNote)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            // Build 202: no photo library required — three
+                            // cents paints them a portrait in the marketplace
+                            // house style, charged to the same picture
+                            // allowance everything else uses (8 a day).
+                            Button {
+                                Task { await paintPortrait() }
+                            } label: {
+                                HStack {
+                                    Text(isPainting ? "Painting…" : "Paint their portrait (3 cents)")
+                                        .foregroundStyle(Color.primary)
+                                    Spacer()
+                                    if isPainting { ProgressView().accessibilityHidden(true) }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isPainting ? "Painting their portrait. About fifteen seconds." : "Paint their portrait. Costs three cents of picture credit.")
+                            .accessibilityHint("Paints a portrait from their name and description, in the same warm style as the marketplace faces. It uploads when you save.")
+                            if let paintNote {
+                                Text(paintNote)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -393,9 +473,11 @@ struct AgentEditorView: View {
                 async let cats = service.loadCategories()
                 async let models = service.loadModelsConfig()
                 async let tools = service.loadAvailableTools()
+                async let menu = service.loadModelMenu()
                 categories = await cats
                 modelsConfig = await models
                 availableTools = await tools
+                modelMenu = await menu
                 toolsListLoaded = !availableTools.isEmpty
                 if provider.isEmpty, let firstProvider = modelsConfig.keys.sorted().first {
                     provider = firstProvider
@@ -405,6 +487,42 @@ struct AgentEditorView: View {
                 guard let existingId else { return }
                 await loadExisting(existingId)
             }
+        }
+    }
+
+    /// Paint a portrait from what's already typed — name and description are
+    /// the prompt, the house style is appended server-side by way of the same
+    /// prompt shape the quiz page uses. The PNG comes back, gets the same
+    /// downscale-to-JPEG treatment a photo-library pick gets, and rides the
+    /// existing pendingAvatarJpeg save path — one upload lane, no new one.
+    private func paintPortrait() async {
+        guard !isPainting else { return }
+        isPainting = true
+        paintNote = nil
+        UIAccessibility.post(notification: .announcement, argument: "Painting their portrait. About fifteen seconds.")
+        defer { isPainting = false }
+        do {
+            let who = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let what = description.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = "Character named \(who.isEmpty ? "a new friend" : who). \(what) "
+                + "Warm friendly character portrait avatar, stylized 3D animation illustration style, "
+                + "chest-up bust, centered composition, soft studio key lighting, simple clean solid-color background, "
+                + "rich saturated color, high detail, characterful expression, square, no text, no words, no watermark, no border."
+            let out = try await service.paintPortrait(prompt: prompt)
+            if let image = UIImage(data: out.png), let jpeg = Self.avatarJpeg(from: image) {
+                pendingAvatarJpeg = jpeg
+                avatarNote = "Portrait painted — it uploads when you save."
+                if let left = out.remainingToday {
+                    paintNote = "\(left) repaints left today."
+                }
+                UIAccessibility.post(notification: .announcement, argument: "Portrait painted. It uploads when you save. There's a repaint if you want a different one.")
+            } else {
+                paintNote = "The portrait arrived scrambled. Try again."
+                UIAccessibility.post(notification: .announcement, argument: "That didn't work. Try again.")
+            }
+        } catch {
+            paintNote = error.localizedDescription
+            UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
         }
     }
 
@@ -503,7 +621,10 @@ struct AgentEditorView: View {
     /// Downscale to a sane avatar size and re-encode as JPEG — camera-roll
     /// photos can arrive as multi-megabyte HEIC, and JPEG at ~1024px is
     /// both universally parseable server-side and plenty for an avatar.
-    private static func avatarJpeg(from image: UIImage, maxEdge: CGFloat = 1024) -> Data? {
+    /// Internal (not private) since build 202: CharacterQuizView reuses the
+    /// exact same downscale so quiz portraits and photo picks are identical
+    /// bytes-wise on the wire.
+    static func avatarJpeg(from image: UIImage, maxEdge: CGFloat = 1024) -> Data? {
         let longest = max(image.size.width, image.size.height)
         guard longest > 0 else { return nil }
         let scale = min(1, maxEdge / longest)

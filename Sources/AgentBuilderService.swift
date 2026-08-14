@@ -252,7 +252,13 @@ final class AgentBuilderService: ObservableObject {
     /// shipped raw over her cell connection.
     func uploadAvatar(id: String, jpegData: Data) async throws {
         let req = client.multipartRequest(
-            path: "api/agents/\(id)/avatar/",
+            // Aug 14 2026 — THE PATH WAS DEAD. /api/agents/:id/avatar answers 404
+            // on this server: the avatar router mounts under
+            // /api/files/images/agents (routes/files/index.js), which means
+            // every avatar upload from this app since the editor shipped has
+            // failed with "Couldn't upload the photo." The proxy's twin lane
+            // hit the identical 404 tonight and bought the receipt.
+            path: "api/files/images/agents/\(id)/avatar/",
             authorized: true,
             fields: [],
             fileField: "file",
@@ -539,4 +545,98 @@ struct AvailableTool: Decodable, Identifiable, Hashable {
     let description: String?
     let isAuthRequired: Bool?
     var id: String { pluginKey }
+
+    // MARK: - The Create-a-Character brain (Aug 14 2026, build 202)
+    //
+    // Web and native deliberately consume the SAME routes — the quiz, the
+    // plain-language model menu, and the portrait painter all live in one
+    // fork module (routes/kadeCreateCharacter.js), so the two surfaces can
+    // never drift apart the way sibling features have before.
+
+    struct ModelMenuEntry: Decodable, Identifiable {
+        let key: String
+        let plainName: String
+        let provider: String
+        let model: String
+        let blurb: String
+        let goodFor: String
+        let speed: String
+        var id: String { key }
+    }
+    private struct MenuEnvelope: Decodable { let menu: [ModelMenuEntry] }
+
+    func loadModelMenu() async -> [ModelMenuEntry] {
+        do {
+            let req = client.request(path: "api/kade/builder/model-menu", authorized: true)
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return [] }
+            return try decoder.decode(MenuEnvelope.self, from: data).menu
+        } catch { return [] }
+    }
+
+    struct QuizOption: Decodable { let v: String; let label: String }
+    struct QuizQuestion: Decodable, Identifiable {
+        let id: String
+        let ask: String
+        let help: String?
+        let options: [QuizOption]?
+        let multi: Bool?
+        let max: Int?
+        let freeText: Bool?
+    }
+    private struct QuizEnvelope: Decodable { let quiz: [QuizQuestion] }
+
+    func loadQuiz() async -> [QuizQuestion] {
+        do {
+            let req = client.request(path: "api/kade/builder/quiz", authorized: true)
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return [] }
+            return try decoder.decode(QuizEnvelope.self, from: data).quiz
+        } catch { return [] }
+    }
+
+    struct QuizDraft: Decodable {
+        let names: [String]
+        let description: String
+        let instructions: String
+        let category: String
+        let conversation_starters: [String]
+        let modelKey: String
+        let provider: String
+        let model: String
+        let avatarPrompt: String
+    }
+    private struct ComposeEnvelope: Decodable { let draft: QuizDraft }
+
+    func composeQuiz(answers: [String: Any]) async throws -> QuizDraft {
+        var req = client.request(path: "api/kade/builder/quiz/compose", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["answers": answers])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't build the character from those answers."))
+        }
+        return try decoder.decode(ComposeEnvelope.self, from: data).draft
+    }
+
+    private struct PortraitEnvelope: Decodable { let image_b64: String; let remainingToday: Int? }
+
+    /// The one paid action in the whole builder: three cents of picture
+    /// credit, drawn from the same prepaid wallet as everything else, and the
+    /// server enforces the daily cap. ~15 seconds; timeout is generous.
+    func paintPortrait(prompt: String) async throws -> (png: Data, remainingToday: Int?) {
+        var req = client.request(path: "api/kade/builder/avatar", method: "POST", authorized: true, timeout: 150)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["prompt": prompt])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "The portrait didn't come out. Try again."))
+        }
+        let env = try decoder.decode(PortraitEnvelope.self, from: data)
+        guard let png = Data(base64Encoded: env.image_b64), !png.isEmpty else {
+            throw AgentBuilderError(message: "The portrait arrived scrambled. Try again.")
+        }
+        return (png, env.remainingToday)
+    }
 }
+
