@@ -1956,7 +1956,18 @@ struct ConversationDetailView: View {
 
         let parentId = sendParentOverride ?? messages.last?.messageId
         sendParentOverride = nil
+        // Build 207 (the 206 on-camera kill: send tapped, screen frozen
+        // ~48s, optimistic bubble never painted, 0x8BADF00D scene-update
+        // watchdog). Lead suspect is a send-time main-thread pileup: the
+        // composer clear (TextKit teardown of a long dictated draft, plus
+        // keyboard and VoiceOver updates) stacked into the SAME SwiftUI
+        // transaction as the optimistic append and the sending-state flip.
+        // Mitigation, measured not guessed: clear the composer ALONE, let
+        // that transaction commit and its frame drain, then start the send
+        // machinery in a fresh turn of the run loop. Re-entry is safe: a
+        // double-tap in the yield window hits the empty-draft guard above.
         draftText = ""
+        await Self.nextRunLoopTurn()
         // Session 23: while Deep Think is armed, stamp this send with a
         // FRESH epoch-ms marker -- the exact string the web composer
         // appends (useSubmitMessage: `[DEEP THINK ${Date.now()}]`).
@@ -2155,6 +2166,17 @@ struct ConversationDetailView: View {
         await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId, includeAttachment: false)
     }
 
+    /// Build 207: one full turn of the main run loop. The awaited
+    /// continuation resumes only after everything already queued — including
+    /// the SwiftUI commit for state mutated just before the call — has
+    /// drained. An honest frame boundary, not a magic-number sleep.
+    @MainActor
+    private static func nextRunLoopTurn() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { c.resume() }
+        }
+    }
+
     /// The shared guts of every send -- a plain Send tap (via `send()`
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
@@ -2173,7 +2195,22 @@ struct ConversationDetailView: View {
         )
         messages.append(optimisticMessage)
         sendState = .sending
-        KadeBreadcrumbs.drop("send started (\(selectedAgentId ?? "default"))")
+        // Build 207: the crumb grows the two facts the composer-wedge
+        // hypothesis needs from the NEXT kill — how big the outgoing text
+        // was, and whether VoiceOver was up (both suspects in the 204/206
+        // stack's TextKit grind).
+        KadeBreadcrumbs.drop(
+            "send started (\(selectedAgentId ?? "default"), \(text.count) chars\(UIAccessibility.isVoiceOverRunning ? ", vo" : ""))"
+        )
+        // Build 207: the localizer. Queued to run AFTER the transaction
+        // above commits and paints — if the next kill's trail shows "send
+        // started" with NO "first frame after send", the app died inside
+        // that first commit (composer/keyboard/optimistic-row pileup); if
+        // this fires and death still follows, those frames are innocent
+        // and the wedge is later in the turn.
+        DispatchQueue.main.async {
+            KadeBreadcrumbs.drop("first frame after send")
+        }
 
         do {
             let wasNewConversation = conversationId == nil
@@ -2326,7 +2363,9 @@ struct ConversationDetailView: View {
                 let newId = resolvedConversationId
                 Task {
                     if let title = await conversationsService.fetchGeneratedTitle(conversationId: newId) {
-                        generatedTitle = title
+                        // Build 207: same special-token strip the list rows
+                        // get — the nav bar speaks this string too.
+                        generatedTitle = MessageTextSanitizer.stripSpecialTokens(title)
                     }
                     await conversationsService.loadFirstPage()
                 }

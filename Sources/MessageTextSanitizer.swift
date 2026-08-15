@@ -118,6 +118,13 @@ enum MessageTextSanitizer {
     )
     private static let leadingWhitespaceRegex = makeRegex("^\\s+")
 
+    /// Build 207: model special-token TEXT — `<|end_of_sentence|>` and kin —
+    /// as leaked into conversation titles by deepseek-v4-flash (seen on
+    /// camera in the App-Review recording, heard by VoiceOver as raw
+    /// punctuation soup). Bounded body, no pipes/angles inside, so real
+    /// prose like "a|b" or "2<3" can never match.
+    private static let specialTokenRegex = makeRegex("<\\|[^|<>]{1,48}\\|>")
+
     private static func makeRegex(
         _ pattern: String,
         caseInsensitive: Bool = false,
@@ -236,6 +243,17 @@ enum MessageTextSanitizer {
         cache.totalCostLimit = 4_000_000
         return cache
     }()
+
+    /// Build 207: the display twin of reframe `45ba53e`'s server-side title
+    /// scrub. That fix stops NEW leaks at the source; this one cleans the
+    /// titles already saved in the database (and any future lane that leaks
+    /// the same shape) everywhere the native app shows or speaks a title.
+    static func stripSpecialTokens(_ text: String) -> String {
+        guard text.contains("<|") else { return text }
+        let stripped = removingMatches(of: specialTokenRegex, in: text)
+        let collapsed = removingMatches(of: doubledSpaceOrTabRegex, in: stripped, replacement: " ")
+        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// The one function call sites should actually use for anything a
     /// human reads or VoiceOver speaks. Mirrors the web client's own

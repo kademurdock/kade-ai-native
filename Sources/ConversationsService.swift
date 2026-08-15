@@ -21,7 +21,13 @@ struct KadeConversation: Codable, Identifiable, Hashable {
     /// conversations, 0 empty) but this is a network response, not a
     /// compile-time guarantee — fall back rather than show a blank row.
     var displayTitle: String {
-        let t = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Build 207: strip model special-token text ("<|end_of_sentence|>")
+        // that the title lane leaked into saved titles before reframe
+        // `45ba53e` scrubbed the server side — VoiceOver was reading the
+        // raw token punctuation out loud in the conversation list.
+        let t = MessageTextSanitizer.stripSpecialTokens(
+            title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        )
         return t.isEmpty ? "Untitled conversation" : t
     }
 }
