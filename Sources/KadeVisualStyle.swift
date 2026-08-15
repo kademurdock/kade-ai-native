@@ -400,6 +400,19 @@ struct KadeSpeakerMonogram: View {
 /// row disappears.
 struct KadeThinkingBubbles: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    /// Build 205 (Aug 15 2026) — measured off her watchdog kill, not guessed.
+    /// The animated branch is a `TimelineView(.animation, 1/30)`, i.e. THIRTY
+    /// view-graph rebuilds a second, and it lives inside the transcript's
+    /// LazyVStack for the entire generation window (it only steps aside once
+    /// deep thoughts start streaming — an `instant`-routed turn keeps it on
+    /// screen start to finish, which is exactly what her fatal turn was).
+    /// The whole view is `accessibilityHidden`, so under VoiceOver it is
+    /// main-thread cost that its user cannot perceive by any means. Her crash
+    /// window burned 10.05s of CPU across ~59 seconds — sustained churn, not
+    /// one pinned computation — so buying that back is worth a one-line gate.
+    /// Reuses the existing Reduce Motion branch rather than adding a second
+    /// resting state: same pixels, no new code path.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     /// (left, size, delay, duration) -- hand-tuned on web so the drift
     /// feels organic rather than a marching row; keep the two lists in
@@ -415,7 +428,7 @@ struct KadeThinkingBubbles: View {
     ]
 
     var body: some View {
-        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
+        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion || voiceOverOn
         Group {
             if reduce {
                 bubbleRow(at: nil)

@@ -92,6 +92,22 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
         KadeBreadcrumbs.drop("app launched -- v\(version) build \(build)")
         let center = NotificationCenter.default
+        // Build 205 (Aug 15 2026) — THE BLIND SPOT THAT COST US A DIAGNOSIS.
+        // Her 0x8BADF00D scene-update kill left NO backgrounding crumb, and
+        // the workup had to guess she had backgrounded at all.
+        // `didEnterBackground` fires only once the scene transition has
+        // COMPLETED — which is exactly the transition a scene-update watchdog
+        // kill interrupts, so that crumb can never record the kill it matters
+        // for. `willResignActive` fires at the START of the same transition.
+        // If the next kill has a "leaving foreground" crumb and no "app
+        // backgrounded" after it, the app died mid-transition and we will
+        // know it rather than infer it.
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: nil) { _ in
+            KadeBreadcrumbs.drop("leaving foreground (scene transition started)")
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
+            KadeBreadcrumbs.drop("became active")
+        }
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in
             KadeBreadcrumbs.drop("app backgrounded")
         }

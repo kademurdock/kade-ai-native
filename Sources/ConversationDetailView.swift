@@ -214,6 +214,14 @@ struct ConversationDetailView: View {
             live.replyFlushScheduled = false
             guard case .sending = sendState else { return }
             guard UIApplication.shared.applicationState == .active else {
+                // The Aug 7 scene-state gate, now with a receipt. Once per
+                // turn: if a kill follows this crumb we know the app was off
+                // screen with a stream still arriving, which is the shape
+                // both her and Amber's watchdog kills have.
+                if !live.crumbedFlushDeferred {
+                    live.crumbedFlushDeferred = true
+                    KadeBreadcrumbs.drop("live flush deferred — app not active")
+                }
                 scheduleLiveReplyFlush(retry: true)
                 return
             }
@@ -2190,6 +2198,10 @@ struct ConversationDetailView: View {
                     // discipline), plus the gentle spoken progress line for
                     // long writes — low priority, waits for silence, same
                     // Settings toggle as spoken thinking progress.
+                    if !live.crumbedFirstText {
+                        live.crumbedFirstText = true
+                        KadeBreadcrumbs.drop("first reply chunk")
+                    }
                     live.replyRaw += chunk
                     scheduleLiveReplyFlush()
                     if spokenThinkingProgress,
@@ -2224,6 +2236,10 @@ struct ConversationDetailView: View {
                     // dodge a full-text pass). Same day, crash hardening:
                     // sanitize+publish is COALESCED to one pass per 250ms
                     // (see live.thinkRaw) instead of per chunk.
+                    if !live.crumbedFirstThink {
+                        live.crumbedFirstThink = true
+                        KadeBreadcrumbs.drop("first think chunk")
+                    }
                     live.thinkRaw += chunk
                     scheduleLiveThinkFlush()
                     if !live.announcedThinking {
@@ -2265,6 +2281,13 @@ struct ConversationDetailView: View {
                     }
                 }
             )
+            // Build 205: her Aug-15 kill left a NINETY-SECOND hole between
+            // "send started" and a "reply landed" that never came, so nothing
+            // in the trail could say which of these steps the app died in.
+            // Sizes ride along because they are the one thing the crash
+            // summary got wrong by guessing (the real reply was 1,860 chars,
+            // not the essay the workup assumed).
+            KadeBreadcrumbs.drop("stream finished (reply \(live.replyRaw.count) chars, think \(live.thinkRaw.count) chars)")
             liveThink = ""
             liveReply = ""
             live.resetTurn()
@@ -2274,6 +2297,7 @@ struct ConversationDetailView: View {
             // whatever the server actually persisted (real ids, real content
             // shape) rather than trusting the SSE payload's exact field set
             // — see MessageSendingService's type doc for why.
+            KadeBreadcrumbs.drop("authoritative reload started")
             messages = try await conversationsService.fetchMessages(
                 conversationId: resolvedConversationId
             )
@@ -2968,6 +2992,13 @@ private final class LiveStreamBuffers {
     var lastThinkProgressAnnounce = Date.distantPast
     var announcedThinking = false
 
+    /// Build 205 breadcrumb latches. One crumb per turn per event, never per
+    /// chunk — a trail that costs a file write per streamed token would be a
+    /// worse bug than the one it is trying to find.
+    var crumbedFirstText = false
+    var crumbedFirstThink = false
+    var crumbedFlushDeferred = false
+
     /// Exactly the four fields the old inline reset cleared, no more: the two
     /// buffers, the write-progress timer, and the thinking-announced latch.
     /// The flush-scheduled guards are deliberately LEFT ALONE — an
@@ -2978,5 +3009,8 @@ private final class LiveStreamBuffers {
         thinkRaw = ""
         lastWriteProgressAnnounce = .distantPast
         announcedThinking = false
+        crumbedFirstText = false
+        crumbedFirstThink = false
+        crumbedFlushDeferred = false
     }
 }
