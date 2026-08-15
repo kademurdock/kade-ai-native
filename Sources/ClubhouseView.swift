@@ -260,13 +260,13 @@ struct ClubhouseView: View {
                 }
                 Button("Add a song") { showFilePicker = true }
                     .accessibilityHint("Pick an audio file, then choose to cut in or queue it politely.")
-                TextField("Or paste a link — YouTube, Spotify, SoundCloud, a direct MP3…", text: $songLink)
+                TextField("Or paste a direct audio link — an MP3, M4A, WAV, or similar…", text: $songLink)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                 Button("Fetch from the link") { showLinkChoice = true }
                     .disabled(songLink.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityHint("Pulls the song from the link, then choose to cut in or queue it. Spotify songs arrive by name-match; if YouTube's gate is closed, I keep knocking and holler when it opens.")
+                    .accessibilityHint("Pulls the song from a direct audio file link, then choose to cut in or queue it.")
                 if !service.knockLine.isEmpty {
                     Text(service.knockLine)
                         .font(.footnote)

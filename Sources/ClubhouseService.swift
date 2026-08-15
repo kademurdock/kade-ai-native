@@ -1261,14 +1261,17 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
-    /// The link lane (round 7): a pasted link becomes ordinary jukebox
-    /// bytes — the fork pulls the audio (yt-dlp speaks ~1,800 sites;
-    /// Spotify arrives by name-match since its audio is locked) and from
-    /// there it's a normal entry: queue, cut in, radio-fight over it.
-    /// When YouTube's flickering gate is closed (walled from the server),
-    /// THE KNOCKER takes the link: quiet retries every three minutes for
-    /// up to an hour, a holler through the PA when it lands, a Stop button
-    /// for changed minds.
+    /// The link lane (round 7, narrowed for App Review in build 206):
+    /// a pasted DIRECT audio-file link becomes ordinary jukebox bytes and
+    /// from there a normal entry: queue, cut in, radio-fight over it.
+    /// Build 206 (Aug 15 2026): the native client accepts direct audio
+    /// links ONLY — enforced in addSong(fromLink:), not just in wording.
+    /// The old field invited video/streaming-site links and the server
+    /// ripped the audio, which is App Store guideline 5.2.3 territory; the
+    /// full any-link lane lives on in the web Lounge, which Apple does not
+    /// review. THE KNOCKER stays for a walled fetch: quiet retries every
+    /// three minutes for up to an hour, a holler through the PA when it
+    /// lands, a Stop button for changed minds.
     private enum LinkFetch {
         case ok(Data, String)
         case walled(String)
@@ -1311,9 +1314,24 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
+    /// Build 206: a link is a song only when its path names an audio FILE.
+    /// Everything else — video sites, streaming services, playlist pages —
+    /// is refused on the client, spoken plainly, before any network call.
+    private static let directAudioExtensions: Set<String> = [
+        "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "aiff", "aif",
+    ]
+
     func addSong(fromLink raw: String, interrupt: Bool) {
         let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !urlStr.isEmpty else { return }
+        guard let comps = URLComponents(string: urlStr),
+              let scheme = comps.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              Self.directAudioExtensions.contains((comps.path as NSString).pathExtension.lowercased())
+        else {
+            announce("Direct audio links only — the link needs to end in the audio file itself, like an MP3 or M4A.")
+            return
+        }
         stopKnocking(quiet: true) // a fresh paste replaces any old knock
         announce("Fetching that link — give it a few seconds…")
         Task { [weak self] in
@@ -1339,8 +1357,8 @@ final class ClubhouseService: NSObject, ObservableObject {
 
     private func startKnocking(url: String, interrupt: Bool) {
         stopKnocking(quiet: true)
-        announce("YouTube's gate is closed — I'll keep knocking every few minutes and holler when it opens.")
-        knockLine = "Knocking for that link — YouTube's gate is closed. Retrying every three minutes."
+        announce("That source's gate is closed — I'll keep knocking every few minutes and holler when it opens.")
+        knockLine = "Knocking for that link — the gate is closed. Retrying every three minutes."
         knockTask = Task { [weak self] in
             for attempt in 1...20 {
                 try? await Task.sleep(nanoseconds: 180_000_000_000)
@@ -1354,7 +1372,7 @@ final class ClubhouseService: NSObject, ObservableObject {
                     self.announceRoom("That link finally cleared the gate — \(title) just landed.", lane: .booth)
                     return
                 case .walled:
-                    self.knockLine = "Still knocking — try \(attempt) of 20. YouTube's gate stays moody."
+                    self.knockLine = "Still knocking — try \(attempt) of 20. The gate stays moody."
                 case let .failed(msg):
                     self.knockLine = ""
                     self.knockTask = nil
@@ -1365,7 +1383,7 @@ final class ClubhouseService: NSObject, ObservableObject {
             guard let self, !Task.isCancelled else { return }
             self.knockLine = ""
             self.knockTask = nil
-            self.announce("YouTube never opened up for that one — try it fresh later.")
+            self.announce("The gate never opened for that one — try it fresh later.")
         }
     }
 
