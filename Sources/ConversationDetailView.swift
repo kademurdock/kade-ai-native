@@ -281,6 +281,19 @@ struct ConversationDetailView: View {
     /// screen.
     @State private var transcriptWindow = ConversationDetailView.transcriptWindowStep
     private static let transcriptWindowStep = 60
+
+    /// Part 70.8 (Aug 16 2026 -- her three send-time freezes ON 208, all in
+    /// one heavy conversation, stacks in the ring): the freezes fire at the
+    /// send-moment transcript update, BEFORE any reply chunk exists, so
+    /// 208's landed-reply chunking could not reach them. While a reply is
+    /// streaming, the transcript renders only the newest few rows -- the
+    /// send-moment insert+scroll and every live flush lay out a BOUNDED
+    /// transcript no matter how heavy the conversation has grown. The full
+    /// window returns the moment the stream ends. Tapping "Show earlier
+    /// messages" mid-stream switches the thinning off for that stream: her
+    /// explicit ask outranks the guard.
+    private static let streamingWindowRows = 12
+    @State private var streamThinDisabledByUser = false
     @FocusState private var messageSearchFocused: Bool
 
     /// What a FAILED send was trying to do -- captured so "Retry" can
@@ -906,9 +919,15 @@ struct ConversationDetailView: View {
         let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard messageSearchActive, !query.isEmpty else {
             // The window (see transcriptWindow's doc comment). suffix keeps
-            // the NEWEST rows — the conversation's living end.
-            if messages.count > transcriptWindow {
-                return Array(messages.suffix(transcriptWindow))
+            // the NEWEST rows — the conversation's living end. During an
+            // active stream the window narrows further (Part 70.8, see
+            // streamingWindowRows) unless she asked for earlier rows.
+            var effectiveWindow = transcriptWindow
+            if case .sending = sendState, !streamThinDisabledByUser {
+                effectiveWindow = min(effectiveWindow, Self.streamingWindowRows)
+            }
+            if messages.count > effectiveWindow {
+                return Array(messages.suffix(effectiveWindow))
             }
             return messages
         }
@@ -922,7 +941,11 @@ struct ConversationDetailView: View {
     private var hiddenEarlierCount: Int {
         let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if messageSearchActive && !query.isEmpty { return 0 }
-        return max(0, messages.count - transcriptWindow)
+        var effectiveWindow = transcriptWindow
+        if case .sending = sendState, !streamThinDisabledByUser {
+            effectiveWindow = min(effectiveWindow, Self.streamingWindowRows)
+        }
+        return max(0, messages.count - effectiveWindow)
     }
 
     private var messageSearchSummary: String {
@@ -1114,12 +1137,22 @@ struct ConversationDetailView: View {
     /// Sanitized every flush (forDisplay), VoiceOver-hidden (see the state
     /// block note), replaced by the real saved message the moment final lands.
     private var liveReplyBubble: some View {
+        // Part 70.8: this used to be ONE growing Text -- the exact unbounded
+        // TextKit job the landed path stopped doing in 208, still alive on
+        // the streaming row. Chunked the same way now: early chunks are
+        // stable strings SwiftUI never re-lays-out, so each flush pays for
+        // the tail chunk only. Short streams keep the single-Text path
+        // inside chunkLongText (below threshold it returns [text]).
         VStack(alignment: .leading, spacing: 4) {
-            Text(liveReply)
-                .font(.body)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(MessageRow.chunkLongText(liveReply).enumerated()), id: \.offset) { piece in
+                    Text(piece.element)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(12)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
         }
         .accessibilityHidden(true)
         .transition(.opacity)
@@ -1135,10 +1168,18 @@ struct ConversationDetailView: View {
             // when she lands on it and can come back for more, exactly
             // like reading a streaming message. The close/reopen dance is
             // dead. (Progress lines still speak only while CLOSED.)
-            Text(liveThink)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Part 70.8: chunked like the live reply (one growing Text was
+            // the unbounded-layout shape; freeze #3 hit six seconds after
+            // "first think chunk"). VoiceOver reads the chunks in order on
+            // focus -- same read-at-will behavior, now in bounded pieces.
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(MessageRow.chunkLongText(liveThink).enumerated()), id: \.offset) { piece in
+                    Text(piece.element)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         } label: {
             // Aug 4: the brain gently pulses while thoughts pour in -- the
             // sighted twin of the bubbling sound. Double-gated on system
@@ -1257,6 +1298,9 @@ struct ConversationDetailView: View {
     /// happened in plain words.
     private func showEarlierButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
+            // Part 70.8: asking for earlier rows mid-stream turns stream
+            // thinning off for this stream -- the guard never overrules her.
+            if case .sending = sendState { streamThinDisabledByUser = true }
             let anchorId = visibleMessages.first?.id
             transcriptWindow += Self.transcriptWindowStep * 2
             rebuildRotorItems()
@@ -2212,6 +2256,14 @@ struct ConversationDetailView: View {
             KadeBreadcrumbs.drop("first frame after send")
         }
 
+        // Part 70.8: thinning re-arms fresh on every send; the crumb makes
+        // the next freeze trail say whether the bounded transcript was in
+        // force when the wedge hit.
+        streamThinDisabledByUser = false
+        if messages.count > Self.streamingWindowRows {
+            KadeBreadcrumbs.drop("transcript thinned to \(Self.streamingWindowRows) rows for stream")
+        }
+
         do {
             let wasNewConversation = conversationId == nil
             // Session 26: a pending attachment rides this send (uploaded
@@ -2633,10 +2685,10 @@ private struct MessageRow: View {
     /// VoiceOver is untouched by construction: the row is one accessibility
     /// element whose label is `accessibleLabel`, never the visual children.
     /// Short messages keep the exact single-Text path they had.
-    private static let chunkThreshold = 4000
-    private static let chunkTarget = 2600
+    fileprivate static let chunkThreshold = 4000
+    fileprivate static let chunkTarget = 2600
 
-    private static func chunkLongText(_ text: String) -> [String] {
+    fileprivate static func chunkLongText(_ text: String) -> [String] {
         guard text.count > chunkThreshold else { return [text] }
         var chunks: [String] = []
         var current = ""

@@ -113,6 +113,22 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     private var freezeMarks: Set<Int> = []
     private var freezeTimer: DispatchSourceTimer?
 
+    /// Part 70.8 (Aug 16 2026): suspension is not a freeze, but the clock
+    /// used to say it was. The whole PROCESS sleeps in the background --
+    /// neither the heartbeat nor the watcher runs -- so on resume the first
+    /// watcher tick read a "gap" containing the entire suspension and
+    /// printed lies like "RECOVERED after ~5016s" (that one was an 84-minute
+    /// background stint, breadcrumbs Aug 16 ~02:27Z). Resetting here, before
+    /// the state flips to foreground, means every freeze episode starts from
+    /// a fresh on-screen pong and the recovery lines only ever measure real
+    /// frozen time.
+    private func resetFreezeClock() {
+        pongLock.lock()
+        lastPong = Date()
+        freezeMarks.removeAll()
+        pongLock.unlock()
+    }
+
     /// Call once, early in launch. Registers for MetricKit diagnostics and
     /// starts the lifecycle breadcrumbs (background/foreground/memory) via
     /// notification observers, so no other file needs lifecycle wiring.
@@ -172,7 +188,8 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             KadeBreadcrumbs.drop("app backgrounded")
             Self.setSessionState("background")
         }
-        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { _ in
+        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.resetFreezeClock()
             KadeBreadcrumbs.drop("app foregrounded")
             Self.setSessionState("foreground")
         }
