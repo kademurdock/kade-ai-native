@@ -82,12 +82,72 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     static let shared = KadeCrashWatch()
     private static let maxReports = 10
 
+    // ── Part 70.6 (Aug 15 2026 — her freezes that never reported) ─────────
+    // The app froze twice tonight (build 207, a long council-board reply
+    // landing), she force-quit to recover, and NOTHING uploaded: a user
+    // force-quit is not a crash to Apple (no dialog, often no MetricKit
+    // record), and this file only shipped crumbs as ride-alongs on crash
+    // payloads. Three additions close the blind spot: a clean-exit sentinel
+    // (a session that ends while FOREGROUND without willTerminate reports
+    // itself on the next launch), an off-main freeze recorder (utility-queue
+    // heartbeat that writes "main thread unresponsive" crumbs WHILE the
+    // freeze is happening — the breadcrumb queue never touches main, so a
+    // force-quit can't erase the evidence), and honest MetricKit kinds
+    // (hang/cpu payloads stop masquerading as "crash").
+    private static let sessionStateKey = "kade.session.state.v1"
+    private static let sessionAtKey = "kade.session.at.v1"
+    private static let reportPrefixes = ["crash-", "hang-", "cpu-", "diagnostic-", "abnormal-"]
+
+    private static func isReportFile(_ name: String) -> Bool {
+        reportPrefixes.contains { name.hasPrefix($0) }
+    }
+
+    private static func setSessionState(_ state: String) {
+        let d = UserDefaults.standard
+        d.set(state, forKey: sessionStateKey)
+        d.set(Date().timeIntervalSince1970, forKey: sessionAtKey)
+    }
+
+    private let pongLock = NSLock()
+    private var lastPong = Date()
+    private var freezeMarks: Set<Int> = []
+    private var freezeTimer: DispatchSourceTimer?
+
     /// Call once, early in launch. Registers for MetricKit diagnostics and
     /// starts the lifecycle breadcrumbs (background/foreground/memory) via
     /// notification observers, so no other file needs lifecycle wiring.
     func start() {
         MXMetricManager.shared.add(self)
         KadeBreadcrumbs.trim()
+        // Abnormal-end check BEFORE this session writes anything: if the
+        // previous session's last known state was "foreground" and no clean
+        // exit was recorded, it ended by force-quit, watchdog, or foreground
+        // jetsam while visible — exactly the invisible-freeze case. The
+        // report file rides the standard uploader, and the crumb tail it
+        // carries still holds the PREVIOUS session's last lines, including
+        // any "MAIN THREAD UNRESPONSIVE" marks the freeze recorder left.
+        let previousState = UserDefaults.standard.string(forKey: Self.sessionStateKey)
+        if previousState == "foreground" {
+            let lastAt = UserDefaults.standard.double(forKey: Self.sessionAtKey)
+            let lastAtText = lastAt > 0
+                ? ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: lastAt))
+                : "unknown"
+            KadeBreadcrumbs.drop("PREVIOUS SESSION ENDED ABNORMALLY while foreground (last state change \(lastAtText))")
+            let dir = KadeBreadcrumbs.directory
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let report: [String: Any] = [
+                "detectedAt": stamp,
+                "lastForegroundStateAt": lastAtText,
+                "note": "Previous session ended while foreground without a clean exit. If the breadcrumb tail shows MAIN THREAD UNRESPONSIVE lines, this was a freeze the user force-quit to escape; MetricKit may deliver a matching hang diagnostic separately.",
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted]) {
+                try? data.write(to: dir.appendingPathComponent("abnormal-\(stamp).json"))
+            }
+        }
+        Self.setSessionState(UIApplication.shared.applicationState == .background ? "background" : "foreground")
+        startFreezeRecorder()
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
         KadeBreadcrumbs.drop("app launched -- v\(version) build \(build)")
@@ -110,14 +170,60 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         }
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in
             KadeBreadcrumbs.drop("app backgrounded")
+            Self.setSessionState("background")
         }
         center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { _ in
             KadeBreadcrumbs.drop("app foregrounded")
+            Self.setSessionState("foreground")
+        }
+        center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            KadeBreadcrumbs.drop("app terminating cleanly")
+            Self.setSessionState("clean-exit")
         }
         center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
             KadeBreadcrumbs.drop("MEMORY WARNING")
         }
         uploadPendingReports()
+    }
+
+    /// The off-main freeze recorder. A heartbeat block is posted to main
+    /// every 2s; a utility-queue timer measures the gap. While main is
+    /// pinned the timer keeps running — its crumbs are written by the
+    /// breadcrumb queue, never main — and each freeze episode logs marks at
+    /// 6/15/30/60s plus a recovery line with the measured duration.
+    /// Backgrounded sessions are exempt (suspension is not a freeze).
+    private func startFreezeRecorder() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kade.freezewatch", qos: .utility))
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pongLock.lock()
+                let hadMarks = !self.freezeMarks.isEmpty
+                let frozeFor = Date().timeIntervalSince(self.lastPong)
+                self.lastPong = Date()
+                self.freezeMarks.removeAll()
+                self.pongLock.unlock()
+                if hadMarks {
+                    KadeBreadcrumbs.drop(String(format: "main thread RECOVERED after ~%.0fs unresponsive", frozeFor))
+                }
+            }
+            if UserDefaults.standard.string(forKey: Self.sessionStateKey) == "background" { return }
+            self.pongLock.lock()
+            let gap = Date().timeIntervalSince(self.lastPong)
+            var announce: Int?
+            for mark in [6, 15, 30, 60] where gap >= Double(mark) && !self.freezeMarks.contains(mark) {
+                self.freezeMarks.insert(mark)
+                announce = mark
+            }
+            self.pongLock.unlock()
+            if let announce {
+                KadeBreadcrumbs.drop("MAIN THREAD UNRESPONSIVE >=\(announce)s -- app is frozen while foreground")
+            }
+        }
+        freezeTimer = timer
+        timer.resume()
     }
 
     /// MetricKit hands crash/hang/CPU diagnostics here on the launch after
@@ -128,7 +234,19 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         for (i, payload) in payloads.enumerated() {
-            let name = "crash-\(stamp)-\(i).json"
+            // Honest kinds (Part 70.6): a hang is not a crash, and telling
+            // them apart is the whole diagnosis for a frozen-then-force-quit
+            // session. Priority order matters only when a payload carries
+            // several; crash wins because it is the loudest truth.
+            var kind = "diagnostic"
+            if let crashes = payload.crashDiagnostics, !crashes.isEmpty {
+                kind = "crash"
+            } else if let hangs = payload.hangDiagnostics, !hangs.isEmpty {
+                kind = "hang"
+            } else if let cpu = payload.cpuExceptionDiagnostics, !cpu.isEmpty {
+                kind = "cpu"
+            }
+            let name = "\(kind)-\(stamp)-\(i).json"
             try? payload.jsonRepresentation().write(to: dir.appendingPathComponent(name))
         }
         KadeBreadcrumbs.drop("MetricKit delivered \(payloads.count) diagnostic payload(s)")
@@ -141,7 +259,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
         ) else { return }
         let reports = files
-            .filter { $0.lastPathComponent.hasPrefix("crash-") }
+            .filter { Self.isReportFile($0.lastPathComponent) }
             .sorted { (a, b) in
                 let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -190,7 +308,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             let who = Self.signedInAccount()
             var sent = 0
             let candidates = files
-                .filter { $0.lastPathComponent.hasPrefix("crash-") && !uploaded.contains($0.lastPathComponent) }
+                .filter { Self.isReportFile($0.lastPathComponent) && !uploaded.contains($0.lastPathComponent) }
                 .sorted { $0.lastPathComponent > $1.lastPathComponent }
             for file in candidates {
                 guard sent < 2 else { break }
@@ -216,7 +334,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
                 var body: [String: Any] = [
                     "build": build,
                     "device": device,
-                    "kind": "crash",
+                    "kind": String(name.prefix(while: { $0 != "-" })),
                     "payload": payload,
                     "breadcrumbs": crumbs,
                 ]
@@ -254,7 +372,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
         let dir = KadeBreadcrumbs.directory
         var urls: [URL] = []
         if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-            urls = files.filter { $0.lastPathComponent.hasPrefix("crash-") }
+            urls = files.filter { Self.isReportFile($0.lastPathComponent) }
         }
         if FileManager.default.fileExists(atPath: KadeBreadcrumbs.logFile.path) {
             urls.append(KadeBreadcrumbs.logFile)

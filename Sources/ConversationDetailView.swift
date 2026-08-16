@@ -2622,6 +2622,78 @@ private struct MessageRow: View {
         message.readableText.isEmpty ? "…" : message.readableText
     }
 
+    /// Part 70.6 (Aug 15 2026 — her council-board freeze ON build 207): a
+    /// long reply used to render as ONE giant Text, a single TextKit layout
+    /// job whose sizing recursion is exactly the 0x8BADF00D workup's stack
+    /// (61 sizing frames, TextKit at the leaf). Long replies now render as
+    /// a stack of paragraph-boundary chunks inside the same bubble: same
+    /// glyphs, same look, but every TextKit container stays small and
+    /// bounded — and during streaming, early chunks are stable so a landing
+    /// long reply re-lays-out only its tail instead of the whole message.
+    /// VoiceOver is untouched by construction: the row is one accessibility
+    /// element whose label is `accessibleLabel`, never the visual children.
+    /// Short messages keep the exact single-Text path they had.
+    private static let chunkThreshold = 4000
+    private static let chunkTarget = 2600
+
+    private static func chunkLongText(_ text: String) -> [String] {
+        guard text.count > chunkThreshold else { return [text] }
+        var chunks: [String] = []
+        var current = ""
+        for para in text.components(separatedBy: "\n\n") {
+            let candidate = current.isEmpty ? para : current + "\n\n" + para
+            if candidate.count > chunkTarget && !current.isEmpty {
+                chunks.append(current)
+                current = para
+            } else {
+                current = candidate
+            }
+            // A single monster paragraph splits at hard caps so no chunk can
+            // recreate the giant-layout problem on its own; back up to the
+            // nearest whitespace so a word never splits mid-glyph.
+            while current.count > chunkTarget * 2 {
+                let cut = current.index(current.startIndex, offsetBy: chunkTarget)
+                var cutAt = cut
+                var probe = cut
+                var steps = 0
+                while probe > current.startIndex && steps < 400 {
+                    probe = current.index(before: probe)
+                    steps += 1
+                    if current[probe] == " " || current[probe] == "\n" {
+                        cutAt = probe
+                        break
+                    }
+                }
+                let dropSeparator = current[cutAt] == " " || current[cutAt] == "\n"
+                chunks.append(String(current[..<cutAt]))
+                let resumeAt = dropSeparator ? current.index(after: cutAt) : cutAt
+                current = String(current[resumeAt...])
+            }
+        }
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+        return chunks
+    }
+
+    @ViewBuilder private var messageBodyView: some View {
+        if bodyText.count <= Self.chunkThreshold {
+            Text(bodyText)
+                .font(appearance.messageFont())
+                .lineSpacing(appearance.lineSpacing.extraPoints)
+                .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
+        } else {
+            VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 10) {
+                ForEach(Array(Self.chunkLongText(bodyText).enumerated()), id: \.offset) { piece in
+                    Text(piece.element)
+                        .font(appearance.messageFont())
+                        .lineSpacing(appearance.lineSpacing.extraPoints)
+                        .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
+                }
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 6) {
             // Conversation compacting (July 22 2026): a reply that carries a
@@ -2652,10 +2724,7 @@ private struct MessageRow: View {
                 Text(message.speakerLabel)
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
-                Text(bodyText)
-                    .font(appearance.messageFont())
-                    .lineSpacing(appearance.lineSpacing.extraPoints)
-                    .multilineTextAlignment(message.isCreatedByUser ? .trailing : .leading)
+                messageBodyView
                     // Session 25 (Kade approved the audit list, "All four"):
                     // the transcript used to be bare aligned text -- no
                     // bubble chrome at all, visually spartan next to every
