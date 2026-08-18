@@ -2358,7 +2358,7 @@ struct ConversationDetailView: View {
              * freeze ever shows "biggest row 1 piece" again, the threshold is
              * still wrong. */
             if let longest = messages.map(\.readableText).max(by: { $0.count < $1.count }), longest.count > 0 {
-                let pieces = Self.chunkLongText(longest).count
+                let pieces = MessageRow.chunkLongText(longest).count
                 KadeBreadcrumbs.drop("biggest row \(longest.count) chars -> \(pieces) piece(s)")
             }
             let resolvedConversationId = try await messageSendingService.send(
