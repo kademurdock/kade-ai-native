@@ -2237,8 +2237,49 @@ struct ConversationDetailView: View {
             parentMessageId: parentId,
             agentId: nil
         )
+        /* ⭐ BUILD 211 -- THE COMMIT THAT WAS STILL FUSED (Aug 18 2026).
+         *
+         * Build 207 split the COMPOSER CLEAR out of the send transaction and
+         * proved the technique works. It left these two lines fused, and they
+         * are the rest of the pileup: `messages.append` inserts a row into the
+         * LazyVStack, and `sendState = .sending` simultaneously changes what
+         * `visibleMessages` returns (the window narrows to streamingWindowRows),
+         * adds `replyingRow`, and arms the live think/reply rows. One SwiftUI
+         * transaction, doing a row insert AND a list-wide re-window.
+         *
+         * Why that is the suspect, from her own instrumentation rather than a
+         * hunch -- the 4am freeze on build 210 (ring 09:01:17Z):
+         *   08:59:57  send started (225 chars, vo)
+         *   09:00:04  MAIN THREAD UNRESPONSIVE >=6s
+         * There is NO "first frame after send" crumb in that trail, and 207's
+         * own comment says exactly what that means: "the app died inside that
+         * first commit." The transcript was only ~7 rows, so this was not the
+         * long-conversation case 209 addressed -- a short conversation wedged
+         * on the commit itself. Every freeze on record also carries `vo`:
+         * VoiceOver is always on for her, which forces the LazyVStack to
+         * materialise its rows so the accessibility tree can be built, so a
+         * commit that both inserts a row and re-windows the list pays for the
+         * whole a11y rebuild in one main-thread breath. The MetricKit stack
+         * agrees: 61 recursive SwiftUICore layout frames bottoming out in
+         * UIFoundation text measurement, killed by the 10-second scene-update
+         * watchdog after 17.85s of CPU.
+         *
+         * So: same cure as 207, applied one layer deeper. Each mutation gets
+         * its own transaction and its own frame. The crumbs between them mean
+         * the NEXT freeze names which half wedged instead of leaving us to
+         * guess -- if the trail stops before "optimistic row painted" it is
+         * the row insert, if between the two it is the re-window, and if after
+         * both then these frames are innocent and the wedge is later.
+         *
+         * Re-entry stays safe for the same reason 207's yield is safe: the
+         * draft was already cleared before this function was reached, so a
+         * double-tap in either window hits the empty-draft guard in send(). */
         messages.append(optimisticMessage)
+        await Self.nextRunLoopTurn()
+        KadeBreadcrumbs.drop("optimistic row painted")
         sendState = .sending
+        await Self.nextRunLoopTurn()
+        KadeBreadcrumbs.drop("sending state painted")
         // Build 207: the crumb grows the two facts the composer-wedge
         // hypothesis needs from the NEXT kill — how big the outgoing text
         // was, and whether VoiceOver was up (both suspects in the 204/206
