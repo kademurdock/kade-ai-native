@@ -1110,16 +1110,47 @@ struct ConversationDetailView: View {
             // nothing. Now they read two precomputed arrays and do no work
             // beyond handing SwiftUI strings it already has. See
             // rebuildRotorItems for when those arrays refresh.
-            .accessibilityRotor("Your messages") {
-                ForEach(userRotorItems) { item in
-                    AccessibilityRotorEntry(item.label, id: item.id)
-                }
-            }
-            .accessibilityRotor("Replies") {
-                ForEach(replyRotorItems) { item in
-                    AccessibilityRotorEntry(item.label, id: item.id)
-                }
-            }
+            /* ⭐⭐⭐ BUILD 214 — THE ACTUAL SEND-TIME FREEZE, FOUND Aug 18 2026
+             * after six builds that each moved the symptom.
+             *
+             * These two custom `accessibilityRotor`s WERE the wedge. Removed.
+             *
+             * The proof is the database, not another guess. Her freezing
+             * conversation ("Menstrual disc size choice") is SIX rows, biggest
+             * rendered row 2,190 chars — tiny — and it still froze the main
+             * thread 30+ seconds. Every earlier theory (giant text, the send
+             * prologue commits, transcript row count, the chunker) was
+             * cleared: build 211's crumbs cleared the row insert and the
+             * re-window, 212's cleared the whole send prologue, and the DB
+             * cleared text size. What was left is what every freeze had in
+             * common and no build had touched: VoiceOver + a transcript
+             * mutation.
+             *
+             * `AccessibilityRotorEntry(label, id:)` is not free the way the
+             * Aug-13 note hoped. Making the rotor CONTENT cheap (precomputed
+             * label strings) fixed the wrong half. The expensive half is
+             * LOCATION RESOLUTION: to place each entry, SwiftUI must match its
+             * id to an element in the LazyVStack and compute that element's
+             * geometry — which forces those rows to lay out. With VoiceOver
+             * active, every transcript change (a send appends a row and moves
+             * sendState) makes SwiftUI re-resolve every entry across BOTH
+             * rotors, laying out the whole transcript synchronously on the
+             * main thread. That is exactly the MetricKit signature: dozens of
+             * recursive SwiftUICore layout frames bottoming out in UIFoundation
+             * text measurement, ~10s CPU, killed by the 10s scene-update
+             * watchdog. It fires regardless of text size (6 modest rows do it)
+             * and ONLY with VoiceOver — which is every freeze on record, all
+             * tagged `vo`, and none reproducible by a sighted tester.
+             *
+             * The rows themselves are each still their own VoiceOver element,
+             * so messages stay fully navigable by normal swipe. What is lost
+             * is the "Your messages" / "Replies" rotor categories (jump by
+             * sender). Worth losing to stop force-quits; can be reintroduced
+             * later with the performant pattern (AccessibilityRotorEntry with
+             * an explicit `prepare`/scroll closure, or a manual rotor that
+             * doesn't force pre-layout). rebuildRotorItems + the two arrays are
+             * left in place, dormant and cheap, so that restore is a small,
+             * clean diff — nothing reads them now. */
         }
     }
 
