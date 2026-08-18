@@ -2351,6 +2351,16 @@ struct ConversationDetailView: View {
             liveThinkExpanded = false
             await Self.nextRunLoopTurn()
             KadeBreadcrumbs.drop("turn state reset")
+            /* Build 213: prove the chunker is actually engaging this time.
+             * 208's chunking was inert for eight days because nothing ever
+             * measured whether it ran -- this crumb makes the next trail say
+             * how many pieces the biggest row in the transcript became. If a
+             * freeze ever shows "biggest row 1 piece" again, the threshold is
+             * still wrong. */
+            if let longest = messages.map(\.readableText).max(by: { $0.count < $1.count }), longest.count > 0 {
+                let pieces = Self.chunkLongText(longest).count
+                KadeBreadcrumbs.drop("biggest row \(longest.count) chars -> \(pieces) piece(s)")
+            }
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
@@ -2761,8 +2771,42 @@ private struct MessageRow: View {
     /// VoiceOver is untouched by construction: the row is one accessibility
     /// element whose label is `accessibleLabel`, never the visual children.
     /// Short messages keep the exact single-Text path they had.
-    fileprivate static let chunkThreshold = 4000
-    fileprivate static let chunkTarget = 2600
+    /* ⭐⭐ BUILD 213 -- THE CHUNKER HAS NEVER ONCE FIRED (Aug 18 2026).
+     *
+     * Build 208 shipped transcript chunking as the cure for a single giant
+     * Text wedging TextKit, and it was the right idea aimed at the right
+     * mechanism. It has also never run. The threshold was 4000 characters and
+     * her replies are not that long -- EVERY freeze on record sat under it:
+     *     208 freeze : reply 1,021 chars
+     *     210 freeze : reply 2,190 chars
+     *     212 freeze : reply 3,113 chars
+     * `chunkLongText` returns `[text]` unchanged below 4000, so all three
+     * rendered as ONE Text and the cure was inert. Same class of bug as the
+     * titler guard that never fired: a real fix behind a condition that is
+     * never true.
+     *
+     * What proves it is a single row and not the transcript: the 212 freeze
+     * was a BRAND NEW conversation on its second send -- three rows on screen
+     * (her first message, one 3,113-char reply, the optimistic row) -- and it
+     * still wedged the main thread for 30+ seconds. Row count, the 60-row
+     * window and the 12-row stream thinning are all therefore innocent; 211's
+     * crumbs had already cleared the row insert and the re-window, and 212's
+     * cleared the whole send prologue (`turn state reset` and `request
+     * dispatched` both fired on the clean send, neither on the wedged one).
+     * What is left is the layout of one big Text, and the MetricKit stack
+     * agrees: 58 recursive SwiftUICore frames on 212 with the identical
+     * repeating offset cycle as build 208's 61, bottoming out in UIFoundation
+     * text measurement, killed by the 10s scene-update watchdog. VoiceOver is
+     * always on for her, so that row's text is measured for the accessibility
+     * tree as well, every commit.
+     *
+     * So: make the chunker actually engage at the sizes she really receives.
+     * 700/600 turns a typical 3,000-char reply into ~5 modest paragraph Texts
+     * instead of one monolith. Paragraph boundaries are preserved, so
+     * VoiceOver still reads it as continuous prose -- the same "untouched by
+     * construction" property 208 designed for, finally switched on. */
+    fileprivate static let chunkThreshold = 700
+    fileprivate static let chunkTarget = 600
 
     fileprivate static func chunkLongText(_ text: String) -> [String] {
         guard text.count > chunkThreshold else { return [text] }
