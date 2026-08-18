@@ -2382,16 +2382,6 @@ struct ConversationDetailView: View {
             liveThinkExpanded = false
             await Self.nextRunLoopTurn()
             KadeBreadcrumbs.drop("turn state reset")
-            /* Build 213: prove the chunker is actually engaging this time.
-             * 208's chunking was inert for eight days because nothing ever
-             * measured whether it ran -- this crumb makes the next trail say
-             * how many pieces the biggest row in the transcript became. If a
-             * freeze ever shows "biggest row 1 piece" again, the threshold is
-             * still wrong. */
-            if let longest = messages.map(\.readableText).max(by: { $0.count < $1.count }), longest.count > 0 {
-                let pieces = MessageRow.chunkLongText(longest).count
-                KadeBreadcrumbs.drop("biggest row \(longest.count) chars -> \(pieces) piece(s)")
-            }
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
@@ -2836,8 +2826,18 @@ private struct MessageRow: View {
      * instead of one monolith. Paragraph boundaries are preserved, so
      * VoiceOver still reads it as continuous prose -- the same "untouched by
      * construction" property 208 designed for, finally switched on. */
-    fileprivate static let chunkThreshold = 700
-    fileprivate static let chunkTarget = 600
+    /* ⭐ REVERTED IN BUILD 215 (Aug 18 2026) back to build 208's values.
+     * Build 213 dropped these to 700/600 on the theory that a single big Text
+     * was the freeze. That theory was WRONG -- the freeze was the custom
+     * VoiceOver rotors (build 214), and it reproduced on a SIX-ROW
+     * conversation whose biggest row was 2,190 chars. Meanwhile 700/600 did
+     * real cosmetic damage: a normal 2,621-char reply split into FOUR pieces
+     * with a visible 10pt gap MID-PARAGRAPH (measured: piece 2 ended in the
+     * middle of a sentence). Every reply she received was being visually
+     * chopped for nothing. Back to 4000/2600, which only ever engages on
+     * genuinely huge rows -- the bound 208 actually intended. */
+    fileprivate static let chunkThreshold = 4000
+    fileprivate static let chunkTarget = 2600
 
     fileprivate static func chunkLongText(_ text: String) -> [String] {
         guard text.count > chunkThreshold else { return [text] }
@@ -2988,15 +2988,25 @@ private struct MessageRow: View {
                     UIPasteboard.general.string = message.readableText
                     UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
                 }
-                // Aug 17 2026, her ask: the same clipboard reach for the
-                // THINKING that the answer already had. Conditional on
-                // purpose -- VoiceOver must never announce an action this
-                // message can't perform (the same rule the Edit/Regenerate/
-                // Delete actions below follow), and most turns think nothing.
-                if let thoughts = message.thoughtsText {
-                    Button("Copy thoughts") {
+                /* Aug 18 2026 -- ALWAYS OFFERED, not conditional.
+                 * It shipped conditional in build 210 on the usual rule that
+                 * VoiceOver should never list an action a message can't
+                 * perform. In practice that rule backfired here: only turns
+                 * that actually THOUGHT carry a think block (measured on her
+                 * real data: 15 of 60 recent replies, ~25%), so the action
+                 * silently vanished on the other 75% and read as "the feature
+                 * is missing" -- she asked for it back believing it had never
+                 * shipped. An action that is sometimes there and sometimes not
+                 * is worse to navigate by ear than one that is always there
+                 * and tells you the honest answer. So: always present, and
+                 * when there is nothing to copy it SAYS so rather than
+                 * quietly doing nothing. */
+                Button("Copy thoughts") {
+                    if let thoughts = message.thoughtsText {
                         UIPasteboard.general.string = thoughts
                         UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
+                    } else {
+                        UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
                     }
                 }
                 switch voicePlayback {
@@ -3068,13 +3078,16 @@ private struct MessageRow: View {
             } label: {
                 Label("Copy Text", systemImage: "doc.on.doc")
             }
-            if let thoughts = message.thoughtsText {
-                Button {
+            // Always shown, same reasoning as the rotor action above.
+            Button {
+                if let thoughts = message.thoughtsText {
                     UIPasteboard.general.string = thoughts
                     UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
-                } label: {
-                    Label("Copy Thoughts", systemImage: "brain")
+                } else {
+                    UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
                 }
+            } label: {
+                Label("Copy Thoughts", systemImage: "brain")
             }
             switch voicePlayback {
             case .playing:
