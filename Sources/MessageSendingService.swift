@@ -114,6 +114,12 @@ final class MessageSendingService: ObservableObject {
             agentId: agentId,
             files: files
         )
+        /* Build 212: the second half of the send-prologue bisect (see the
+         * long note in ConversationDetailView.performSend). startGeneration
+         * runs on the MainActor and does the POST that opens the stream; if
+         * the freeze trail reaches "turn state reset" but never this crumb,
+         * the wedge is in there and not in any SwiftUI commit at all. */
+        KadeBreadcrumbs.drop("request dispatched")
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
         try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText)

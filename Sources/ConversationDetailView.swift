@@ -2312,10 +2312,45 @@ struct ConversationDetailView: View {
             // includeAttachment:false -- a re-ask of an OLD question must
             // never quietly consume a file meant for the NEXT message.
             let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
+            /* ⭐ BUILD 212 -- BISECTING WHAT 211 NARROWED.
+             *
+             * Build 211's crumbs did their job and CLEARED two suspects. Her
+             * 12:18 freeze trail reads:
+             *     12:18:30  optimistic row painted
+             *     12:18:31  sending state painted
+             *     12:18:31  send started (155 chars, vo)
+             *     12:18:38  MAIN THREAD UNRESPONSIVE >=6s
+             * Both split commits PAINTED. The row insert and the re-window are
+             * innocent, and the wedge lives after "send started" and before the
+             * queued "first frame after send" ever ran.
+             *
+             * The MetricKit stack changed shape completely between builds,
+             * which matters: build 208's was 100 frames with 61 recursive
+             * SwiftUICore layout frames bottoming out in UIFoundation TEXT
+             * MEASUREMENT. Build 211's is 35 frames, no recursion, leaf in
+             * AttributeGraph inside a QuartzCore CATransaction commit -- and
+             * only 16% application CPU over the window. Blocked, not busy.
+             * That looks like a DIFFERENT wedge underneath the one 209/211
+             * addressed, not the same one surviving.
+             *
+             * So this build stops guessing and bisects the remaining gap. Two
+             * crumbs, each after its own frame: if the trail dies before "turn
+             * state reset" the wedge is in these four @State resets coalescing
+             * into one commit; if it dies between that and "request
+             * dispatched" it is inside startGeneration on the MainActor; if it
+             * reaches both then the send prologue is entirely clean and the
+             * wedge is in the streaming callbacks.
+             *
+             * Giving the resets their own frame is also the cheapest plausible
+             * mitigation on its own -- it is the same split that cleared the
+             * two frames above, applied to the last un-split commit in the
+             * prologue. */
             liveThink = ""
             liveReply = ""
             live.resetTurn()
             liveThinkExpanded = false
+            await Self.nextRunLoopTurn()
+            KadeBreadcrumbs.drop("turn state reset")
             let resolvedConversationId = try await messageSendingService.send(
                 text: text,
                 conversationId: conversationId,
