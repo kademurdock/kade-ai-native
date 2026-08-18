@@ -474,11 +474,57 @@ struct ConversationDetailView: View {
                     messageList
                 }
             }
+            .frame(maxHeight: .infinity)
+        }
+        /* ⭐⭐ BUILD 219 -- AIMED AT THE RECURSION ITSELF, NOT AT WHAT IT WAS
+         * MEASURING.
+         *
+         * Her single-line-composer test is what made this readable. With the
+         * multi-line box, every stack leafed in UIKit text measurement, so I
+         * read the composer as the cause. With the single-line box, those
+         * UIKit frames VANISHED from the leaf -- and the freeze did not. What
+         * stayed, in all of them, is a 9-frame SwiftUICore layout cycle
+         * repeating six and seven times (`+479532 → +517752 → +486812 →
+         * +479324 → +482944 → +464312 → …`, 44 SwiftUICore frames in the
+         * 22:05 kill, 10.039s of app CPU against a 10.00s allowance).
+         *
+         * So the text control was never the cause -- it was the thing being
+         * re-measured by a layout that will not settle. Whatever text is at
+         * the bottom of the tree shows up at the leaf; swap it and the leaf
+         * changes and the loop does not.
+         *
+         * THE SHAPE THAT PRODUCES THAT LOOP IS RIGHT HERE. This was one
+         * `VStack(spacing: 0)` holding a greedy `ScrollView` AND four
+         * flexible-height siblings (agent picker, context meter, read-aloud
+         * row, composer). A VStack resolves that by proposing sizes to its
+         * children, taking their answers, and re-proposing -- and every
+         * re-proposal cascades into both subtrees, each of which contains its
+         * own nested flexible stacks and text. A transcript that wants all the
+         * height and a composer that wants to grow to five lines are in the
+         * same negotiation, arguing over the same points.
+         *
+         * `safeAreaInset` is the idiomatic answer for exactly this screen --
+         * a scrolling transcript with a pinned input bar. The scroll view
+         * simply takes the space; the inset is measured on its own, once, and
+         * `fixedSize(vertical:)` makes it state one definite height instead of
+         * negotiating for it. Nothing moves on screen and nothing changes for
+         * VoiceOver: same content, same order, same pinned bar. It also gives
+         * keyboard avoidance the shape Apple designed it for.
+         *
+         * ⚠️ Swing 13, and named as one. What is EVIDENCE here is that the
+         * loop is a layout negotiation and not any single widget -- her two
+         * toggles proved the rows and the text control are both innocent.
+         * What is INFERENCE is that this particular VStack is the negotiation
+         * that will not converge. */
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if !isLoading && loadError == nil {
-                agentSection
-                contextMeter
-                readAloudToggle
-                composer
+                VStack(spacing: 0) {
+                    agentSection
+                    contextMeter
+                    readAloudToggle
+                    composer
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
@@ -664,7 +710,7 @@ struct ConversationDetailView: View {
                 // Build 218: the trail now says which composer was on screen,
                 // so a freeze report is self-describing without asking her.
                 KadeBreadcrumbs.drop(
-                    "composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
+                    "layout: safeAreaInset(219), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
                     + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
                 )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
