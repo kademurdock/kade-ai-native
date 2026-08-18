@@ -606,7 +606,16 @@ struct ConversationDetailView: View {
         // say, idle -> sending firing twice or landing double-counting.
         .sensoryFeedback(trigger: sendState) { old, new in
             // Session 20: haptics gated through the app-wide Haptics switch.
-            if case .idle = old, case .sending = new { return FeedbackPrefs.gate(.impact(weight: .light)) }
+            /* ⭐ BUILD 216: the idle->sending case is GONE from here. It fired
+             * a light impact at the same instant the watcher below fired
+             * `KadeHaptics.sentTick()` -- TWO haptics for one send, one of
+             * them driven by SwiftUI from inside the state-change turn the
+             * 215 crash died in. sentTick is the better of the two (her
+             * tuned Taptic pattern, not a generic impact) and it now lands
+             * on the next turn, so this line was pure duplicate cost in the
+             * exact place we cannot afford it. The other two moments stay:
+             * they fire on the reply LANDING and on failure, neither of
+             * which is a wedged turn on any trail we have. */
             if case .sending = old, case .idle = new { return FeedbackPrefs.gate(.success) }
             if case .failed = new { return FeedbackPrefs.gate(.error) }
             return nil
@@ -618,6 +627,17 @@ struct ConversationDetailView: View {
             if case .idle = old, case .sending = new {
                 Earcons.shared.play(.messageSent)
                 KadeHaptics.sentTick() // Aug 6 2026: felt twin of the send bloop
+                /* ⭐ BUILD 216 -- the bisect that survives this fix. Both calls
+                 * above now only QUEUE their work (see KadeFeedback.swift), so
+                 * this crumb proves the send turn got past them, and the
+                 * queued one after it proves the audio/haptic work itself
+                 * finished. If a freeze trail ever again ends at "optimistic
+                 * row painted" with NEITHER of these, the wedge is the rest of
+                 * the turn -- the replyingRow insert -- not feedback. If it
+                 * ends at "send feedback queued", the hardware call is still
+                 * blocking, just no longer inside the scene update. */
+                KadeBreadcrumbs.drop("send feedback queued")
+                Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
                 // Session 23 (Kade: "the space between the send sound and
                 // the thinking sound is huge"): the soft waiting ticks
                 // start a breath after the send bloop and run until the

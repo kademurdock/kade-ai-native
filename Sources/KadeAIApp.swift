@@ -77,6 +77,9 @@ struct KadeAIApp: App {
                     // Synthesize the earcons once up front so the first real
                     // one (a message send) is never a synthesis hitch.
                     Earcons.shared.prewarm()
+                    // Build 216: and the haptic engine, for the same reason --
+                    // its lazy first start() was landing on her send turn.
+                    KadeHapticEngine.shared.prewarm()
                     await auth.restore()   // restore a saved session at launch
                     requestPushAuthorization()
                 }

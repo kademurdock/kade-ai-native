@@ -187,10 +187,20 @@ enum KadeHaptics {
         case cardFlick, cardShuffle, diceRoll, chipKnock, winRise, loseSlump, buzz, ding, yourTurn, boom, splash, gong, sting
     }
 
-    private static func play(pattern: Pattern, fallback: () -> Void) {
+    /* ⭐ BUILD 216. Every haptic now lands on the NEXT main-queue turn, not
+     * the one that asked for it. The 215 crash died inside a single SwiftUI
+     * state-change turn -- `sendState = .sending` -- and this call was in it.
+     * Hardware handshakes do not belong inside a view update: SwiftUI charges
+     * the whole thing to the scene-update watchdog, which is exactly the
+     * 0x8BADF00D she has been eating. One hop is imperceptible for touch (a
+     * frame at most) and ordering is preserved, so nothing about how the app
+     * FEELS changes -- only what the watchdog is holding the bag for. */
+    private static func play(pattern: Pattern, fallback: @escaping () -> Void) {
         guard UserDefaults.standard.bool(forKey: "kade.feedback.haptics") else { return }
-        if KadeHapticEngine.shared.play(events: events(for: pattern)) { return }
-        fallback()
+        Task { @MainActor in
+            if KadeHapticEngine.shared.play(events: events(for: pattern)) { return }
+            fallback()
+        }
     }
 
     /// (relativeTime, duration, intensity, sharpness) -- duration 0 means a
@@ -255,14 +265,52 @@ final class KadeHapticEngine {
     private let supported = CHHapticEngine.capabilitiesForHardware().supportsHaptics
     private init() {}
 
+    /* ⭐ BUILD 216 -- THE CALL THE 215 CRASH CORNERED (Aug 18 2026).
+     *
+     * `CHHapticEngine.start()` is a SYNCHRONOUS handshake with the haptic
+     * server, and the media server it talks to is the same one VoiceOver is
+     * using to speak. This engine was created and started LAZILY -- meaning
+     * the first start of the app's life happened on whatever turn first
+     * asked for a haptic, and for her that turn is the send: the crumb trail
+     * on builds 214 and 215 both stop dead between `sendState = .sending`
+     * and the next main-queue hop, with 17% application CPU across the hang
+     * (blocked, not busy) and ~7.4s of CPU burned OUTSIDE the app. Worse,
+     * `play` called `engine.start()` AGAIN on every single tick even when
+     * the engine was already running -- a redundant synchronous handshake
+     * per haptic, forever.
+     *
+     * So: start it ONCE, at launch, next to the earcon prewarm, off the send
+     * path entirely. `playsHapticsOnly` tells CoreHaptics this engine will
+     * never render audio, which keeps it out of the audio-session
+     * negotiation that VoiceOver is already holding. `stoppedHandler` drops
+     * our reference when the system stops the engine (audio-session churn
+     * from a call or a recording does this), so the next play rebuilds it
+     * rather than throwing forever. */
+    func prewarm() {
+        guard supported, engine == nil else { return }
+        engine = Self.makeEngine { [weak self] in self?.engine = nil }
+    }
+
+    // `onDead` is @MainActor because it touches this class's isolated
+    // `engine` -- CoreHaptics calls its handlers on its own queue, so the
+    // hop through `Task { @MainActor in }` below is what makes that legal.
+    private static func makeEngine(onDead: @escaping @MainActor () -> Void) -> CHHapticEngine? {
+        guard let fresh = try? CHHapticEngine() else { return nil }
+        fresh.playsHapticsOnly = true
+        fresh.resetHandler = { Task { @MainActor in onDead() } }
+        fresh.stoppedHandler = { _ in Task { @MainActor in onDead() } }
+        guard (try? fresh.start()) != nil else { return nil }
+        return fresh
+    }
+
     func play(events specs: [(TimeInterval, TimeInterval, Float, Float)]) -> Bool {
         guard supported else { return false }
         do {
+            // Build 216: normally already warm from launch. This lazy path
+            // survives only for the case the system killed the engine
+            // mid-session -- it is the exception now, not the send path.
             if engine == nil {
-                let fresh = try CHHapticEngine()
-                fresh.resetHandler = { [weak self] in Task { @MainActor in self?.engine = nil } }
-                try fresh.start()
-                engine = fresh
+                engine = Self.makeEngine { [weak self] in self?.engine = nil }
             }
             guard let engine else { return false }
             let events: [CHHapticEvent] = specs.map { (time, duration, intensity, sharpness) in
@@ -277,7 +325,9 @@ final class KadeHapticEngine {
                 return CHHapticEvent(eventType: .hapticTransient, parameters: params, relativeTime: time)
             }
             let player = try engine.makePlayer(with: try CHHapticPattern(events: events, parameters: []))
-            try engine.start()
+            // Build 216: the second `engine.start()` that used to sit here
+            // ran a full synchronous handshake on EVERY tick. The engine is
+            // started once, at launch, in prewarm() above.
             try player.start(atTime: CHHapticTimeImmediate)
             return true
         } catch {
@@ -360,6 +410,13 @@ final class Earcons {
 
     private let sampleRate: Double = 44_100
     private var cache: [Earcon: Data] = [:]
+    /// Build 216: one ready, already-`prepareToPlay()`d player per bundled
+    /// earcon, built at launch. `prepareToPlay()` is the expensive half of
+    /// starting a sound -- it allocates buffers and readies the audio
+    /// hardware, and it was running on the send turn, right beside the
+    /// haptic handshake the 215 crash cornered. Firing a warm player is a
+    /// seek plus a play.
+    private var readyPlayers: [Earcon: AVAudioPlayer] = [:]
     /// Keep players alive until they finish -- an AVAudioPlayer deallocated
     /// mid-play just stops. Small pool, pruned as clips end.
     private var players: [AVAudioPlayer] = []
@@ -370,6 +427,16 @@ final class Earcons {
         for e in Earcon.allCases where cache[e] == nil {
             cache[e] = Self.renderWAV(segments: e.segments, amplitude: e.amplitude, sampleRate: sampleRate)
         }
+        // Build 216: and the real recordings get their players built and
+        // prepared here too, so no send ever pays for that again.
+        for e in Earcon.allCases {
+            guard readyPlayers[e] == nil, let file = e.bundleFile,
+                  let url = Bundle.main.url(forResource: file.name, withExtension: file.ext),
+                  let player = try? AVAudioPlayer(contentsOf: url) else { continue }
+            player.volume = e.bundleVolume
+            player.prepareToPlay()
+            readyPlayers[e] = player
+        }
     }
 
     /// Play an earcon, honouring the Sound effects switch. Safe to call from
@@ -377,8 +444,22 @@ final class Earcons {
     /// Cache of the real recordings' bytes, loaded lazily per earcon.
     private var fileCache: [Earcon: Data] = [:]
 
+    /* ⭐ BUILD 216. Same reasoning as KadeHaptics.play: the sound now starts
+     * on the next main-queue turn instead of inside the SwiftUI update that
+     * asked for it, so the scene-update watchdog is never holding an
+     * AVAudioPlayer's hardware setup. Imperceptible for a send bloop. */
     func play(_ earcon: Earcon) {
         guard FeedbackPrefs.shared.soundEffects else { return }
+        Task { @MainActor in self.fire(earcon) }
+    }
+
+    private func fire(_ earcon: Earcon) {
+        // Build 216: warm player from prewarm() -- the whole point.
+        if let ready = readyPlayers[earcon] {
+            ready.currentTime = 0
+            ready.play()
+            return
+        }
         // Real recording first (July 22 2026); the synth path below is the
         // fail-soft fallback and still owns every earcon with no file.
         if let file = earcon.bundleFile {
