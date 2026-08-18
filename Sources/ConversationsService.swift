@@ -179,6 +179,26 @@ struct KadeMessage: Codable, Identifiable {
         MessageTextSanitizer.forDisplay(displayText)
     }
 
+    /// The reply's THINKING, joined and sanitized -- nil when this message
+    /// carried none (every user message, and any assistant turn that answered
+    /// instantly). Aug 17 2026, her ask: the same clipboard reach the answer
+    /// already had. Sanitized through the same path as `readableText` so a
+    /// copied thought can never paste raw "%%%" steering tags, and trimmed so
+    /// an empty think block reads as "no thoughts" rather than an empty
+    /// clipboard the user can't distinguish from a failed copy.
+    var thoughtsText: String? {
+        guard let blocks = content else { return nil }
+        let joined = blocks
+            .filter { $0.type == "think" }
+            .compactMap { $0.think }
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !joined.isEmpty else { return nil }
+        let cleaned = MessageTextSanitizer.forDisplay(joined)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
     /// True when this reply carries a context-compaction "summary" content
     /// block: the server condensed everything OLDER than this point into a
     /// running story-so-far summary for the model's payload only. Nothing in
@@ -209,18 +229,27 @@ struct KadeMessage: Codable, Identifiable {
 struct ContentBlock: Codable {
     let type: String
     let text: String?
+    /// Aug 17 2026 (her ask: "I'd like other options to copy thoughts to
+    /// clipboard similar to how you can copy text"). Think blocks carry their
+    /// payload under "think", not "text" -- this decoder simply never read
+    /// that key, so a reply's reasoning was visible while it STREAMED and
+    /// then silently dropped the moment the conversation reloaded from the
+    /// server. Decoding it is what makes `thoughtsText` (and therefore the
+    /// Copy Thoughts action) possible on a message you scrolled back to.
+    let think: String?
     /// Session 35 (July 30 2026, Amber's armadillo debug): a turn that dies
     /// server-side persists as `{type:"error", error:"..."}` — decode the
     /// reason so the transcript can say what actually happened instead of
     /// mislabeling a failed turn as "tool activity only."
     let errorText: String?
 
-    enum CodingKeys: String, CodingKey { case type, text, errorText = "error" }
+    enum CodingKeys: String, CodingKey { case type, text, think, errorText = "error" }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.type = (try? c.decode(String.self, forKey: .type)) ?? "unknown"
         self.text = try? c.decode(String.self, forKey: .text)
+        self.think = try? c.decode(String.self, forKey: .think)
         self.errorText = try? c.decode(String.self, forKey: .errorText)
     }
 }

@@ -100,6 +100,7 @@ struct CallView: View {
                     cameraButton
                 }
                 spotterButton
+                stopTalkingButton
                 controls
             }
             .padding()
@@ -439,6 +440,28 @@ struct CallView: View {
         )
     }
 
+    /// Aug 17 2026, her call: OFF the main strip, not gone. She asked why it
+    /// still exists at all -- "barge should handle that correctly, and of
+    /// course you can mute yourself" -- and the honest answer is that auto
+    /// barge-in is server-side and only fires when she SPEAKS, which means it
+    /// cannot fire at all while the mic is MUTED (mute sends silence by
+    /// design). So this button is the only way to stop a rambling agent while
+    /// muted, or to stop one without having to make noise. It keeps its full
+    /// label and hint for VoiceOver; it just no longer eats a third of the
+    /// primary row, which is now the two controls she actually reaches for.
+    private var stopTalkingButton: some View {
+        Button {
+            callService.barge()
+        } label: {
+            Label("Stop Talking", systemImage: "hand.raised.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(callService.status == .reconnecting)
+        .accessibilityLabel("Stop talking")
+        .accessibilityHint("Interrupts what \(currentSpeakerName) is saying. Works even while your microphone is muted.")
+    }
+
     private var controls: some View {
         HStack(spacing: 16) {
             // Session 26, her spec exactly: "a mute button to mute your
@@ -472,16 +495,6 @@ struct CallView: View {
                     ? "Double-tap so \(currentSpeakerName) can hear you again."
                     : "Double-tap to send silence instead of your microphone. Stops accidental interruptions too."
             )
-
-            Button {
-                callService.barge()
-            } label: {
-                Label("Stop Talking", systemImage: "hand.raised.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(callService.status == .reconnecting)
-            .accessibilityHint("Interrupts what \(currentSpeakerName) is saying so you can talk.")
 
             Button(role: .destructive) {
                 hangUp()

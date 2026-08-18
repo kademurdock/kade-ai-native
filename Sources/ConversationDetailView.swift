@@ -2837,6 +2837,17 @@ private struct MessageRow: View {
                     UIPasteboard.general.string = message.readableText
                     UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
                 }
+                // Aug 17 2026, her ask: the same clipboard reach for the
+                // THINKING that the answer already had. Conditional on
+                // purpose -- VoiceOver must never announce an action this
+                // message can't perform (the same rule the Edit/Regenerate/
+                // Delete actions below follow), and most turns think nothing.
+                if let thoughts = message.thoughtsText {
+                    Button("Copy thoughts") {
+                        UIPasteboard.general.string = thoughts
+                        UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
+                    }
+                }
                 switch voicePlayback {
                 case .playing:
                     Button("Pause voice message") { onPauseResume() }
@@ -2905,6 +2916,14 @@ private struct MessageRow: View {
                 UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
             } label: {
                 Label("Copy Text", systemImage: "doc.on.doc")
+            }
+            if let thoughts = message.thoughtsText {
+                Button {
+                    UIPasteboard.general.string = thoughts
+                    UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
+                } label: {
+                    Label("Copy Thoughts", systemImage: "brain")
+                }
             }
             switch voicePlayback {
             case .playing:
