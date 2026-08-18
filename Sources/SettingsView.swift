@@ -37,6 +37,9 @@ struct SettingsView: View {
     /// Build 217: shared with ConversationDetailView by key. See its own
     /// declaration there for what the two answers mean.
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
+    /// Build 218: see the `simpleComposer` declaration in
+    /// ConversationDetailView for what its two answers mean.
+    @AppStorage("kade.chat.simpleComposer") private var simpleComposer = false
     // Aug 6 2026: whisper mode — night-quiet delivery, the native twin of the
     // web toggle that shipped in Part 32. Rides the send payload; the server
     // appends the whisper head line while it's on.
@@ -317,6 +320,15 @@ struct SettingsView: View {
                     Text("Simple transcript (troubleshooting)")
                 }
                 .accessibilityHint("Renders each message as plain text with no per-message actions, bubble, or timestamp. Turn this on if sending a message freezes the app -- it tells us whether the message rows are the cause. Message actions are still available from the Actions menu.")
+
+                /* ⭐ BUILD 218 -- the second half of the bisect. Build 217's
+                 * transcript switch already cleared the message rows (she
+                 * froze with every row a bare Text), so this one aims at the
+                 * only other text-measuring surface on the screen. */
+                Toggle(isOn: $simpleComposer) {
+                    Text("Simple composer (troubleshooting)")
+                }
+                .accessibilityHint("Makes the message box a single line that scrolls instead of growing to five lines. Turn this on if sending still freezes the app -- it tells us whether the message box is the cause. You can still type and send messages of any length.")
 
                 Toggle(isOn: $feedback.forceReduceMotion) {
                     Text("Reduce motion")

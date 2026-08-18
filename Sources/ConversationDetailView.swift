@@ -440,6 +440,15 @@ struct ConversationDetailView: View {
      * debug flag so she can answer the question herself, in one tap, without
      * waiting for another build. */
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
+    /* ⭐ BUILD 218 bisect, default OFF. ON = the composer is a plain
+     * SINGLE-LINE field: no vertical growth, no line-limit range, nothing for
+     * the layout to negotiate. Freeze stops when she flips this and the
+     * composer's text control is convicted outright; freeze survives and the
+     * last text-measuring surface on the screen is cleared too, which would
+     * leave the transcript CONTAINER (ScrollView/LazyVStack/ScrollViewReader)
+     * as the only thing standing. Costs her the multi-line composer while it
+     * is on -- long messages still type fine, they just scroll in one line. */
+    @AppStorage("kade.chat.simpleComposer") private var simpleComposer = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -652,6 +661,12 @@ struct ConversationDetailView: View {
                  * ends at "send feedback queued", the hardware call is still
                  * blocking, just no longer inside the scene update. */
                 KadeBreadcrumbs.drop("send feedback queued")
+                // Build 218: the trail now says which composer was on screen,
+                // so a freeze report is self-describing without asking her.
+                KadeBreadcrumbs.drop(
+                    "composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
+                    + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
+                )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
                 // Session 23 (Kade: "the space between the send sound and
                 // the thinking sound is huge"): the soft waiting ticks
@@ -1945,12 +1960,75 @@ struct ConversationDetailView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 attachButton
                 deepThinkButton
-                TextField("Message", text: $draftText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
-                    .accessibilityLabel("Message")
-                    .accessibilityFocused($a11yFocus, equals: .composerField)
+                /* ⭐⭐ BUILD 218 -- THE FIRST CHANGE IN THIS HUNT AIMED AT A LEAF
+                 * FRAME INSTEAD OF A THEORY.
+                 *
+                 * Her two build-217 stacks (17:55:42Z, both Foreground kills,
+                 * 10.087s and 10.131s of app CPU against a 10.00s allowance --
+                 * a pegged core) bottom out in **UIFoundation text
+                 * measurement** reached through UIKitCore from SwiftUI, and
+                 * they RECURSE: `SwiftUICore +464312` appears SEVEN times in
+                 * one and SIX in the other, 17 distinct frames repeating for
+                 * 56 duplicate frames total. Same family as builds 204 and
+                 * 208. The shallower AttributeGraph-topped samples on 211/215/
+                 * 216 were the same loop caught at a different instant.
+                 *
+                 * And the Simple-transcript toggle cleared the message rows:
+                 * she froze with every row rendered as one bare `Text` with no
+                 * accessibility modifiers at all. So the text being measured
+                 * recursively is not in the transcript -- and this is the only
+                 * other text-measuring surface on the screen.
+                 *
+                 * Two things about the old line were wrong together:
+                 *   - `axis: .vertical` makes this a MULTI-LINE, UITextView-
+                 *     backed control, but `.textFieldStyle(.roundedBorder)` is
+                 *     UIKit's single-line bordered style. Sizing that pair is a
+                 *     negotiation between a control that wants one line and a
+                 *     container that permits several -- and it resolves through
+                 *     exactly the UIFoundation/UIKitCore frames at her leaf.
+                 *   - `.lineLimit(1...5)` is a RANGE, so the layout has to
+                 *     measure the text at multiple candidate heights and pick.
+                 *     Nested in flexible stacks, those probes multiply. That is
+                 *     the recursion.
+                 * `isSending` flipping is what dirties this subtree at the
+                 * exact moment she freezes, and no swing in this hunt --
+                 * feedback, decorations, chunking, windows, rotors, rows -- has
+                 * ever touched it.
+                 *
+                 * ⚠️ HONEST LIMIT: this is not proven. I checked the obvious
+                 * corollary (longer drafts = more line candidates = more work)
+                 * against every send in the ring and it did NOT hold -- 37
+                 * chars froze, 199 chars was fine, 72 chars did both. Length is
+                 * at most an amplifier. What is solid is the leaf, the
+                 * recursion, and that the rows are eliminated. Hence the
+                 * `simpleComposer` bisect below, so a wrong guess here costs
+                 * her a tap instead of another day. */
+                if simpleComposer {
+                    TextField("Message", text: $draftText)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color(uiColor: .separator))
+                        )
+                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                        .accessibilityLabel("Message")
+                        .accessibilityFocused($a11yFocus, equals: .composerField)
+                } else {
+                    TextField("Message", text: $draftText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color(uiColor: .separator))
+                        )
+                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                        .accessibilityLabel("Message")
+                        .accessibilityFocused($a11yFocus, equals: .composerField)
+                }
                 micButton
                 // Session 17: one button, two jobs, matching how `isSending`
                 // already gates it -- Send while idle, Stop while a reply is
