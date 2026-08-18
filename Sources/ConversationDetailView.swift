@@ -425,6 +425,21 @@ struct ConversationDetailView: View {
         case voiceError
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
+    /// Build 217: the replying row's decorative layer is skipped entirely
+    /// under VoiceOver -- see `replyingRow`.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+    /* ⭐ BUILD 217 -- THE BISECT SHE ASKED FOR, user-flippable, default OFF.
+     * With this on, every transcript row renders as ONE plain Text with a
+     * single accessibility label and nothing else: no custom accessibility
+     * element tree, no per-row `.accessibilityActions`, no bubble chrome, no
+     * timestamp, no attachment views, no chunking. If the freeze survives
+     * build 217's cure and STOPS when she flips this, the stall lives in the
+     * per-row view/accessibility machinery; if it freezes with this ON too,
+     * every row is innocent and the wedge is the transcript container or the
+     * replying row itself. It is deliberately a real setting rather than a
+     * debug flag so she can answer the question herself, in one tap, without
+     * waiting for another build. */
+    @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1038,6 +1053,7 @@ struct ConversationDetailView: View {
                     ForEach(visibleMessages) { message in
                         MessageRow(
                             message: message,
+                            simpleMode: simpleTranscript,
                             canEdit: canEdit(message),
                             canRegenerate: canRegenerate(message),
                             voicePlayback: voiceService.nowPlayingKey == message.id
@@ -1102,7 +1118,15 @@ struct ConversationDetailView: View {
             }
             .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: sendState) { _, _ in
-                scrollToBottom(proxy)
+                /* ⭐ BUILD 217: the `scrollToBottom(proxy)` that used to sit
+                 * here is GONE. On a send BOTH of these hooks fire -- the
+                 * optimistic row changes `messages.count` and the state
+                 * change fires this one -- so every send paid for TWO forced
+                 * LazyVStack position resolutions, the second one targeting
+                 * `replyingRowId`, a row being inserted in that same commit.
+                 * The count hook above already scrolls, and `scrollToBottom`
+                 * reads `sendState` itself when it picks its target, so the
+                 * newest row still gets the scroll. */
                 // Covers the cases the cheap signature can't see on its own:
                 // an edit or a regenerate rewrites a message IN PLACE, so the
                 // count and the last id both stay put while the text changes.
@@ -1263,10 +1287,35 @@ struct ConversationDetailView: View {
         .accessibilityHint(liveThinkExpanded ? "Double-tap to close the thoughts." : "Double-tap to open and read the thoughts as they arrive.")
     }
 
+    /* ⭐ BUILD 217 -- FINISHING WHAT BUILD 205 STARTED AND LEFT HALF DONE.
+     *
+     * 205 measured that `KadeThinkingBubbles`' TimelineView was THIRTY
+     * view-graph rebuilds a second inside the transcript for the whole
+     * generation window, called it "main-thread cost that its user cannot
+     * perceive by any means," and gated it under VoiceOver. It cured nothing
+     * -- because the two decorations sitting RIGHT BESIDE it were never
+     * gated: `ProgressView()`'s indeterminate spinner, and `KadePulseDot`'s
+     * `.repeatForever` animation whose `pulsing` flag is set from `onAppear`
+     * DURING the very commit that inserts this row.
+     *
+     * And the numbers say churn is exactly what this is. Every crash in this
+     * hunt reports ~10.0s of application CPU (208: 9.973 · 211: 10.156 ·
+     * 212: 10.082 · 215: 9.999 · 216: 9.923) against a 10.00s watchdog
+     * allowance -- ONE CORE PEGGED FOR THE WHOLE ALLOWANCE. The "17% CPU"
+     * beside it is that same 10s spread across a ~60s reporting window, and
+     * reading it as "blocked, not busy" (build 211's comment, and the two
+     * ground-truth lines that repeated it) was wrong. It is busy.
+     *
+     * So under VoiceOver this row is now TEXT ONLY. She loses nothing she
+     * can perceive: every decoration here is `accessibilityHidden`, and the
+     * row's own label ("X is replying") plus the waiting-tick earcons carry
+     * the whole non-visual story. `KadePulseDot` stays in the tree with its
+     * visual stilled by its own new gate -- that is what keeps her opt-in
+     * haptic heartbeat beating while the animation stops. */
     private var replyingRow: some View {
         let who = messages.last(where: { !$0.isCreatedByUser })?.speakerLabel ?? "The assistant"
         return HStack(spacing: 8) {
-            ProgressView()
+            if !voiceOverOn { ProgressView() }
             // Session 20 visual flair: a soft pulsing dot while a reply is in
             // flight. Purely decorative -- KadePulseDot is accessibilityHidden
             // and collapses to a static dot under Reduce Motion, so VoiceOver
@@ -1278,7 +1327,7 @@ struct ConversationDetailView: View {
             // waiting beat. The moment thoughts start pouring into the live
             // bubble, that takes the visual job and these step aside (same
             // rule as the web: never fight the streaming content).
-            if liveThink.isEmpty {
+            if liveThink.isEmpty, !voiceOverOn {
                 KadeThinkingBubbles()
             }
         }
@@ -2756,6 +2805,10 @@ private struct MessageRow: View {
     // preference would be pure noise.
     @EnvironmentObject private var appearance: AppearancePreferences
     let message: KadeMessage
+    /// Build 217: Settings -> "Simple transcript (troubleshooting)". See the
+    /// `simpleTranscript` declaration in ConversationDetailView for why this
+    /// exists and what its two answers mean.
+    var simpleMode: Bool = false
     /// Only the last user message gets an Edit action; see
     /// `ConversationDetailView.canEdit(_:)`.
     let canEdit: Bool
@@ -2918,6 +2971,28 @@ private struct MessageRow: View {
     }
 
     var body: some View {
+        if simpleMode { simpleRow } else { fullRow }
+    }
+
+    /* ⭐ BUILD 217. The stripped row: ONE Text, and not one accessibility
+     * modifier on it. No `.accessibilityElement(children: .ignore)`, no
+     * `accessibleLabel` interpolating the whole body on every evaluation, no
+     * `.accessibilityActions`, no bubble background, no timestamp, no
+     * attachment view, no chunking. The speaker is folded into the visible
+     * string so she still knows who is talking without a custom label
+     * putting one back. VoiceOver reads a plain Text natively.
+     *
+     * Everything she gives up while this is on (row actions, Reading View,
+     * read-aloud, copy) is still reachable from the message Actions menu and
+     * the composer -- this strips the ROW, not the app. */
+    private var simpleRow: some View {
+        Text("\(message.speakerLabel): \(bodyText)")
+            .font(appearance.messageFont())
+            .lineSpacing(appearance.lineSpacing.extraPoints)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var fullRow: some View {
         VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 6) {
             // Conversation compacting (July 22 2026): a reply that carries a
             // summary block marks the spot where the server condensed the

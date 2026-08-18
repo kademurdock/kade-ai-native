@@ -728,28 +728,43 @@ struct KadePulseDot: View {
     private let period: Double = 1.7
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    /* ⭐ BUILD 217. VoiceOver stills the VISUAL but NOT the heartbeat, and the
+     * split is the whole point. This dot's `.repeatForever` animation is
+     * driven by `pulsing`, which `onAppear` sets DURING the commit that
+     * inserts the row -- and every crash in the freeze hunt burned ~10.0s of
+     * application CPU against a 10.00s watchdog allowance, i.e. a pegged core
+     * for the entire window. Build 205 gated the thinking bubbles for exactly
+     * this reason and called it "main-thread cost that its user cannot
+     * perceive by any means"; this dot is `accessibilityHidden(true)` too, so
+     * the same sentence applies word for word.
+     *
+     * The haptic heartbeat is a DIFFERENT question: she can feel that, she
+     * asked for it, and it is hers to keep. So `stillVisual` gates the
+     * animation and `reduce` alone still gates the beat. */
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
     @State private var pulsing = false
     @State private var beat: Task<Void, Never>? = nil
 
     var body: some View {
         let reduce = systemReduceMotion || FeedbackPrefs.shared.forceReduceMotion
+        let stillVisual = reduce || voiceOverOn
         Circle()
             .fill(color)
             .frame(width: diameter, height: diameter)
-            .scaleEffect((active && !reduce && pulsing) ? 1.25 : 1.0)
-            .opacity((active && !reduce && pulsing) ? 0.5 : 1.0)
+            .scaleEffect((active && !stillVisual && pulsing) ? 1.25 : 1.0)
+            .opacity((active && !stillVisual && pulsing) ? 0.5 : 1.0)
             .animation(
-                (active && !reduce)
+                (active && !stillVisual)
                     ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true)
                     : .default,
                 value: pulsing
             )
             .onAppear {
-                if active && !reduce { pulsing = true }
+                if active && !stillVisual { pulsing = true }
                 syncBeat(active: active, reduce: reduce)
             }
             .onChange(of: active) { _, now in
-                pulsing = now && !reduce
+                pulsing = now && !stillVisual
                 syncBeat(active: now, reduce: reduce)
             }
             .onDisappear { beat?.cancel(); beat = nil }

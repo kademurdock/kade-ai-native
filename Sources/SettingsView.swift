@@ -33,6 +33,10 @@ struct SettingsView: View {
     /// every 20 seconds). Announcement-only; thoughts are never read by
     /// TTS. Same key ConversationDetailView reads.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
+
+    /// Build 217: shared with ConversationDetailView by key. See its own
+    /// declaration there for what the two answers mean.
+    @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
     // Aug 6 2026: whisper mode — night-quiet delivery, the native twin of the
     // web toggle that shipped in Part 32. Rides the send payload; the server
     // appends the whisper head line while it's on.
@@ -303,6 +307,16 @@ struct SettingsView: View {
                 }
                 .disabled(!feedback.haptics)
                 .accessibilityHint("When something on screen is gently pulsing, like the dot while a companion is thinking, a soft tap pulses in time with it. Haptics must be on.")
+
+                /* ⭐ BUILD 217 -- the send-freeze bisect, in her hands.
+                 * Lives here rather than in a hidden debug screen because SHE
+                 * is the one who can answer the question, in one tap, without
+                 * waiting on another build. Default OFF; harmless to leave on
+                 * if she ever prefers the plainer transcript. */
+                Toggle(isOn: $simpleTranscript) {
+                    Text("Simple transcript (troubleshooting)")
+                }
+                .accessibilityHint("Renders each message as plain text with no per-message actions, bubble, or timestamp. Turn this on if sending a message freezes the app -- it tells us whether the message rows are the cause. Message actions are still available from the Actions menu.")
 
                 Toggle(isOn: $feedback.forceReduceMotion) {
                     Text("Reduce motion")
