@@ -306,6 +306,41 @@ struct ConversationDetailView: View {
      * rest on demand; nothing is lost but the freeze. */
     private static let transcriptWindowStep = 12
 
+    /* ⚠️⚠️ READ THIS BEFORE CHANGING `transcriptWindowStep` ABOVE -- THE 12
+     * AND THE `VStack` IN `messageList` ARE ONE DECISION, NOT TWO.
+     *
+     * Build 225 replaced the transcript's `LazyVStack` with a plain `VStack`
+     * (Apple Developer Forums thread 814208, Workaround 1 -- see the comment
+     * on the container itself). That swap is only free BECAUSE the window is
+     * small: a `VStack` renders every row it holds EAGERLY, all at once, on
+     * every mutation. At 12 rows that costs nothing and buys us out of a
+     * documented framework race. At 60 rows it is a different animal.
+     *
+     * The evidence line, so nobody has to re-derive it:
+     *   - 12 rows  PROVEN SAFE. Streaming has run at 12 since build 209, and
+     *              builds 224/225 send at 12.
+     *   - 60 rows  PROVEN TO FREEZE. Build 223 wedged on the optimistic
+     *              append with a 60-row window (main thread busy in
+     *              SwiftUICore layout / AttributeGraph, no TextKit frame).
+     *   - 13-59    NEVER TESTED, on either container.
+     *
+     * So: RAISING THIS NUMBER MEANS RECONSIDERING THE `VStack` IN THE SAME
+     * BREATH. If a future change needs a bigger default window, the honest
+     * options are (a) go back to `LazyVStack` and re-solve the 814208 race
+     * some other way, or (b) keep the `VStack` and prove the larger number
+     * under VoiceOver on a real device first. Not (c) bump it and hope.
+     *
+     * `transcriptWindowMaxTested` is the line between "inside the envelope we
+     * have receipts for" and "past it." It does NOT clamp anything today --
+     * "Show earlier messages" can still walk the window as far as she likes,
+     * because taking her history away to dodge a maybe is the wrong trade.
+     * What it does is make the crossing VISIBLE: `noteTranscriptWindow()`
+     * trips a breadcrumb the first time a conversation goes past it, so if a
+     * freeze ever lands after she expanded, the ring says so in words instead
+     * of leaving the next session to guess. Debug builds assert. */
+    private static let transcriptWindowMaxTested = 48
+    @State private var transcriptWindowWarned = false
+
     /// Part 70.8 (Aug 16 2026 -- her three send-time freezes ON 208, all in
     /// one heavy conversation, stacks in the ring): the freezes fire at the
     /// send-moment transcript update, BEFORE any reply chunk exists, so
@@ -721,6 +756,50 @@ struct ConversationDetailView: View {
             if case .sending = old, case .idle = new { return FeedbackPrefs.gate(.success) }
             if case .failed = new { return FeedbackPrefs.gate(.error) }
             return nil
+        }
+        /* ⭐⭐⭐ HER HAPTIC HEARTBEAT, BACK -- AND OFF THE COMMIT THAT KILLED IT.
+         *
+         * The beat was hers from session 21 ("if something is pulsing visually,
+         * we could get a matching little haptic that feels sensory cool"), and
+         * under VoiceOver it is the ONLY channel that says "it's working on it"
+         * while she waits. Build 222 gave it back by ungating `KadePulseDot` in
+         * `replyingRow` and FROZE ON HER FIRST SEND. Build 223 put the gate back
+         * and the verdict stuck: a `KadePulseDot` present in the replying-row
+         * commit under VoiceOver reintroduces the freeze regardless of how clean
+         * its internals are -- its mere INSTALLATION forces work into an
+         * already-expensive commit. That gate is load-bearing and it stays.
+         *
+         * So the beat comes back by the road `replyingRow`'s own comment named:
+         * driven from SEND STATE, not from a view inside the commit. This
+         * `.task(id:)` lives on the OUTER view, which is not being inserted when
+         * the transcript mutates, and SwiftUI installs `.task` AFTER the commit
+         * and owns its cancellation. Nothing new enters the send path -- no view,
+         * no state write, no modifier on the row. `sendState` is already
+         * `Equatable` and this view already observes it one line below.
+         *
+         * Rhythm is byte-identical to what she had: same 1.7s period, same
+         * half-period offset so the first thump lands where the visual pulse's
+         * expansion would, same `KadeHaptics.pulseBeat()` two-thump lub-dub,
+         * same two switches (Haptics + Pulse with the visuals), same reduced-
+         * motion gate. VoiceOver-only on purpose: sighted users still get the
+         * real `KadePulseDot` and would otherwise feel it twice.
+         *
+         * ⚠️ IF A FREEZE EVER RETURNS, THIS IS NOT THE FIRST SUSPECT -- it adds
+         * nothing to the transcript commit. But it IS new, so the one-line
+         * revert is: delete this whole `.task(id:)` block. Nothing else depends
+         * on it. */
+        .task(id: sendState) {
+            guard voiceOverOn, case .sending = sendState else { return }
+            guard !UIAccessibility.isReduceMotionEnabled,
+                  UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
+                  UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
+            // Let the send commit finish and get out of its way before the
+            // first thump -- half a period, matching the visual pulse's offset.
+            try? await Task.sleep(nanoseconds: 850_000_000)
+            while !Task.isCancelled {
+                KadeHaptics.pulseBeat()
+                try? await Task.sleep(nanoseconds: 1_700_000_000)
+            }
         }
         // Session 20 earcons: the same three send moments get a short,
         // gentle non-speech sound (honouring the Sound effects switch),
@@ -1665,6 +1744,27 @@ struct ConversationDetailView: View {
         return time.isEmpty ? truncated : "\(time): \(truncated)"
     }
 
+    /// Records -- once per conversation -- that the transcript window has been
+    /// expanded past the row count this app has receipts for. See
+    /// `transcriptWindowMaxTested`. This is instrumentation, not a guard: it
+    /// changes nothing about what she sees. Its whole job is that a future
+    /// freeze report arrives with "she was at 84 rows" already in the trail,
+    /// instead of a stack and a shrug. Cheap, once, never on the send path.
+    private func noteTranscriptWindow() {
+        guard transcriptWindow > Self.transcriptWindowMaxTested,
+              !transcriptWindowWarned else { return }
+        transcriptWindowWarned = true
+        assertionFailure(
+            "transcriptWindow \(transcriptWindow) is past transcriptWindowMaxTested "
+            + "\(Self.transcriptWindowMaxTested); the transcript is an EAGER VStack "
+            + "(build 225) and 60 rows froze on build 223."
+        )
+        KadeBreadcrumbs.drop(
+            "transcript window expanded to \(transcriptWindow) rows "
+            + "(past tested max \(Self.transcriptWindowMaxTested), eager VStack)"
+        )
+    }
+
     /// The window's one control: a single, clearly-labeled button above the
     /// transcript. Expanding keeps the reader's place (the previously-oldest
     /// visible row is re-anchored to the top) and tells VoiceOver what
@@ -1676,6 +1776,7 @@ struct ConversationDetailView: View {
             if case .sending = sendState { streamThinDisabledByUser = true }
             let anchorId = visibleMessages.first?.id
             transcriptWindow += Self.transcriptWindowStep * 2
+            noteTranscriptWindow()
             rebuildRotorItems()
             if let anchorId {
                 DispatchQueue.main.async { proxy.scrollTo(anchorId, anchor: .top) }
