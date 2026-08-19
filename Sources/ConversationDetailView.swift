@@ -284,7 +284,27 @@ struct ConversationDetailView: View {
     /// a giant thread, and the rotors now navigate exactly what is on
     /// screen.
     @State private var transcriptWindow = ConversationDetailView.transcriptWindowStep
-    private static let transcriptWindowStep = 60
+    /* ⭐⭐⭐ BUILD 224 — THE WINDOW IS THE FREEZE, AND THIS IS THE EVIDENCE-BASED CUT.
+     *
+     * Every fix from 216→223 shaved a widget off the send commit (haptics,
+     * earcons, the pulse dot, the rotors, the composer field) and the freeze
+     * only MOVED — because the real cost was never a widget, it was the NUMBER
+     * OF ROWS re-laid-out for VoiceOver when the transcript mutates on send.
+     * Her 223 kill proves it: the main thread was busy in SwiftUICore layout /
+     * AttributeGraph (no TextKit, no recursion), and it died on the OPTIMISTIC
+     * APPEND itself — the moment her own message is added — before any widget
+     * in the reply row even existed. "Simple transcript" (bare Text rows) also
+     * froze because it still had all 60 rows in the container.
+     *
+     * The number is the whole story. A SEND lays out against THIS window; the
+     * streaming thin-to-12 only kicks in AFTER `sendState` flips, so every send
+     * paid for 60 rows. But the app STREAMS fine at 12 rows (build 209, live
+     * for days). 60 froze, 12 did not. So the base window becomes 12 — a send
+     * now re-lays-out the same bounded transcript that streaming already proved
+     * tolerable, and the thin-to-12 becomes a no-op instead of a second
+     * re-window on the same commit. "Show earlier messages" still loads the
+     * rest on demand; nothing is lost but the freeze. */
+    private static let transcriptWindowStep = 12
 
     /// Part 70.8 (Aug 16 2026 -- her three send-time freezes ON 208, all in
     /// one heavy conversation, stacks in the ring): the freezes fire at the
