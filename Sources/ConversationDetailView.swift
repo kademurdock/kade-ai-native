@@ -1389,7 +1389,34 @@ struct ConversationDetailView: View {
             // flight. Purely decorative -- KadePulseDot is accessibilityHidden
             // and collapses to a static dot under Reduce Motion, so VoiceOver
             // and motion-sensitive users are untouched.
-            KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
+            /* ⭐⭐ BUILD 221 -- HER CALL: BELT AND BRACES, THE DOT LEAVES THE
+             * TREE ENTIRELY UNDER VOICEOVER.
+             *
+             * 220's crumbs cleared the composer teardown, the row insert and
+             * the focus move, and pinned the wedge inside the `sendState =
+             * .sending` commit. Under VoiceOver `ProgressView` and
+             * `KadeThinkingBubbles` were already gated out, which left this
+             * row as `Text` plus one view with a lifecycle -- and
+             * `KadePulseDot.onAppear` ran `beat?.cancel(); beat = nil`, an
+             * unconditional `@State` write INSIDE that commit, ahead of every
+             * guard, so no switch could stop it.
+             *
+             * KadePulseDot's own internals are fixed too (the state is gone,
+             * the heartbeat moved to `.task(id:)`), so every other place it
+             * is used is safe. Offered her that fix alone; she took the
+             * stronger version, and she is right to while a freeze is still
+             * live -- under VoiceOver this commit now installs NOTHING with a
+             * lifecycle at all.
+             *
+             * ⚠️ THE COST, STATED PLAINLY: her opt-in haptic heartbeat does
+             * not beat during a reply while VoiceOver is on. She asked for
+             * that beat in session 21 and build 217 kept this dot in the tree
+             * specifically to preserve it. RESTORE = delete this gate (the
+             * `.task` version is safe to insert here), and it should be
+             * restored the moment 221 proves the freeze dead. */
+            if !voiceOverOn {
+                KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
+            }
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
             // Aug 4 2026: her hypnotic bubbles, native -- only in the pure
@@ -1401,6 +1428,14 @@ struct ConversationDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        /* Build 221: the bisect continues one layer in. This crumb can only
+         * fire once the commit that inserts this row has COMPLETED. If a
+         * future trail still stops after `send feedback queued` and this is
+         * absent, the row insert is still the wedge and KadePulseDot was not
+         * the whole of it. If it is present and the freeze is gone, done.
+         * Dropping a crumb is a file write on a utility queue -- it writes no
+         * state and cannot itself schedule an update. */
+        .onAppear { KadeBreadcrumbs.drop("replying row appeared") }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(who) is replying")
     }
