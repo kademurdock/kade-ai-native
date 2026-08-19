@@ -1472,28 +1472,39 @@ struct ConversationDetailView: View {
              * specifically to preserve it. RESTORE = delete this gate (the
              * `.task` version is safe to insert here), and it should be
              * restored the moment 221 proves the freeze dead. */
-            /* ⭐⭐ BUILD 222 — HER HEARTBEAT COMES BACK.
+            /* ⭐⭐⭐ BUILD 223 — THE GATE IS BACK, AND THE VERDICT IS IN.
              *
-             * Build 221 made TWO changes and only ONE of them was the fix.
-             * The fix was inside `KadePulseDot` itself: `@State beat` deleted,
-             * the heartbeat moved to `.task(id:)`, so nothing writes state
-             * during the commit that installs this row. THIS gate was the
-             * belt-and-braces on top — pulling the dot out of the tree
-             * entirely under VoiceOver — and it is what cost her the beat she
-             * asked for in session 21 and told us she missed.
+             * Build 222 removed this gate to give her the heartbeat under
+             * VoiceOver. It CRASHED on the first send — her words, "no send
+             * sound," and the ring agrees exactly: 06:13:53 trail runs
+             * `send feedback queued` -> `replying row appeared` -> then
+             * MAIN THREAD UNRESPONSIVE, with `send feedback done` and
+             * `sending state painted` never firing and the queued earcon
+             * never playing. The wedge is in the commit that installs THIS
+             * row, and the only thing 222 added to that commit is this dot.
              *
-             * With the `.task(id:)` engine in place the dot installs nothing
-             * that writes state, so it can come back. Its VISUAL is still
-             * stilled under VoiceOver by `stillVisual` (build 217) and the
-             * beat still honours both switches; nothing about the rhythm
-             * changed — same 1.7s period, same half-period offset onto the
-             * pulse peak, same two-thump `KadeHaptics.pulseBeat`.
+             * Verdict, earned empirically over 221->222->223: 221's
+             * `.task(id:)` refactor was necessary but NOT sufficient. A
+             * `KadePulseDot` present in the `replyingRow` commit UNDER
+             * VoiceOver reintroduces the freeze regardless -- its mere
+             * installation forces work into that already-expensive commit.
+             * This gate is not belt-and-braces; it is load-bearing, and it
+             * stays.
              *
-             * ⚠️ IF THE FREEZE RETURNS ON 222, THIS LINE IS THE FIRST THING TO
-             * PUT BACK — it is a one-line revert to `if !voiceOverOn { ... }`
-             * and it tells us the gate was load-bearing after all, which is
-             * itself worth knowing. */
-            KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
+             * The rotors (222's other half) are UNTOUCHED and stay: the ring
+             * puts the wedge in the send commit, which the rotors never enter
+             * (outer ScrollView, on-demand `prepare` resolution), and 215-220
+             * all froze without them. 223 keeps them, which makes it the clean
+             * bisect -- if 223 holds, the rotors are cleared for good.
+             *
+             * ⚠️ THE HEARTBEAT UNDER VOICEOVER IS A DEAD END BY THIS PATH.
+             * Giving it back means driving the beat from the SEND LOGIC (a
+             * timer keyed on `sendState`), NOT from a SwiftUI view living in
+             * the commit -- a real change for a calm day, not a fix to ship
+             * while she is asleep. */
+            if !voiceOverOn {
+                KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
+            }
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
             // Aug 4 2026: her hypnotic bubbles, native -- only in the pure
