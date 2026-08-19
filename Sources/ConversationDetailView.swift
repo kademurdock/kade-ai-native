@@ -524,7 +524,15 @@ struct ConversationDetailView: View {
                     readAloudToggle
                     composer
                 }
-                .fixedSize(horizontal: false, vertical: true)
+                /* ⭐ BUILD 220: 219's `.fixedSize(horizontal: false,
+                 * vertical: true)` is GONE from here. It did help -- the
+                 * 9-frame cycle 219 aimed at went from six and seven
+                 * repetitions down to ONE in the newest kill -- but asking
+                 * this cluster for its IDEAL height re-opens a measurement
+                 * pass over a text control whose ideal height depends on its
+                 * content, and a VoiceOver tree re-scan is exactly what
+                 * triggers that pass. `safeAreaInset` already sizes its
+                 * content to fit; it does not need to be told twice. */
             }
         }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
@@ -710,7 +718,7 @@ struct ConversationDetailView: View {
                 // Build 218: the trail now says which composer was on screen,
                 // so a freeze report is self-describing without asking her.
                 KadeBreadcrumbs.drop(
-                    "layout: safeAreaInset(219), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
+                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
                     + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
                 )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
@@ -2234,8 +2242,55 @@ struct ConversationDetailView: View {
         // that transaction commit and its frame drain, then start the send
         // machinery in a fresh turn of the run loop. Re-entry is safe: a
         // double-tap in the yield window hits the empty-draft guard above.
+        /* ⭐⭐ BUILD 220 -- WHAT VOICEOVER LOSES WHEN THE DRAFT CLEARS.
+         *
+         * Her build-219 report, in her words: "I typed maybe five words and
+         * when I hit send, it moved me to the stat bar where VO fucked up,
+         * then crashed" -- and NO send sound. Build 216 made the earcons
+         * QUEUE onto the next main-queue turn, so a silent send proves the
+         * main thread never got to `sendState = .sending`. The ring agrees
+         * and goes further: the 219 trail has NO SEND CRUMBS AT ALL. Not
+         * `optimistic row painted`, not anything -- the last entry is
+         * `became active` from nine minutes earlier, and the freeze-watch
+         * marks kept firing right through the wedge, so the crumb queue was
+         * demonstrably alive and writing. The absence is real.
+         *
+         * That puts the wedge EARLIER than any swing in this hunt has looked.
+         * Build 211's rule ("stops before optimistic row painted = it is the
+         * row insert") cannot resolve it, because there was never a crumb
+         * between the tap and that insert -- the composer clear lives in that
+         * blind spot. Build 207 split the clear into its own transaction and
+         * assumed that made it safe; it only made it SEPARATE.
+         *
+         * And "it moved me to the stat bar" is the tell. Throwing focus to
+         * the status bar is exactly what VoiceOver does when the element it
+         * was focused on stops existing: it re-scans the whole accessibility
+         * tree looking for somewhere to land. Under VoiceOver the LazyVStack
+         * must materialise its rows for that tree, so an orphan-and-rescan at
+         * send time pays for the entire transcript AND the pinned inset
+         * cluster in one main-thread breath -- which is the non-converging
+         * layout the MetricKit stacks have been showing all along.
+         *
+         * So give it somewhere to land BEFORE taking anything away. Session
+         * 23 already fixed this exact class once (`case micButton`, added
+         * when VoiceOver "bounces your focus so you can't just double tap the
+         * button to be done recording"); this is the same medicine at the
+         * send moment. VoiceOver-only -- a sighted user gets no focus
+         * movement at all. */
+        KadeBreadcrumbs.drop(
+            "send tapped (\(trimmed.count) chars\(UIAccessibility.isVoiceOverRunning ? ", vo" : ""))"
+        )
+        if UIAccessibility.isVoiceOverRunning {
+            a11yFocus = messages.last.map { .message($0.id) }
+        }
         draftText = ""
         await Self.nextRunLoopTurn()
+        // Build 220: the crumb that build 211's bisect was missing. If a
+        // future trail carries `send tapped` but not `draft cleared`, the
+        // composer teardown is convicted outright. If it carries both and
+        // stops before `optimistic row painted`, it is the row insert, and
+        // this whole hypothesis is wrong in a way that says so plainly.
+        KadeBreadcrumbs.drop("draft cleared")
         // Session 23: while Deep Think is armed, stamp this send with a
         // FRESH epoch-ms marker -- the exact string the web composer
         // appends (useSubmitMessage: `[DEEP THINK ${Date.now()}]`).
@@ -2501,6 +2556,15 @@ struct ConversationDetailView: View {
         messages.append(optimisticMessage)
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("optimistic row painted")
+        /* Build 220: the row she just sent is the right place for VoiceOver
+         * to be standing. Its own transaction and its own crumb, keeping
+         * build 211's one-mutation-per-commit discipline -- fusing it into
+         * the `sendState` flip would rebuild exactly the pileup 211 split. */
+        if UIAccessibility.isVoiceOverRunning {
+            a11yFocus = .message(optimisticMessage.id)
+        }
+        await Self.nextRunLoopTurn()
+        KadeBreadcrumbs.drop("focus anchored")
         sendState = .sending
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("sending state painted")
