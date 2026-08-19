@@ -743,7 +743,6 @@ struct KadePulseDot: View {
      * animation and `reduce` alone still gates the beat. */
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
     @State private var pulsing = false
-    @State private var beat: Task<Void, Never>? = nil
 
     var body: some View {
         let reduce = systemReduceMotion || FeedbackPrefs.shared.forceReduceMotion
@@ -761,38 +760,65 @@ struct KadePulseDot: View {
             )
             .onAppear {
                 if active && !stillVisual { pulsing = true }
-                syncBeat(active: active, reduce: reduce)
             }
             .onChange(of: active) { _, now in
                 pulsing = now && !stillVisual
-                syncBeat(active: now, reduce: reduce)
             }
-            .onDisappear { beat?.cancel(); beat = nil }
+            /* ⭐⭐ BUILD 221 -- THE HEARTBEAT NO LONGER WRITES STATE INSIDE THE
+             * COMMIT THAT INSERTS IT. This is the engine build 220's bisect
+             * finally exposed.
+             *
+             * 220 added crumbs either side of every candidate and her trail
+             * ran clean through ALL of them -- `send tapped`, `draft cleared`,
+             * `optimistic row painted`, `focus anchored`, `send feedback
+             * queued` -- and then died before `send feedback done` (a
+             * `Task { @MainActor }`, so main never freed) and before `sending
+             * state painted`. The composer teardown, the row insert and the
+             * VoiceOver focus move are all EXONERATED by her own instrument.
+             * What is left in that turn is the `replyingRow` insert, and this
+             * dot goes in with it.
+             *
+             * The old `onAppear` called `syncBeat`, whose FIRST line was
+             * `beat?.cancel(); beat = nil` -- an UNCONDITIONAL `@State` write,
+             * executed before any guard, during the view-graph commit that
+             * installs this row. A state write inside a commit schedules
+             * another update, and `Task<Void, Never>?` is not Equatable so
+             * SwiftUI cannot short-circuit it as a no-op. No toggle could stop
+             * it either: the Haptics and "Pulse with the visuals" switches are
+             * checked AFTER that line, so turning them off changed nothing.
+             *
+             * That is exactly what her 220 stack looks like: 27 frames, ZERO
+             * recursion, leaf in AttributeGraph, under a CFRunLoop observer
+             * rather than an UpdateCycle -- a flat loop re-servicing an update
+             * queue that keeps refilling, burning 10.290s of application CPU
+             * against a 10.00s allowance. 219's 91-frame, 59-SwiftUICore
+             * triple-nested layout recursion is GONE (220 removed it); this
+             * was the engine underneath it the whole time, and the layout
+             * negotiation was only the amplifier.
+             *
+             * `.task(id:)` is the cure and it is smaller than the disease:
+             * SwiftUI installs it AFTER the commit, owns its lifetime, and
+             * cancels it on disappear and on any id change. `@State beat` is
+             * deleted outright, so there is no state to write. Her heartbeat
+             * is byte-for-byte the same rhythm -- same period, same offset
+             * onto the pulse peak, same two-thump `KadeHaptics.pulseBeat`,
+             * same two switches. Build 217 kept this dot in the tree on
+             * purpose so she keeps the beat she asked for; that decision
+             * stands, it just stopped costing a commit. */
+            .task(id: "\(active)-\(reduce)-\(haptic)") {
+                guard haptic, active, !reduce,
+                      UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
+                      UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
+                try? await Task.sleep(nanoseconds: UInt64(period / 2 * 1_000_000_000))
+                while !Task.isCancelled {
+                    KadeHaptics.pulseBeat()
+                    try? await Task.sleep(nanoseconds: UInt64(period * 1_000_000_000))
+                }
+            }
             .accessibilityHidden(true)
     }
 
     /// Start or stop the heartbeat to match the current pulse state. Only
     /// runs when haptics are wanted here, the pulse is active, motion is
     /// allowed, and the app-wide Haptics switch is on.
-    private func syncBeat(active: Bool, reduce: Bool) {
-        beat?.cancel(); beat = nil
-        // Session 23: rhythmic beats are gated by BOTH the Haptics master
-        // switch and the new "Pulse with the visuals" sub-switch.
-        guard haptic, active, !reduce,
-              UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
-              UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
-        let period = self.period
-        beat = Task { @MainActor in
-            // Session 23: the beat grew up -- a real two-thump LUB-DUB
-            // (KadeHaptics.pulseBeat, CoreHaptics with UIKit fallback)
-            // once per visual period, landing on the pulse's peak. Touch
-            // and sight breathe together, and it finally has the bass
-            // Kade asked for.
-            try? await Task.sleep(nanoseconds: UInt64(period / 2 * 1_000_000_000))
-            while !Task.isCancelled {
-                KadeHaptics.pulseBeat()
-                try? await Task.sleep(nanoseconds: UInt64(period * 1_000_000_000))
-            }
-        }
-    }
 }
