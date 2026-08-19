@@ -187,6 +187,10 @@ struct ConversationDetailView: View {
     /// else. Deliberately NOT an ObservableObject — publishing is exactly the
     /// behaviour being removed here.
     @State private var live = LiveStreamBuffers()
+    /* ⭐ BUILD 222 — the rotors come back, scoped so SwiftUI can match an
+     * entry WITHOUT walking the LazyVStack. Pairs with
+     * `.accessibilityRotorEntry(id:in:)` on each row below. */
+    @Namespace private var transcriptRotorSpace
     @State private var userRotorItems: [RotorItem] = []
     @State private var replyRotorItems: [RotorItem] = []
 
@@ -1151,6 +1155,10 @@ struct ConversationDetailView: View {
                         )
                         .id(message.id)
                         .accessibilityFocused($a11yFocus, equals: .message(message.id))
+                        // Build 222: registers this row in the rotor namespace.
+                        // Scoped matching is the half of the restore that keeps
+                        // SwiftUI from searching the whole stack for an entry.
+                        .accessibilityRotorEntry(id: message.id, in: transcriptRotorSpace)
                     }
                     if !liveThink.isEmpty, case .sending = sendState {
                         liveThinkingBubble
@@ -1264,6 +1272,56 @@ struct ConversationDetailView: View {
              * doesn't force pre-layout). rebuildRotorItems + the two arrays are
              * left in place, dormant and cheap, so that restore is a small,
              * clean diff — nothing reads them now. */
+            /* ⭐⭐ BUILD 222 — THE RESTORE, AND THE HONEST REASON IT IS SAFE.
+             *
+             * Build 214 removed these on the theory that they were the freeze.
+             * THAT THEORY WAS DISPROVEN THE SAME DAY: 215, 216, 217, 218, 219
+             * and 220 all froze with the rotors already gone, and the hunt
+             * ended somewhere else entirely (a `@State` write inside the
+             * `replyingRow` commit — see KadePulseDot / build 221). So jumping
+             * by sender was taken away from her for a wrong guess, and giving
+             * it back costs nothing that was ever proven.
+             *
+             * What DOES survive from 214's analysis is the Aug-13 finding that
+             * these were expensive: `AccessibilityRotorEntry(label, id:)` makes
+             * SwiftUI locate each entry by searching for a matching element and
+             * computing its geometry, so under VoiceOver every transcript
+             * mutation re-resolved every entry across both rotors. Expensive is
+             * not the same as fatal — but it is not worth re-adding either.
+             *
+             * So the restore uses the pattern Apple documents for exactly this,
+             * and it is a different shape in two ways:
+             *
+             *   1. `in: transcriptRotorSpace` — a `@Namespace` the rows opt into
+             *      via `.accessibilityRotorEntry(id:in:)`. SwiftUI matches
+             *      inside that namespace instead of searching the stack.
+             *   2. a `prepare` closure that scrolls the row into view. This is
+             *      the part that removes the eager work: an entry no longer has
+             *      to be laid out for the rotor to KNOW about it. It is
+             *      resolved on demand, when she actually dials to it.
+             *
+             * The item arrays are still precomputed by `rebuildRotorItems`, so
+             * the Aug-13 content fix is kept too — labels are built once per
+             * transcript change, never per body evaluation.
+             *
+             * ⚠️ NOTE FOR WHOEVER SHIPS THIS: it goes out WITH the heartbeat
+             * restore as one build, deliberately, after 221 has had a few days
+             * of silence. Two feature restores in one build keeps the freeze
+             * clock clean; shipping either one alone would have reset it twice. */
+            .accessibilityRotor("Your messages") {
+                ForEach(userRotorItems) { item in
+                    AccessibilityRotorEntry(item.label, item.id, in: transcriptRotorSpace) {
+                        proxy.scrollTo(item.id, anchor: .center)
+                    }
+                }
+            }
+            .accessibilityRotor("Replies") {
+                ForEach(replyRotorItems) { item in
+                    AccessibilityRotorEntry(item.label, item.id, in: transcriptRotorSpace) {
+                        proxy.scrollTo(item.id, anchor: .center)
+                    }
+                }
+            }
         }
     }
 
@@ -1414,9 +1472,28 @@ struct ConversationDetailView: View {
              * specifically to preserve it. RESTORE = delete this gate (the
              * `.task` version is safe to insert here), and it should be
              * restored the moment 221 proves the freeze dead. */
-            if !voiceOverOn {
-                KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
-            }
+            /* ⭐⭐ BUILD 222 — HER HEARTBEAT COMES BACK.
+             *
+             * Build 221 made TWO changes and only ONE of them was the fix.
+             * The fix was inside `KadePulseDot` itself: `@State beat` deleted,
+             * the heartbeat moved to `.task(id:)`, so nothing writes state
+             * during the commit that installs this row. THIS gate was the
+             * belt-and-braces on top — pulling the dot out of the tree
+             * entirely under VoiceOver — and it is what cost her the beat she
+             * asked for in session 21 and told us she missed.
+             *
+             * With the `.task(id:)` engine in place the dot installs nothing
+             * that writes state, so it can come back. Its VISUAL is still
+             * stilled under VoiceOver by `stillVisual` (build 217) and the
+             * beat still honours both switches; nothing about the rhythm
+             * changed — same 1.7s period, same half-period offset onto the
+             * pulse peak, same two-thump `KadeHaptics.pulseBeat`.
+             *
+             * ⚠️ IF THE FREEZE RETURNS ON 222, THIS LINE IS THE FIRST THING TO
+             * PUT BACK — it is a one-line revert to `if !voiceOverOn { ... }`
+             * and it tells us the gate was load-bearing after all, which is
+             * itself worth knowing. */
+            KadePulseDot(color: .accentColor, diameter: 8, active: true, haptic: true)
             Text("\(who) is replying…")
                 .foregroundStyle(.secondary)
             // Aug 4 2026: her hypnotic bubbles, native -- only in the pure
