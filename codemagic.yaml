@@ -56,6 +56,34 @@ workflows:
       - name: Simulator screenshots — the App Store tour (blind-friendly loop)
         script: |
           set -e
+          # The issuer id is NOT part of the screenshot tour and other lanes
+          # read it as an artifact, so it is emitted BEFORE the skip guard --
+          # gating the tour must not quietly stop producing it.
+          printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" > "$CM_BUILD_DIR/asc-issuer.txt" || true
+          # ⭐ OFF BY DEFAULT (Aug 19 2026, her call: "we don't need the
+          # screenshots thing until we're on appstore right?"). She is right,
+          # and it was the single most expensive step in the file: it runs a
+          # SECOND full xcodebuild (a debug simulator build, on top of the
+          # release archive above), boots a simulator, installs, launches, and
+          # sits through a 7x7s capture loop -- roughly half the wall time of
+          # the whole build, on EVERY TestFlight build, to produce images only
+          # an App Store submission ever uses.
+          #
+          # Context that made this bite: the 204-225 freeze hunt burned the
+          # 500 free Mac minutes for August, so builds now cost $0.095/min.
+          # Halving the build halves that, and doubles what next month's free
+          # tier buys.
+          #
+          # TURN IT BACK ON WITHOUT EDITING THIS FILE -- trigger the build with
+          # KADE_TOUR_SHOTS=1 in the environment (the Codemagic API accepts
+          # environment.variables on the trigger). That matters because the
+          # App Store 2.0 submission is still pending and WILL need these
+          # frames again; this must be one flag, not an archaeology exercise.
+          if [ "${KADE_TOUR_SHOTS:-0}" != "1" ]; then
+            echo "Skipping the App Store screenshot tour (KADE_TOUR_SHOTS is not 1)."
+            echo "Re-run with KADE_TOUR_SHOTS=1 when you need store frames."
+            exit 0
+          fi
           # July 31 2026, the App Store sprint: prefer a Pro Max simulator so
           # frames land at an accepted store size (1290x2796 / 1320x2868).
           # The DEBUG sim build contains the tour (auto sign-in on the TEST
@@ -74,9 +102,8 @@ workflows:
             sleep 7
             xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/tour-$i.png" || true
           done
-          # One credential IDENTIFIER for the sandbox's direct ASC lane (the
-          # .p8 itself already lives with Kade; an issuer id is inert alone).
-          printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" > "$CM_BUILD_DIR/asc-issuer.txt" || true
+          # (asc-issuer.txt is written at the TOP of this step now, before the
+          # skip guard, so it is produced whether or not the tour runs.)
     artifacts:
       - build/ios/ipa/*.ipa
       - tour-*.png
