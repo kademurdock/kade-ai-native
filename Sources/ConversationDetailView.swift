@@ -1139,7 +1139,41 @@ struct ConversationDetailView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                /* ⭐⭐⭐ BUILD 225 — APPLE'S OWN DOCUMENTED WORKAROUND.
+                 *
+                 * This was a `LazyVStack`. It is now a plain `VStack`, and
+                 * that is not another guess: it is Workaround 1 from Apple
+                 * Developer Forums thread 814208, "Application Hangs with
+                 * Nested LazyVStack When Accessibility Inspector is Active",
+                 * which an Apple DTS engineer reproduced and escalated
+                 * (radar FB21851974, minimal repro at
+                 * github.com/pendo-io/SwiftUI_Hang_Reproduction).
+                 *
+                 * DTS named the mechanism exactly: "LazyVStacks allocate
+                 * views as they are needed and here SwiftUI is modifying its
+                 * content through state changes while that is happening.
+                 * This creates a race condition. Traversing the accessibility
+                 * tree will cause unexpected issues in this situation."
+                 *
+                 * Three ingredients: lazy allocation + a state write during
+                 * that allocation + accessibility traversal. We had all
+                 * three. Her every freeze is `vo`-tagged, dies inside the
+                 * `messages.append` commit, and leaves an AttributeGraph
+                 * stack with NO TextKit frame — the graph-invalidation
+                 * signature, not a text-measurement one.
+                 *
+                 * ⚠️ HONEST LIMIT: Apple's repro uses NESTED LazyVStacks and
+                 * a row-level `.onAppear` state write. Ours is a single
+                 * LazyVStack and `MessageRow` has no such `onAppear` — we
+                 * reach the same race by a different road (see
+                 * `rebuildRotorItems`). Strong match, not an identical one.
+                 *
+                 * COST: none worth the name. `VStack` renders the whole
+                 * window eagerly, and the window is 12 rows (build 224), so
+                 * laziness was buying nothing here. That 12 is now
+                 * LOAD-BEARING for this change — if anyone raises it back to
+                 * 60, reconsider this swap at the same time. */
+                VStack(alignment: .leading, spacing: 16) {
                     if hiddenEarlierCount > 0 {
                         showEarlierButton(proxy)
                     }
@@ -1587,14 +1621,41 @@ struct ConversationDetailView: View {
         return "\(messages.count)|\(messages.last?.id ?? "")|\(search)|\(transcriptWindow)"
     }
 
+    /* ⭐⭐ BUILD 225 — THE STATE WRITE MOVES OFF THE COMMIT.
+     *
+     * `rotorSignature` includes `messages.count`, so appending her optimistic
+     * row fired `.onChange(of: rotorSignature)` → this function → two `@State`
+     * array writes, SYNCHRONOUSLY, inside the very commit where the
+     * LazyVStack was materialising that new row for VoiceOver. That is
+     * precisely the race Apple's DTS engineer described on thread 814208:
+     * "SwiftUI is modifying its content through state changes while [lazy
+     * allocation] is happening."
+     *
+     * Deferring the whole body to the next main-queue turn means no call site
+     * can write state during a view-graph commit — this covers all four
+     * callers (onAppear, the sendState hook, the rotorSignature hook, and
+     * "Show earlier messages") with one change instead of four.
+     *
+     * ⚠️ NOT deleted. Forge suggested removing the call outright on the
+     * grounds that "nothing reads the arrays" — that was true for builds
+     * 215–221, when the rotors were gone, and STOPPED being true in build 222
+     * when they came back. Both rotors read these arrays now; deleting this
+     * would silently break jump-by-sender navigation again. Deferring keeps
+     * her feature and removes the race.
+     *
+     * The rotor entries are one main-queue turn behind the transcript for a
+     * few milliseconds after a send. VoiceOver cannot perceive that gap: the
+     * rotor is only consulted when she actually opens it. */
     private func rebuildRotorItems() {
-        let source = visibleMessages
-        userRotorItems = source
-            .filter { $0.isCreatedByUser }
-            .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
-        replyRotorItems = source
-            .filter { !$0.isCreatedByUser }
-            .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
+        Task { @MainActor in
+            let source = visibleMessages
+            userRotorItems = source
+                .filter { $0.isCreatedByUser }
+                .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
+            replyRotorItems = source
+                .filter { !$0.isCreatedByUser }
+                .map { RotorItem(id: $0.id, label: rotorLabel(for: $0)) }
+        }
     }
 
     private func rotorLabel(for message: KadeMessage) -> String {
