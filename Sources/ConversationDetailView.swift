@@ -793,6 +793,23 @@ struct ConversationDetailView: View {
             guard !UIAccessibility.isReduceMotionEnabled,
                   UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
                   UserDefaults.standard.bool(forKey: "kade.feedback.sensorySync") else { return }
+            /* BUILD 228 — NAME THE SUSPECT IN THE TRAIL.
+             *
+             * This beat shipped in 226 believing it was held on a branch; the
+             * branch existed but the commit was on main the whole time, so it
+             * has been live and unproven since then. A version of this feature
+             * froze her on 222.
+             *
+             * If a freeze ever lands again, the trail must not make the next
+             * session guess whether the beat was running. One crumb, off main
+             * (the breadcrumb queue owns the write), once per send. A freeze
+             * report now reads "heartbeat armed" immediately before any
+             * MAIN THREAD UNRESPONSIVE marks, or it does not — and either way
+             * that is an answer instead of a re-derivation.
+             *
+             * Kill switch, no build required: Settings > Haptics, or Settings >
+             * "Pulse with the visuals". Both gates are checked above. */
+            KadeBreadcrumbs.drop("heartbeat armed (VoiceOver send pulse)")
             // Let the send commit finish and get out of its way before the
             // first thump -- half a period, matching the visual pulse's offset.
             try? await Task.sleep(nanoseconds: 850_000_000)

@@ -201,6 +201,68 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
             KadeBreadcrumbs.drop("MEMORY WARNING")
         }
         uploadPendingReports()
+        sendBuildCheckIn()
+    }
+
+    /* BUILD 228 (Aug 20 2026) -- THE CHECK-IN, and the exact hole it fills.
+     *
+     * Everything else in this file only speaks when something BREAKS. That
+     * makes silence in the crash ring ambiguous in the worst possible way:
+     * "she is on the new build and it is healthy" and "she never installed
+     * the new build" look identical from the outside.
+     *
+     * That ambiguity cost real time. A session read the ring, saw the newest
+     * entry was build 216, and reported Amber as still stuck on 216 -- twelve
+     * hours after Kade had already expired that build in App Store Connect.
+     * The data was honest and stale, and nothing in the ring said how old it
+     * was or what anyone was running NOW.
+     *
+     * So: one small POST at launch naming the running build. It rides the
+     * SAME utility queue and the SAME endpoint as the crash uploader -- one
+     * more request on a path that already fires at launch, not a new
+     * launch-time actor, which matters given this app's freeze history.
+     * `kind: "checkin"` means the bridge needs no change at all: its ring
+     * already evicts non-crash entries first, so a check-in can never push a
+     * real crash payload out of the ring.
+     *
+     * ONCE PER BUILD PER CALENDAR DAY -- enough to answer "is she on it and
+     * opening it", cheap enough never to crowd the ring. Fail-soft like
+     * everything else here: no network, no bridge, no problem, and nothing
+     * ever waits on it. */
+    private static let checkInStampKey = "kade.diag.lastCheckIn"
+
+    private func sendBuildCheckIn() {
+        DispatchQueue.global(qos: .utility).async {
+            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+            let today = String(ISO8601DateFormatter().string(from: Date()).prefix(10))
+            let stamp = build + "@" + today
+            guard UserDefaults.standard.string(forKey: Self.checkInStampKey) != stamp else { return }
+
+            var req = URLRequest(url: Self.sinkURL)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.timeoutInterval = 10
+            let payload = "{\"appVersion\":\"" + version + "\",\"appBuildVersion\":\"" + build + "\"}"
+            var body: [String: Any] = [
+                "build": build,
+                "device": UIDevice.current.model + " iOS " + UIDevice.current.systemVersion,
+                "kind": "checkin",
+                "payload": payload,
+                "breadcrumbs": "",
+            ]
+            let who = Self.signedInAccount()
+            if !who.isEmpty { body["who"] = who }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            URLSession.shared.dataTask(with: req) { _, response, _ in
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode) else { return }
+                // Stamped only on a confirmed 2xx, so a failed check-in retries
+                // next launch instead of going quiet for the rest of the day.
+                UserDefaults.standard.set(stamp, forKey: Self.checkInStampKey)
+            }.resume()
+        }
     }
 
     /// The off-main freeze recorder. A heartbeat block is posted to main
