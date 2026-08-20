@@ -19,14 +19,46 @@ struct LogbookView: View {
     @State private var editText = ""
     @State private var busy = false
 
+    /* Aug 20 2026 — WINDOWED AND EAGER, LAID OUT LIKE THE TRANSCRIPT.
+     * `/api/diary` hands back the WHOLE logbook in one response — no
+     * pagination server-side — so this count is unbounded and grows every
+     * day she talks to anybody. The transcript's bargain applies here too:
+     * a plain `VStack` renders every row it holds EAGERLY, which is exactly
+     * why it doesn't race VoiceOver the way a lazy container does, and the
+     * window is what keeps that eagerness affordable.
+     *
+     * 120 rather than the transcript's 48 because a logbook row is one line
+     * of text and a holder name — no toolbar, no voice controls, no think
+     * block. RAISING THIS MEANS RE-TESTING WITH VOICEOVER ACTUALLY ON,
+     * not eyeballing it in the simulator. See ConversationDetailView's
+     * `transcriptWindowMaxTested` writeup for why that sentence is there. */
+    private static let entryWindow = 120
+    @State private var windowGenerations = 1
+
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: LogbookService(client: apiClient))
+    }
+
+    private var windowedEntries: [LogbookService.LogbookEntry] {
+        guard let page else { return [] }
+        let newestFirst = page.entries.sorted { $0.date > $1.date }
+        return Array(newestFirst.prefix(Self.entryWindow * windowGenerations))
+    }
+
+    private var hiddenEarlierCount: Int {
+        guard let page else { return 0 }
+        return max(0, page.entries.count - windowedEntries.count)
+    }
+
+    private var hiddenEarlierHint: String {
+        let noun = hiddenEarlierCount == 1 ? "entry" : "entries"
+        return "\(hiddenEarlierCount) older \(noun) not shown yet."
     }
 
     private var days: [(date: String, spoken: String, entries: [LogbookService.LogbookEntry])] {
         guard let page else { return [] }
         var byDate: [String: [LogbookService.LogbookEntry]] = [:]
-        for e in page.entries {
+        for e in windowedEntries {
             byDate[e.date, default: []].append(e)
         }
         return byDate.keys.sorted(by: >).map { key in
@@ -35,28 +67,50 @@ struct LogbookView: View {
     }
 
     var body: some View {
-        List {
-            if let error = service.loadError {
-                Section {
+        /* Aug 20 2026 — WAS A `List` WITH PER-DAY `Section`s. Three things
+         * were wrong with that under VoiceOver, and they compounded:
+         *
+         * 1. `List` is a LAZY CONTAINER. It is the same family as the
+         *    `LazyVStack` that build 225 tore out of the transcript after
+         *    twenty-two builds — rows materialize as the accessibility tree
+         *    is being walked, which is the shape of Apple's 814208 race.
+         *    This screen is smaller so it stuttered instead of freezing.
+         * 2. Every row carried BOTH `.accessibilityAction(named:)` AND
+         *    `.swipeActions`, and SwiftUI publishes swipe actions into the
+         *    actions rotor automatically. So every entry offered FOUR
+         *    actions — "Edit this entry", "Forget this entry", "Edit",
+         *    "Forget" — two of them duplicates with worse labels.
+         * 3. `Section` headers are a list affordance, not a heading, so the
+         *    Headings rotor had nothing in it and she had to swipe through
+         *    every day linearly to reach an older one.
+         *
+         * Now it is the transcript's layout: `ScrollView` + plain `VStack`,
+         * one combined element per row, actions on the actions rotor only,
+         * and the day markers carry `.isHeader` so the NATIVE Headings rotor
+         * jumps day to day. Deliberately NOT a custom `accessibilityRotor` —
+         * two of those were the actual send-time freeze wedge found in
+         * build 214, and the Headings trait gets the same navigation out of
+         * plain UIAccessibility without re-entering that machinery. */
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let error = service.loadError {
                     Text(error)
                         .foregroundStyle(.red)
                 }
-            }
-            if let page, page.enabled == false {
-                Section {
+                if let page, page.enabled == false {
                     Text("The logbook is currently paused — nothing new is being written.")
                         .foregroundStyle(.secondary)
                 }
-            }
-            if let page, page.entries.isEmpty, service.loadError == nil {
-                Section {
+                if let page, page.entries.isEmpty, service.loadError == nil {
                     Text("Nothing here yet. Your logbook fills up as you share your days with your companions — or add a line yourself with the plus button.")
                         .foregroundStyle(.secondary)
                         .accessibilityLabel("Nothing here yet. Your logbook fills up as you share your days with your companions, or add a line yourself with the add entry button.")
                 }
-            }
-            ForEach(days, id: \.date) { day in
-                Section {
+                ForEach(days, id: \.date) { day in
+                    Text(day.spoken)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.top, 4)
                     ForEach(day.entries) { entry in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.text)
@@ -64,6 +118,8 @@ struct LogbookView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(entry.text). \(entry.holder).")
                         .accessibilityAction(named: "Edit this entry") {
@@ -73,16 +129,17 @@ struct LogbookView: View {
                         .accessibilityAction(named: "Forget this entry") {
                             entryPendingForget = entry
                         }
-                        .swipeActions(edge: .leading) {
+                        /* Long-press for sighted users, replacing the swipe
+                         * actions the `List` used to provide. VoiceOver reaches
+                         * the same two operations through the actions rotor
+                         * above, so this adds no duplicate entries. */
+                        .contextMenu {
                             Button {
                                 editText = entry.text
                                 entryEditing = entry
                             } label: {
                                 Label("Edit", systemImage: "pencil")
                             }
-                            .tint(.blue)
-                        }
-                        .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 entryPendingForget = entry
                             } label: {
@@ -90,10 +147,25 @@ struct LogbookView: View {
                             }
                         }
                     }
-                } header: {
-                    Text(day.spoken)
+                }
+                if hiddenEarlierCount > 0 {
+                    Button {
+                        windowGenerations += 1
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Loaded earlier entries."
+                        )
+                    } label: {
+                        Text("Show earlier entries")
+                    }
+                    .accessibilityLabel("Show earlier entries")
+                    .accessibilityHint(hiddenEarlierHint)
+                    .padding(.top, 8)
                 }
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Your Logbook")
         .navigationBarTitleDisplayMode(.inline)
