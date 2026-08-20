@@ -35,6 +35,38 @@ struct LogbookView: View {
     private static let entryWindow = 120
     @State private var windowGenerations = 1
 
+    /* Aug 20 2026 — FOCUS MANAGEMENT (her report: "still kinda weird with vo
+     * focus"). The relayout fixed the CONTAINER; this fixes where focus goes
+     * after something changes under it. Previously: nothing was bound, so an
+     * edit, a forget, or loading more rebuilt the whole VStack and VoiceOver
+     * dropped focus to the top of the screen every time — which on a logbook
+     * means she loses her place in her own diary after every single action.
+     * The transcript solved this with `.accessibilityFocused` per row; same
+     * pattern here, keyed on entry id.
+     *
+     * ⚠️ UNVERIFIED ON DEVICE. Written while we were deliberately not spending
+     * a build. The sleep before each focus set is the pragmatic fix for
+     * SwiftUI needing a render pass before it can resolve a focus target;
+     * if focus still lands wrong, that delay is the first knob, and posting
+     * a UIAccessibility .layoutChanged with the element is the fallback. */
+    @AccessibilityFocusState private var a11yFocus: String?
+
+    private func focusAfterRender(_ id: String?) async {
+        guard let id else { return }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        a11yFocus = id
+    }
+
+    /// The entry VoiceOver should land on once `entry` is gone: the next one
+    /// down, or the one above it if it was last. Computed BEFORE the delete.
+    private func neighborOf(_ entry: LogbookService.LogbookEntry) -> String? {
+        let flat = windowedEntries
+        guard let i = flat.firstIndex(where: { $0.id == entry.id }) else { return nil }
+        if i + 1 < flat.count { return flat[i + 1].id }
+        if i > 0 { return flat[i - 1].id }
+        return nil
+    }
+
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: LogbookService(client: apiClient))
     }
@@ -122,6 +154,7 @@ struct LogbookView: View {
                         .contentShape(Rectangle())
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(entry.text). \(entry.holder).")
+                        .accessibilityFocused($a11yFocus, equals: entry.id)
                         .accessibilityAction(named: "Edit this entry") {
                             editText = entry.text
                             entryEditing = entry
@@ -150,11 +183,16 @@ struct LogbookView: View {
                 }
                 if hiddenEarlierCount > 0 {
                     Button {
+                        let firstNew = windowedEntries.count
                         windowGenerations += 1
                         UIAccessibility.post(
                             notification: .announcement,
                             argument: "Loaded earlier entries."
                         )
+                        let revealed = windowedEntries
+                        if firstNew < revealed.count {
+                            Task { await focusAfterRender(revealed[firstNew].id) }
+                        }
                     } label: {
                         Text("Show earlier entries")
                     }
@@ -292,6 +330,7 @@ struct LogbookView: View {
             KadeHaptics.success()
             UIAccessibility.post(notification: .announcement, argument: "Entry updated.")
             await reload()
+            await focusAfterRender(entry.id)
         } catch {
             UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
         }
@@ -299,11 +338,14 @@ struct LogbookView: View {
 
     private func forget(_ entry: LogbookService.LogbookEntry) async {
         entryPendingForget = nil
+        // Neighbour is resolved BEFORE the delete, while the entry still exists.
+        let landing = neighborOf(entry)
         do {
             try await service.forget(entry: entry)
             KadeHaptics.success()
             UIAccessibility.post(notification: .announcement, argument: "Entry forgotten.")
             await reload()
+            await focusAfterRender(landing)
         } catch {
             UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
         }
