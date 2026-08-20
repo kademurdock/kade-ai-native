@@ -71,9 +71,27 @@ struct LogbookView: View {
         _service = StateObject(wrappedValue: LogbookService(client: apiClient))
     }
 
+    /* Aug 20 2026 — STABLE ORDER, and this was a real bug, not a tidy-up.
+     *
+     * `date` is a DAY string ("2026-08-04"), not a timestamp, so every entry
+     * written on the same day compares EQUAL under `$0.date > $1.date`.
+     * Swift's `sort(by:)` is not documented as stable, so the order of
+     * same-day entries could differ between two renders of identical data.
+     *
+     * On a sighted screen that is a shrug. Here it means the rows under her
+     * finger can renumber themselves after any reload — and worse, it fights
+     * the focus restoration added in this same commit, because `neighborOf`
+     * resolves a position the next render may not agree with. Ordering a
+     * blind person's diary has to be deterministic before "put the focus
+     * back" can mean anything at all.
+     *
+     * `id` is the tiebreak: the only field guaranteed present, unique, and
+     * unchanged across reloads. */
     private var windowedEntries: [LogbookService.LogbookEntry] {
         guard let page else { return [] }
-        let newestFirst = page.entries.sorted { $0.date > $1.date }
+        let newestFirst = page.entries.sorted {
+            $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
+        }
         return Array(newestFirst.prefix(Self.entryWindow * windowGenerations))
     }
 
@@ -185,11 +203,22 @@ struct LogbookView: View {
                     Button {
                         let firstNew = windowedEntries.count
                         windowGenerations += 1
+                        let revealed = windowedEntries
+                        /* Say how many arrived and how many are still behind.
+                         * "Loaded earlier entries." told her something had
+                         * happened but not whether it was worth swiping — and
+                         * on a screen navigated one row at a time, the count
+                         * IS the information. */
+                        let added = revealed.count - firstNew
+                        let stillHidden = max(0, (page?.entries.count ?? 0) - revealed.count)
+                        let noun = added == 1 ? "entry" : "entries"
+                        let tail = stillHidden > 0
+                            ? " \(stillHidden) still older."
+                            : " That is the whole logbook."
                         UIAccessibility.post(
                             notification: .announcement,
-                            argument: "Loaded earlier entries."
+                            argument: "Loaded \(added) earlier \(noun)." + tail
                         )
-                        let revealed = windowedEntries
                         if firstNew < revealed.count {
                             Task { await focusAfterRender(revealed[firstNew].id) }
                         }
@@ -314,6 +343,14 @@ struct LogbookView: View {
             KadeHaptics.success()
             UIAccessibility.post(notification: .announcement, argument: "Saved to your logbook.")
             await reload()
+            /* Aug 20 2026 — ADD was the one path the focus work missed. Its
+             * sibling commit handled edit, forget and load-more; saving a new
+             * entry still dumped VoiceOver at the top of the screen, which on
+             * this screen means she cannot hear the thing she just wrote
+             * without swiping back down to it. The new entry is today's, and
+             * today sorts first, so the landing target is simply the newest
+             * row after the reload. */
+            await focusAfterRender(windowedEntries.first?.id)
         } catch {
             UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
         }
