@@ -872,6 +872,7 @@ struct AdminLogsConvosView: View {
                     }
                 }
                 .listStyle(.plain)
+                .refreshable { await load() }
                 .navigationDestination(item: $selected) { convo in
                     AdminLogsMessagesView(service: service, convo: convo, ownerName: user.name)
                 }
@@ -911,6 +912,16 @@ struct AdminLogsMessagesView: View {
     @State private var messages: [AdminLogMessage] = []
     @State private var isLoading = true
     @State private var loadError: String?
+    /// Aug 21 2026 (Kade, using this exact screen to catch three real bugs
+    /// tonight): the log was a LazyVStack, and under VoiceOver a lazy
+    /// container's unmaterialized rows can't be flicked to -- "it acts like
+    /// the page is done scrolling as I'm flicking right, but a three-finger
+    /// scroll moves it." Same disease family as the build-225 transcript
+    /// freeze and the 227 logbook relayout; this view just never got the
+    /// medicine. Now an EAGER VStack over a bounded window (newest 80,
+    /// "Show earlier" reveals more), which is the proven logbook shape.
+    @State private var visibleCount = 80
+    private let windowStep = 80
 
     var body: some View {
         Group {
@@ -930,22 +941,74 @@ struct AdminLogsMessagesView: View {
                     .padding()
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("Read-only log of \(ownerName)'s conversation, oldest first. The text shown is what they actually saw — voice tags and tool markup are already stripped by the server.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        ForEach(Array(messages.enumerated()), id: \.offset) { _, message in
+                        if messages.count > visibleCount {
+                            Button("Show earlier messages (\(messages.count - visibleCount) more)") {
+                                let was = min(visibleCount, messages.count)
+                                visibleCount = min(messages.count, visibleCount + windowStep)
+                                let revealed = min(visibleCount, messages.count) - was
+                                UIAccessibility.post(
+                                    notification: .announcement,
+                                    argument: "Showing \(revealed) earlier message\(revealed == 1 ? "" : "s")."
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        // id is the message's offset in the FULL array, so a row keeps
+                        // its identity when earlier history is revealed above it and
+                        // across a refresh -- VoiceOver doesn't lose its place.
+                        ForEach(
+                            Array(messages.enumerated()).suffix(min(visibleCount, messages.count)),
+                            id: \.offset
+                        ) { _, message in
                             messageCard(message)
                         }
                     }
                     .padding()
                 }
+                .refreshable { await refresh() }
             }
         }
         .navigationTitle(convo.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Aug 21 2026 (her report: refreshing meant backing out to the
+            // activity-logs page and drilling all the way back in). A real
+            // Refresh button IN PLACE -- more reliable under VoiceOver than
+            // the pull gesture, though .refreshable is there too.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("Refresh this conversation")
+            }
+        }
         .task {
             if messages.isEmpty { await load() }
+        }
+    }
+
+    /// In-place reload that keeps her spot: same ids for existing rows, the
+    /// window grows by exactly the number of new messages, and VoiceOver
+    /// hears what changed instead of the page silently rebuilding.
+    private func refresh() async {
+        let before = messages.count
+        do {
+            let fresh = try await service.logsMessages(conversationId: convo.conversationId)
+            let added = fresh.count - before
+            messages = fresh
+            if added > 0 { visibleCount += added }
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: added > 0 ? "\(added) new message\(added == 1 ? "" : "s")." : "Up to date."
+            )
+        } catch {
+            UIAccessibility.post(notification: .announcement, argument: "Refresh failed. Check your connection.")
         }
     }
 

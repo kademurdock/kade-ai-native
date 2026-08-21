@@ -45,8 +45,13 @@ enum MessageTextSanitizer {
     /// against eating a legitimate doubled percent sign in ordinary prose
     /// (the enclosed span must start with a letter, contain no percent
     /// sign or newline, and stay short).
+    /// Aug 21 2026 (the length-cap sweep, after the admin scrub's 81-char cap
+    /// bit live): v130+ personas teach LAYERED directions that outgrow every
+    /// old cap, and the old charset here refused digits and periods -- the
+    /// same two gaps the TTS normalizer fixed July 27. Widened to match:
+    /// anything but %% or newline, up to 160.
     private static let sloppyVoiceTagRegex = makeRegex(
-        "%{2,4}([a-zA-Z][a-zA-Z \u{2019}',!-]{0,60}?)%{2,4}"
+        "%{2,4}([a-zA-Z][^%\n]{0,160}?)%{2,4}"
     )
 
     /// Game Parlor sound cue, e.g. "[sound:card_deal]".
