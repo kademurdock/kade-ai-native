@@ -33,6 +33,10 @@ struct ContentView: View {
     // the voice immediately either way, so which character nominally opened
     // the call is not something the caller ever hears.
     @State private var callingSpotter = false
+    /// Part 75 (Aug 21 2026): non-nil presents the agent-call screen --
+    /// set when a KADE_CALL push routes through `.agentCall`, cleared by
+    /// the cover's own dismissal (item:-keyed).
+    @State private var agentCallPayload: AgentCallPayload?
     @State private var spotterTranscript: SpotterTranscriptHandoff?
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
@@ -465,6 +469,23 @@ struct ContentView: View {
             .buttonStyle(KadeCardButtonStyle())
             .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityHint("Opens your conversation list.")
+            // Part 75 (Aug 21 2026): the agent-call screen, item:-keyed off
+            // the parked KADE_CALL payload. Deliberately on a DIFFERENT view
+            // than the Spotter's cover -- two presentation modifiers on one
+            // view is exactly the collision class build 121 paid for. The
+            // post-call transcript rides the same handoff destination as the
+            // Spotter's (one navigationDestination, no duplicate keying).
+            .fullScreenCover(item: $agentCallPayload) { call in
+                CallView(
+                    agentId: call.agentId.isEmpty ? nil : call.agentId,
+                    agentName: call.agentName,
+                    apiClient: apiClient,
+                    callPlanId: call.planId,
+                    onOpenTranscript: { convo in
+                        spotterTranscript = SpotterTranscriptHandoff(conversation: convo)
+                    }
+                )
+            }
 
             // Session 18: native notification history — the one genuinely
             // missing piece of the web's four tabs per the session-17/18
@@ -724,6 +745,14 @@ struct ContentView: View {
             route = .brief
         case .accessRequests:
             route = .accessRequests
+        case .agentCall:
+            // Part 75: the payload was parked next to the destination --
+            // consume it the same one-shot way. A ring with no payload
+            // (shouldn't happen) just opens the app normally.
+            if let call = router.pendingAgentCall {
+                router.pendingAgentCall = nil
+                agentCallPayload = call
+            }
         }
     }
 

@@ -138,6 +138,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 IntentRouter.shared.request(.accessRequests)
             }
         }
+        /* Part 75 (Aug 21 2026): the agent-call ring. The push carries a
+         * kadeCall payload (planId/agentId/agentName/purpose). "Not now"
+         * (KADE_CALL_LATER) is a deliberate decline -- do nothing here; the
+         * bridge's missed-call sweep sends the gentle follow-up on its own.
+         * Answer (or a plain tap on the banner) parks the payload and
+         * routes; ContentView presents the call screen, which sends the
+         * planId on the call's hello so the agent opens knowing why it
+         * called. A build that predates this just opens the app on tap --
+         * the same forward-safety every category here rides in on. */
+        if category == "KADE_CALL",
+           response.actionIdentifier != "KADE_CALL_LATER",
+           let payload = response.notification.request.content.userInfo["kadeCall"] as? [String: Any],
+           let planId = payload["planId"] as? String {
+            let call = AgentCallPayload(
+                planId: planId,
+                agentId: (payload["agentId"] as? String) ?? "",
+                agentName: (payload["agentName"] as? String) ?? "Your agent",
+                purpose: (payload["purpose"] as? String) ?? ""
+            )
+            Task { @MainActor in
+                IntentRouter.shared.pendingAgentCall = call
+                IntentRouter.shared.request(.agentCall)
+            }
+        }
         completionHandler()
     }
 

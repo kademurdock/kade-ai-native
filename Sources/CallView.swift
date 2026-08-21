@@ -43,6 +43,10 @@ struct CallView: View {
     /// conversation. Nil (home-screen Spotter, agent picker) = the old
     /// fresh-call behavior, unchanged.
     let conversationId: String?
+    /// Part 75 (Aug 21 2026): non-nil when this screen is the ANSWER to an
+    /// agent-call ring -- forwarded to the call's hello (see
+    /// StreamingCallService.pendingCallPlanId).
+    let callPlanId: String?
 
     init(
         agentId: String?,
@@ -50,12 +54,14 @@ struct CallView: View {
         apiClient: KadeAPIClient,
         spotterDirect: Bool = false,
         conversationId: String? = nil,
+        callPlanId: String? = nil,
         onOpenTranscript: ((KadeConversation) -> Void)? = nil
     ) {
         self.agentId = agentId
         self.agentName = agentName
         self.spotterDirect = spotterDirect
         self.conversationId = conversationId
+        self.callPlanId = callPlanId
         self.onOpenTranscript = onOpenTranscript
         _callService = StateObject(wrappedValue: StreamingCallService(apiClient: apiClient))
     }
@@ -514,7 +520,7 @@ struct CallView: View {
         do {
             try await callService.start(
                 agentId: agentId, displayName: agentName, spotterDirect: spotterDirect,
-                conversationId: conversationId
+                conversationId: conversationId, callPlanId: callPlanId
             )
         } catch {
             startError = (error as? LocalizedError)?.errorDescription ?? "Something went wrong starting the call."

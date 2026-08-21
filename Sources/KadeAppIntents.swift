@@ -74,12 +74,21 @@ final class IntentRouter: ObservableObject {
         // Build 195: a tap on the front-door doorbell push lands on the
         // Access Requests screen instead of a blank app bounce.
         case accessRequests
+        // Part 75 (Aug 21 2026): answering an agent call (KADE_CALL push).
+        // A String-raw enum can't carry the payload (who/why/planId), so
+        // it parks in `pendingAgentCall` below and this case says go look.
+        case agentCall
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
     /// flag per destination so two phrases in quick succession can't leave
     /// the app trying to do both at once.
     @Published var pending: Destination?
+
+    /// Part 75: the KADE_CALL payload parked by AppDelegate for ContentView
+    /// to consume alongside the `.agentCall` destination -- same one-shot
+    /// contract as `pending` itself.
+    @Published var pendingAgentCall: AgentCallPayload?
 
     private init() {}
 
@@ -92,6 +101,17 @@ final class IntentRouter: ObservableObject {
         pending = nil
         return value
     }
+}
+
+/// Part 75 (Aug 21 2026): everything the app needs to answer an agent call,
+/// parsed from the push's `kadeCall` payload in AppDelegate.didReceive.
+/// Identifiable (by planId) so a fullScreenCover(item:) presents off it.
+struct AgentCallPayload: Identifiable, Equatable {
+    let planId: String
+    let agentId: String
+    let agentName: String
+    let purpose: String
+    var id: String { planId }
 }
 
 struct CallSpotterIntent: AppIntent {

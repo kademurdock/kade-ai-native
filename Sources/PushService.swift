@@ -30,12 +30,22 @@ final class PushService: ObservableObject {
     private let bridgeURL = URL(string: "https://kade-ai-bridge-production.up.railway.app/push-register")!
     private var lastSentToken: String?
     private var lastSentUserId: String?
+    private var lastSentRingtone: String?
+    /// Part 75: the Settings agent-call ringtone pick, stored here so the
+    /// bridge learns the user's DEFAULT ring on the same register call.
+    static let ringtoneDefaultsKey = "kadeCallRingtone"
     private(set) var deviceTokenHex: String?
     private(set) var userId: String?
 
     /// Called from AppDelegate once iOS hands over a real APNs token.
     func setDeviceToken(_ data: Data) {
         deviceTokenHex = data.map { String(format: "%02x", $0) }.joined()
+        Task { await syncIfNeeded() }
+    }
+
+    /// Part 75: Settings pokes this after a ringtone pick so the new
+    /// default reaches the bridge without waiting for the next launch.
+    func ringtoneChanged() {
         Task { await syncIfNeeded() }
     }
 
@@ -51,18 +61,21 @@ final class PushService: ObservableObject {
 
     private func syncIfNeeded() async {
         guard let token = deviceTokenHex else { return }   // nothing to register yet
-        if token == lastSentToken && userId == lastSentUserId { return }
+        let ringtone = UserDefaults.standard.string(forKey: Self.ringtoneDefaultsKey)
+        if token == lastSentToken && userId == lastSentUserId && ringtone == lastSentRingtone { return }
         var req = URLRequest(url: bridgeURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: String] = ["token": token, "platform": "ios"]
         if let userId { body["userId"] = userId }
+        if let ringtone { body["ringtone"] = ringtone }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
             if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                 lastSentToken = token
                 lastSentUserId = userId
+                lastSentRingtone = ringtone
             }
             // Any other status: fail-soft, next foreground/state-change retries.
         } catch {

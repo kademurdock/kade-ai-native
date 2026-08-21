@@ -139,7 +139,22 @@ struct KadeAIApp: App {
         let doorbellCategory = UNNotificationCategory(
             identifier: "KADE_DOORBELL", actions: [], intentIdentifiers: [], options: []
         )
-        UNUserNotificationCenter.current().setNotificationCategories([briefCategory, doorbellCategory])
+        /* Part 75 (Aug 21 2026): the agent-call ring. Answer opens the app
+         * straight into the call (.foreground); "Not now" quietly declines
+         * (no .foreground -- iOS dismisses, and the bridge's missed-call
+         * sweep sends the follow-up note on its own). The ringtone is the
+         * push's sound: bundled KadeRing*.caf files, and a build that
+         * predates them falls back to the default sound by Apple's rule. */
+        let answer = UNNotificationAction(
+            identifier: "KADE_CALL_ANSWER", title: "Answer", options: [.foreground]
+        )
+        let later = UNNotificationAction(
+            identifier: "KADE_CALL_LATER", title: "Not now", options: []
+        )
+        let callCategory = UNNotificationCategory(
+            identifier: "KADE_CALL", actions: [answer, later], intentIdentifiers: [], options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([briefCategory, doorbellCategory, callCategory])
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
             // registerForRemoteNotifications() must run on the main thread;

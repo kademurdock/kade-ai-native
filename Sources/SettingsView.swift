@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// The real Settings tab session 17/18's own doc comments kept flagging as
 /// "still open" -- Kade: "We also need a native way to access settings
@@ -48,6 +49,11 @@ struct SettingsView: View {
 
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var appearance: AppearancePreferences
+    /// Part 75 (Aug 21 2026): the agent-call ringtone pick rides the next
+    /// /push-register so the bridge knows this user's DEFAULT ring.
+    @EnvironmentObject private var pushService: PushService
+    @State private var callRingtone = UserDefaults.standard.string(forKey: PushService.ringtoneDefaultsKey) ?? "ring_classic"
+    @State private var ringtonePlayer: AVAudioPlayer?
     @EnvironmentObject private var feedback: FeedbackPrefs
     /// July 23 2026: opt-in location ride-along (singleton — the watch must
     /// outlive this screen, so it's observed here, never owned here).
@@ -123,6 +129,38 @@ struct SettingsView: View {
                 Text("Main agent")
             } footer: {
                 Text("The app opens into a chat with your main agent, and new chats start with them. Pick anyone -- a Kade-AI character or one of your own. You can still switch who answers inside any single conversation.")
+            }
+
+            // Part 75 (Aug 21 2026, agent calls): which sound an agent CALL
+            // rings with -- the default for call plans that don't name their
+            // own tone. Tapping a row saves the pick AND plays the real
+            // ringtone, so the choice is made by ear, not by label -- the
+            // only honest way to pick a sound on a screen reader. The pick
+            // rides the next /push-register (PushService reads it back).
+            Section {
+                ForEach(Self.callRingtones) { tone in
+                    Button {
+                        callRingtone = tone.id
+                        UserDefaults.standard.set(tone.id, forKey: PushService.ringtoneDefaultsKey)
+                        pushService.ringtoneChanged()
+                        previewRingtone(tone)
+                    } label: {
+                        LabeledContent {
+                            if callRingtone == tone.id {
+                                Image(systemName: "checkmark")
+                            }
+                        } label: {
+                            Text(tone.label)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(callRingtone == tone.id ? "\(tone.label), your current ringtone" : tone.label)
+                    .accessibilityHint("Sets this as your agent-call ringtone and plays it so you can hear it. Tap another to compare.")
+                }
+            } header: {
+                Text("Agent call ringtone")
+            } footer: {
+                Text("When a companion calls you, this is the sound your phone rings with. Tap a tone to hear it and make it yours. An agent can also pick a different tone for one specific scheduled call.")
             }
 
             Section {
@@ -606,6 +644,36 @@ struct SettingsView: View {
 /// field optional on purpose: that route serves reminder channels, birthday
 /// settings and a phone number too, and this screen must not care when any of
 /// them change shape.
+// MARK: - Agent-call ringtones (Part 75, Aug 21 2026)
+
+extension SettingsView {
+    struct RingtoneOption: Identifiable {
+        let id: String
+        let label: String
+        let file: String
+    }
+
+    /// The bundled ring set — ids match the bridge's CALL_RINGTONES map and
+    /// the files ship in Sources/ (XcodeGen bundles non-source files as
+    /// resources). Adding a tone = new .caf here + one bridge map line.
+    static let callRingtones: [RingtoneOption] = [
+        RingtoneOption(id: "ring_classic", label: "Classic bell", file: "KadeRingClassic"),
+        RingtoneOption(id: "ring_marimba", label: "Marimba", file: "KadeRingMarimba"),
+        RingtoneOption(id: "ring_chimes", label: "Chimes", file: "KadeRingChimes"),
+        RingtoneOption(id: "ring_pulse", label: "Soft pulse", file: "KadeRingPulse"),
+        RingtoneOption(id: "ring_harp", label: "Harp sweep", file: "KadeRingHarp"),
+    ]
+
+    /// Plays the actual ringtone file, replacing any running preview. Quiet-
+    /// failing on purpose: a missing file should never break Settings.
+    func previewRingtone(_ tone: RingtoneOption) {
+        guard let url = Bundle.main.url(forResource: tone.file, withExtension: "caf") else { return }
+        ringtonePlayer?.stop()
+        ringtonePlayer = try? AVAudioPlayer(contentsOf: url)
+        ringtonePlayer?.play()
+    }
+}
+
 private struct NudgePrefsEnvelope: Decodable {
     struct Prefs: Decodable {
         let longTaskPing: Bool?

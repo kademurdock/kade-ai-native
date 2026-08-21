@@ -218,6 +218,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// Session 26 (call continuity): the conversation this call should
     /// continue, handed to `start()` by a call opened from inside one.
     private var pendingConversationId: String?
+    /// Part 75 (Aug 21 2026): non-nil when this call is the ANSWER to an
+    /// agent-call ring (KADE_CALL push) -- rides the hello so the bridge
+    /// primes the agent with why it called and clears the missed-call sweep.
+    private var pendingCallPlanId: String?
     /// Running playhead (on `playerNode`'s own sample-time timeline, at
     /// `playerFormat.sampleRate`) the next scheduled buffer pins to. `nil`
     /// means nothing is queued -- the next schedule starts a small lead
@@ -284,10 +288,11 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// mirrors `useStreamingCall.ts`'s own `start()` contract exactly
     /// (ticket fetch fails -> throw; mic fails -> throw; socket fails ->
     /// throw), including tearing everything back down on any failure.
-    func start(agentId: String?, displayName: String, spotterDirect: Bool, conversationId: String? = nil) async throws {
+    func start(agentId: String?, displayName: String, spotterDirect: Bool, conversationId: String? = nil, callPlanId: String? = nil) async throws {
         KadeBreadcrumbs.drop("call started (\(displayName))")
         // Session 26 (call continuity): stashed for the hello message below.
         pendingConversationId = conversationId
+        pendingCallPlanId = callPlanId
         guard webSocketTask == nil else { return }
         agentName = displayName
         callAgentId = agentId
@@ -353,6 +358,14 @@ final class StreamingCallService: NSObject, ObservableObject {
         var hello: [String: Any] = ["type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect]
         if let pendingConversationId {
             hello["conversationId"] = pendingConversationId
+        }
+        // Part 75 (Aug 21 2026, agent calls): answering a KADE_CALL ring rides
+        // the plan id in on the hello -- the bridge primes the agent with WHY
+        // it called, speaks a purpose-aware greeting, and marks the plan
+        // answered (which stops the missed-call follow-up). Nil on every
+        // ordinary call, and the bridge ignores ids that aren't yours.
+        if let pendingCallPlanId {
+            hello["callPlanId"] = pendingCallPlanId
         }
         sendJSON(hello)
         startReceiveLoop()
