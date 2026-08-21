@@ -162,6 +162,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 IntentRouter.shared.request(.agentCall)
             }
         }
+        /* Part 83: generic screen routing. The bridge stamps KADE_ROUTE plus
+         * a userInfo["kadeRoute"] string on any push that has a real home --
+         * bug reports open the feedback window, admin alerts (canary, crash,
+         * balance) open the Admin hub. Her report, verbatim: tapping the
+         * bug push "took me to a new conversation with Kiana" -- the app's
+         * launch default -- "it should have taken me to the bug window."
+         * Unknown route strings and old builds fall through to the plain
+         * open, the same forward-safety every category above rides. */
+        if category == "KADE_ROUTE",
+           let routeName = response.notification.request.content.userInfo["kadeRoute"] as? String {
+            var dest: IntentRouter.Destination?
+            switch routeName {
+            case "feedback": dest = .feedbackReports
+            case "admin": dest = .adminHub
+            default: dest = nil
+            }
+            if let dest {
+                Task { @MainActor in IntentRouter.shared.request(dest) }
+            }
+        }
         completionHandler()
     }
 

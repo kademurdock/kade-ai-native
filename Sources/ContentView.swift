@@ -257,6 +257,11 @@ struct ContentView: View {
                     WallOfFameView(apiClient: apiClient)
                 case .admin:
                     AdminView(apiClient: apiClient)
+                case .feedbackReports:
+                    // Part 83: the bug-report push's deep link -- the Admin
+                    // hub opened straight onto Feedback reports, so the tap
+                    // lands where the news is.
+                    AdminView(apiClient: apiClient, initialRoute: .feedback)
                 }
             }
         }
@@ -753,6 +758,10 @@ struct ContentView: View {
                 router.pendingAgentCall = nil
                 agentCallPayload = call
             }
+        case .feedbackReports:
+            route = .feedbackReports
+        case .adminHub:
+            route = .admin
         }
     }
 
@@ -911,6 +920,7 @@ enum HomeRoute: Identifiable, Hashable {
     case myCreations
     case wallOfFame
     case admin
+    case feedbackReports
     case brief
     case accessRequests
 
@@ -937,6 +947,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"
+        case .feedbackReports: return "feedbackReports"
         case .brief: return "brief"
         case .accessRequests: return "accessRequests"
         }

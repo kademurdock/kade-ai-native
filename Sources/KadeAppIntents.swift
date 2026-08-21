@@ -78,6 +78,13 @@ final class IntentRouter: ObservableObject {
         // A String-raw enum can't carry the payload (who/why/planId), so
         // it parks in `pendingAgentCall` below and this case says go look.
         case agentCall
+        // Part 83 (Aug 21 2026, her report: tapping the bug-report push
+        // landed in a NEW CONVERSATION -- the app's launch default -- instead
+        // of the bug window): pushes now carry a route home. The bridge
+        // stamps KADE_ROUTE + a kadeRoute string; these are the screens
+        // that string can name so far.
+        case feedbackReports
+        case adminHub
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a

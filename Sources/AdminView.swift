@@ -275,8 +275,12 @@ func adminCount(_ value: Double?) -> String {
 
 struct AdminView: View {
     let apiClient: KadeAPIClient
+    /// Part 83: a notification deep-link can open the hub already drilled
+    /// into one section (the bug push lands on Feedback reports). Nil -- the
+    /// normal case -- changes nothing.
+    var initialRoute: Route? = nil
 
-    private enum Route: String, Identifiable, Hashable {
+    enum Route: String, Identifiable, Hashable {
         case usage, feedback, logs, world, accessRequests, frontDesk, appCrashes
         var id: String { rawValue }
     }
@@ -340,6 +344,15 @@ struct AdminView: View {
         }
         .navigationTitle("Admin")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Part 83 deep-link: a notification tap can open the hub already
+            // drilled into one section. One-shot, and only if she hasn't
+            // navigated on her own; the async hop keeps the presentation off
+            // the first layout pass (the logbook lessons).
+            if let r = initialRoute, route == nil {
+                DispatchQueue.main.async { route = r }
+            }
+        }
         .navigationDestination(item: $route) { destination in
             switch destination {
             case .usage: AdminUsageView(service: AdminService(client: apiClient))
