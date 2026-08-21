@@ -105,6 +105,18 @@ enum MessageTextSanitizer {
     /// in forDisplay only, so copies of what the eye/ear gets stay in sync.
     private static let mdHeaderRegex = makeRegex("^#{1,6}\\s+", caseInsensitive: false)
     private static let mdBoldRegex = makeRegex("\\*\\*([^*]+)\\*\\*")
+    /// Aug 20 2026 (Kade: "I saw some word with emphasis having stars around
+    /// it... at least on native I saw * next to the word") — single-asterisk
+    /// ITALIC spans were never handled. The Aug 7 pass covered **bold** and
+    /// the star-RUN cleanup, so a lone *emphasised* word sailed through both
+    /// and VoiceOver read the stars to her. Mirrors the proxy's
+    /// single-asterisk shape, tightened for display: the span must start and
+    /// end on non-space, so arithmetic like "2 * 3 * 4" can never lose its
+    /// operators. Markers vanish, the words survive — the AUDIO half of the
+    /// same catch already gives the word its spoken stress (proxy d2b99f6,
+    /// *word* -> WORD before synthesis), so ear and eye now agree: neither
+    /// gets a star.
+    private static let mdItalicRegex = makeRegex("(^|[^*\\w])\\*(\\S(?:[^*\\n]{0,58}\\S)?)\\*(?!\\*)")
     private static let mdUnderlineRegex = makeRegex("__([^_]+)__")
     private static let mdStrikeRegex = makeRegex("~~([^~]+)~~")
     private static let mdLinkRegex = makeRegex("\\[([^\\]]+)\\]\\(([^)]*)\\)")
@@ -276,12 +288,16 @@ enum MessageTextSanitizer {
     /// Cheap guard first: the overwhelming majority of messages carry none
     /// of these markers and skip every pass.
     static func stripMarkdownDecoration(_ text: String) -> String {
-        guard text.contains("#") || text.contains("**") || text.contains("__")
+        // Aug 20 2026: the guard used to require "**", so a message whose only
+        // decoration was a single-asterisk *span* skipped this pass entirely
+        // — that is exactly how the stars reached her. A bare "*" now enters.
+        guard text.contains("#") || text.contains("*") || text.contains("__")
             || text.contains("~~") || text.contains("](") else { return text }
         var result = text
         result = replacingLinewise(of: mdHeaderRegex, in: result)
         result = replacingLinewise(of: mdBulletRegex, in: result)
         result = removingMatches(of: mdBoldRegex, in: result, replacement: "$1")
+        result = removingMatches(of: mdItalicRegex, in: result, replacement: "$1$2")
         result = removingMatches(of: mdUnderlineRegex, in: result, replacement: "$1")
         result = removingMatches(of: mdStrikeRegex, in: result, replacement: "$1")
         result = removingMatches(of: mdLinkRegex, in: result, replacement: "$1")
