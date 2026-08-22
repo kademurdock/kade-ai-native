@@ -533,19 +533,56 @@ struct ContentView: View {
             // session 23, the last two user-facing web-only pages; no Siri
             // phrases (10-cap) or Quick Actions (4-of-5) -- same
             // constraint notes as Alerts.
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                toolTile("Transcribe", spoken: "Transcribe a voice memo", icon: "waveform", tint: .purple, hint: "Records what you say and turns it into text you can edit, tidy up and share.", destination: .transcribe)
-                toolTile("Describe", spoken: "Describe a photo, video, or document", icon: "plus.viewfinder", tint: .teal, hint: "Take or choose a photo or video, or pick a document, and get it described or read back to you.", destination: .describe)
-                toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
-                toolTile("The Parlor", spoken: "The Parlor", icon: "suit.club.fill", tint: .mint, hint: "Every game on a menu — play your own cards with buttons, seat characters if you want company, and a house narrator calls the table.", destination: .parlor)
-                toolTile("Kade's Clubhouse", spoken: "Kade's Clubhouse", icon: "hifispeaker.2.fill", tint: .pink, hint: "Live family voice rooms with a shared jukebox anyone can drive, private Hotel rooms with passcodes, and companion guests you can invite in.", destination: .lounge)
-                toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
-                toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
-                toolTile("Marketplace", spoken: "The Marketplace", icon: "storefront", tint: .orange, hint: "Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.", destination: .marketplace)
-                toolTile("Bookmarks", spoken: "Bookmarks", icon: "bookmark.fill", tint: .red, hint: "Your tagged conversations, gathered by bookmark \u{2014} tag any conversation from the conversation list.", destination: .bookmarks)
-                toolTile("Prompts", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", destination: .prompts)
-                toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
-                toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
+            /* ⭐ PART 87 (Aug 22 2026): THIS WAS A LazyVGrid.
+             *
+             * The standing law, earned across builds 204-225 and twenty-two
+             * blind swings at it: NO LAZY CONTAINER IN A VOICEOVER PATH. EVER.
+             * Apple DTS reproduced the mechanism themselves (radar
+             * FB21851974, Forums 814208) -- a lazy container allocates views
+             * as they are needed, VoiceOver's tree traversal forces that
+             * allocation, and a state change during it is a race. Build 225
+             * tore the LazyVStack out of the transcript and the freeze era
+             * ended.
+             *
+             * This grid survived that purge because nothing here had crashed:
+             * the home screen does not mutate state on every send the way the
+             * transcript does, so the race never had its third ingredient.
+             * That is luck, not safety, and "it hasn't bitten us yet" is not
+             * a reason a scar law gets an exception. Twelve tiles is a
+             * bounded, known list; laziness buys nothing at that size and
+             * costs the whole freeze story if the screen ever grows a live
+             * state write.
+             *
+             * Six explicit rows of two. Same order, same tiles, same spoken
+             * labels, same two-up layout by eye -- and by ear nothing changes
+             * at all, because reading order in a two-column grid and in a
+             * stack of pairs is identical. The only difference is that every
+             * one of them now exists before VoiceOver comes looking. */
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("Transcribe", spoken: "Transcribe a voice memo", icon: "waveform", tint: .purple, hint: "Records what you say and turns it into text you can edit, tidy up and share.", destination: .transcribe)
+                    toolTile("Describe", spoken: "Describe a photo, video, or document", icon: "plus.viewfinder", tint: .teal, hint: "Take or choose a photo or video, or pick a document, and get it described or read back to you.", destination: .describe)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
+                    toolTile("The Parlor", spoken: "The Parlor", icon: "suit.club.fill", tint: .mint, hint: "Every game on a menu — play your own cards with buttons, seat characters if you want company, and a house narrator calls the table.", destination: .parlor)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("Kade's Clubhouse", spoken: "Kade's Clubhouse", icon: "hifispeaker.2.fill", tint: .pink, hint: "Live family voice rooms with a shared jukebox anyone can drive, private Hotel rooms with passcodes, and companion guests you can invite in.", destination: .lounge)
+                    toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
+                    toolTile("Marketplace", spoken: "The Marketplace", icon: "storefront", tint: .orange, hint: "Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.", destination: .marketplace)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("Bookmarks", spoken: "Bookmarks", icon: "bookmark.fill", tint: .red, hint: "Your tagged conversations, gathered by bookmark \u{2014} tag any conversation from the conversation list.", destination: .bookmarks)
+                    toolTile("Prompts", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", destination: .prompts)
+                }
+                HStack(alignment: .top, spacing: 12) {
+                    toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
+                    toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
+                }
             }
 
             Text("Settings and help")

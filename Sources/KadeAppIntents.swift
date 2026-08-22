@@ -51,7 +51,10 @@ import SwiftUI
 final class IntentRouter: ObservableObject {
     static let shared = IntentRouter()
 
-    enum Destination: String {
+    /// `CaseIterable` since Part 87: `KadeRouteTable` walks every case to
+    /// turn a push's route string into a destination, and walking them all is
+    /// what makes the table impossible to leave half-filled.
+    enum Destination: String, CaseIterable {
         case spotterCall
         case transcribe
         case conversations

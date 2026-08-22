@@ -138,6 +138,39 @@ enum KadeHaptics {
     /// Featherweight tick as a message leaves.
     static func sentTick()   { play(pattern: .sentTick)   { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6) } }
 
+    // ── PART 87 §2.5: TACTILE MESSAGE RHYTHM ────────────────────────────────
+    //
+    // "Distinct haptic patterns per event type so identity reaches the hand
+    // before VoiceOver speaks." A notification arriving has always felt
+    // identical whatever it was; now a message, a call, a reminder and an
+    // alert each have their own shape, and the shapes are built to be told
+    // apart by hand alone, not by being louder:
+    //
+    //   message   two even knocks, close together  (the spec's double-tap)
+    //   call      two long bass rumbles, one second (the spec's long buzz)
+    //   reminder  one knock that fades out
+    //   alert     three quick sharp ticks
+    //
+    // ⚠️ THE HAPTICS SCAR IS RESPECTED BY LOCATION. Build 216 traced the
+    // freeze era to `.sensoryFeedback` firing inside the SEND-COMMIT path;
+    // the standing law is haptics on completed actions, never inside a
+    // transcript mutation. These fire from AppDelegate when a push ARRIVES —
+    // not from any SwiftUI body, not near a transcript commit, and they ride
+    // the same next-main-queue-turn hop and the same Haptics switch as every
+    // other haptic in the app.
+    static func arrival(_ kind: KadeArrivalKind) {
+        switch kind {
+        case .message:
+            play(pattern: .arrivalMessage) { UIImpactFeedbackGenerator(style: .soft).impactOccurred() }
+        case .call:
+            play(pattern: .arrivalCall) { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        case .reminder:
+            play(pattern: .arrivalReminder) { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+        case .alert:
+            play(pattern: .arrivalAlert) { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        }
+    }
+
     /// Map one Parlor sound-cue name to a felt pattern. Unknown cue names
     /// get a soft tick — never silence-by-crash, never a wrong big blast.
     static func gameCue(_ name: String) {
@@ -185,6 +218,7 @@ enum KadeHaptics {
         case success, warning, error, tap, pulseBeat, press
         case replyLanded, sentTick
         case cardFlick, cardShuffle, diceRoll, chipKnock, winRise, loseSlump, buzz, ding, yourTurn, boom, splash, gong, sting
+        case arrivalMessage, arrivalCall, arrivalReminder, arrivalAlert
     }
 
     /* ⭐ BUILD 216. Every haptic now lands on the NEXT main-queue turn, not
@@ -250,6 +284,16 @@ enum KadeHaptics {
             return [(0, 0, 1.0, 0.25), (0.05, 0.6, 0.8, 0.05)]
         case .sting:
             return [(0, 0, 0.9, 0.65), (0.11, 0, 1.0, 0.7)]
+        // Part 87 arrivals. Told apart by SHAPE, not by volume: two even
+        // knocks, two long rumbles, one fading knock, three sharp ticks.
+        case .arrivalMessage:
+            return [(0, 0, 0.9, 0.35), (0.13, 0, 0.9, 0.35)]
+        case .arrivalCall:
+            return [(0, 0.5, 1.0, 0.05), (0.62, 0.5, 1.0, 0.05)]
+        case .arrivalReminder:
+            return [(0, 0, 0.85, 0.3), (0.1, 0.3, 0.55, 0.1)]
+        case .arrivalAlert:
+            return [(0, 0, 1.0, 0.7), (0.09, 0, 1.0, 0.7), (0.18, 0, 1.0, 0.7)]
         }
     }
 }

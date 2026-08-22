@@ -315,6 +315,15 @@ struct SettingsView: View {
                 auditionTapRow("Error") { KadeHaptics.error() }
                 auditionTapRow("Heartbeat") { KadeHaptics.pulseBeat() }
                 auditionTapRow("Big press") { KadeHaptics.press() }
+                // Part 87 §2.5: the four arrival shapes, auditionable. A
+                // pattern you can only feel when a real push happens is a
+                // pattern nobody can learn -- and the whole point is that the
+                // hand knows what arrived before VoiceOver gets a word out.
+                // Learn them here once, on purpose, then recognise them later.
+                auditionTapRow("Arriving: a message") { KadeHaptics.arrival(.message) }
+                auditionTapRow("Arriving: a call") { KadeHaptics.arrival(.call) }
+                auditionTapRow("Arriving: a reminder") { KadeHaptics.arrival(.reminder) }
+                auditionTapRow("Arriving: an alert") { KadeHaptics.arrival(.alert) }
             }
             .disabled(!feedback.haptics)
             .accessibilityHint("Opens a list of every haptic the app uses, each with a button that fires it once.")

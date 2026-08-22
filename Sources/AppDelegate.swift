@@ -170,17 +170,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
          * launch default -- "it should have taken me to the bug window."
          * Unknown route strings and old builds fall through to the plain
          * open, the same forward-safety every category above rides. */
+        /* Part 87: the two-case switch that used to live here ended in
+         * `default: dest = nil` -- a silent drop for every route string the
+         * app had not been taught, which by ear is indistinguishable from a
+         * push that just opened the app. The mapping now lives in ONE place,
+         * `KadeRouteTable.swift`, as an exhaustive switch with no default, so
+         * adding a destination breaks the build until it is given a name (or
+         * explicitly given none). Fifteen screens answer to a name now, up
+         * from two, and forward-safety is unchanged: an unknown string on an
+         * older build still falls through to the plain open. */
         if category == "KADE_ROUTE",
-           let routeName = response.notification.request.content.userInfo["kadeRoute"] as? String {
-            var dest: IntentRouter.Destination?
-            switch routeName {
-            case "feedback": dest = .feedbackReports
-            case "admin": dest = .adminHub
-            default: dest = nil
-            }
-            if let dest {
-                Task { @MainActor in IntentRouter.shared.request(dest) }
-            }
+           let routeName = response.notification.request.content.userInfo["kadeRoute"] as? String,
+           let dest = IntentRouter.Destination(routeName: routeName) {
+            Task { @MainActor in IntentRouter.shared.request(dest) }
         }
         completionHandler()
     }
@@ -197,6 +199,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        /* Part 87 §2.5: identity reaches the hand before VoiceOver speaks.
+         * A push arriving while the app is open used to feel like nothing at
+         * all -- the banner and its sound were the whole event. Now the kind
+         * of arrival has its own shape in the hand (see KadeArrivalKind and
+         * KadeHaptics.arrival): two knocks for a message, two long bass
+         * rumbles for a call, a fading knock for a reminder, three sharp
+         * ticks for an alert. Gated by the same Haptics switch as everything
+         * else, and fired HERE -- in the notification delegate, nowhere near
+         * a SwiftUI transcript commit, which is the whole point of the
+         * build-216 scar. */
+        let kind = KadeArrivalKind(categoryIdentifier: notification.request.content.categoryIdentifier)
+        Task { @MainActor in KadeHaptics.arrival(kind) }
         completionHandler([.banner, .list, .sound])
     }
 }
