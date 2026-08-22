@@ -137,30 +137,46 @@ struct SettingsView: View {
             // ringtone, so the choice is made by ear, not by label -- the
             // only honest way to pick a sound on a screen reader. The pick
             // rides the next /push-register (PushService reads it back).
+            // Part 84 (Aug 21 2026): Kade's 72 homemade tones join the picker,
+            // grouped by feel so 70+ rows stay navigable by rotor-heading. Her
+            // parked gripe fixed too: previews now have a STOP control (and
+            // stop on their own when Settings closes).
             Section {
-                ForEach(Self.callRingtones) { tone in
-                    Button {
-                        callRingtone = tone.id
-                        UserDefaults.standard.set(tone.id, forKey: PushService.ringtoneDefaultsKey)
-                        pushService.ringtoneChanged()
-                        previewRingtone(tone)
-                    } label: {
-                        LabeledContent {
-                            if callRingtone == tone.id {
-                                Image(systemName: "checkmark")
-                            }
-                        } label: {
-                            Text(tone.label)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(callRingtone == tone.id ? "\(tone.label), your current ringtone" : tone.label)
-                    .accessibilityHint("Sets this as your agent-call ringtone and plays it so you can hear it. Tap another to compare.")
+                Button {
+                    stopRingtonePreview()
+                } label: {
+                    Label("Stop preview", systemImage: "stop.circle")
                 }
+                .accessibilityHint("Stops the ringtone that's playing right now.")
             } header: {
                 Text("Agent call ringtone")
             } footer: {
-                Text("When a companion calls you, this is the sound your phone rings with. Tap a tone to hear it and make it yours. An agent can also pick a different tone for one specific scheduled call.")
+                Text("When a companion calls you, this is the sound your phone rings with. Tap any tone to hear it and make it yours; tap Stop preview to hush it. An agent can pick a different tone for one specific scheduled call — every tone has a name they know.")
+            }
+            ForEach(Self.ringtoneGroups, id: \.self) { group in
+                Section {
+                    ForEach(Self.callRingtones.filter { $0.group == group }) { tone in
+                        Button {
+                            callRingtone = tone.id
+                            UserDefaults.standard.set(tone.id, forKey: PushService.ringtoneDefaultsKey)
+                            pushService.ringtoneChanged()
+                            previewRingtone(tone)
+                        } label: {
+                            LabeledContent {
+                                if callRingtone == tone.id {
+                                    Image(systemName: "checkmark")
+                                }
+                            } label: {
+                                Text(tone.label)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(callRingtone == tone.id ? "\(tone.label), your current ringtone" : tone.label)
+                        .accessibilityHint("Sets this as your agent-call ringtone and plays it so you can hear it. Tap another to compare, or Stop preview to hush it.")
+                    }
+                } header: {
+                    Text(group)
+                }
             }
 
             Section {
@@ -459,6 +475,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .onDisappear { stopRingtonePreview() }
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadLongTaskPing() }
         .sheet(isPresented: $showingMainAgentPicker) {
@@ -651,17 +668,101 @@ extension SettingsView {
         let id: String
         let label: String
         let file: String
+        let group: String
     }
 
     /// The bundled ring set — ids match the bridge's CALL_RINGTONES map and
     /// the files ship in Sources/ (XcodeGen bundles non-source files as
     /// resources). Adding a tone = new .caf here + one bridge map line.
     static let callRingtones: [RingtoneOption] = [
-        RingtoneOption(id: "ring_classic", label: "Classic bell", file: "KadeRingClassic"),
-        RingtoneOption(id: "ring_marimba", label: "Marimba", file: "KadeRingMarimba"),
-        RingtoneOption(id: "ring_chimes", label: "Chimes", file: "KadeRingChimes"),
-        RingtoneOption(id: "ring_pulse", label: "Soft pulse", file: "KadeRingPulse"),
-        RingtoneOption(id: "ring_harp", label: "Harp sweep", file: "KadeRingHarp"),
+        // Classics (the one survivor of the launch set — the other four files
+        // stay bundled for existing plans, just out of the picker).
+        RingtoneOption(id: "ring_marimba", label: "Marimba", file: "KadeRingMarimba", group: "Classics"),
+        // Dreamy & gentle
+        RingtoneOption(id: "ring_dream_bell", label: "Dream Bell", file: "KadeRingDreamBell", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_dream_bloom", label: "Dream Bloom", file: "KadeRingDreamBloom", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_dream_box", label: "Dream Box", file: "KadeRingDreamBox", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_dreamcatcher", label: "Dreamcatcher", file: "KadeRingDreamcatcher", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_fable_waltz", label: "Fable Waltz", file: "KadeRingFableWaltz", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_lullaby_dusk", label: "Lullaby Dusk", file: "KadeRingLullabyDusk", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_moonlit", label: "Moonlit", file: "KadeRingMoonlit", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_morning_dew", label: "Morning Dew", file: "KadeRingMorningDew", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_quiet_dawn", label: "Quiet Dawn", file: "KadeRingQuietDawn", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_quiet_meadow", label: "Quiet Meadow", file: "KadeRingQuietMeadow", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_soft_bloom", label: "Soft Bloom", file: "KadeRingSoftBloom", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_soft_chimes", label: "Soft Chimes", file: "KadeRingSoftChimes", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_starbox", label: "Starbox", file: "KadeRingStarbox", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_starlight", label: "Starlight", file: "KadeRingStarlight", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_sweet_dreams", label: "Sweet Dreams", file: "KadeRingSweetDreams", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_sweet_slumber", label: "Sweet Slumber", file: "KadeRingSweetSlumber", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_tranquil_dawn", label: "Tranquil Dawn", file: "KadeRingTranquilDawn", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_zen_ripple", label: "Zen Ripple", file: "KadeRingZenRipple", group: "Dreamy & gentle"),
+        // Calm & lo-fi
+        RingtoneOption(id: "ring_dusk_call", label: "Dusk Call", file: "KadeRingDuskCall", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_dusk_glow", label: "Dusk Glow", file: "KadeRingDuskGlow", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_late_echoes", label: "Late Echoes", file: "KadeRingLateEchoes", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_lunar_tone", label: "Lunar Tone", file: "KadeRingLunarTone", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_midnight_drift", label: "Midnight Drift", file: "KadeRingMidnightDrift", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_neon_cloud", label: "Neon Cloud", file: "KadeRingNeonCloud", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_neon_pulse", label: "Neon Pulse", file: "KadeRingNeonPulse", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_neon_rain", label: "Neon Rain", file: "KadeRingNeonRain", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_night_shift", label: "Night Shift", file: "KadeRingNightShift", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_night_velvet", label: "Night Velvet", file: "KadeRingNightVelvet", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_porch_sunset", label: "Porch Sunset", file: "KadeRingPorchSunset", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_quiet_signal", label: "Quiet Signal", file: "KadeRingQuietSignal", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_silk_chords", label: "Silk Chords", file: "KadeRingSilkChords", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_smooth_echo", label: "Smooth Echo", file: "KadeRingSmoothEcho", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_soft_horizon", label: "Soft Horizon", file: "KadeRingSoftHorizon", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_soft_signal", label: "Soft Signal", file: "KadeRingSoftSignal", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_sundial", label: "Sundial", file: "KadeRingSundial", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_tape_deck", label: "Tape Deck", file: "KadeRingTapeDeck", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_velvet_sunset", label: "Velvet Sunset", file: "KadeRingVelvetSunset", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_warm_coffee", label: "Warm Coffee", file: "KadeRingWarmCoffee", group: "Calm & lo-fi"),
+        // Soul & groove
+        RingtoneOption(id: "ring_city_scratch", label: "City Scratch", file: "KadeRingCityScratch", group: "Soul & groove"),
+        RingtoneOption(id: "ring_clockwork_boom", label: "Clockwork Boom", file: "KadeRingClockworkBoom", group: "Soul & groove"),
+        RingtoneOption(id: "ring_honey_melody", label: "Honey Melody", file: "KadeRingHoneyMelody", group: "Soul & groove"),
+        RingtoneOption(id: "ring_soul_ring", label: "Soul Ring", file: "KadeRingSoulRing", group: "Soul & groove"),
+        RingtoneOption(id: "ring_velvet_call", label: "Velvet Call", file: "KadeRingVelvetCall", group: "Soul & groove"),
+        RingtoneOption(id: "ring_vinyl_bounce", label: "Vinyl Bounce", file: "KadeRingVinylBounce", group: "Soul & groove"),
+        // Bright & playful
+        RingtoneOption(id: "ring_brass_bounce", label: "Brass Bounce", file: "KadeRingBrassBounce", group: "Bright & playful"),
+        RingtoneOption(id: "ring_clockwork_tea", label: "Clockwork Tea", file: "KadeRingClockworkTea", group: "Bright & playful"),
+        RingtoneOption(id: "ring_cobblestone", label: "Cobblestone", file: "KadeRingCobblestone", group: "Bright & playful"),
+        RingtoneOption(id: "ring_neon_pop", label: "Neon Pop", file: "KadeRingNeonPop", group: "Bright & playful"),
+        RingtoneOption(id: "ring_pixel_bounce", label: "Pixel Bounce", file: "KadeRingPixelBounce", group: "Bright & playful"),
+        RingtoneOption(id: "ring_retro_bounce", label: "Retro Bounce", file: "KadeRingRetroBounce", group: "Bright & playful"),
+        RingtoneOption(id: "ring_sunlit_steps", label: "Sunlit Steps", file: "KadeRingSunlitSteps", group: "Bright & playful"),
+        RingtoneOption(id: "ring_toy_waltz", label: "Toy Waltz", file: "KadeRingToyWaltz", group: "Bright & playful"),
+        RingtoneOption(id: "ring_toybox", label: "Toybox", file: "KadeRingToybox", group: "Bright & playful"),
+        RingtoneOption(id: "ring_toybox_groove", label: "Toybox Groove", file: "KadeRingToyboxGroove", group: "Bright & playful"),
+        RingtoneOption(id: "ring_whimsy_hop", label: "Whimsy Hop", file: "KadeRingWhimsyHop", group: "Bright & playful"),
+        // Driving & bold
+        RingtoneOption(id: "ring_digital_bloom", label: "Digital Bloom", file: "KadeRingDigitalBloom", group: "Driving & bold"),
+        RingtoneOption(id: "ring_flute_drift", label: "Flute Drift", file: "KadeRingFluteDrift", group: "Driving & bold"),
+        RingtoneOption(id: "ring_neon_dusk", label: "Neon Dusk", file: "KadeRingNeonDusk", group: "Driving & bold"),
+        RingtoneOption(id: "ring_shadow_bounce", label: "Shadow Bounce", file: "KadeRingShadowBounce", group: "Driving & bold"),
+        RingtoneOption(id: "ring_street_oracle", label: "Street Oracle", file: "KadeRingStreetOracle", group: "Driving & bold"),
+        RingtoneOption(id: "ring_street_sonata", label: "Street Sonata", file: "KadeRingStreetSonata", group: "Driving & bold"),
+        RingtoneOption(id: "ring_string_drop", label: "String Drop", file: "KadeRingStringDrop", group: "Driving & bold"),
+        // World & cinematic
+        RingtoneOption(id: "ring_bamboo_mist", label: "Bamboo Mist", file: "KadeRingBambooMist", group: "World & cinematic"),
+        RingtoneOption(id: "ring_desert_beat", label: "Desert Beat", file: "KadeRingDesertBeat", group: "World & cinematic"),
+        RingtoneOption(id: "ring_fading_grace", label: "Fading Grace", file: "KadeRingFadingGrace", group: "World & cinematic"),
+        RingtoneOption(id: "ring_jade_mist", label: "Jade Mist", file: "KadeRingJadeMist", group: "World & cinematic"),
+        RingtoneOption(id: "ring_lantern_path", label: "Lantern Path", file: "KadeRingLanternPath", group: "World & cinematic"),
+        RingtoneOption(id: "ring_lotus_whisper", label: "Lotus Whisper", file: "KadeRingLotusWhisper", group: "World & cinematic"),
+        RingtoneOption(id: "ring_misty_river", label: "Misty River", file: "KadeRingMistyRiver", group: "World & cinematic"),
+        RingtoneOption(id: "ring_morning_raga", label: "Morning Raga", file: "KadeRingMorningRaga", group: "World & cinematic"),
+        RingtoneOption(id: "ring_oasis_call", label: "Oasis Call", file: "KadeRingOasisCall", group: "World & cinematic"),
+        RingtoneOption(id: "ring_silk_beat", label: "Silk Beat", file: "KadeRingSilkBeat", group: "World & cinematic"),
+    ]
+
+    /// Group order for the picker sections — a VoiceOver user jumps these
+    /// by heading instead of flicking 73 rows.
+    static let ringtoneGroups: [String] = [
+        "Classics", "Dreamy & gentle", "Calm & lo-fi", "Soul & groove",
+        "Bright & playful", "Driving & bold", "World & cinematic",
     ]
 
     /// Plays the actual ringtone file, replacing any running preview. Quiet-
@@ -671,6 +772,13 @@ extension SettingsView {
         ringtonePlayer?.stop()
         ringtonePlayer = try? AVAudioPlayer(contentsOf: url)
         ringtonePlayer?.play()
+    }
+
+    /// Part 84 — her gripe on the launch set: "there's no way to make it stop
+    /// other than the magic tap or something."
+    func stopRingtonePreview() {
+        ringtonePlayer?.stop()
+        ringtonePlayer = nil
     }
 }
 
