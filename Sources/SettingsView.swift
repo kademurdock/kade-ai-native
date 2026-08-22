@@ -668,6 +668,11 @@ extension SettingsView {
         let id: String
         let label: String
         let file: String
+        /// Part 84.2: full-length high-quality preview (m4a). The 30-second
+        /// law binds only the LOCKED-PHONE ring (Apple plays default past
+        /// 30s, CallKit or not) — but her EAR-PICKING deserves the whole
+        /// minute at real quality, so previews play this when present.
+        let preview: String?
         let group: String
     }
 
@@ -675,87 +680,86 @@ extension SettingsView {
     /// the files ship in Sources/ (XcodeGen bundles non-source files as
     /// resources). Adding a tone = new .caf here + one bridge map line.
     static let callRingtones: [RingtoneOption] = [
-        // Classics (the one survivor of the launch set — the other four files
-        // stay bundled for existing plans, just out of the picker).
-        RingtoneOption(id: "ring_marimba", label: "Marimba", file: "KadeRingMarimba", group: "Classics"),
+        // Classics (the launch survivor; no long preview — its caf plays).
+        RingtoneOption(id: "ring_marimba", label: "Marimba", file: "KadeRingMarimba", preview: nil, group: "Classics"),
         // Dreamy & gentle
-        RingtoneOption(id: "ring_dream_bell", label: "Dream Bell", file: "KadeRingDreamBell", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_dream_bloom", label: "Dream Bloom", file: "KadeRingDreamBloom", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_dream_box", label: "Dream Box", file: "KadeRingDreamBox", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_dreamcatcher", label: "Dreamcatcher", file: "KadeRingDreamcatcher", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_fable_waltz", label: "Fable Waltz", file: "KadeRingFableWaltz", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_lullaby_dusk", label: "Lullaby Dusk", file: "KadeRingLullabyDusk", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_moonlit", label: "Moonlit", file: "KadeRingMoonlit", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_morning_dew", label: "Morning Dew", file: "KadeRingMorningDew", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_quiet_dawn", label: "Quiet Dawn", file: "KadeRingQuietDawn", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_quiet_meadow", label: "Quiet Meadow", file: "KadeRingQuietMeadow", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_soft_bloom", label: "Soft Bloom", file: "KadeRingSoftBloom", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_soft_chimes", label: "Soft Chimes", file: "KadeRingSoftChimes", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_starbox", label: "Starbox", file: "KadeRingStarbox", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_starlight", label: "Starlight", file: "KadeRingStarlight", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_sweet_dreams", label: "Sweet Dreams", file: "KadeRingSweetDreams", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_sweet_slumber", label: "Sweet Slumber", file: "KadeRingSweetSlumber", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_tranquil_dawn", label: "Tranquil Dawn", file: "KadeRingTranquilDawn", group: "Dreamy & gentle"),
-        RingtoneOption(id: "ring_zen_ripple", label: "Zen Ripple", file: "KadeRingZenRipple", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_ballroom_ghost", label: "Ballroom Ghost", file: "KadeRingBallroomGhost", preview: "KadePrevBallroomGhost", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_carousel", label: "Carousel", file: "KadeRingCarousel", preview: "KadePrevCarousel", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_counting_sheep", label: "Counting Sheep", file: "KadeRingCountingSheep", preview: "KadePrevCountingSheep", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_cradle_song", label: "Cradle Song", file: "KadeRingCradleSong", preview: "KadePrevCradleSong", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_creek_bed", label: "Creek Bed", file: "KadeRingCreekBed", preview: "KadePrevCreekBed", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_firefly_jar", label: "Firefly Jar", file: "KadeRingFireflyJar", preview: "KadePrevFireflyJar", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_first_frost", label: "First Frost", file: "KadeRingFirstFrost", preview: "KadePrevFirstFrost", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_harp_house", label: "Harp House", file: "KadeRingHarpHouse", preview: "KadePrevHarpHouse", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_koi_pond", label: "Koi Pond", file: "KadeRingKoiPond", preview: "KadePrevKoiPond", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_meadowlark", label: "Meadowlark", file: "KadeRingMeadowlark", preview: "KadePrevMeadowlark", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_mobile", label: "Mobile", file: "KadeRingMobile", preview: "KadePrevMobile", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_music_box", label: "Music Box", file: "KadeRingMusicBox", preview: "KadePrevMusicBox", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_nightlight", label: "Nightlight", file: "KadeRingNightlight", preview: "KadePrevNightlight", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_snow_globe", label: "Snow Globe", file: "KadeRingSnowGlobe", preview: "KadePrevSnowGlobe", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_storybook", label: "Storybook", file: "KadeRingStorybook", preview: "KadePrevStorybook", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_watercolor", label: "Watercolor", file: "KadeRingWatercolor", preview: "KadePrevWatercolor", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_wind_bells", label: "Wind Bells", file: "KadeRingWindBells", preview: "KadePrevWindBells", group: "Dreamy & gentle"),
+        RingtoneOption(id: "ring_wishing_well", label: "Wishing Well", file: "KadeRingWishingWell", preview: "KadePrevWishingWell", group: "Dreamy & gentle"),
         // Calm & lo-fi
-        RingtoneOption(id: "ring_dusk_call", label: "Dusk Call", file: "KadeRingDuskCall", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_dusk_glow", label: "Dusk Glow", file: "KadeRingDuskGlow", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_late_echoes", label: "Late Echoes", file: "KadeRingLateEchoes", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_lunar_tone", label: "Lunar Tone", file: "KadeRingLunarTone", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_midnight_drift", label: "Midnight Drift", file: "KadeRingMidnightDrift", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_neon_cloud", label: "Neon Cloud", file: "KadeRingNeonCloud", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_neon_pulse", label: "Neon Pulse", file: "KadeRingNeonPulse", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_neon_rain", label: "Neon Rain", file: "KadeRingNeonRain", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_night_shift", label: "Night Shift", file: "KadeRingNightShift", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_night_velvet", label: "Night Velvet", file: "KadeRingNightVelvet", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_porch_sunset", label: "Porch Sunset", file: "KadeRingPorchSunset", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_quiet_signal", label: "Quiet Signal", file: "KadeRingQuietSignal", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_silk_chords", label: "Silk Chords", file: "KadeRingSilkChords", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_smooth_echo", label: "Smooth Echo", file: "KadeRingSmoothEcho", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_soft_horizon", label: "Soft Horizon", file: "KadeRingSoftHorizon", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_soft_signal", label: "Soft Signal", file: "KadeRingSoftSignal", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_sundial", label: "Sundial", file: "KadeRingSundial", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_tape_deck", label: "Tape Deck", file: "KadeRingTapeDeck", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_velvet_sunset", label: "Velvet Sunset", file: "KadeRingVelvetSunset", group: "Calm & lo-fi"),
-        RingtoneOption(id: "ring_warm_coffee", label: "Warm Coffee", file: "KadeRingWarmCoffee", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_aquarium", label: "Aquarium", file: "KadeRingAquarium", preview: "KadePrevAquarium", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_corner_booth", label: "Corner Booth", file: "KadeRingCornerBooth", preview: "KadePrevCornerBooth", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_drive_home", label: "Drive Home", file: "KadeRingDriveHome", preview: "KadePrevDriveHome", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_golden_hour", label: "Golden Hour", file: "KadeRingGoldenHour", preview: "KadePrevGoldenHour", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_house_plants", label: "House Plants", file: "KadeRingHousePlants", preview: "KadePrevHousePlants", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_last_call", label: "Last Call", file: "KadeRingLastCall", preview: "KadePrevLastCall", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_lava_lamp", label: "Lava Lamp", file: "KadeRingLavaLamp", preview: "KadePrevLavaLamp", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_moon_roof", label: "Moon Roof", file: "KadeRingMoonRoof", preview: "KadePrevMoonRoof", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_night_owl", label: "Night Owl", file: "KadeRingNightOwl", preview: "KadePrevNightOwl", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_night_shift", label: "Night Shift", file: "KadeRingNightShift", preview: "KadePrevNightShift", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_old_photographs", label: "Old Photographs", file: "KadeRingOldPhotographs", preview: "KadePrevOldPhotographs", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_porch_swing", label: "Porch Swing", file: "KadeRingPorchSwing", preview: "KadePrevPorchSwing", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_rain_check", label: "Rain Check", file: "KadeRingRainCheck", preview: "KadePrevRainCheck", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_rooftop", label: "Rooftop", file: "KadeRingRooftop", preview: "KadePrevRooftop", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_screen_door", label: "Screen Door", file: "KadeRingScreenDoor", preview: "KadePrevScreenDoor", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_silk_robe", label: "Silk Robe", file: "KadeRingSilkRobe", preview: "KadePrevSilkRobe", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_slow_elevator", label: "Slow Elevator", file: "KadeRingSlowElevator", preview: "KadePrevSlowElevator", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_sundial", label: "Sundial", file: "KadeRingSundial", preview: "KadePrevSundial", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_tape_deck", label: "Tape Deck", file: "KadeRingTapeDeck", preview: "KadePrevTapeDeck", group: "Calm & lo-fi"),
+        RingtoneOption(id: "ring_warm_coffee", label: "Warm Coffee", file: "KadeRingWarmCoffee", preview: "KadePrevWarmCoffee", group: "Calm & lo-fi"),
         // Soul & groove
-        RingtoneOption(id: "ring_city_scratch", label: "City Scratch", file: "KadeRingCityScratch", group: "Soul & groove"),
-        RingtoneOption(id: "ring_clockwork_boom", label: "Clockwork Boom", file: "KadeRingClockworkBoom", group: "Soul & groove"),
-        RingtoneOption(id: "ring_honey_melody", label: "Honey Melody", file: "KadeRingHoneyMelody", group: "Soul & groove"),
-        RingtoneOption(id: "ring_soul_ring", label: "Soul Ring", file: "KadeRingSoulRing", group: "Soul & groove"),
-        RingtoneOption(id: "ring_velvet_call", label: "Velvet Call", file: "KadeRingVelvetCall", group: "Soul & groove"),
-        RingtoneOption(id: "ring_vinyl_bounce", label: "Vinyl Bounce", file: "KadeRingVinylBounce", group: "Soul & groove"),
+        RingtoneOption(id: "ring_boom_bap", label: "Boom Bap", file: "KadeRingBoomBap", preview: "KadePrevBoomBap", group: "Soul & groove"),
+        RingtoneOption(id: "ring_honey_dip", label: "Honey Dip", file: "KadeRingHoneyDip", preview: "KadePrevHoneyDip", group: "Soul & groove"),
+        RingtoneOption(id: "ring_slow_jam", label: "Slow Jam", file: "KadeRingSlowJam", preview: "KadePrevSlowJam", group: "Soul & groove"),
+        RingtoneOption(id: "ring_sunday_best", label: "Sunday Best", file: "KadeRingSundayBest", preview: "KadePrevSundayBest", group: "Soul & groove"),
+        RingtoneOption(id: "ring_turntable", label: "Turntable", file: "KadeRingTurntable", preview: "KadePrevTurntable", group: "Soul & groove"),
+        RingtoneOption(id: "ring_wind_up_crew", label: "Wind-Up Crew", file: "KadeRingWindUpCrew", preview: "KadePrevWindUpCrew", group: "Soul & groove"),
         // Bright & playful
-        RingtoneOption(id: "ring_brass_bounce", label: "Brass Bounce", file: "KadeRingBrassBounce", group: "Bright & playful"),
-        RingtoneOption(id: "ring_clockwork_tea", label: "Clockwork Tea", file: "KadeRingClockworkTea", group: "Bright & playful"),
-        RingtoneOption(id: "ring_cobblestone", label: "Cobblestone", file: "KadeRingCobblestone", group: "Bright & playful"),
-        RingtoneOption(id: "ring_neon_pop", label: "Neon Pop", file: "KadeRingNeonPop", group: "Bright & playful"),
-        RingtoneOption(id: "ring_pixel_bounce", label: "Pixel Bounce", file: "KadeRingPixelBounce", group: "Bright & playful"),
-        RingtoneOption(id: "ring_retro_bounce", label: "Retro Bounce", file: "KadeRingRetroBounce", group: "Bright & playful"),
-        RingtoneOption(id: "ring_sunlit_steps", label: "Sunlit Steps", file: "KadeRingSunlitSteps", group: "Bright & playful"),
-        RingtoneOption(id: "ring_toy_waltz", label: "Toy Waltz", file: "KadeRingToyWaltz", group: "Bright & playful"),
-        RingtoneOption(id: "ring_toybox", label: "Toybox", file: "KadeRingToybox", group: "Bright & playful"),
-        RingtoneOption(id: "ring_toybox_groove", label: "Toybox Groove", file: "KadeRingToyboxGroove", group: "Bright & playful"),
-        RingtoneOption(id: "ring_whimsy_hop", label: "Whimsy Hop", file: "KadeRingWhimsyHop", group: "Bright & playful"),
+        RingtoneOption(id: "ring_arcade_token", label: "Arcade Token", file: "KadeRingArcadeToken", preview: "KadePrevArcadeToken", group: "Bright & playful"),
+        RingtoneOption(id: "ring_big_parade", label: "Big Parade", file: "KadeRingBigParade", preview: "KadePrevBigParade", group: "Bright & playful"),
+        RingtoneOption(id: "ring_cartoon_hop", label: "Cartoon Hop", file: "KadeRingCartoonHop", preview: "KadePrevCartoonHop", group: "Bright & playful"),
+        RingtoneOption(id: "ring_clockwork_tea", label: "Clockwork Tea", file: "KadeRingClockworkTea", preview: "KadePrevClockworkTea", group: "Bright & playful"),
+        RingtoneOption(id: "ring_cobblestone", label: "Cobblestone", file: "KadeRingCobblestone", preview: "KadePrevCobblestone", group: "Bright & playful"),
+        RingtoneOption(id: "ring_front_porch", label: "Front Porch", file: "KadeRingFrontPorch", preview: "KadePrevFrontPorch", group: "Bright & playful"),
+        RingtoneOption(id: "ring_high_score", label: "High Score", file: "KadeRingHighScore", preview: "KadePrevHighScore", group: "Bright & playful"),
+        RingtoneOption(id: "ring_jewelry_box", label: "Jewelry Box", file: "KadeRingJewelryBox", preview: "KadePrevJewelryBox", group: "Bright & playful"),
+        RingtoneOption(id: "ring_paper_boat", label: "Paper Boat", file: "KadeRingPaperBoat", preview: "KadePrevPaperBoat", group: "Bright & playful"),
+        RingtoneOption(id: "ring_roller_rink", label: "Roller Rink", file: "KadeRingRollerRink", preview: "KadePrevRollerRink", group: "Bright & playful"),
+        RingtoneOption(id: "ring_toybox", label: "Toybox", file: "KadeRingToybox", preview: "KadePrevToybox", group: "Bright & playful"),
         // Driving & bold
-        RingtoneOption(id: "ring_digital_bloom", label: "Digital Bloom", file: "KadeRingDigitalBloom", group: "Driving & bold"),
-        RingtoneOption(id: "ring_flute_drift", label: "Flute Drift", file: "KadeRingFluteDrift", group: "Driving & bold"),
-        RingtoneOption(id: "ring_neon_dusk", label: "Neon Dusk", file: "KadeRingNeonDusk", group: "Driving & bold"),
-        RingtoneOption(id: "ring_shadow_bounce", label: "Shadow Bounce", file: "KadeRingShadowBounce", group: "Driving & bold"),
-        RingtoneOption(id: "ring_street_oracle", label: "Street Oracle", file: "KadeRingStreetOracle", group: "Driving & bold"),
-        RingtoneOption(id: "ring_street_sonata", label: "Street Sonata", file: "KadeRingStreetSonata", group: "Driving & bold"),
-        RingtoneOption(id: "ring_string_drop", label: "String Drop", file: "KadeRingStringDrop", group: "Driving & bold"),
+        RingtoneOption(id: "ring_alarm_clock_trap", label: "Alarm Clock Trap", file: "KadeRingAlarmClockTrap", preview: "KadePrevAlarmClockTrap", group: "Driving & bold"),
+        RingtoneOption(id: "ring_bird_flute", label: "Bird Flute", file: "KadeRingBirdFlute", preview: "KadePrevBirdFlute", group: "Driving & bold"),
+        RingtoneOption(id: "ring_chess_club", label: "Chess Club", file: "KadeRingChessClub", preview: "KadePrevChessClub", group: "Driving & bold"),
+        RingtoneOption(id: "ring_curtain_rise", label: "Curtain Rise", file: "KadeRingCurtainRise", preview: "KadePrevCurtainRise", group: "Driving & bold"),
+        RingtoneOption(id: "ring_fast_lane", label: "Fast Lane", file: "KadeRingFastLane", preview: "KadePrevFastLane", group: "Driving & bold"),
+        RingtoneOption(id: "ring_rosin", label: "Rosin", file: "KadeRingRosin", preview: "KadePrevRosin", group: "Driving & bold"),
+        RingtoneOption(id: "ring_storm_chaser", label: "Storm Chaser", file: "KadeRingStormChaser", preview: "KadePrevStormChaser", group: "Driving & bold"),
         // World & cinematic
-        RingtoneOption(id: "ring_bamboo_mist", label: "Bamboo Mist", file: "KadeRingBambooMist", group: "World & cinematic"),
-        RingtoneOption(id: "ring_desert_beat", label: "Desert Beat", file: "KadeRingDesertBeat", group: "World & cinematic"),
-        RingtoneOption(id: "ring_fading_grace", label: "Fading Grace", file: "KadeRingFadingGrace", group: "World & cinematic"),
-        RingtoneOption(id: "ring_jade_mist", label: "Jade Mist", file: "KadeRingJadeMist", group: "World & cinematic"),
-        RingtoneOption(id: "ring_lantern_path", label: "Lantern Path", file: "KadeRingLanternPath", group: "World & cinematic"),
-        RingtoneOption(id: "ring_lotus_whisper", label: "Lotus Whisper", file: "KadeRingLotusWhisper", group: "World & cinematic"),
-        RingtoneOption(id: "ring_misty_river", label: "Misty River", file: "KadeRingMistyRiver", group: "World & cinematic"),
-        RingtoneOption(id: "ring_morning_raga", label: "Morning Raga", file: "KadeRingMorningRaga", group: "World & cinematic"),
-        RingtoneOption(id: "ring_oasis_call", label: "Oasis Call", file: "KadeRingOasisCall", group: "World & cinematic"),
-        RingtoneOption(id: "ring_silk_beat", label: "Silk Beat", file: "KadeRingSilkBeat", group: "World & cinematic"),
+        RingtoneOption(id: "ring_bamboo_grove", label: "Bamboo Grove", file: "KadeRingBambooGrove", preview: "KadePrevBambooGrove", group: "World & cinematic"),
+        RingtoneOption(id: "ring_caravan", label: "Caravan", file: "KadeRingCaravan", preview: "KadePrevCaravan", group: "World & cinematic"),
+        RingtoneOption(id: "ring_dragon_boat", label: "Dragon Boat", file: "KadeRingDragonBoat", preview: "KadePrevDragonBoat", group: "World & cinematic"),
+        RingtoneOption(id: "ring_jade_dragon", label: "Jade Dragon", file: "KadeRingJadeDragon", preview: "KadePrevJadeDragon", group: "World & cinematic"),
+        RingtoneOption(id: "ring_misty_river", label: "Misty River", file: "KadeRingMistyRiver", preview: "KadePrevMistyRiver", group: "World & cinematic"),
+        RingtoneOption(id: "ring_morning_raga", label: "Morning Raga", file: "KadeRingMorningRaga", preview: "KadePrevMorningRaga", group: "World & cinematic"),
+        RingtoneOption(id: "ring_paper_lantern", label: "Paper Lantern", file: "KadeRingPaperLantern", preview: "KadePrevPaperLantern", group: "World & cinematic"),
+        RingtoneOption(id: "ring_sand_drum", label: "Sand Drum", file: "KadeRingSandDrum", preview: "KadePrevSandDrum", group: "World & cinematic"),
+        RingtoneOption(id: "ring_tea_garden", label: "Tea Garden", file: "KadeRingTeaGarden", preview: "KadePrevTeaGarden", group: "World & cinematic"),
+        RingtoneOption(id: "ring_weeping_strings", label: "Weeping Strings", file: "KadeRingWeepingStrings", preview: "KadePrevWeepingStrings", group: "World & cinematic"),
     ]
 
     /// Group order for the picker sections — a VoiceOver user jumps these
@@ -768,7 +772,10 @@ extension SettingsView {
     /// Plays the actual ringtone file, replacing any running preview. Quiet-
     /// failing on purpose: a missing file should never break Settings.
     func previewRingtone(_ tone: RingtoneOption) {
-        guard let url = Bundle.main.url(forResource: tone.file, withExtension: "caf") else { return }
+        // Full-length preview when the tone has one; the 29s ring caf otherwise.
+        let url = tone.preview.flatMap { Bundle.main.url(forResource: $0, withExtension: "m4a") }
+            ?? Bundle.main.url(forResource: tone.file, withExtension: "caf")
+        guard let url else { return }
         ringtonePlayer?.stop()
         ringtonePlayer = try? AVAudioPlayer(contentsOf: url)
         ringtonePlayer?.play()
