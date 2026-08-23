@@ -143,6 +143,9 @@ struct ConversationDetailView: View {
     // frames during a send; cleared when the real message (with its own
     // permanent think part) replaces it at final.
     @State private var liveThink = ""
+    /// Part 91.4 — the last tool the agent picked up, in words. Drives the
+    /// on-screen "working" line during a tool-heavy turn; cleared per turn.
+    @State private var liveToolNote = ""
     /// Aug 5 2026 crash hardening: raw think chunks accumulate here and get
     /// sanitized + published to `liveThink` at most every 250ms. Deep thinks
     /// stream ~34 chunks/second; sanitizing and re-laying-out a growing Text
@@ -1316,6 +1319,19 @@ struct ConversationDetailView: View {
                     }
                     if !liveReply.isEmpty, case .sending = sendState {
                         liveReplyBubble
+                    }
+                    /* Part 91.4 — the working line. Shown only while a tool
+                     * is the ONLY thing happening: once reply text starts
+                     * arriving, the text is the better signal and this would
+                     * just be noise competing with it. Plain Text, no
+                     * animation — a spinner in a transcript commit is what
+                     * builds 216 through 225 were about. */
+                    if !liveToolNote.isEmpty, liveReply.isEmpty, case .sending = sendState {
+                        Text("\(agentDisplayLabel) is \(liveToolNote)…")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("\(agentDisplayLabel) is \(liveToolNote)")
                     }
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
@@ -2957,6 +2973,7 @@ struct ConversationDetailView: View {
              * prologue. */
             liveThink = ""
             liveReply = ""
+            liveToolNote = ""
             live.resetTurn()
             liveThinkExpanded = false
             await Self.nextRunLoopTurn()
@@ -2967,6 +2984,37 @@ struct ConversationDetailView: View {
                 parentMessageId: parentId,
                 agentId: selectedAgentId,
                 files: files,
+                onTool: { spoken in
+                    /* PART 91.4 — SAY THAT A TOOL IS RUNNING. Until now this
+                     * stream never read on_run_step, so an agent that thought
+                     * for a second and then worked tools for two minutes gave
+                     * the phone nothing at all: no text, no thinking, no
+                     * sound. Kiana rarely showed it — she answers fast off one
+                     * tool. Forge has sixty-seven and chains them, and Kade
+                     * asked to trust him from her phone, which he cannot earn
+                     * while the app looks dead.
+                     *
+                     * Manners, because this is an interruption on a screen
+                     * reader: LOW priority so it waits for a gap in speech,
+                     * at most one every four seconds, and never the same tool
+                     * twice running. A six-call round becomes one line, not
+                     * six. Also mirrored into the on-screen status so a
+                     * sighted glance and VoiceOver hear the same thing. */
+                    guard !spoken.isEmpty else { return }
+                    liveToolNote = spoken
+                    guard UIAccessibility.isVoiceOverRunning,
+                          spoken != live.lastToolSpoken,
+                          Date().timeIntervalSince(live.lastToolAnnounce) >= 4 else { return }
+                    live.lastToolAnnounce = Date()
+                    live.lastToolSpoken = spoken
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: NSAttributedString(
+                            string: "\(agentDisplayLabel) is \(spoken).",
+                            attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                        )
+                    )
+                },
                 onText: { chunk in
                     // Live reply streaming: coalesced to one sanitize+publish
                     // per 250ms (the think lane's exact crash-hardening
@@ -3065,6 +3113,7 @@ struct ConversationDetailView: View {
             KadeBreadcrumbs.drop("stream finished (reply \(live.replyRaw.count) chars, think \(live.thinkRaw.count) chars)")
             liveThink = ""
             liveReply = ""
+            liveToolNote = ""
             live.resetTurn()
             liveThinkExpanded = false
             conversationId = resolvedConversationId
@@ -3176,6 +3225,7 @@ struct ConversationDetailView: View {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
             liveThink = ""
             liveReply = ""
+            liveToolNote = ""
             live.resetTurn()
             liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was
@@ -3947,6 +3997,12 @@ private final class LiveStreamBuffers {
     var crumbedFirstThink = false
     var crumbedFlushDeferred = false
 
+    /// Part 91.4 — tool announcements. `lastToolAnnounce` throttles so a
+    /// six-tool round is not six interruptions in one breath, and
+    /// `lastToolSpoken` suppresses the same tool announced twice running.
+    var lastToolAnnounce = Date.distantPast
+    var lastToolSpoken = ""
+
     /// Exactly the four fields the old inline reset cleared, no more: the two
     /// buffers, the write-progress timer, and the thinking-announced latch.
     /// The flush-scheduled guards are deliberately LEFT ALONE — an
@@ -3956,6 +4012,8 @@ private final class LiveStreamBuffers {
         replyRaw = ""
         thinkRaw = ""
         lastWriteProgressAnnounce = .distantPast
+        lastToolAnnounce = .distantPast
+        lastToolSpoken = ""
         announcedThinking = false
         crumbedFirstText = false
         crumbedFirstThink = false

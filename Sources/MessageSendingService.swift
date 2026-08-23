@@ -105,7 +105,8 @@ final class MessageSendingService: ObservableObject {
         agentId: String?,
         files: [[String: Any]]? = nil,
         onText: ((String) -> Void)? = nil,
-        onThink: ((String) -> Void)? = nil
+        onThink: ((String) -> Void)? = nil,
+        onTool: ((String) -> Void)? = nil
     ) async throws -> String {
         let start = try await startGeneration(
             text: text,
@@ -122,7 +123,7 @@ final class MessageSendingService: ObservableObject {
         KadeBreadcrumbs.drop("request dispatched")
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
-        try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText)
+        try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText, onTool: onTool)
         return start.conversationId
     }
 
@@ -273,7 +274,77 @@ final class MessageSendingService: ObservableObject {
         let data: DataBox?
     }
 
-    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil) async throws {
+    /* PART 91.4 — WHY THE PHONE GOES QUIET WHEN AN AGENT USES A TOOL.
+     *
+     * This stream handled exactly three events: on_reasoning_delta,
+     * on_message_delta and attachment. The server ALSO sends on_run_step every
+     * time the agent picks up a tool, and nothing here ever read it — so a turn
+     * that thinks for a second and then spends two minutes running tools
+     * looked, sounded and felt like a dead app. Kiana rarely exposed it: she
+     * answers fast and usually reaches for at most one tool. Forge has
+     * sixty-seven and chains them freely, which turns the gap from a blip into
+     * minutes of silence on Kade's phone.
+     *
+     * Silence and death are indistinguishable by ear. That rule is written all
+     * over this platform, and this was the last place still breaking it. */
+    private struct RunStepFrame: Decodable {
+        struct DataBox: Decodable {
+            struct StepDetails: Decodable {
+                struct ToolCall: Decodable {
+                    struct Fn: Decodable { let name: String? }
+                    let name: String?
+                    let function: Fn?
+                    var toolName: String? { name ?? function?.name }
+                }
+                let type: String?
+                let tool_calls: [ToolCall]?
+            }
+            let stepDetails: StepDetails?
+        }
+        let event: String?
+        let data: DataBox?
+    }
+
+    /// Tool names are plumbing (`startHarnessRun_action_a2FkZS1oYX`,
+    /// `kade_read_page`). This turns one into something worth hearing.
+    /// An unknown name still beats silence, so the fallback tidies rather than
+    /// hides: drop the action suffix, split the snake case, say it plainly.
+    static func spokenToolName(_ raw: String) -> String {
+        let known: [String: String] = [
+            "web_search": "searching the web",
+            "file_search": "searching your files",
+            "kade_read_page": "reading a page",
+            "kade_research": "starting deep research",
+            "kade_memory_search": "checking memory",
+            "kade_living_memory": "checking memory",
+            "kade_weather": "checking the weather",
+            "kade_news": "checking the news",
+            "kade_wikipedia": "looking it up",
+            "kade_notify": "sending a notification",
+            "kade_feedback": "filing that with Kade",
+            "kade_code": "running some code",
+            "kade_errand": "working the errand desk",
+            "kade_phone_call": "placing a call",
+            "flux": "making a picture",
+        ]
+        var base = raw
+        if let r = base.range(of: "_action_") { base = String(base[base.startIndex..<r.lowerBound]) }
+        if let hit = known[base] { return hit }
+        var out = ""
+        for ch in base {
+            if ch == "_" {
+                out.append(" ")
+            } else if ch.isUppercase && !out.isEmpty && out.last != " " {
+                out.append(" ")
+                out.append(Character(ch.lowercased()))
+            } else {
+                out.append(ch)
+            }
+        }
+        return out.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) async throws {
         var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // Generous on purpose: the generation job lives server-side,
@@ -331,6 +402,19 @@ final class MessageSendingService: ObservableObject {
                     for part in parts where part.type == "text" {
                         if let text = part.text, !text.isEmpty {
                             onText(text)
+                        }
+                    }
+                }
+
+                /* The tool announcement: one line per tool the agent picks
+                 * up, so a long chain reads as progress instead of a hang. */
+                if let onTool,
+                   let frame = try? decoder.decode(RunStepFrame.self, from: jsonData),
+                   frame.event == "on_run_step",
+                   let calls = frame.data?.stepDetails?.tool_calls {
+                    for call in calls {
+                        if let n = call.toolName, !n.isEmpty {
+                            onTool(Self.spokenToolName(n))
                         }
                     }
                 }
