@@ -75,6 +75,23 @@ final class VoiceService: NSObject, ObservableObject {
     /// path is byte-identical in behavior: nil/nil/nil.
     private var speakQueue: [(text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)] = []
     private var isPumping = false
+    /* PART 91.9 — THE SECOND PUMP, and it is why she heard "a couple of
+     * seconds of each chunk and then the next one."
+     *
+     * `isPumping` is set INSIDE pumpSpeakQueue, which runs in a Task — so it
+     * is still false when enqueueSpeak returns. Enqueue twice before that Task
+     * gets a turn and BOTH calls pass the guard and BOTH spawn a pump. Two
+     * pumps then race the same queue, and since `currentPlayer` is a single
+     * property, the second player overwrites the first — dropping its only
+     * strong reference, so ARC deallocates a player that is still speaking.
+     * The clip dies a second or two in and the next one starts.
+     *
+     * This race has always been here. Nothing ever triggered it because
+     * enqueueSpeak was called once per reply. Streaming speech calls it
+     * several times in a row from one synchronous loop, which is exactly the
+     * condition it needed. `pumpScheduled` is set SYNCHRONOUSLY, before the
+     * Task exists, so the second caller can see it. */
+    private var pumpScheduled = false
 
     /// Playback rate for spoken replies. 1.0 is the voice's own natural
     /// pace; the picker offers 0.75x through 2x. Applied via
@@ -406,8 +423,9 @@ final class VoiceService: NSObject, ObservableObject {
         guard !trimmed.isEmpty else { return }
         supersedePausedClip()
         speakQueue.append((trimmed, agentId, agentName, nil, nil, key, nil))
-        guard !isPumping else { return }
-        Task { await pumpSpeakQueue() }
+        guard !isPumping, !pumpScheduled else { return }
+        pumpScheduled = true
+        Task { await pumpSpeakQueue(); pumpScheduled = false }
     }
 
     /// Aug 4 2026 evening (her report, same day the Pause button shipped:
@@ -443,8 +461,9 @@ final class VoiceService: NSObject, ObservableObject {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             supersedePausedClip()
             speakQueue.append((trimmed, nil, nil, voiceId, rate, nil, continuation))
-            guard !isPumping else { return }
-            Task { await self.pumpSpeakQueue() }
+            guard !isPumping, !pumpScheduled else { return }
+            pumpScheduled = true
+            Task { await self.pumpSpeakQueue(); self.pumpScheduled = false }
         }
     }
 
@@ -615,6 +634,16 @@ final class VoiceService: NSObject, ObservableObject {
         prepareOutputSession()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             do {
+                /* Belt and braces for the same class of fault: if a
+                 * continuation is somehow still parked here, resume it before
+                 * overwriting, or whoever is awaiting it waits forever. With
+                 * the pump guard above this should never fire — but a silent
+                 * hang is the worst way to find out it did. */
+                if let stranded = playbackContinuation {
+                    playbackContinuation = nil
+                    currentPlayer?.stop()
+                    stranded.resume()
+                }
                 let player = try AVAudioPlayer(data: data)
                 player.delegate = self
                 // `enableRate` MUST be set before `play()` -- setting it
