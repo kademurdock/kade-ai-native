@@ -2984,37 +2984,6 @@ struct ConversationDetailView: View {
                 parentMessageId: parentId,
                 agentId: selectedAgentId,
                 files: files,
-                onTool: { spoken in
-                    /* PART 91.4 — SAY THAT A TOOL IS RUNNING. Until now this
-                     * stream never read on_run_step, so an agent that thought
-                     * for a second and then worked tools for two minutes gave
-                     * the phone nothing at all: no text, no thinking, no
-                     * sound. Kiana rarely showed it — she answers fast off one
-                     * tool. Forge has sixty-seven and chains them, and Kade
-                     * asked to trust him from her phone, which he cannot earn
-                     * while the app looks dead.
-                     *
-                     * Manners, because this is an interruption on a screen
-                     * reader: LOW priority so it waits for a gap in speech,
-                     * at most one every four seconds, and never the same tool
-                     * twice running. A six-call round becomes one line, not
-                     * six. Also mirrored into the on-screen status so a
-                     * sighted glance and VoiceOver hear the same thing. */
-                    guard !spoken.isEmpty else { return }
-                    liveToolNote = spoken
-                    guard UIAccessibility.isVoiceOverRunning,
-                          spoken != live.lastToolSpoken,
-                          Date().timeIntervalSince(live.lastToolAnnounce) >= 4 else { return }
-                    live.lastToolAnnounce = Date()
-                    live.lastToolSpoken = spoken
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: NSAttributedString(
-                            string: "\(agentDisplayLabel) is \(spoken).",
-                            attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
-                        )
-                    )
-                },
                 onText: { chunk in
                     // Live reply streaming: coalesced to one sanitize+publish
                     // per 250ms (the think lane's exact crash-hardening
@@ -3102,6 +3071,37 @@ struct ConversationDetailView: View {
                             )
                         )
                     }
+                },
+                onTool: { spoken in
+                    /* PART 91.4 — SAY THAT A TOOL IS RUNNING. Until now this
+                     * stream never read on_run_step, so an agent that thought
+                     * for a second and then worked tools for two minutes gave
+                     * the phone nothing at all: no text, no thinking, no
+                     * sound. Kiana rarely showed it — she answers fast off one
+                     * tool. Forge has sixty-seven and chains them, and Kade
+                     * asked to trust him from her phone, which he cannot earn
+                     * while the app looks dead.
+                     *
+                     * Manners, because this is an interruption on a screen
+                     * reader: LOW priority so it waits for a gap in speech,
+                     * at most one every four seconds, and never the same tool
+                     * twice running. A six-call round becomes one line, not
+                     * six. Also mirrored into the on-screen status so a
+                     * sighted glance and VoiceOver hear the same thing. */
+                    guard !spoken.isEmpty else { return }
+                    liveToolNote = spoken
+                    guard UIAccessibility.isVoiceOverRunning,
+                          spoken != live.lastToolSpoken,
+                          Date().timeIntervalSince(live.lastToolAnnounce) >= 4 else { return }
+                    live.lastToolAnnounce = Date()
+                    live.lastToolSpoken = spoken
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: NSAttributedString(
+                            string: "\(agentDisplayLabel) is \(spoken).",
+                            attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                        )
+                    )
                 }
             )
             // Build 205: her Aug-15 kill left a NINETY-SECOND hole between
