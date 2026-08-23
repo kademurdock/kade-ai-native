@@ -73,7 +73,9 @@ final class VoiceService: NSObject, ObservableObject {
     /// completion so a caller can AWAIT one line finishing (auto-advance
     /// paces itself on real playback, not guesses). Chat's enqueueSpeak
     /// path is byte-identical in behavior: nil/nil/nil.
-    private var speakQueue: [(text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)] = []
+    /// Part 91.10 — named so the prefetcher can take one whole.
+    typealias SpeakItem = (text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)
+    private var speakQueue: [SpeakItem] = []
     private var isPumping = false
     /* PART 91.9 — THE SECOND PUMP, and it is why she heard "a couple of
      * seconds of each chunk and then the next one."
@@ -92,6 +94,11 @@ final class VoiceService: NSObject, ObservableObject {
      * condition it needed. `pumpScheduled` is set SYNCHRONOUSLY, before the
      * Task exists, so the second caller can see it. */
     private var pumpScheduled = false
+    /* Part 91.10 — the pump raises this while it holds a prefetched clip, so
+     * stopSpeaking can tell the pump to drop what it is carrying. The pump
+     * owns the prefetch task; stop cannot reach into the loop, so it leaves a
+     * flag the loop checks the moment it wakes. */
+    private var cancelGeneration = 0
 
     /// Playback rate for spoken replies. 1.0 is the voice's own natural
     /// pace; the picker offers 0.75x through 2x. Applied via
@@ -475,6 +482,11 @@ final class VoiceService: NSObject, ObservableObject {
         // forever on a continuation nobody owns anymore.
         for item in speakQueue { item.completion?.resume() }
         speakQueue.removeAll()
+        /* Part 91.10 — invalidate anything the pump has already fetched or is
+         * fetching. Without this, a stop mid-reply still plays the sentence
+         * that was queued up behind it: she turns Read Aloud off and hears one
+         * more sentence anyway, which reads as the switch being broken. */
+        cancelGeneration &+= 1
         currentPlayer?.stop()
         currentPlayer = nil
         playbackContinuation?.resume()
@@ -544,17 +556,49 @@ final class VoiceService: NSObject, ObservableObject {
     private func pumpSpeakQueue() async {
         isPumping = true
         isSpeaking = true
-        while !speakQueue.isEmpty {
-            let item = speakQueue.removeFirst()
-            await speakOne(
-                text: item.text,
-                agentId: item.agentId,
-                agentName: item.agentName,
-                explicitVoice: item.explicitVoice,
-                explicitRate: item.explicitRate,
-                key: item.key
-            )
-            item.completion?.resume()
+        let generation = cancelGeneration
+        /* One clip in flight ahead of the one being spoken. Not two: a deeper
+         * queue would synthesize text the user may never hear (they stop, or
+         * a new reply supersedes it) and every one of those costs real money
+         * and real characters against the TTS meter. One is what it takes to
+         * cover the gap; more is waste. */
+        var ahead: (item: SpeakItem, task: Task<Data?, Never>)?
+        while !speakQueue.isEmpty || ahead != nil {
+            let current: (item: SpeakItem, task: Task<Data?, Never>)
+            if let a = ahead {
+                current = a
+                ahead = nil
+            } else {
+                let item = speakQueue.removeFirst()
+                current = (item, prefetch(item))
+            }
+            // Start the NEXT one now, so its two seconds overlap with this
+            // one's four seconds of playback instead of following them.
+            if !speakQueue.isEmpty {
+                let next = speakQueue.removeFirst()
+                ahead = (next, prefetch(next))
+            }
+            let data = await current.task.value
+            // Stopped while that was in flight? Drop it, resume the waiter,
+            // and leave — never speak past a stop.
+            if generation != cancelGeneration {
+                current.task.cancel()
+                current.item.completion?.resume()
+                ahead?.task.cancel()
+                ahead?.item.completion?.resume()
+                isSpeaking = false
+                isPumping = false
+                return
+            }
+            if let data {
+                await playAudio(data, key: current.item.key)
+            } else {
+                // Session 23: a failed synth used to be PURE silence --
+                // indistinguishable from read-aloud never firing at all. The
+                // error boop (gated by the Sound switch) says which half died.
+                Earcons.shared.play(.error)
+            }
+            current.item.completion?.resume()
             nowPlayingKey = nil
             isPaused = false
         }
@@ -562,17 +606,27 @@ final class VoiceService: NSObject, ObservableObject {
         isPumping = false
     }
 
-    /// One clip failing to fetch or play never blocks the rest of the
-    /// queue -- matches the web app's own `try{...}catch(e){ /* one bad
-    /// clip never blocks the queue */ }` behavior exactly.
-    private func speakOne(
+    /* PART 91.10 — SYNTHESIS SPLIT OUT OF PLAYBACK, so the next sentence can
+     * be fetched while the current one is still being spoken.
+     *
+     * Her report on build 155: "long gappy silences between chunks." Measured
+     * against the live endpoint: a ~95-character sentence takes about two
+     * seconds to synthesize and yields about four seconds of audio. The pump
+     * was strictly serial — fetch, play, fetch, play — so every sentence
+     * boundary cost a full two-second round trip of dead air. One big
+     * synthesis used to pay that once; streaming pays it N times.
+     *
+     * Because playback (4s) comfortably outlasts synthesis (2s), fetching ONE
+     * ahead hides the cost completely. This is the same trick the phone lane
+     * has always used, and the reason a call never has gaps between
+     * sentences. */
+    private func synthesize(
         text: String,
         agentId: String?,
         agentName: String?,
-        explicitVoice: String? = nil,
-        explicitRate: Double? = nil,
-        key: String? = nil
-    ) async {
+        explicitVoice: String?,
+        explicitRate: Double?
+    ) async -> Data? {
         // An explicit voice (Debate Room cast snapshot) skips the network
         // resolve entirely; an empty-string voiceId means "uncast" and
         // falls through to the resolver exactly like nil.
@@ -589,15 +643,24 @@ final class VoiceService: NSObject, ObservableObject {
 
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {
-            // Session 23: a failed synth used to be PURE silence --
-            // indistinguishable from read-aloud never firing at all (the
-            // exact ambiguity that made Kade's deep-think report
-            // undiagnosable at a distance). The error boop (gated by the
-            // Sound switch) makes "no voice" say which half died.
-            Earcons.shared.play(.error)
-            return
+            return nil
         }
-        await playAudio(data, key: key)
+        return data
+    }
+
+    /// Kick a synthesis off now and hand back the handle. Nothing awaits this
+    /// until its turn comes, which is the whole point.
+    private func prefetch(_ item: SpeakItem) -> Task<Data?, Never> {
+        Task { [weak self] in
+            guard let self else { return nil }
+            return await self.synthesize(
+                text: item.text,
+                agentId: item.agentId,
+                agentName: item.agentName,
+                explicitVoice: item.explicitVoice,
+                explicitRate: item.explicitRate
+            )
+        }
     }
 
     /// FIX (Kade, session 14): "if the auto play is switched on in a text
