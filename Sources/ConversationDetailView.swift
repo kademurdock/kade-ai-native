@@ -934,6 +934,15 @@ struct ConversationDetailView: View {
         // watchdog drag them out.
         .onChange(of: voiceService.isClipPlaying) { _, playing in
             if playing, awaitingSpokenReply { endSpeechWait() }
+            /* Part 91.7 (Fable review) — the streaming-speech twin of the
+             * session-28 handoff. With "start speaking as she writes" on, the
+             * first clip now starts while sendState is still .sending — a case
+             * session 28 could not have imagined, so its watcher (gated on
+             * awaitingSpokenReply, which is only set at completion) never
+             * fired and the waiting ticks kept ticking UNDER her voice. The
+             * moment any clip starts during a send, the voice owns the
+             * soundstage. stopWaitingLoop is safe to call redundantly. */
+            if playing, case .sending = sendState { Earcons.shared.stopWaitingLoop() }
         }
         .onChange(of: voiceService.isSpeaking) { was, speaking in
             if was, !speaking, awaitingSpokenReply { endSpeechWait() }

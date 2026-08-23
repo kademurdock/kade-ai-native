@@ -28,16 +28,25 @@ struct KadeAssetItem: Decodable, Identifiable, Equatable {
     let model: String?
     let createdAt: String?
     let by: String?
+    /// Part 91.7 — a document's generation-time spoken summary (what the
+    /// spreadsheet's columns are, what the totals say). Optional so every
+    /// pre-existing asset decodes exactly as before.
+    let spoken: String?
 
     var kindLabel: String {
         switch kind {
         case "video": return "Video"
         case "audio": return "Song"
+        case "document": return "Document"
         default: return "Picture"
         }
     }
     var playable: Bool { kind == "video" || kind == "audio" }
     var bestText: String {
+        // A document's spoken summary beats everything: it says what is IN
+        // the file, which is the only thing that makes a file real by ear.
+        let s = (spoken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.isEmpty { return s }
         let d = (description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !d.isEmpty { return d }
         let p = (prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -223,7 +232,9 @@ private struct CreationRow: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(isSaving)
-                .accessibilityHint("Downloads it and opens the share sheet — Save \(asset.kind == "video" ? "Video" : "Image") puts it in your Photos.")
+                .accessibilityHint(asset.kind == "document"
+                    ? "Downloads the file and opens the share sheet — save it to Files, or send it to someone."
+                    : "Downloads it and opens the share sheet — Save \(asset.kind == "video" ? "Video" : "Image") puts it in your Photos.")
                 if let onToggleShare {
                     Button {
                         onToggleShare()
