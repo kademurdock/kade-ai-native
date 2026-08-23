@@ -319,9 +319,15 @@ struct ContentView: View {
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Status").font(.headline)
+            /* PART 91 — flagged for contrast by Apple's audit. `.secondary` is
+             * about 4.4:1 on white, which just misses the 4.5:1 that text this
+             * size needs; the system reads it as decorative and this line is
+             * not decorative — it is how anybody tells whether they are signed
+             * in. Primary at the same size and weight: same layout, same
+             * spacing, one shade darker. */
             Text(statusText)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.updatesFrequently)
@@ -380,11 +386,31 @@ struct ContentView: View {
             // rather than re-implementing the form: the page already carries
             // the honeypot + rate limiting, and a request rings Kade's phone
             // either way.
+            /* PART 91 — APPLE'S OWN AUDIT FLAGGED THIS ONE TWICE, and it was
+             * the only element on the screen to earn two findings:
+             *   contrast too low to read   ("not high enough unless font size is larger")
+             *   tap target too small       ("too small for user to interact")
+             * It is the door a new family member walks through, it was hard to
+             * see AND hard to press, and nothing on this platform could find
+             * that before the audit lane existed. Neither Kade nor a screen
+             * reader can hear a contrast ratio.
+             *
+             * Accent-coloured subheadline text is roughly 3:1 against the
+             * background — fine for large text, short of the 4.5:1 that text
+             * this size needs. Primary with an underline clears it outright and
+             * still reads as a link to a sighted user. The 44-point frame plus
+             * contentShape is Apple's own minimum target, and the shape matters
+             * as much as the height: without it the tappable area is the glyphs
+             * themselves, not the row. */
             Button {
                 showingAskToJoin = true
             } label: {
                 Text("New here without a code? Ask to join")
-                    .font(.subheadline)
+                    .font(.callout)
+                    .underline()
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .accessibilityHint("Opens the request page. Kade approves people herself — if she knows you, expect to hear back.")
             .sheet(isPresented: $showingAskToJoin) {
