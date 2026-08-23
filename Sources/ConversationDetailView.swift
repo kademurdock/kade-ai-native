@@ -146,6 +146,16 @@ struct ConversationDetailView: View {
     /// Part 91.4 — the last tool the agent picked up, in words. Drives the
     /// on-screen "working" line during a tool-heavy turn; cleared per turn.
     @State private var liveToolNote = ""
+    /* PART 91.6 — speak the reply while it is still being written. Her ask,
+     * more than once: "there's a hell of a break between ding, message
+     * arrived, and tts speaking the message out loud." The engine for this has
+     * existed on the PHONE lane since the Twilio work (voice-stream.js's
+     * SentenceStreamer, first audio in 2-3s instead of 20-30s); the app never
+     * got it. `spokenSoFar` tracks what the streamer already handed to the
+     * voice queue so the reply is never spoken twice. */
+    @State private var speechStreamer = SpeechStreamer()
+    @State private var spokenSoFar = 0
+    @AppStorage("kade.speakWhileWriting") private var speakWhileWriting = true
     /// Aug 5 2026 crash hardening: raw think chunks accumulate here and get
     /// sanitized + published to `liveThink` at most every 250ms. Deep thinks
     /// stream ~34 chunks/second; sanitizing and re-laying-out a growing Text
@@ -2974,6 +2984,8 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            speechStreamer = SpeechStreamer()
+            spokenSoFar = 0
             live.resetTurn()
             liveThinkExpanded = false
             await Self.nextRunLoopTurn()
@@ -2996,6 +3008,26 @@ struct ConversationDetailView: View {
                     }
                     live.replyRaw += chunk
                     scheduleLiveReplyFlush()
+                    /* Hand finished sentences to the voice queue AS THEY LAND.
+                     * VoiceService.enqueueSpeak already plays strictly in
+                     * order, so this only decides WHEN a piece is ready — it
+                     * is not a second voice system. Guarded on Read Aloud
+                     * being on, so a silent chat stays silent, and on the
+                     * Settings switch so it can be turned off without a
+                     * build. Nothing here touches the transcript commit: the
+                     * 216-to-225 freeze hunt is why that sentence is written
+                     * down rather than assumed. */
+                    if readAloudEnabled, speakWhileWriting {
+                        for piece in speechStreamer.push(chunk) {
+                            spokenSoFar += piece.count
+                            voiceService.enqueueSpeak(
+                                text: piece,
+                                agentId: selectedAgentId,
+                                agentName: agentDisplayLabel,
+                                key: nil
+                            )
+                        }
+                    }
                     if spokenThinkingProgress,
                        UIAccessibility.isVoiceOverRunning,
                        Date().timeIntervalSince(live.lastWriteProgressAnnounce) >= 20,
@@ -3114,6 +3146,8 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            speechStreamer = SpeechStreamer()
+            spokenSoFar = 0
             live.resetTurn()
             liveThinkExpanded = false
             conversationId = resolvedConversationId
@@ -3169,7 +3203,24 @@ struct ConversationDetailView: View {
             // (see VoiceService.speakOne) instead of indistinguishable
             // from "never fired." If her next deep turn stays silent, an
             // error boop = TTS half; pure silence = trigger half.
-            if readAloudEnabled, let reply = messages.last(where: { !$0.isCreatedByUser }) {
+            /* PART 91.6 — if the streamer already spoke this reply as it was
+             * written, the tail is all that is left. Speaking the whole thing
+             * again here is how a fix like this becomes "she said it twice",
+             * which is worse than the silence it replaced. `spokenSoFar` is
+             * character-counted rather than compared, because the streamer
+             * adds carried steering tags the stored reply does not have. */
+            let streamedThisTurn = readAloudEnabled && speakWhileWriting && spokenSoFar > 0
+            if streamedThisTurn {
+                for piece in speechStreamer.flush() {
+                    voiceService.enqueueSpeak(
+                        text: piece,
+                        agentId: selectedAgentId,
+                        agentName: agentDisplayLabel,
+                        key: nil
+                    )
+                }
+            }
+            if !streamedThisTurn, readAloudEnabled, let reply = messages.last(where: { !$0.isCreatedByUser }) {
                 // FIX (session 21, Kade: "Whit replies still come back as
                 // Kiana"). Attribute the spoken reply to whoever ACTUALLY
                 // authored it (`reply.agentId` / `reply.speakerLabel`), not to
@@ -3226,6 +3277,8 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            speechStreamer = SpeechStreamer()
+            spokenSoFar = 0
             live.resetTurn()
             liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was

@@ -43,6 +43,10 @@ struct SettingsView: View {
     /// every 20 seconds). Announcement-only; thoughts are never read by
     /// TTS. Same key ConversationDetailView reads.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
+    // Part 91.6 — the streaming-speech switch. Default ON because it strictly
+    // shortens the wait; here as a switch because a voice change is the kind
+    // of thing that should be undoable without a TestFlight build.
+    @AppStorage("kade.speakWhileWriting") private var speakWhileWriting = true
 
     /// Build 217: shared with ConversationDetailView by key. See its own
     /// declaration there for what the two answers mean.
@@ -222,6 +226,7 @@ struct SettingsView: View {
         Section {
             voiceDefaultRow(searchStyle: false)
             thinkingProgressRow(searchStyle: false)
+            speakWhileWritingRow(searchStyle: false)
             whisperRow(searchStyle: false)
             speedRow(searchStyle: false)
             pronunciationRow(searchStyle: false)
@@ -407,7 +412,7 @@ struct SettingsView: View {
     /// person types the word THEY have, not the word the screen has.
     private enum SettingRow: String, CaseIterable, Identifiable {
         case mainAgent, ringtone
-        case voiceDefault, thinkingProgress, whisper, speed, pronunciation
+        case voiceDefault, thinkingProgress, speakWhileWriting, whisper, speed, pronunciation
         case longTaskPing, brief
         case memories, logbook
         case highContrast, font, spacing
@@ -425,6 +430,7 @@ struct SettingsView: View {
             case .ringtone: return "Agent call ringtone"
             case .voiceDefault: return "Voice messages by default"
             case .thinkingProgress: return "Spoken thinking progress"
+            case .speakWhileWriting: return "Start speaking as she writes"
             case .whisper: return "Whisper mode"
             case .speed: return "Voice message speed"
             case .pronunciation: return "Pronunciation Dictionary"
@@ -455,7 +461,7 @@ struct SettingsView: View {
             switch self {
             case .mainAgent: return "Main agent"
             case .ringtone: return "Calls"
-            case .voiceDefault, .thinkingProgress, .whisper, .speed, .pronunciation: return "Voice & Audio"
+            case .voiceDefault, .thinkingProgress, .speakWhileWriting, .whisper, .speed, .pronunciation: return "Voice & Audio"
             case .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook: return "Memory"
             case .highContrast, .font, .spacing: return "Accessibility"
@@ -473,6 +479,7 @@ struct SettingsView: View {
             case .ringtone: return "ringtone ring rings tone tones sound call calls phone marimba preview stop music"
             case .voiceDefault: return "voice messages read aloud speak spoken tts audio default on"
             case .thinkingProgress: return "thinking progress deep think spoken voiceover announce"
+            case .speakWhileWriting: return "speak while writing streaming voice sentence early start talking sooner latency wait silence"
             case .whisper: return "whisper quiet night hushed gentle soft volume"
             case .speed: return "speed rate fast slow playback voice quicker talk faster"
             case .pronunciation: return "pronunciation pronounce names dictionary say saying word words"
@@ -540,6 +547,7 @@ struct SettingsView: View {
         case .ringtone: ringtoneRow(searchStyle: true)
         case .voiceDefault: voiceDefaultRow(searchStyle: true)
         case .thinkingProgress: thinkingProgressRow(searchStyle: true)
+        case .speakWhileWriting: speakWhileWritingRow(searchStyle: true)
         case .whisper: whisperRow(searchStyle: true)
         case .speed: speedRow(searchStyle: true)
         case .pronunciation: pronunciationRow(searchStyle: true)
@@ -616,6 +624,13 @@ struct SettingsView: View {
             Text(searchStyle ? searchLabel(.thinkingProgress, "Spoken thinking progress") : "Spoken thinking progress")
         }
         .accessibilityHint("During a long Deep Think, VoiceOver quietly says how much thinking has streamed so far, about every twenty seconds. The thoughts themselves are never read out loud.")
+    }
+
+    private func speakWhileWritingRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $speakWhileWriting) {
+            Text(searchStyle ? searchLabel(.speakWhileWriting, "Start speaking as she writes") : "Start speaking as she writes")
+        }
+        .accessibilityHint("Her voice starts on the first finished sentence instead of waiting for the whole reply to be written, so there is far less silence between the message arriving and hearing it. Turn this off to go back to hearing the reply only once it is complete.")
     }
 
     private func whisperRow(searchStyle: Bool) -> some View {
