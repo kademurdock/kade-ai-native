@@ -412,6 +412,14 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }
+            /* ⚠️ SECOND PASS, AND THE AUDIT IS WHY. Setting .foregroundStyle on
+             * the label was NOT enough: a Button applies its tint to the label,
+             * so the text kept rendering in the accent colour and Apple flagged
+             * the contrast again on the very next run. The hit-region finding
+             * and the status-line finding both cleared on that run; this one
+             * did not, and the lane refused to call it fixed. `.plain` is what
+             * stops the re-tint, so the primary colour above actually lands. */
+            .buttonStyle(.plain)
             .accessibilityHint("Opens the request page. Kade approves people herself — if she knows you, expect to hear back.")
             .sheet(isPresented: $showingAskToJoin) {
                 SafariView(url: URL(string: "https://kademurdock.com/request-access")!, loadFailed: $webLoadFailed)
