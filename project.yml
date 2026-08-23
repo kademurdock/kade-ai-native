@@ -35,6 +35,14 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # PART 91.4 — the last accessibility-audit finding, and it was a real
+        # one for SIGHTED users. There was no AccentColor asset at all, so
+        # everything tinted fell back to iOS system blue (#007AFF): white text
+        # on it measures 4.02:1, under the 4.5:1 that normal-size text needs.
+        # Apple's audit flagged the Sign in button for exactly that, three runs
+        # in a row. Naming the asset here is what makes the catalog entry the
+        # app's actual accent.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Manual
     info:
       path: Sources/Info.plist
