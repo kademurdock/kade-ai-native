@@ -107,7 +107,12 @@ final class KadeA11yAuditUITests: XCTestCase {
         continueAfterFailure = true
 
         app = XCUIApplication()
-        app.launchEnvironment["KADE_TOUR"] = "1"   // see the class comment
+        app.launchEnvironment["KADE_TOUR"] = "1"        // see the class comment
+        // Tells the app an audit is driving it, so it skips the haptic engine
+        // and earcon prewarm. Those keep the run loop alive, XCUITest waits for
+        // IDLE before every query, and two live runs died on exactly that.
+        // See Sources/KadeUITestMode.swift for the rule this flag lives under.
+        app.launchEnvironment["KADE_A11Y_AUDIT"] = "1"
         app.launch()
 
         // Belt and braces for anything the flag above does not cover (a
@@ -121,7 +126,19 @@ final class KadeA11yAuditUITests: XCTestCase {
     }
 
     func testAccessibilityAuditAcrossTheMainScreens() throws {
-        emit("KADE_A11Y|version|1")
+        emit("KADE_A11Y|version|2")
+
+        /* THE PROBE. If the tree cannot be read at all, everything after this is
+         * noise, and the run should say which half broke rather than leaving the
+         * next person to read a build log. Cheap: one audit type, no queries. */
+        Thread.sleep(forTimeInterval: 5.0)
+        do {
+            try app.performAccessibilityAudit(for: .contrast) { _ in true }
+            emit("KADE_A11Y_PROBE|the accessibility tree is readable")
+        } catch {
+            emit("KADE_A11Y_PROBE|THE ACCESSIBILITY TREE COULD NOT BE READ AT ALL: "
+                 + clean(String(describing: error)))
+        }
 
         // 1 — the signed-out surface. This one always runs: it needs no
         //     credentials and it is the first screen every new family member
@@ -154,9 +171,13 @@ final class KadeA11yAuditUITests: XCTestCase {
     // MARK: - Auditing
 
     private func audit(screen: String) {
-        // Let the screen finish drawing before auditing it. A layout still in
-        // flight is not the layout anybody will meet.
-        _ = app.staticTexts.firstMatch.waitForExistence(timeout: 15)
+        /* ⚠️ A PLAIN SLEEP, NOT waitForExistence, AND THAT IS DELIBERATE. Every
+         * XCUITest query first waits for the app to go idle and then captures a
+         * snapshot of the whole accessibility tree; when either half is slow,
+         * the query burns thirty seconds and retries twice before failing the
+         * test outright. Run 2 spent a hundred and seven seconds and died in
+         * this exact call. A sleep asks the app for nothing at all. */
+        Thread.sleep(forTimeInterval: 3.0)
 
         var found = 0
         var ran = 0

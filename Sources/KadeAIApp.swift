@@ -76,10 +76,25 @@ struct KadeAIApp: App {
                     appDelegate.pushService = pushService
                     // Synthesize the earcons once up front so the first real
                     // one (a message send) is never a synthesis hitch.
-                    Earcons.shared.prewarm()
                     // Build 216: and the haptic engine, for the same reason --
                     // its lazy first start() was landing on her send turn.
-                    KadeHapticEngine.shared.prewarm()
+                    //
+                    // ⚠️ BOTH ARE SKIPPED UNDER THE ACCESSIBILITY AUDIT (Part 90,
+                    // DEBUG-only, CI-only). A prewarmed CHHapticEngine and a set
+                    // of prepared AVAudioPlayers keep the run loop and the audio
+                    // session alive, and XCUITest waits for the app to go IDLE
+                    // before every query -- so on the Codemagic simulator the app
+                    // never idled, every accessibility snapshot timed out after
+                    // sixty seconds, and Apple's audit could not read a single
+                    // screen. Twice, at six and a half minutes of Mac time each.
+                    // A simulator has no haptics and nobody is listening to the
+                    // earcons, so skipping them costs the audit nothing and buys
+                    // it the only thing it needs: an app that stops moving.
+                    // Release builds never contain this branch.
+                    if !KadeUITestMode.isAuditing {
+                        Earcons.shared.prewarm()
+                        KadeHapticEngine.shared.prewarm()
+                    }
                     await auth.restore()   // restore a saved session at launch
                     requestPushAuthorization()
                 }
