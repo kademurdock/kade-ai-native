@@ -153,8 +153,6 @@ struct ConversationDetailView: View {
      * SentenceStreamer, first audio in 2-3s instead of 20-30s); the app never
      * got it. `spokenSoFar` tracks what the streamer already handed to the
      * voice queue so the reply is never spoken twice. */
-    @State private var speechStreamer = SpeechStreamer()
-    @State private var spokenSoFar = 0
     @AppStorage("kade.speakWhileWriting") private var speakWhileWriting = true
     /// Aug 5 2026 crash hardening: raw think chunks accumulate here and get
     /// sanitized + published to `liveThink` at most every 250ms. Deep thinks
@@ -2993,9 +2991,8 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
-            speechStreamer = SpeechStreamer()
-            spokenSoFar = 0
             live.resetTurn()
+            live.resetSpeech()
             liveThinkExpanded = false
             await Self.nextRunLoopTurn()
             KadeBreadcrumbs.drop("turn state reset")
@@ -3027,8 +3024,8 @@ struct ConversationDetailView: View {
                      * 216-to-225 freeze hunt is why that sentence is written
                      * down rather than assumed. */
                     if readAloudEnabled, speakWhileWriting {
-                        for piece in speechStreamer.push(chunk) {
-                            spokenSoFar += piece.count
+                        for piece in live.speech.push(chunk) {
+                            live.spokenChars += piece.count
                             voiceService.enqueueSpeak(
                                 text: piece,
                                 agentId: selectedAgentId,
@@ -3155,8 +3152,6 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
-            speechStreamer = SpeechStreamer()
-            spokenSoFar = 0
             live.resetTurn()
             liveThinkExpanded = false
             conversationId = resolvedConversationId
@@ -3218,9 +3213,9 @@ struct ConversationDetailView: View {
              * which is worse than the silence it replaced. `spokenSoFar` is
              * character-counted rather than compared, because the streamer
              * adds carried steering tags the stored reply does not have. */
-            let streamedThisTurn = readAloudEnabled && speakWhileWriting && spokenSoFar > 0
+            let streamedThisTurn = readAloudEnabled && speakWhileWriting && live.spokenChars > 0
             if streamedThisTurn {
-                for piece in speechStreamer.flush() {
+                for piece in live.speech.flush() {
                     voiceService.enqueueSpeak(
                         text: piece,
                         agentId: selectedAgentId,
@@ -3286,9 +3281,8 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
-            speechStreamer = SpeechStreamer()
-            spokenSoFar = 0
             live.resetTurn()
+            live.resetSpeech()
             liveThinkExpanded = false
             // The optimistic message stays visible on purpose: it really was
             // sent from the user's point of view, only the "did the reply
@@ -4065,11 +4059,44 @@ private final class LiveStreamBuffers {
     var lastToolAnnounce = Date.distantPast
     var lastToolSpoken = ""
 
+    /* PART 91.8 — THE STREAMING-SPEECH ACCUMULATOR LIVES HERE, AND ITS FIRST
+     * home was the bug she heard within minutes of installing build 153:
+     * chunks skipped, chunks out of order, then the whole reply again at the
+     * end.
+     *
+     * It was a `@State` struct mutated from the onText closure. SwiftUI State
+     * writes are read-modify-write against storage that is not guaranteed to
+     * be re-read within the same run-loop turn — and onText fires many times a
+     * second. Two chunks landing in one turn both read the SAME pre-mutation
+     * streamer, so one push overwrote the other: text vanished, and what
+     * survived arrived in whatever order the writes settled.
+     *
+     * The comment at the top of this class already said so, about the very
+     * buffers sitting two properties up: "Reference type on purpose." A
+     * high-frequency accumulator driven by an escaping closure belongs on a
+     * class, where a mutation is immediate and total. `live.replyRaw += chunk`
+     * has always worked for exactly this reason; the speech streamer now sits
+     * beside it instead of in State. */
+    var speech = SpeechStreamer()
+    var spokenChars = 0
+
     /// Exactly the four fields the old inline reset cleared, no more: the two
     /// buffers, the write-progress timer, and the thinking-announced latch.
     /// The flush-scheduled guards are deliberately LEFT ALONE — an
     /// `asyncAfter` may already be in flight, and clearing its guard here
     /// would let a second one stack on top of it.
+    /* ⚠️ PART 91.8 — resetTurn() DELIBERATELY DOES NOT TOUCH THE SPEECH
+     * STREAMER, and that is the second half of the build-153 bug. The three
+     * call sites are NOT all turn boundaries: one of them fires at
+     * "stream finished", which is BEFORE the completion path decides whether
+     * the streamer already spoke this reply. Clearing the counter there made
+     * `spokenChars > 0` read false every single time, so the completion path
+     * concluded nothing had been spoken and read the WHOLE reply out again —
+     * her "then finally playing the whole thing through the right way" — and
+     * the freshly-made streamer had no tail left to flush either.
+     *
+     * The streamer is reset by `resetSpeech()` at the two places that really
+     * are boundaries: the start of a send, and a failed send. */
     func resetTurn() {
         replyRaw = ""
         thinkRaw = ""
@@ -4080,5 +4107,12 @@ private final class LiveStreamBuffers {
         crumbedFirstText = false
         crumbedFirstThink = false
         crumbedFlushDeferred = false
+    }
+
+    /// A real turn boundary: a new send, or a send that died. Never at
+    /// stream-finish — see resetTurn's comment.
+    func resetSpeech() {
+        speech = SpeechStreamer()
+        spokenChars = 0
     }
 }

@@ -88,18 +88,31 @@ struct SpeechStreamer {
             buffer = String(buffer[cut...])
             return piece
         }
-        guard let end = sentenceEndIndex() else { return nil }
-        let piece = String(buffer[buffer.startIndex..<end])
-        guard piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= minPieceChars else {
-            return nil
+        /* PART 91.8 — KEEP WALKING TO THE NEXT BOUNDARY INSTEAD OF STALLING.
+         * The first version stopped at the FIRST sentence end and, if that
+         * piece was under the minimum, returned nil and waited. But the buffer
+         * still began with that same short sentence, so every later push hit
+         * the identical too-short piece and bailed again — a short opener
+         * ("Okay." / "Yeah.") deadlocked the lane until the 320-character cap
+         * fired and cut the text at an arbitrary comma. That is why her pieces
+         * broke in strange places. Now a short sentence simply absorbs the one
+         * after it until the piece is worth speaking. */
+        var searchFrom = buffer.startIndex
+        while let end = sentenceEndIndex(from: searchFrom) {
+            let piece = String(buffer[buffer.startIndex..<end])
+            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= minPieceChars {
+                buffer = String(buffer[end...])
+                return piece
+            }
+            guard end < buffer.endIndex else { return nil }
+            searchFrom = end
         }
-        buffer = String(buffer[end...])
-        return piece
+        return nil
     }
 
-    /// Index just past the first real sentence terminator.
-    private func sentenceEndIndex() -> String.Index? {
-        var idx = buffer.startIndex
+    /// Index just past the first real sentence terminator at or after `from`.
+    private func sentenceEndIndex(from: String.Index? = nil) -> String.Index? {
+        var idx = from ?? buffer.startIndex
         while idx < buffer.endIndex {
             let ch = buffer[idx]
             if ch == "." || ch == "!" || ch == "?" || ch == "\n" {
