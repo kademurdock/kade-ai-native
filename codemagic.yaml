@@ -119,3 +119,71 @@ workflows:
         notify:
           success: true
           failure: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PART 88 — THE COMPILE GATE. Kade's ask, in her words: "I've also wondered
+  # about somehow giving it access to a swift compiler."
+  #
+  # She already owns one: this Mac. Swift for iOS only compiles on macOS — no
+  # container, no Linux sandbox, no amount of cleverness changes that, and it is
+  # Apple's rule rather than a gap in our setup. So the harness does not need a
+  # compiler; it needs a phone line to the Mac she already rents. This workflow
+  # is that line.
+  #
+  # WHAT IT DELIBERATELY DOES NOT DO, and why each omission is load-bearing:
+  #   · NO app_store_connect integration — an experiment CANNOT publish. There is
+  #     no path from this workflow to her phone, by construction rather than by
+  #     policy.
+  #   · NO signing, NO certificates, NO keychain — a simulator build needs none of
+  #     it, and every one of those steps is minutes of Mac time.
+  #   · NO screenshot tour, NO .ipa, NO build-number bump — nothing that touches
+  #     TestFlight's numbering or her install.
+  # What is left is the only question Forge actually needs answered: DOES IT BUILD.
+  #
+  # COST IS MINUTES, NOT DOLLARS-PER-CALL. August's 500 free Mac minutes were
+  # burned by the 204-225 freeze hunt, so Mac time bills at $0.095/min. A full
+  # TestFlight build ran ~12 minutes; this should land well under that because it
+  # skips signing and archiving. The harness caps how many of these can run per
+  # day (KADE_COMPILE_DAILY_CAP, default 6) so a loop cannot eat the month.
+  ios-compile-check:
+    name: Kade-AI Native — compile check only (no signing, no publish)
+    max_build_duration: 25
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+      - name: Compile for the simulator (no signing)
+        script: |
+          set -o pipefail
+          # -sdk iphonesimulator + CODE_SIGNING_ALLOWED=NO is what makes this
+          # need no certificate at all. A device build would demand signing and
+          # signing is the half that can reach her phone.
+          xcodebuild \
+            -project KadeAI.xcodeproj \
+            -scheme KadeAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "$CM_BUILD_DIR/compile.log"
+          STATUS=$?
+          # THE GATE'S OWN DOCTRINE: say the FIRST REAL ERROR with its file and
+          # line, never "looks good" and never a wall of log. This file is what
+          # the harness reads back to Forge, and Forge reads it to Kade out loud.
+          if [ $STATUS -ne 0 ]; then
+            grep -m 5 -E '(error:|error :)' "$CM_BUILD_DIR/compile.log" \
+              > "$CM_BUILD_DIR/first-errors.txt" || true
+            echo "--- first errors ---"
+            cat "$CM_BUILD_DIR/first-errors.txt"
+          else
+            echo "Compiled clean." > "$CM_BUILD_DIR/first-errors.txt"
+          fi
+          exit $STATUS
+    artifacts:
+      - first-errors.txt
+      - compile.log
