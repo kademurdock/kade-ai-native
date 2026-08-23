@@ -42,14 +42,24 @@ final class KadeA11yAuditUITests: XCTestCase {
     /// eighth audit type changes this file (and its findings) on purpose
     /// instead of silently. Settings notes that don't name their version read
     /// later like broken promises — that lesson is already on the record.
-    private static let auditTypes: XCUIAccessibilityAuditType = [
-        .contrast,
-        .elementDetection,
-        .hitRegion,
-        .sufficientElementDescription,
-        .dynamicType,
-        .textClipped,
-        .trait
+    ///
+    /// ⚠️ ONE CALL PER TYPE, AND THE FIRST LIVE RUN IS WHY. Asking for all
+    /// seven in a single `performAccessibilityAudit` is all-or-nothing: on
+    /// 2026-08-23 the combined call TIMED OUT on the sign-in screen and the
+    /// whole run came back having audited nothing at all. Seven calls means a
+    /// slow check costs its own coverage and nothing else's, and the report
+    /// can say WHICH check went missing instead of losing the screen. The
+    /// expensive one is `dynamicType`, which re-renders at every content size
+    /// — and it is also the one that catches truncation, the single finding
+    /// Kade can never catch by ear, so it stays.
+    private static let auditTypes: [(name: String, type: XCUIAccessibilityAuditType)] = [
+        ("contrast too low to read", .contrast),
+        ("element not detected as its own control", .elementDetection),
+        ("tap target too small", .hitRegion),
+        ("missing or unhelpful description", .sufficientElementDescription),
+        ("text is clipped", .textClipped),
+        ("wrong accessibility trait", .trait),
+        ("does not scale with Dynamic Type", .dynamicType)
     ]
 
     /// One stop on the walk. `path` is the sequence of accessibility labels to
@@ -144,45 +154,49 @@ final class KadeA11yAuditUITests: XCTestCase {
     // MARK: - Auditing
 
     private func audit(screen: String) {
+        // Let the screen finish drawing before auditing it. A layout still in
+        // flight is not the layout anybody will meet.
+        _ = app.staticTexts.firstMatch.waitForExistence(timeout: 15)
+
         var found = 0
-        do {
-            try app.performAccessibilityAudit(for: Self.auditTypes) { issue in
-                found += 1
-                self.issueCount += 1
-                self.emit(
-                    "KADE_A11Y_ISSUE|"
-                    + self.clean(screen) + "|"
-                    + self.clean(self.describe(issue.auditType)) + "|"
-                    + self.clean(issue.element?.label ?? "(element not identified)") + "|"
-                    + self.clean(String(describing: issue))
-                )
-                // TRUE means "ignore this one" — every issue is recorded and
-                // then ignored, so the test itself never fails. See the class
-                // comment: reporting first, blocking later, once calibrated.
-                return true
+        var ran = 0
+        var missed: [String] = []
+
+        for (name, type) in Self.auditTypes {
+            do {
+                try app.performAccessibilityAudit(for: type) { issue in
+                    found += 1
+                    self.issueCount += 1
+                    self.emit(
+                        "KADE_A11Y_ISSUE|"
+                        + self.clean(screen) + "|"
+                        + self.clean(name) + "|"
+                        + self.clean(issue.element?.label ?? "(element not identified)") + "|"
+                        + self.clean(String(describing: issue))
+                    )
+                    // TRUE means "ignore this one" — every issue is recorded
+                    // and then ignored, so the test itself never fails. See
+                    // the class comment: reporting first, blocking later,
+                    // once calibrated.
+                    return true
+                }
+                ran += 1
+            } catch {
+                // A timeout on one check is not a verdict on the screen.
+                missed.append(name)
             }
-        } catch {
-            skip(screen, "the audit itself threw: \(clean(String(describing: error)))")
+        }
+
+        if ran == 0 {
+            skip(screen, "every one of Apple's checks failed or timed out here, so this screen was not audited")
             return
         }
         screensAudited += 1
         emit("KADE_A11Y_SCREEN|\(clean(screen))|\(found)")
-    }
-
-    /// Apple's type is an OptionSet, not an enum, and its `String(describing:)`
-    /// reads as `XCUIAccessibilityAuditType(rawValue: 2)` — a number nobody can
-    /// hear. This says the finding out loud instead. if/else rather than a
-    /// switch on purpose: this file ships without ever meeting a compiler on
-    /// this machine, so it avoids every construct it does not have to use.
-    private func describe(_ type: XCUIAccessibilityAuditType) -> String {
-        if type == .contrast { return "contrast too low to read" }
-        if type == .elementDetection { return "element not detected as its own control" }
-        if type == .hitRegion { return "tap target too small" }
-        if type == .sufficientElementDescription { return "missing or unhelpful description" }
-        if type == .dynamicType { return "does not scale with Dynamic Type" }
-        if type == .textClipped { return "text is clipped" }
-        if type == .trait { return "wrong accessibility trait" }
-        return "other"
+        if !missed.isEmpty {
+            // COVERAGE YOU DID NOT GET IS NOT COVERAGE. Say it.
+            emit("KADE_A11Y_PARTIAL|\(clean(screen))|\(clean(missed.joined(separator: ", ")))")
+        }
     }
 
     // MARK: - Getting around
