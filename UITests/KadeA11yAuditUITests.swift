@@ -19,8 +19,16 @@ import XCTest
 ///    findings, and only then earns the right to block. `KADE_A11Y_STRICT=1`
 ///    on the workflow flips it to blocking when that day comes.
 ///
-///  · IT DOES NOT TOUCH APP SOURCE. Not one line of Sources/ changes for this
-///    lane. Sign-in is driven through the real form the way a person would.
+///  · IT BARELY TOUCHES APP SOURCE, AND SAYS EXACTLY WHERE. The first version
+///    of this comment claimed "not one line of Sources/", and two live runs
+///    made that a lie worth correcting rather than keeping. The app now has
+///    `KadeUITestMode` and one `#if DEBUG` branch that skips the haptic-engine
+///    and earcon prewarm while an audit is driving — without it the app never
+///    reports itself idle, and XCUITest waits for idle before every query, so
+///    no screen could be read at all. Nothing else changes: no layout, no
+///    labels, no traits, no text, no colours. The audit has to be looking at
+///    the screen a real person meets or it is auditing a stunt double.
+///    Sign-in is still driven through the real form the way a person would.
 ///
 ///  · IT DOES NOT SIGN, PUBLISH, OR BUMP A BUILD NUMBER. Simulator only. There
 ///    is no path from this test to her phone, by construction.
