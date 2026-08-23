@@ -187,3 +187,131 @@ workflows:
     artifacts:
       - first-errors.txt
       - compile.log
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GAP 3 — APPLE'S OWN ACCESSIBILITY AUDIT. The third no-signing workflow.
+  #
+  # Xcode ships performAccessibilityAudit() (XCUITest, Xcode 15+): Apple's own
+  # automated check for missing labels, low contrast, Dynamic Type truncation
+  # and tap targets too small to hit — run against the REAL rendered app in a
+  # simulator, not against source. The native app's accessibility has been
+  # guarded by hand-discipline until now. This makes it measurable.
+  #
+  # SAME OMISSIONS AS ios-compile-check, SAME REASONS:
+  #   · NO app_store_connect integration — cannot publish, cannot reach her phone.
+  #   · NO signing, NO certificates, NO keychain — a simulator build needs none.
+  #   · NO screenshot tour, NO .ipa, NO build-number bump.
+  #
+  # ⚠️ COST IS THE REAL CONSTRAINT AND IT IS BIGGER THAN COMPILE. This does
+  # everything ios-compile-check does (~2m16s measured) and then boots a
+  # simulator, installs, signs in, and walks nine screens auditing each — call
+  # it 8–12 minutes, so roughly 75¢–$1.15 at August's $0.095/min. That is a
+  # dollar a run, not a tenth of a cent. The harness caps it separately from
+  # compile (KADE_A11Y_DAILY_CAP, default 2) and says the number out loud.
+  #
+  # ⚠️ THE TEST SEAT'S CREDENTIALS DO NOT LIVE IN THIS FILE. Put them in a
+  # Codemagic environment group named `a11y` as KADE_A11Y_EMAIL and
+  # KADE_A11Y_PASS. Without them the run still works and audits the sign-in
+  # screen, and the report says which screens it could not reach — an honest
+  # partial, never a silent one. (See SECURITY_NOTE_test_seat_credentials.md
+  # for why this file, unlike its neighbour, keeps its mouth shut.)
+  ios-a11y-audit:
+    name: Kade-AI Native — accessibility audit (no signing, no publish)
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      # ⚠️ FIRST RUN IS DELIBERATELY CREDENTIAL-FREE. With no test seat the walk
+      # audits the SIGN-IN SCREEN ONLY and says so out loud — which is the
+      # cheapest honest way to prove the whole pipe (XcodeGen -> test target
+      # builds -> simulator boots -> audit runs -> report lands in an artifact)
+      # before spending Mac minutes on a nine-screen walk.
+      #
+      # TO AUDIT THE SIGNED-IN SCREENS: create a Codemagic environment group
+      # called `a11y` holding KADE_A11Y_EMAIL and KADE_A11Y_PASS (both secured,
+      # a throwaway seat, never Kade's own), then uncomment the two lines below.
+      # The credentials NEVER appear in this file — see
+      # SECURITY_NOTE_test_seat_credentials_2026-08-23.md for why that rule is
+      # written down rather than assumed.
+      # groups:
+      #   - a11y
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+
+      - name: Walk the app and run Apple's accessibility audit
+        script: |
+          set -o pipefail
+          # Pick a real simulator by udid rather than by name: the runner's
+          # available device list changes with every Xcode bump, and a
+          # hard-coded "iPhone 15" turns a routine image update into a red
+          # build that names nothing.
+          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);devs=[dev for l in d['devices'].values() for dev in l if 'iPhone' in dev['name']];pm=[x for x in devs if 'Pro' in x['name']];print((pm or devs)[0]['udid'])")
+          echo "Simulator: $SIM"
+          xcrun simctl boot "$SIM" || true
+
+          # TEST_RUNNER_-prefixed settings are handed to the UI-test runner
+          # process with the prefix stripped — that is how the credentials
+          # reach ProcessInfo inside the test without ever being written down
+          # in the repo. Empty is fine and handled: the test says which
+          # screens it skipped.
+          xcodebuild \
+            -project KadeAI.xcodeproj \
+            -scheme KadeAIA11yAudit \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=$SIM" \
+            -derivedDataPath /tmp/a11y-dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            TEST_RUNNER_KADE_A11Y_EMAIL="${KADE_A11Y_EMAIL:-}" \
+            TEST_RUNNER_KADE_A11Y_PASS="${KADE_A11Y_PASS:-}" \
+            test 2>&1 | tee "$CM_BUILD_DIR/a11y.log"
+          STATUS=$?
+
+          # THE GATE'S OWN DOCTRINE, SAME AS THE COMPILE LANE: hand back the
+          # findings themselves, never "looks good" and never a wall of log.
+          # This file is what the harness reads and Forge reads aloud.
+          grep -E '^KADE_A11Y' "$CM_BUILD_DIR/a11y.log" \
+            > "$CM_BUILD_DIR/a11y-issues.txt" || true
+
+          # ⚠️ XCODEBUILD'S EXIT CODE IS NOT THE VERDICT HERE, AND THAT IS
+          # DELIBERATE. The test swallows every finding, so a normal run exits
+          # 0 whether the app is perfect or a disaster — the REPORT carries the
+          # verdict. A non-zero $STATUS means something structural broke
+          # (simulator, install, a crash mid-walk), which the missing-summary
+          # check below already catches; it is echoed so a red run says which
+          # kind of red it was.
+          if ! grep -q '^KADE_A11Y_SUMMARY' "$CM_BUILD_DIR/a11y-issues.txt"; then
+            echo "KADE_A11Y_BROKEN|the audit never reported a summary — the walk did not finish (xcodebuild exit $STATUS)" \
+              >> "$CM_BUILD_DIR/a11y-issues.txt"
+            grep -m 5 -E '(error:|Testing failed|Failing tests)' "$CM_BUILD_DIR/a11y.log" \
+              >> "$CM_BUILD_DIR/a11y-issues.txt" || true
+            echo "--- audit report ---"; cat "$CM_BUILD_DIR/a11y-issues.txt"
+            exit 1
+          fi
+
+          echo "--- audit report ---"
+          cat "$CM_BUILD_DIR/a11y-issues.txt"
+
+          # REPORT-ONLY BY DEFAULT, ON PURPOSE. Apple's audit has known
+          # false-positive classes, and a guard that cries wolf gets switched
+          # off — that scar is already paid for twice on this platform. The
+          # lane reports until its findings have been checked against the real
+          # app; KADE_A11Y_STRICT=1 (set on the trigger, no file edit) makes
+          # findings fail the build the day it has earned that.
+          if [ "${KADE_A11Y_STRICT:-0}" = "1" ]; then
+            # ⚠️ `grep -c` PRINTS 0 AND EXITS 1 WHEN IT FINDS NOTHING, so the
+            # obvious `$(grep -c … || echo 0)` yields the two-line string
+            # "0\n0" and then `[ … -gt 0 ]` dies on it — a clean app failing
+            # the gate with a shell error. head -1 is the fix.
+            ISSUES=$(grep -c '^KADE_A11Y_ISSUE' "$CM_BUILD_DIR/a11y-issues.txt" 2>/dev/null | head -1)
+            ISSUES=${ISSUES:-0}
+            if [ "$ISSUES" -gt 0 ]; then exit 1; fi
+          fi
+          exit 0
+    artifacts:
+      - a11y-issues.txt
+      - a11y.log

@@ -178,6 +178,27 @@ targets:
             # true in the same commit that uncomments the entitlements.
             RequestsOpenAccess: true
 
+  # GAP 3 (Aug 2026) — Apple's performAccessibilityAudit, run in CI on the
+  # Codemagic Mac. Simulator only, never signed, never published; see
+  # UITests/KadeA11yAuditUITests.swift for what it walks and why it reports
+  # instead of failing. NOT in the KadeAI scheme: the TestFlight lane must not
+  # be able to notice this target exists.
+  KadeAIUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: KadeAI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.uitests
+        DEVELOPMENT_TEAM: JQPWZ2RL9P
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        TEST_TARGET_NAME: KadeAI
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_STYLE: Manual
+
 schemes:
   KadeAI:
     build:
@@ -185,3 +206,14 @@ schemes:
         KadeAI: all
     archive:
       config: Release
+  # Built only by the ios-a11y-audit workflow. The TestFlight lane never names
+  # this scheme, so nothing here can lengthen or endanger a release build.
+  KadeAIA11yAudit:
+    build:
+      targets:
+        KadeAI: [testing]
+        KadeAIUITests: [testing]
+    test:
+      config: Debug
+      targets:
+        - KadeAIUITests
