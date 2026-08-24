@@ -55,6 +55,12 @@ struct SpeechStreamer {
     /// reason a streamed reply does not go emotionally dead after sentence one.
     private var carriedDirection: String?
 
+    /// Past this, a "sentence" is not a sentence any more and the soft cut
+    /// takes over. Twice the cap: long enough that a genuinely long sentence
+    /// still gets spoken whole, short enough that a runaway cannot turn into
+    /// one enormous synthesis call the listener waits out in silence.
+    private var runawayCeiling: Int { maxPieceChars * 2 }
+
     init(minPieceChars: Int = 60, maxPieceChars: Int = 320) {
         self.minPieceChars = minPieceChars
         self.maxPieceChars = maxPieceChars
@@ -83,12 +89,51 @@ struct SpeechStreamer {
     /// Pull one speakable piece off the front of the buffer, or nil if nothing
     /// is ready yet.
     private mutating func takeReadyPiece() -> String? {
+        /* PART 92.6 — A REAL SENTENCE BOUNDARY BEATS THE RUNAWAY CAP, AND THE
+         * ORDER OF THESE TWO BLOCKS WAS THE WHOLE BUG.
+         *
+         * The cap block used to run FIRST. So the moment the buffer went over
+         * 320 characters — a fast burst, a fat chunk, a pump that fell a beat
+         * behind — the lane jumped straight to softCutIndex() and cut at the
+         * last COMMA, ignoring every perfectly good sentence ending sitting
+         * inside those same 320 characters. Receipt, 354 characters of four
+         * clean sentences: arriving in one chunk it came out as a 258-char
+         * lump ending "...the fourth complete sentence," and a 95-char
+         * remainder. Arriving one character at a time the SAME text came out
+         * as four clean sentences. Same input, different cut, and the only
+         * difference was how the network happened to fragment it.
+         *
+         * That is her "it breaks in strange places" from Aug 23, and 91.8
+         * fixed only the other half of it (the short-opener deadlock). Worse,
+         * 91.8 made this half MORE reachable: short sentences now absorb the
+         * next one, so the buffer crosses the cap more often than it used to.
+         *
+         * The cap's own comment always said what it was for — "if the model
+         * writes a long clause with no terminator." It is the FALLBACK. A
+         * sentence you can actually speak is always the better piece, even a
+         * long one; only past twice the cap is it not really a sentence any
+         * more and the soft cut takes over. */
+        var searchFrom = buffer.startIndex
+        while let end = sentenceEndIndex(from: searchFrom) {
+            let piece = String(buffer[buffer.startIndex..<end])
+            if piece.count > runawayCeiling { break }
+            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= minPieceChars {
+                buffer = String(buffer[end...])
+                return piece
+            }
+            guard end < buffer.endIndex else { break }
+            searchFrom = end
+        }
         if buffer.count >= maxPieceChars, let cut = softCutIndex() {
             let piece = String(buffer[buffer.startIndex..<cut])
             buffer = String(buffer[cut...])
             return piece
         }
-        /* PART 91.8 — KEEP WALKING TO THE NEXT BOUNDARY INSTEAD OF STALLING.
+        return nil
+    }
+
+    /* Kept only so the history below stays readable next to the code it
+     * describes. PART 91.8 — KEEP WALKING TO THE NEXT BOUNDARY INSTEAD OF STALLING.
          * The first version stopped at the FIRST sentence end and, if that
          * piece was under the minimum, returned nil and waited. But the buffer
          * still began with that same short sentence, so every later push hit
@@ -96,19 +141,8 @@ struct SpeechStreamer {
          * ("Okay." / "Yeah.") deadlocked the lane until the 320-character cap
          * fired and cut the text at an arbitrary comma. That is why her pieces
          * broke in strange places. Now a short sentence simply absorbs the one
-         * after it until the piece is worth speaking. */
-        var searchFrom = buffer.startIndex
-        while let end = sentenceEndIndex(from: searchFrom) {
-            let piece = String(buffer[buffer.startIndex..<end])
-            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= minPieceChars {
-                buffer = String(buffer[end...])
-                return piece
-            }
-            guard end < buffer.endIndex else { return nil }
-            searchFrom = end
-        }
-        return nil
-    }
+         * after it until the piece is worth speaking. That absorb-forward rule
+         * is the loop above; this note is what bought it. */
 
     /// Index just past the first real sentence terminator at or after `from`.
     private func sentenceEndIndex(from: String.Index? = nil) -> String.Index? {
@@ -119,7 +153,21 @@ struct SpeechStreamer {
                 let next = buffer.index(after: idx)
                 // A terminator only ends a sentence if whitespace or the end
                 // follows it — this is what keeps "3.5" and "kade.ai" whole.
-                let followedByBreak = next >= buffer.endIndex || buffer[next].isWhitespace
+                /* PART 92.6 — THE BUFFER ENDING IS NOT THE TEXT ENDING.
+                 * This used to read `next >= buffer.endIndex || …`, treating
+                 * "nothing follows the dot YET" as "the sentence is over". In
+                 * a stream that is never true: more is coming. When a network
+                 * chunk boundary happened to land right after a dot, the lane
+                 * cut there — and "kade.ai" went to the synthesiser as "kade."
+                 * then "ai", and "3.5" as "3." then "5". A dose read aloud as
+                 * "three point" … "five milligrams" is the failure that matters,
+                 * and the abbreviation list cannot catch it because the guard
+                 * that fires is this one, not that one.
+                 * Reproduced on the real struct: the identical sentence split
+                 * in two when fed as two chunks and stayed whole when fed as
+                 * one. Now only flush() — which takes the whole remaining
+                 * buffer by design — may end a sentence at the end of the text. */
+                let followedByBreak = next < buffer.endIndex && buffer[next].isWhitespace
                 if followedByBreak && !endsWithAbbreviation(before: idx) {
                     return next <= buffer.endIndex ? next : buffer.endIndex
                 }
