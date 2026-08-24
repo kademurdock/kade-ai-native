@@ -210,13 +210,56 @@ struct SpeechStreamer {
         guard piece.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
 
         if let lead = leadingDirection(of: piece) {
+            /* PART 92.11 — REMEMBER THE DIRECTION, BUT NEVER SPEAK IT ALONE.
+             *
+             * Found by her ear on build 241: "every now and then it would play
+             * the error sound tone in the middle — first section, error sound,
+             * more words, error sound, more words." The production logs named
+             * it exactly. Two of twenty-nine synthesis calls for that one reply
+             * carried NOTHING BUT A DIRECTION:
+             *
+             *   input len=65, after strip len=61: "%%%settling in like…%%%"
+             *   input len=77, after strip len=73: "%%%picking up a little…%%%"
+             *
+             * The synthesiser strips the tag, finds no words, returns nothing;
+             * VoiceService gets nil and plays the error boop — which session 23
+             * added on purpose so a dead synth would stop being silent. The
+             * boop was right. The request should never have been made.
+             *
+             * ⚠️ THE GUARD FIVE LINES UP WAS SUPPOSED TO CATCH THIS AND ITS
+             * COMMENT SAYS SO — "refuse anything that would only make the voice
+             * say punctuation." It tests isLetter || isNumber, and "settling in
+             * like i've been waiting for somebody to ask this" is ALL letters.
+             * A direction reads as speech to a check that only knows symbols.
+             * These tags run 60-80 characters, which clears minPieceChars, so a
+             * tag alone at the top of a paragraph was a legal piece by every
+             * rule this splitter had.
+             *
+             * The direction is still CARRIED — dropping it is what makes a
+             * streamed reply go emotionally flat after sentence one, which is
+             * the whole reason carriedDirection exists. It just does not get
+             * spoken by itself. takeReadyPiece() has already removed this piece
+             * from the buffer, so returning nil drops it without stalling: no
+             * repeat of 91.8's deadlock, where bailing left the same text at
+             * the front of the buffer forever. */
             carriedDirection = lead
+            guard hasSpeechAfterDirection(piece) else { return nil }
             return piece
         }
         if let carried = carriedDirection {
             return "%%%\(carried)%%% \(piece)"
         }
         return piece
+    }
+
+    /// Is there anything to actually SAY after this piece's leading tag?
+    /// A piece that is only a direction costs a synthesis call and comes back
+    /// empty, which the app reports to her as an error tone.
+    private func hasSpeechAfterDirection(_ piece: String) -> Bool {
+        guard piece.hasPrefix("%%%"),
+              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+        else { return true }
+        return !piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// A leading `%%%…%%%` tag, if this piece opens with one. Non-verbal cues

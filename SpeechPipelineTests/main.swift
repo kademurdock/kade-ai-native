@@ -63,6 +63,15 @@ func check(_ name: String, _ condition: Bool, _ detail: @autoclosure () -> Strin
     }
 }
 
+/// True when a piece is a steering direction with no words after it — the
+/// shape that reached the synthesiser twice on build 241 and boop'd.
+func isBareDirection(_ piece: String) -> Bool {
+    guard piece.hasPrefix("%%%"),
+          let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+    else { return false }
+    return piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
 func checkEqual<T: Equatable>(_ name: String, _ got: T, _ want: T) {
     check(name, got == want, "got:  \(got)\n      want: \(want)")
 }
@@ -335,6 +344,87 @@ do {
         let rebuilt = normalized(pieces.map(stripCarry).joined(separator: " "))
         checkEqual("T9 @\(size): the unterminated tail still gets spoken", rebuilt, normalized(text))
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T12 — A STEERING TAG IS NOT A SENTENCE. FOUND ON BUILD 241, BY HER EAR.
+//
+// Her report, minutes after installing 241: the order was right and everything
+// got spoken, but "every now and then it would play the error sound tone in the
+// middle — first section, error sound, more words, error sound, more words."
+//
+// The production logs named it exactly. Two of the twenty-nine synthesis calls
+// for that one reply were sent with NOTHING BUT A DIRECTION IN THEM:
+//
+//     input len=65, after strip len=61 : "%%%settling in like i've been…%%%"
+//     input len=77, after strip len=73 : "%%%picking up a little momentum…%%%"
+//
+// The synthesiser strips the tag, finds no words left, and returns nothing.
+// VoiceService gets `nil` back and plays the error boop on purpose — session 23
+// added it so a failed synth would stop being indistinguishable from silence.
+// It was doing its job. It was reporting a real failure that should never have
+// been requested.
+//
+// ⚠️ AND THE GUARD THAT SHOULD HAVE CAUGHT IT WAS ALREADY THERE, one line up,
+// with a comment describing this exact job: "refuse anything that would only
+// make the voice say punctuation." It tests `isLetter || isNumber` — and
+// "settling in like i've been waiting for somebody to ask this" is ALL letters.
+// A direction reads as speech to a check that only knows about symbols.
+//
+// These tags run 60-80 characters, which clears minPieceChars, so a tag sitting
+// alone at the top of a paragraph is a legal piece by every rule the splitter
+// had. The direction must still be REMEMBERED — dropping it is what makes a
+// streamed reply go emotionally flat after sentence one — it just must not be
+// spoken by itself.
+
+do {
+    var s = SpeechStreamer()
+    let emitted = s.push("%%%settling in like i've been waiting for somebody to ask this%%%\n\n")
+        + s.push("Somebody born in 1885 saw horse-drawn everything and died after the moon landing. ")
+        + s.push("That is the whole argument in one sentence and I will defend it. ")
+    let tagOnly = emitted.filter { piece -> Bool in
+        guard piece.hasPrefix("%%%"),
+              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+        else { return false }
+        return piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    check("T12: no piece is a steering tag with nothing to say",
+          tagOnly.isEmpty, "would have booped on: \(tagOnly)")
+    check("T12: the words still got spoken",
+          emitted.contains { $0.contains("horse-drawn") }, "emitted: \(emitted)")
+    check("T12: the direction is still carried onto the speech",
+          emitted.contains { $0.contains("settling in") && $0.contains("horse-drawn") },
+          "emitted: \(emitted)")
+}
+
+do {
+    // The second one from the same reply, and a longer tag, fed as one chunk.
+    var s = SpeechStreamer()
+    var emitted = s.push("%%%picking up a little momentum because here's the part i actually believe%%% ")
+    emitted += s.push("Your generation got the internet and that is a real answer. ")
+    emitted += s.flush()
+    let speakable = emitted.filter { piece -> Bool in
+        guard piece.hasPrefix("%%%"),
+              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+        else { return true }
+        return !piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    checkEqual("T12: every emitted piece has words after its tag", speakable.count, emitted.count)
+    check("T12: flush does not leave a bare direction behind",
+          !(emitted.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("%%%")
+          || emitted.last?.contains("generation") == true,
+          "last piece: \(emitted.last ?? "nil")")
+}
+
+do {
+    // A tag with no speech AFTER IT AT ALL must be dropped, never spoken —
+    // this is the end-of-reply case, where flush() takes whatever is left.
+    var s = SpeechStreamer()
+    var emitted = s.push("%%%warm and a little amused%%%")
+    emitted += s.flush()
+    check("T12: a reply ending on a bare direction emits nothing at all",
+          emitted.allSatisfy { $0.contains(where: { $0.isLetter }) && !isBareDirection($0) },
+          "emitted: \(emitted)")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
