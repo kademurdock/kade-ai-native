@@ -99,6 +99,32 @@ final class VoiceService: NSObject, ObservableObject {
      * owns the prefetch task; stop cannot reach into the loop, so it leaves a
      * flag the loop checks the moment it wakes. */
     private var cancelGeneration = 0
+    /* PART 92.13 — THE KEY THE STREAMED TURN DID NOT HAVE.
+     *
+     * Her report on build 243, 7am: "when I tried to pause the voice message
+     * from where it started auto playing by default, it just reloaded a new
+     * instance of the voice clip. Like regenerated one as if it weren't
+     * already playing."
+     *
+     * It was not already playing — AS FAR AS THE ROW KNEW. 91.6's streaming
+     * lane enqueues every piece with `key: nil`, because while the reply is
+     * still being written the server has not given it an id yet. So
+     * `nowPlayingKey` stays nil for the whole spoken reply, MessageRow's
+     * `voicePlayback` (nowPlayingKey == message.id) reads `.idle`, and the
+     * control she pressed was not Pause at all — it was READ ALOUD, which
+     * correctly did what it says and synthesised the message from the top.
+     * The non-streaming path passes `key: reply.id` and has always worked,
+     * which is exactly why this hid: pause works on a message you tap read-
+     * aloud on yourself, and only fails on the one that started by itself.
+     *
+     * ⚠️ 92.12 made this EASIER to hit rather than causing it. Bigger pieces
+     * and depth 2 mean more audio is still queued when the stream ends, so
+     * the window where she can reach for pause got longer.
+     *
+     * The id exists by the time the authoritative reload lands, so the fix is
+     * to adopt it then: stamp the clip currently playing, everything still
+     * queued, and — via this property — everything the pump has in flight. */
+    private var streamedTurnKey: String?
 
     /// Playback rate for spoken replies. 1.0 is the voice's own natural
     /// pace; the picker offers 0.75x through 2x. Applied via
@@ -457,6 +483,19 @@ final class VoiceService: NSObject, ObservableObject {
         playbackContinuation = nil
     }
 
+    /// The streamed reply finally has a real message id — give it to every
+    /// piece of that reply so the row can tell it is playing. Safe to call
+    /// more than once and safe to call when nothing is playing.
+    func adoptStreamedTurn(as key: String) {
+        streamedTurnKey = key
+        // The clip in the speaker right now, if it came from the stream.
+        if isClipPlaying, nowPlayingKey == nil { nowPlayingKey = key }
+        // Everything still waiting its turn.
+        for i in speakQueue.indices where speakQueue[i].key == nil {
+            speakQueue[i].key = key
+        }
+    }
+
     /// Session 35 part 3: speak ONE line in an explicit voice and return
     /// only when it has finished playing (or failed, or been stopped).
     /// The Debate Room's autoplay and auto-advance pace themselves on
@@ -496,6 +535,7 @@ final class VoiceService: NSObject, ObservableObject {
         isPaused = false
         nowPlayingKey = nil
         isPumping = false
+        streamedTurnKey = nil
     }
 
     /// Aug 4 2026: pause the clip that's playing right now, resumable with
@@ -609,7 +649,10 @@ final class VoiceService: NSObject, ObservableObject {
                 return
             }
             if let data {
-                await playAudio(data, key: current.item.key)
+                // `?? streamedTurnKey` covers the pieces that were prefetched
+                // BEFORE the reload handed us an id — they are already out of
+                // speakQueue, so adoptStreamedTurn cannot reach them directly.
+                await playAudio(data, key: current.item.key ?? streamedTurnKey)
             } else {
                 // Session 23: a failed synth used to be PURE silence --
                 // indistinguishable from read-aloud never firing at all. The
@@ -624,6 +667,7 @@ final class VoiceService: NSObject, ObservableObject {
         }
         isSpeaking = false
         isPumping = false
+        streamedTurnKey = nil
     }
 
     /* PART 91.10 — SYNTHESIS SPLIT OUT OF PLAYBACK, so the next sentence can

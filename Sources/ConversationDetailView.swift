@@ -3223,6 +3223,18 @@ struct ConversationDetailView: View {
                         key: nil
                     )
                 }
+                /* PART 92.13 — hand the streamed reply its id now that one
+                 * exists. Until this line, every piece of a self-starting
+                 * spoken reply carried `key: nil`, so MessageRow read
+                 * `.idle` and offered READ ALOUD where she expected Pause —
+                 * pressing it re-synthesised the whole message from the top,
+                 * which is exactly what she heard on 243 ("as if it weren't
+                 * already playing"). The reload above is the first moment
+                 * the real id exists, so this is the earliest it can be
+                 * done. Nil-safe: no reply, no adoption, no crash. */
+                if let spoken = messages.last(where: { !$0.isCreatedByUser }) {
+                    voiceService.adoptStreamedTurn(as: spoken.id)
+                }
             }
             if !streamedThisTurn, readAloudEnabled, let reply = messages.last(where: { !$0.isCreatedByUser }) {
                 // FIX (session 21, Kade: "Whit replies still come back as
