@@ -38,6 +38,34 @@ struct SpeechStreamer {
         "a.m", "p.m", "u.s", "u.k",
     ]
 
+    /* PART 92.12 — THE FLOOR IS NOT ONE NUMBER, BECAUSE THE FIRST PIECE AND
+     * EVERY PIECE AFTER IT ARE PAYING FOR DIFFERENT THINGS.
+     *
+     * Measured against the live endpoint Aug 24-25 2026, both regimes:
+     *   normal   ~1.31s fixed per-request overhead + ~12.6ms/char
+     *   degraded ~5.9s  fixed per-request overhead + ~7.1ms/char  (a ~30min
+     *            Inworld spike; same voice, same text, no deploy of ours)
+     * Audio runs ~62ms/char. So margin per piece = 0.062c - (fixed + rate*c).
+     * At 1.31s fixed EVERY piece size clears, which is why this never showed
+     * before. At 5.9s fixed a 60-char piece is ~3.3s of audio against ~6.3s
+     * of synthesis — a DEFICIT. Consecutive short sentences drain the buffer
+     * and the listener eats a whole synthesis as dead air. That is the "five
+     * or more seconds, every few sentences" a family member reported.
+     *
+     * A 160-char floor leaves ~+2.9s of margin even at 5.9s fixed overhead.
+     * But raising the floor for the FIRST piece would pay for that with
+     * time-to-first-word, which is the exact complaint 91.6 was built to fix
+     * ("a hell of a break between ding and tts speaking"). So the opener keeps
+     * the old small floor and everything after it gets the big one.
+     *
+     * ⚠️ Forge's catch, and it is the failure mode worth naming: the floor is
+     * enforced by ABSORB-FORWARD (91.8) — a piece under the floor swallows the
+     * next sentence. If the opener were ever measured against the big floor it
+     * would absorb sentence two and the fast start would be silently gone.
+     * `pieceFloor` reads `piecesEmitted == 0`, and takeReadyPiece returns the
+     * instant the floor is met, so the opener cannot absorb. firstPieceGuard()
+     * in the tests is what keeps that true. */
+    private let firstPieceChars: Int
     /// Not spoken until a piece is at least this long. A three-word opener
     /// ("Okay.") synthesised on its own costs a whole network round trip to
     /// say one word, and the queue then stutters between it and the next.
@@ -47,6 +75,13 @@ struct SpeechStreamer {
     private let maxPieceChars: Int
 
     private var buffer = ""
+    /// How many pieces this reply has actually handed out. Only the opener
+    /// (0) gets the small floor. Counted on EMIT, not on cut, so a piece that
+    /// prepare() drops (a direction with nothing to say) never spends the
+    /// fast-start allowance.
+    private var piecesEmitted = 0
+    /// The floor this piece must clear before it is worth a synthesis call.
+    private var pieceFloor: Int { piecesEmitted == 0 ? firstPieceChars : minPieceChars }
     /// The last `%%%direction%%%` seen. Steering tags lead a paragraph and are
     /// meant to colour everything after them — but each piece is synthesised as
     /// its own stateless call, so without carrying the direction forward only
@@ -61,7 +96,8 @@ struct SpeechStreamer {
     /// one enormous synthesis call the listener waits out in silence.
     private var runawayCeiling: Int { maxPieceChars * 2 }
 
-    init(minPieceChars: Int = 60, maxPieceChars: Int = 320) {
+    init(firstPieceChars: Int = 60, minPieceChars: Int = 160, maxPieceChars: Int = 320) {
+        self.firstPieceChars = firstPieceChars
         self.minPieceChars = minPieceChars
         self.maxPieceChars = maxPieceChars
     }
@@ -71,7 +107,7 @@ struct SpeechStreamer {
         buffer += chunk
         var out: [String] = []
         while let piece = takeReadyPiece() {
-            if let ready = prepare(piece) { out.append(ready) }
+            if let ready = prepare(piece) { out.append(ready); piecesEmitted += 1 }
         }
         return out
     }
@@ -81,6 +117,7 @@ struct SpeechStreamer {
         let rest = buffer
         buffer = ""
         guard let ready = prepare(rest) else { return [] }
+        piecesEmitted += 1
         return [ready]
     }
 
@@ -117,7 +154,7 @@ struct SpeechStreamer {
         while let end = sentenceEndIndex(from: searchFrom) {
             let piece = String(buffer[buffer.startIndex..<end])
             if piece.count > runawayCeiling { break }
-            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= minPieceChars {
+            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= pieceFloor {
                 buffer = String(buffer[end...])
                 return piece
             }

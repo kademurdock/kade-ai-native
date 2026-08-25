@@ -428,6 +428,83 @@ do {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// T13 — PART 92.12. THE TWO-FLOOR RULE, AND THE FAST START IT MUST NOT EAT.
+//
+// Why the floor moved at all: measured against the live endpoint Aug 24-25
+// 2026, Inworld's FIXED per-request overhead ran ~1.31s normally and ~5.9s
+// during a ~30-minute spike. Audio is ~62ms/char. So a 60-char piece is ~3.3s
+// of speech bought with ~6.3s of synthesis during a spike — a deficit, paid
+// in silence. A 160-char floor stays ahead even then.
+//
+// Why the opener is exempt: 91.6 exists because she said there was "a hell of
+// a break between ding and tts speaking." A 160-char opener would hand that
+// straight back.
+//
+// ⚠️ These two rules fight, and this test is the referee. The floor is enforced
+// by ABSORB-FORWARD — a piece under the floor swallows the next sentence. If
+// the opener were ever measured against the big floor it would absorb sentence
+// two and the fast start would be gone with every other test still green.
+func testTwoFloors() {
+    // Six clean sentences, each ~70 chars: over the opener's floor, under the
+    // running floor. Exactly the shape that separates the two rules.
+    let sentences = [
+        "The first thing she said was short enough to get moving quickly here.",
+        "The second sentence is also about seventy characters long in total ok.",
+        "A third one follows it with roughly the same length as all the others.",
+        "The fourth continues the pattern so the absorb rule has room to work..",
+        "Number five keeps going with the same approximate size as before now.",
+        "And the sixth one closes the reply out at about the same length too..",
+    ]
+    let text = sentences.joined(separator: " ")
+
+    for size in [1, 7, 40, 400] {
+        let pieces = run(text, chunk: size).map(stripCarry)
+        guard !pieces.isEmpty else {
+            check("T13 @\(size): something was emitted", false)
+            continue
+        }
+        // The opener may not absorb: it clears 60 on its own, so it must be
+        // ONE sentence, not two glued together.
+        let first = normalized(pieces[0])
+        check("T13 @\(size): the opener is a single sentence (fast start intact)",
+              first.count < 140,
+              "opener was \(first.count) chars: \(first)")
+
+        // Everything after the opener must clear the running floor, or be the
+        // last piece (a genuine remainder at flush time is allowed to be short).
+        for (i, p) in pieces.enumerated() where i > 0 && i < pieces.count - 1 {
+            let n = normalized(p)
+            check("T13 @\(size): piece \(i) clears the 160 floor",
+                  n.count >= 160,
+                  "piece \(i) was \(n.count) chars: \(n)")
+        }
+        // Nothing may be lost or reordered by the new floor.
+        let rebuilt = normalized(pieces.joined(separator: " "))
+        checkEqual("T13 @\(size): every word survives, in order", rebuilt, normalized(text))
+    }
+}
+testTwoFloors()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T14 — the opener exemption is spent exactly once, and a dropped piece does
+// not spend it. A reply that OPENS on a bare direction (92.11 drops it, no
+// synthesis) must still get its fast first spoken piece.
+func testOpenerExemptionSurvivesADroppedPiece() {
+    let text = "%%%settling in like you have all night%%%\n"
+        + "Short one first, just to get the sound started for her here.\n"
+        + "Then a second sentence that is long enough to be its own piece easily.\n"
+        + "And a third that keeps the reply going for a good while after that..\n"
+    let pieces = run(text, chunk: 5).filter { !isBareDirection($0) }
+    guard let first = pieces.first.map(stripCarry).map(normalized) else {
+        check("T14: something was spoken", false); return
+    }
+    check("T14: a bare opening direction does not spend the fast-start allowance",
+          first.count < 140,
+          "first spoken piece was \(first.count) chars: \(first)")
+}
+testOpenerExemptionSurvivesADroppedPiece()
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 print("")
 print("  Speech pipeline — \(checks) checks")
@@ -437,6 +514,10 @@ if failures.isEmpty {
     print("  NOT COVERED BY THIS SUITE, said plainly so nobody reads green as safe:")
     print("    - the VoiceService pump races (155's two-pumps-one-queue, 156's serial")
     print("      fetch stall) live in actor-scheduled audio code, not in this struct.")
+    print("    - the two-floor rule (T13/T14) is checked on TEXT only. It proves the")
+    print("      pieces are the right SIZE; it cannot prove the resulting margin beats")
+    print("      whatever the provider's latency is doing tonight.")
+    print("    - prefetch depth 2 is NOT covered here at all — it lives in the pump.")
     print("    - nothing here plays audio or listens to it. This proves the TEXT that")
     print("      reaches the synthesiser is whole, ordered and sensibly cut. It cannot")
     print("      prove what comes out of the speaker.")

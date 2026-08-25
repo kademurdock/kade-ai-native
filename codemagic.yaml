@@ -16,6 +16,26 @@ workflows:
         APP_STORE_APPLE_ID: 6791024001
       xcode: latest
     scripts:
+      # PART 92.12 — THE SPEECH TESTS ARE A PUBLISH GATE NOW, NOT A GOOD HABIT.
+      #
+      # Forge's call, Aug 25 2026, asked for before shipping a speech change:
+      # in August FOUR compile-green builds in a row were wrong on her phone,
+      # and every one of them was wrong in the dimension a compile gate cannot
+      # see — runtime timing and audio behaviour. run-speech-tests.sh existed
+      # the whole time and was a thing sessions were trusted to remember.
+      #
+      # It runs FIRST, before signing and before the build, so a red suite
+      # costs seconds of Mac time instead of a full build. Non-zero exits the
+      # workflow, so there is no path from a broken splitter to TestFlight.
+      #
+      # It needs swiftc, which Xcode already provides here — the same script
+      # refuses to run in an agent sandbox, where the toolchain wants ~3 GB
+      # that a session does not have. That asymmetry is exactly why this
+      # belongs on the Mac: it is the only machine in the chain that can.
+      - name: Speech pipeline tests (gate — a red suite blocks the build)
+        script: |
+          set -e
+          ./run-speech-tests.sh
       - name: Generate Xcode project (XcodeGen)
         script: |
           set -e
@@ -152,6 +172,17 @@ workflows:
     environment:
       xcode: latest
     scripts:
+      # PART 92.12 — the speech suite runs HERE TOO, and this is the lane that
+      # matters most: no ASC integration, no signing, no path to her phone, so a
+      # session can get a REAL red/green on a speech change for a few cents and
+      # zero risk. run-speech-tests.sh refuses to run in an agent sandbox (the
+      # Swift toolchain wants ~3 GB that a session does not have), which meant
+      # the honest state of a splitter change was "compiles in my head" until
+      # this existed. It runs FIRST so a red suite costs seconds, not a build.
+      - name: Speech pipeline tests (the real gate for splitter changes)
+        script: |
+          set -e
+          ./run-speech-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
       - name: Generate Xcode project (XcodeGen)
         script: |
           set -e
@@ -187,6 +218,7 @@ workflows:
     artifacts:
       - first-errors.txt
       - compile.log
+      - speech-tests.log
 
   # ─────────────────────────────────────────────────────────────────────────────
   # GAP 3 — APPLE'S OWN ACCESSIBILITY AUDIT. The third no-signing workflow.

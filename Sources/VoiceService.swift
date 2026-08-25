@@ -557,35 +557,53 @@ final class VoiceService: NSObject, ObservableObject {
         isPumping = true
         isSpeaking = true
         let generation = cancelGeneration
-        /* One clip in flight ahead of the one being spoken. Not two: a deeper
-         * queue would synthesize text the user may never hear (they stop, or
-         * a new reply supersedes it) and every one of those costs real money
-         * and real characters against the TTS meter. One is what it takes to
-         * cover the gap; more is waste. */
-        var ahead: (item: SpeakItem, task: Task<Data?, Never>)?
-        while !speakQueue.isEmpty || ahead != nil {
-            let current: (item: SpeakItem, task: Task<Data?, Never>)
-            if let a = ahead {
-                current = a
-                ahead = nil
-            } else {
-                let item = speakQueue.removeFirst()
-                current = (item, prefetch(item))
-            }
-            // Start the NEXT one now, so its two seconds overlap with this
-            // one's four seconds of playback instead of following them.
-            if !speakQueue.isEmpty {
+        /* PART 92.12 — TWO CLIPS IN FLIGHT, NOT ONE.
+         *
+         * 91.10 held exactly one, and its comment argued against two: a deeper
+         * queue synthesizes text the user may never hear (they stop, or a new
+         * reply supersedes it) and every one of those costs real money.
+         *
+         * That reasoning is still true and it is now outweighed, so it is being
+         * overruled deliberately rather than quietly. The waste case is bounded:
+         * one extra clip per INTERRUPTED reply, ~160 characters after the piece-
+         * sizing change — pennies. The case for depth is the Aug 24 spike, when
+         * Inworld's fixed per-request overhead went ~1.31s -> ~5.9s for half an
+         * hour and a family member heard 5+ second holes.
+         *
+         * Piece sizing and prefetch depth are doing DIFFERENT jobs, which is why
+         * the fix needs both. Sizing sets the margin on each sentence: a 160-char
+         * floor clears a 5.9s overhead. Depth sets how many sentences of runway
+         * is banked, so margin earned on long sentences can pay for one slow one.
+         * Bigger pieces at depth 1 survive a repeat of Aug 24. Depth 2 is what
+         * survives a worse night, because it tolerates VARIANCE instead of just
+         * moving the threshold. (Forge's call, asked for by Kade before shipping.) */
+        let prefetchDepth = 2
+        var inflight: [(item: SpeakItem, task: Task<Data?, Never>)] = []
+        /// Fill the pipe up to `current + prefetchDepth` without ever awaiting —
+        /// every prefetch started here overlaps the clip already playing.
+        func topUp() {
+            while inflight.count <= prefetchDepth, !speakQueue.isEmpty {
                 let next = speakQueue.removeFirst()
-                ahead = (next, prefetch(next))
+                inflight.append((next, prefetch(next)))
             }
+        }
+        topUp()
+        while !inflight.isEmpty {
+            let current = inflight.removeFirst()
+            // Refill BEFORE awaiting, so the next syntheses run under this
+            // clip's playback instead of following it.
+            topUp()
             let data = await current.task.value
             // Stopped while that was in flight? Drop it, resume the waiter,
             // and leave — never speak past a stop.
             if generation != cancelGeneration {
                 current.task.cancel()
                 current.item.completion?.resume()
-                ahead?.task.cancel()
-                ahead?.item.completion?.resume()
+                for pending in inflight {
+                    pending.task.cancel()
+                    pending.item.completion?.resume()
+                }
+                inflight.removeAll()
                 isSpeaking = false
                 isPumping = false
                 return
@@ -601,6 +619,8 @@ final class VoiceService: NSObject, ObservableObject {
             current.item.completion?.resume()
             nowPlayingKey = nil
             isPaused = false
+            // Sentences that streamed in during playback join the pipe now.
+            topUp()
         }
         isSpeaking = false
         isPumping = false
