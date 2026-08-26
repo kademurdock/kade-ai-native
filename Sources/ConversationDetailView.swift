@@ -3086,10 +3086,37 @@ struct ConversationDetailView: View {
                             liveThinkExpanded = true
                         }
                         live.lastThinkProgressAnnounce = Date()
-                        UIAccessibility.post(
-                            notification: .announcement,
-                            argument: "Deep thoughts are streaming — the thinking bubble is under the last message."
-                        )
+                        /* AUG 26 2026 — THE FIRST-THINK ANNOUNCEMENT IS GONE,
+                         * AND ITS PRIORITY IS WHY. It posted a bare String,
+                         * which iOS treats as DEFAULT priority, and a
+                         * default-priority announcement INTERRUPTS whatever
+                         * VoiceOver is mid-way through. On send, focus lands on
+                         * her just-sent message and VoiceOver starts reading it
+                         * — so the first think chunk arriving mid-sentence
+                         * steamrolled her own message, every single time.
+                         *
+                         * Compare the 20-second tick immediately below: it
+                         * posts an NSAttributedString carrying
+                         * .accessibilitySpeechAnnouncementPriority = .low,
+                         * which QUEUES and waits for silence. That one has
+                         * always been polite. This one never was.
+                         *
+                         * It got worse rather than louder: auto-think is on for
+                         * Kiana and the server-side thinking gists (KADE_GIST,
+                         * live on reframe) mean think content now streams on
+                         * essentially every deep turn. What used to fire
+                         * sometimes started firing almost always.
+                         *
+                         * Deleted rather than demoted to .low, because nothing
+                         * is lost: the send earcon and the thinking-loop earcon
+                         * already say a reply is working, and the collapsed
+                         * bubble carries its own label on focus ("Closed, about
+                         * N characters of thought so far"). What she asked for
+                         * is TRUE SILENCE between send and reply.
+                         *
+                         * `announcedThinking` and `lastThinkProgressAnnounce`
+                         * are still set above — the progress ticks below depend
+                         * on both and are deliberately untouched. */
                     } else if spokenThinkingProgress,
                               !liveThinkExpanded,
                               Date().timeIntervalSince(live.lastThinkProgressAnnounce) >= 20 {
@@ -3724,26 +3751,46 @@ private struct MessageRow: View {
                  * and tells you the honest answer. So: always present, and
                  * when there is nothing to copy it SAYS so rather than
                  * quietly doing nothing. */
-                Button("Copy thoughts") {
-                    if let thoughts = message.thoughtsText {
-                        UIPasteboard.general.string = thoughts
-                        UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
-                    } else {
-                        UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
+                /* AUG 26 2026 — ...BUT ONLY ON REPLIES. The Aug-18 reasoning
+                 * above is about AGENT messages, where a think block is
+                 * possible but only present ~25% of the time; keeping it
+                 * always-offered there is right and stays. A message SHE typed
+                 * can never carry a think block under any circumstances, so on
+                 * her own messages this action was permanent dead weight in the
+                 * rotor that answered "This reply didn't include any thoughts"
+                 * forever. Sometimes-there is worse than always-there; never-
+                 * possible is worse than both. */
+                if !message.isCreatedByUser {
+                    Button("Copy thoughts") {
+                        if let thoughts = message.thoughtsText {
+                            UIPasteboard.general.string = thoughts
+                            UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
+                        } else {
+                            UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
+                        }
                     }
                 }
-                switch voicePlayback {
-                case .playing:
-                    Button("Pause voice message") { onPauseResume() }
-                case .paused:
-                    Button("Resume voice message") { onPauseResume() }
-                case .idle:
-                    Button("Play as voice message") { onReadAloud() }
+                /* Voice actions are for REPLIES. Read-aloud on her own message
+                 * synthesises her words in the character's voice, which is not
+                 * a feature anybody asked for — it was collateral from the same
+                 * always-offer sweep. "Open reading view" was already correctly
+                 * nil on user messages; this brings the rest in line. */
+                if !message.isCreatedByUser {
+                    switch voicePlayback {
+                    case .playing:
+                        Button("Pause voice message") { onPauseResume() }
+                    case .paused:
+                        Button("Resume voice message") { onPauseResume() }
+                    case .idle:
+                        Button("Play as voice message") { onReadAloud() }
+                    }
                 }
                 if let onReadingView {
                     Button("Open reading view") { onReadingView() }
                 }
-                Button("Save voice message") { onSaveVoiceMessage() }
+                if !message.isCreatedByUser {
+                    Button("Save voice message") { onSaveVoiceMessage() }
+                }
                 Button("Share text") { onShare() }
                 if canEdit {
                     Button("Edit and resend") { onEdit() }
@@ -3801,35 +3848,39 @@ private struct MessageRow: View {
             } label: {
                 Label("Copy Text", systemImage: "doc.on.doc")
             }
-            // Always shown, same reasoning as the rotor action above.
-            Button {
-                if let thoughts = message.thoughtsText {
-                    UIPasteboard.general.string = thoughts
-                    UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
-                } else {
-                    UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
-                }
-            } label: {
-                Label("Copy Thoughts", systemImage: "brain")
-            }
-            switch voicePlayback {
-            case .playing:
+            // Always shown on REPLIES, same reasoning as the rotor action
+            // above — and gated off her own messages for the same reason, so
+            // the sighted menu and the rotor list can never disagree.
+            if !message.isCreatedByUser {
                 Button {
-                    onPauseResume()
+                    if let thoughts = message.thoughtsText {
+                        UIPasteboard.general.string = thoughts
+                        UIAccessibility.post(notification: .announcement, argument: "Thoughts copied to clipboard.")
+                    } else {
+                        UIAccessibility.post(notification: .announcement, argument: "This reply didn't include any thoughts.")
+                    }
                 } label: {
-                    Label("Pause Voice Message", systemImage: "pause.circle")
+                    Label("Copy Thoughts", systemImage: "brain")
                 }
-            case .paused:
-                Button {
-                    onPauseResume()
-                } label: {
-                    Label("Resume Voice Message", systemImage: "play.circle")
-                }
-            case .idle:
-                Button {
-                    onReadAloud()
-                } label: {
-                    Label("Play as Voice Message", systemImage: "speaker.wave.2")
+                switch voicePlayback {
+                case .playing:
+                    Button {
+                        onPauseResume()
+                    } label: {
+                        Label("Pause Voice Message", systemImage: "pause.circle")
+                    }
+                case .paused:
+                    Button {
+                        onPauseResume()
+                    } label: {
+                        Label("Resume Voice Message", systemImage: "play.circle")
+                    }
+                case .idle:
+                    Button {
+                        onReadAloud()
+                    } label: {
+                        Label("Play as Voice Message", systemImage: "speaker.wave.2")
+                    }
                 }
             }
             if let onReadingView {
@@ -3839,15 +3890,17 @@ private struct MessageRow: View {
                     Label("Reading View", systemImage: "book")
                 }
             }
-            Button {
-                onSaveVoiceMessage()
-            } label: {
-                Label(
-                    isPreparingVoiceMessage ? "Preparing Voice Message" : "Save Voice Message",
-                    systemImage: "square.and.arrow.down"
-                )
+            if !message.isCreatedByUser {
+                Button {
+                    onSaveVoiceMessage()
+                } label: {
+                    Label(
+                        isPreparingVoiceMessage ? "Preparing Voice Message" : "Save Voice Message",
+                        systemImage: "square.and.arrow.down"
+                    )
+                }
+                .disabled(isPreparingVoiceMessage)
             }
-            .disabled(isPreparingVoiceMessage)
             Button {
                 onShare()
             } label: {
