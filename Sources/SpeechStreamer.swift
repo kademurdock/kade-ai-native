@@ -90,16 +90,60 @@ struct SpeechStreamer {
     /// reason a streamed reply does not go emotionally dead after sentence one.
     private var carriedDirection: String?
 
+    /* ⭐ PART 94 — THE CARRY HAD NO BRAKE, AND THAT IS THE BUG SHE HEARD.
+     *
+     * Her report, Aug 28 2026: "a single tag carried over the entire message."
+     * She opened a reply with one %%%slow and soothing%%% and never re-tagged,
+     * and every sentence of that reply came out slow and soothing.
+     *
+     * ⚠️ AND THE CAP FOR THIS ALREADY EXISTED — IN THE WRONG LANE. The proxy's
+     * `applySteeringTags` has capped its paragraph carry at TTS_STEER_CARRY=2
+     * since Aug 18, written for this exact complaint ("a direction should
+     * colour the thought it was written for and the next beat or two, not
+     * haunt the rest of the reply"). It never fires for a streamed reply,
+     * and it CANNOT: this struct re-stamps `%%%direction%%%` onto the front
+     * of every piece, and each piece is its own request, so from the proxy's
+     * side every paragraph it sees was tagged BY THE AUTHOR. A paragraph that
+     * opens with its own tag is exactly the case the proxy skips. The cap was
+     * being handed a forgery every time.
+     *
+     * So the brake belongs here, where the carry is actually created, and it
+     * is set to match the proxy's number rather than invent a second one.
+     * Two bounds because pieces vary from 160 to 640 characters and either
+     * one alone would be the wrong shape: the direction colours the thought
+     * it opened plus the next beat or two, then the voice returns to her own
+     * register exactly as if the author had written %%%reset%%%.
+     *
+     * NOT zero, and this is the trap 91.10 already fell into once: dropping
+     * the carry entirely is what makes a streamed reply go emotionally dead
+     * after sentence one, which is the whole reason carriedDirection exists.
+     * The fix for "it never stops" is not "it never starts." */
+    private let carryMaxPieces: Int
+    private let carryMaxChars: Int
+    /// Pieces that have been stamped with the CARRIED direction (the authored
+    /// piece itself is not counted -- the author asked for that one).
+    private var carriedPieces = 0
+    /// Characters spoken under the carried direction, the second bound.
+    private var carriedChars = 0
+
     /// Past this, a "sentence" is not a sentence any more and the soft cut
     /// takes over. Twice the cap: long enough that a genuinely long sentence
     /// still gets spoken whole, short enough that a runaway cannot turn into
     /// one enormous synthesis call the listener waits out in silence.
     private var runawayCeiling: Int { maxPieceChars * 2 }
 
-    init(firstPieceChars: Int = 60, minPieceChars: Int = 160, maxPieceChars: Int = 320) {
+    init(
+        firstPieceChars: Int = 60,
+        minPieceChars: Int = 160,
+        maxPieceChars: Int = 320,
+        carryMaxPieces: Int = 2,
+        carryMaxChars: Int = 600
+    ) {
         self.firstPieceChars = firstPieceChars
         self.minPieceChars = minPieceChars
         self.maxPieceChars = maxPieceChars
+        self.carryMaxPieces = carryMaxPieces
+        self.carryMaxChars = carryMaxChars
     }
 
     /// Feed a streamed chunk; get back whatever is now ready to speak.
@@ -279,11 +323,36 @@ struct SpeechStreamer {
              * from the buffer, so returning nil drops it without stalling: no
              * repeat of 91.8's deadlock, where bailing left the same text at
              * the front of the buffer forever. */
-            carriedDirection = lead
+            /* ⭐ PART 94 — %%%reset%%% IS AN ENDING, NOT A DIRECTION.
+             *
+             * The persona tells her to close a steered passage with
+             * %%%reset%%% and the PROXY has honoured that since Aug 25
+             * (soundsIsResetTag ends the paragraph carry). This lane never
+             * learned the word. "reset" is not in the non-verbal set above,
+             * so it fell through as an ordinary direction and became the
+             * CARRIED one -- every following piece went out stamped
+             * `%%%reset%%%`, which is the precise opposite of what the
+             * author asked for and left the real direction un-ended.
+             * The one tool she had for saying STOP was a no-op here. */
+            if Self.isResetTag(lead) {
+                clearCarry()
+            } else {
+                carriedDirection = lead
+                carriedPieces = 0
+                carriedChars = 0
+            }
             guard hasSpeechAfterDirection(piece) else { return nil }
             return piece
         }
         if let carried = carriedDirection {
+            // Spent: the direction has coloured its thought and the next beat
+            // or two. Return to her own register, same as a written reset.
+            if carriedPieces >= carryMaxPieces || carriedChars >= carryMaxChars {
+                clearCarry()
+                return piece
+            }
+            carriedPieces += 1
+            carriedChars += piece.count
             return "%%%\(carried)%%% \(piece)"
         }
         return piece
@@ -310,5 +379,18 @@ struct SpeechStreamer {
             .trimmingCharacters(in: .whitespaces)
         let nonVerbal: Set<String> = ["laugh", "breathe", "clear throat", "sigh", "cough", "yawn"]
         return nonVerbal.contains(inner.lowercased()) ? nil : inner
+    }
+
+    /// The author's way of saying "stop steering, go back to normal."
+    /// Case- and space-insensitive, matching `sounds.js`'s `isResetTag` on
+    /// the proxy so the two halves can never disagree about the word.
+    private static func isResetTag(_ s: String) -> Bool {
+        s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "reset"
+    }
+
+    private mutating func clearCarry() {
+        carriedDirection = nil
+        carriedPieces = 0
+        carriedChars = 0
     }
 }

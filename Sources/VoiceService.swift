@@ -619,6 +619,35 @@ final class VoiceService: NSObject, ObservableObject {
          * moving the threshold. (Forge's call, asked for by Kade before shipping.) */
         let prefetchDepth = 2
         var inflight: [(item: SpeakItem, task: Task<Data?, Never>)] = []
+        /* ⭐ PART 94 — AN ERROR TONE IN THE MIDDLE OF A REPLY IS A LIE.
+         *
+         * Her report, Aug 28 2026: "one of the sections of voiceclip gave an
+         * error sound" — the earcon fired mid-message and the rest of the
+         * reply kept playing, so what she heard was a hole with an alarm in
+         * it. The alarm was the honest thing to do in session 23, when the
+         * only alternative was silence indistinguishable from read-aloud
+         * never firing at all. It stopped being honest the day this pump
+         * started streaming a reply as N separate synthesis calls: one
+         * sentence hiccuping is not "something broke," and 92.11 already
+         * showed a single reply making 29 of these calls.
+         *
+         * So the tone now means what a listener assumes it means — YOU GOT
+         * NOTHING — and nothing else. A piece that dies while other pieces
+         * are playing is skipped quietly and left in the breadcrumb trail,
+         * where a session can find it without her having to describe a sound.
+         * A whole reply that never makes a sound still boops, exactly once,
+         * however many of its pieces failed.
+         *
+         * ⚠️ THE KNOWN EDGE, said plainly rather than hidden: `playedAnything`
+         * is scoped to this PUMP RUN, not to one reply, so a second reply that
+         * fails completely while a first one played fine goes quiet instead of
+         * booping. Scoping it per reply was tried and is worse — a streamed
+         * reply's pieces carry a nil key until adoptStreamedTurn lands one
+         * mid-flight, so a per-key reset would fire a false alarm in the exact
+         * middle of a reply, which is the bug being fixed. A missed tone beats
+         * a wrong tone. */
+        var playedAnything = false
+        var failedPieces = 0
         /// Fill the pipe up to `current + prefetchDepth` without ever awaiting —
         /// every prefetch started here overlaps the clip already playing.
         func topUp() {
@@ -653,17 +682,24 @@ final class VoiceService: NSObject, ObservableObject {
                 // BEFORE the reload handed us an id — they are already out of
                 // speakQueue, so adoptStreamedTurn cannot reach them directly.
                 await playAudio(data, key: current.item.key ?? streamedTurnKey)
+                playedAnything = true
             } else {
-                // Session 23: a failed synth used to be PURE silence --
-                // indistinguishable from read-aloud never firing at all. The
-                // error boop (gated by the Sound switch) says which half died.
-                Earcons.shared.play(.error)
+                // Session 23's boop lives on below, at the END of the pump and
+                // only if nothing at all was spoken. See the note up top.
+                failedPieces += 1
+                KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
             }
             current.item.completion?.resume()
             nowPlayingKey = nil
             isPaused = false
             // Sentences that streamed in during playback join the pipe now.
             topUp()
+        }
+        // Session 23's rule, kept and narrowed: a reply that made no sound at
+        // all must never be indistinguishable from read-aloud never firing.
+        if failedPieces > 0 && !playedAnything {
+            KadeBreadcrumbs.drop("tts: WHOLE reply failed to synthesise (\(failedPieces) pieces) -- earcon")
+            Earcons.shared.play(.error)
         }
         isSpeaking = false
         isPumping = false
@@ -705,11 +741,46 @@ final class VoiceService: NSObject, ObservableObject {
         if let voice { fields.append(("voice", voice)) }
         if let speed { fields.append(("speed", String(speed))) }
 
-        let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
-        guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {
-            return nil
+        /* ⭐ PART 94 — ONE RETRY, BECAUSE THE FAILURE CLASS HERE IS LATENCY.
+         *
+         * Every measured failure on this endpoint has been transient: the
+         * Aug-24 Inworld spike (fixed overhead 1.31s -> 5.9s for half an
+         * hour, same voice, same text, no deploy of ours), a 5xx from the
+         * proxy's upstream, a timeout. That class usually clears on the very
+         * next attempt, and the cost of finding out is one extra call on a
+         * piece that was otherwise going to be a hole in her reply.
+         *
+         * Only the transient class is retried. A 401, a 400, a 413 will fail
+         * identically the second time and retrying them just doubles the
+         * spend and the wait. A 200 carrying zero bytes IS transient — 92.11
+         * measured that shape live on this exact endpoint.
+         *
+         * The request is rebuilt each attempt rather than reused: a
+         * multipart body is a stream, and handing a consumed one back to
+         * URLSession is a class of bug that reads as "the server did it." */
+        func transientStatus(_ code: Int) -> Bool {
+            code >= 500 || code == 408 || code == 429
         }
-        return data
+        for attempt in 0...1 {
+            let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
+            guard let (data, http) = try? await client.send(req) else {
+                // No response at all -- the most transient shape there is.
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 400_000_000); continue }
+                KadeBreadcrumbs.drop("tts: no response after retry (\(text.count) chars)")
+                return nil
+            }
+            if http.statusCode == 200, !data.isEmpty {
+                if attempt == 1 { KadeBreadcrumbs.drop("tts: recovered on retry") }
+                return data
+            }
+            let retryable = transientStatus(http.statusCode) || (http.statusCode == 200 && data.isEmpty)
+            guard retryable, attempt == 0 else {
+                KadeBreadcrumbs.drop("tts: synth failed HTTP \(http.statusCode), \(data.count) bytes")
+                return nil
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        return nil
     }
 
     /// Kick a synthesis off now and hand back the handle. Nothing awaits this

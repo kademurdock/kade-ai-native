@@ -505,6 +505,102 @@ func testOpenerExemptionSurvivesADroppedPiece() {
 testOpenerExemptionSurvivesADroppedPiece()
 
 // ─────────────────────────────────────────────────────────────────────────────
+// T15 — HER AUG-28 REPORT: "a single tag carried over the entire message."
+// One authored direction, six sentences, and every one of them came out
+// steered. The carry now spends itself after the thought it opened plus the
+// next beat or two, and the rest of the reply returns to her own register.
+//
+// RED-PROOF: delete the two bounds in prepare() and this goes red at 6 stamped.
+let steeredReply = "%%%slow and soothing like you are talking somebody down%%%"
+    + " Hey, I need you to actually breathe with me for a second here before we go anywhere near the rest of it, because you have been holding your shoulders up by your ears since Tuesday.\n"
+    + "The number came back and it moved the wrong direction, which is not nothing and I am not going to sit here and tell you that it is nothing, because you would know I was lying.\n"
+    + "But it is also not the thing you have been quietly afraid of all week, and I want that said out loud before your brain runs off and writes the whole ending by itself tonight.\n"
+    + "Your doctor wants a second draw on Friday morning before she is willing to say one single word about what any of it means, and honestly that is the right call for her to make.\n"
+    + "So Friday is the day that actually decides something, and today is just a day you have to get through, which is a much smaller job than the one you have been doing all week.\n"
+    + "Between now and then you can put the whole thing down for a few hours and go do something with your hands, and that is not denial, that is just you pacing yourself properly.\n"
+
+func testCarryDecays() {
+    let pieces = run(steeredReply, chunk: 7).filter { !isBareDirection($0) }
+    let stamped = pieces.filter { $0.hasPrefix("%%%") }.count
+    check("T15: the carry stops instead of haunting the whole reply",
+          stamped < pieces.count,
+          "\(stamped) of \(pieces.count) pieces carried the direction")
+    check("T15: it stops after the authored piece plus two beats",
+          stamped <= 3,
+          "\(stamped) pieces steered — the bound is the authored one plus 2")
+    // The steered pieces are the EARLY ones. A direction colours the thought
+    // it opened, never a passage three sentences downstream.
+    let firstClean = pieces.firstIndex { !$0.hasPrefix("%%%") } ?? pieces.count
+    let lastStamped = pieces.lastIndex { $0.hasPrefix("%%%") } ?? -1
+    check("T15: the carry is contiguous from the top, never resumed later",
+          lastStamped < firstClean,
+          "last stamped at \(lastStamped), first clean at \(firstClean)")
+}
+testCarryDecays()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T16 — a NEW authored direction re-arms the carry. The decay must not become
+// "the back half of every reply is flat": the author is still in charge.
+//
+// ⚠️ HONEST LABEL: this one is a NO-REGRESSION guard, not a red-proof. It
+// passes against the old code too, by design — it exists to catch a future
+// change that makes the decay too eager, not to convict the Aug-28 bug.
+func testReTaggingReArmsTheCarry() {
+    let text = "%%%dry as hell like you are already unimpressed%%%"
+        + " One, and this is the first real thing said here, written long enough that it stands on its own as a spoken piece instead of getting absorbed into the sentence after it.\n"
+        + "Two, which is also long enough to stand alone as its own spoken piece, and it should still be carrying the first direction because it is the very next beat after it.\n"
+        + "Three, still long enough to be its own piece, and by this point the first direction has spent its budget completely and this text should be going out perfectly clean.\n"
+        + "%%%warmer now like you actually mean this part%%% Four, said a different way entirely, and long enough on its own that the splitter will hand it over as one piece.\n"
+        + "Five, which should be carrying the SECOND direction now and must never go back to carrying the first one, because that one was finished several sentences ago.\n"
+    let pieces = run(text, chunk: 9).filter { !isBareDirection($0) }
+    let carriedWarm = pieces.filter { $0.hasPrefix("%%%warmer now") }.count
+    check("T16: a re-tag re-arms the carry", carriedWarm >= 2,
+          "only \(carriedWarm) pieces carried the second direction, of \(pieces.count)")
+    let afterWarm = pieces.drop(while: { !$0.contains("warmer now") })
+    let staleDry = afterWarm.filter { $0.hasPrefix("%%%dry as hell") }.count
+    check("T16: the old direction never comes back after a new one", staleDry == 0,
+          "\(staleDry) pieces carried the stale direction past the re-tag")
+}
+testReTaggingReArmsTheCarry()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T17 — %%%reset%%% ends the carry instead of BECOMING it. The proxy has
+// honoured reset since Aug 25; this lane treated it as an ordinary direction,
+// so the literal word got stamped onto every later piece and the real
+// direction was never actually ended.
+func testResetEndsTheCarryAndIsNeverCarried() {
+    let text = "%%%cracking up barely able to get it out%%%"
+        + " Girl. GIRL. No you did not, and I am going to need every single detail of that in order, starting from the part where you thought this was a reasonable plan.\n"
+        + "%%%reset%%% Anyway, here is the real part of it, which is the actual reason I brought the whole thing up with you in the first place instead of just quietly letting it go by.\n"
+        + "And this sentence right after that one, which has to come out completely clean of every single tag, because the author already said stop and she meant it when she said it.\n"
+        + "And one more after that as well, still clean, because a reset does not wear off after a sentence or two the way an ordinary steering direction is supposed to wear off.\n"
+    let pieces = run(text, chunk: 6).filter { !isBareDirection($0) }
+    let resetSeen = pieces.filter { $0.contains("%%%reset%%%") }.count
+    check("T17: reset appears once — where she wrote it, never carried", resetSeen <= 1,
+          "\(resetSeen) pieces carried a literal reset tag")
+    let afterReset = pieces.drop(while: { !$0.contains("%%%reset%%%") }).dropFirst()
+    let stale = afterReset.filter { $0.hasPrefix("%%%") }.count
+    check("T17: nothing after a reset is steered", stale == 0,
+          "\(stale) of \(afterReset.count) pieces after the reset were still steered")
+}
+testResetEndsTheCarryAndIsNeverCarried()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T18 — the fix does not undo 91.10. A steered passage must STILL be steered
+// past its first sentence, which is the entire reason the carry exists. The
+// cure for "it never stops" is not "it never starts."
+func testCarryStillWorksAtAll() {
+    let text = "%%%quick and animated still a little spooked by it%%%"
+        + " So I am walking up to the door and the porch light is already off, which it never is at that hour, and I am telling myself there is a normal reason for that.\n"
+        + "And then the door is standing open about four inches, and I just stopped dead right there on the step because that door sticks and it does not drift open.\n"
+    let pieces = run(text, chunk: 8).filter { !isBareDirection($0) }
+    let stamped = pieces.filter { $0.hasPrefix("%%%") }.count
+    check("T18: the carry still carries (a reply does not go flat after line one)",
+          stamped >= 2, "only \(stamped) of \(pieces.count) pieces were steered")
+}
+testCarryStillWorksAtAll()
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 print("")
 print("  Speech pipeline — \(checks) checks")
