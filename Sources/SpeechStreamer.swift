@@ -369,16 +369,92 @@ struct SpeechStreamer {
     }
 
     /// A leading `%%%…%%%` tag, if this piece opens with one. Non-verbal cues
-    /// (laugh, sigh) are one-shots and are deliberately NOT carried forward —
-    /// carrying "laugh" would make her laugh through the whole reply.
+    /// (laugh, sigh, gasp…) are one-shots and are deliberately NOT carried
+    /// forward — carrying "laugh" would make her laugh through the whole reply.
     private func leadingDirection(of piece: String) -> String? {
         guard piece.hasPrefix("%%%"),
               let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
         else { return nil }
         let inner = String(piece[piece.index(piece.startIndex, offsetBy: 3)..<close.lowerBound])
             .trimmingCharacters(in: .whitespaces)
-        let nonVerbal: Set<String> = ["laugh", "breathe", "clear throat", "sigh", "cough", "yawn"]
-        return nonVerbal.contains(inner.lowercased()) ? nil : inner
+        return Self.isNonVerbalSound(inner) ? nil : inner
+    }
+
+    /* ⭐ PART 95 (Aug 28 2026) — THE SOUND LIST CATCHES UP WITH THE PROXY'S.
+     *
+     * This set held SIX sounds while Inworld recognizes about FORTY-FIVE
+     * (docs.inworld.ai/tts/capabilities/steering, re-read this date). The
+     * proxy's sounds.js has carried the full list since Part 92.14; this copy
+     * was left behind, so a piece opening %%%gasp%%% or %%%chuckle%%% was
+     * classified a DIRECTION and carried onto the next two pieces — a gasp at
+     * the top of every piece, the exact failure the six-name comment above
+     * promised to prevent. Sibling drift is the house bug of the week: the
+     * TTS retry ladders, the phone lane's copy of this very list, and now
+     * this one. sounds.js (inworld-tts-proxy) and voice-stream.js (bridge)
+     * carry the same canonical list; a change to any copy is a change to all
+     * three, and each file says so.
+     *
+     * Matching mirrors the docs: case, spacing and punctuation ignored,
+     * common inflections accepted ([chuckles], [clears throat],
+     * [throat clearing] all resolve). [shout] [scream] [sing] [hum] [mumble]
+     * describe HOW words are spoken — instructions, not sounds — and MUST
+     * stay carriable or a shout dies after one piece. */
+    private static let canonicalSounds: [String] = [
+        "breathe", "sigh", "gasp", "pant", "huff", "grunt", "groan", "moan",
+        "laugh", "chuckle", "giggle", "cackle", "snort", "scoff",
+        "cry", "sob", "wail", "whimper", "whine", "sniffle", "sniff", "shriek", "squeal", "howl",
+        "clear throat", "cough", "sneeze", "hiccup", "yawn", "burp", "snore", "choke", "gag",
+        "swallow", "gulp", "spit",
+        "tongue click", "mouth click", "mouth sound", "lip smack", "kiss", "shush", "raspberry",
+        "whistle", "bleh",
+        "chew", "slurp",
+        "babble", "beatbox", "growl",
+    ]
+    private static let notSounds: Set<String> = ["shout", "scream", "sing", "hum", "mumble"]
+
+    private static let soundSet: Set<String> = {
+        var out = Set<String>()
+        func inflections(_ w: String) -> [String] {
+            var v = [w]
+            v.append(w.hasSuffix("s") ? w : w + "s")
+            v.append(w.hasSuffix("e") ? String(w.dropLast()) + "ing" : w + "ing")
+            v.append(w.hasSuffix("e") ? w + "d" : w + "ed")
+            return v
+        }
+        for tag in canonicalSounds {
+            let words = tag.split(separator: " ").map(String.init)
+            if words.count == 1 {
+                for v in inflections(words[0]) { out.insert(v) }
+            } else if words.count == 2 {
+                for v in inflections(words[0]) {
+                    out.insert("\(v) \(words[1])")
+                    out.insert("\(words[1]) \(v)")
+                }
+            }
+        }
+        return out
+    }()
+
+    private static func normalizeTag(_ s: String) -> String {
+        let lowered = s.lowercased()
+        var cleaned = ""
+        var lastWasSpace = true
+        for ch in lowered {
+            if ch.isLetter {
+                cleaned.append(ch)
+                lastWasSpace = false
+            } else if !lastWasSpace {
+                cleaned.append(" ")
+                lastWasSpace = true
+            }
+        }
+        return cleaned.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func isNonVerbalSound(_ inner: String) -> Bool {
+        let n = normalizeTag(inner)
+        if n.isEmpty || notSounds.contains(n) { return false }
+        return soundSet.contains(n)
     }
 
     /// The author's way of saying "stop steering, go back to normal."

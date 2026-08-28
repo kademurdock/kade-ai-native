@@ -601,6 +601,48 @@ func testCarryStillWorksAtAll() {
 testCarryStillWorksAtAll()
 
 // ─────────────────────────────────────────────────────────────────────────────
+// T19 — A SOUND IS A ONE-SHOT, AND THE LIST FINALLY KNOWS ALL OF THEM.
+// The six-name set classified %%%gasp%%% as a DIRECTION and carried it — a
+// gasp at the top of the next two pieces. The proxy fixed its copy in 92.14;
+// this is the app's copy catching up, inflections included.
+//
+// RED-PROOF: shrink canonicalSounds back to the old six and the gasp test
+// goes red with the gasp stamped onto piece two.
+func testSoundsAreOneShots() {
+    for sound in ["gasp", "chuckle", "scoff", "sob", "sniffle", "growl"] {
+        let text = "%%%\(sound)%%%"
+            + " No she did not, and I am going to need every single detail of this story right now.\n"
+            + "Start from the very top and do not skip the part you are already planning to skip.\n"
+            + "And then keep going all the way to the end, because I have absolutely nowhere to be.\n"
+        let pieces = run(text, chunk: 8).filter { !isBareDirection($0) }
+        let stamped = pieces.filter { $0.hasPrefix("%%%") }.count
+        check("T19: \(sound) is played once, never carried", stamped <= 1,
+              "\(stamped) pieces carried [\(sound)]")
+    }
+    // Inflected forms resolve the same way, per the docs' matching rules.
+    check("T19: inflections are sounds too", SpeechStreamer.isNonVerbalSound("chuckles"))
+    check("T19: word order flexes like the docs say", SpeechStreamer.isNonVerbalSound("throat clearing"))
+    // And the docs' explicit NOT-sounds stay carriable directions.
+    check("T19: shout is an instruction, not a sound", !SpeechStreamer.isNonVerbalSound("shout"))
+}
+testSoundsAreOneShots()
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T20 — [shout] still carries: it describes how words are spoken, and killing
+// its carry would end a shout after one piece. The fence between T19 and T20
+// is the docs' own fence.
+func testInstructionWordsStillCarry() {
+    let text = "%%%shout%%%"
+        + " Get down right now and do not argue with me about it, there is no time for a debate.\n"
+        + "Everybody move toward the back exit in one line and keep your heads below the windows.\n"
+    let pieces = run(text, chunk: 8).filter { !isBareDirection($0) }
+    let stamped = pieces.filter { $0.hasPrefix("%%%") }.count
+    check("T20: an instruction-class word still carries", stamped >= 2,
+          "only \(stamped) of \(pieces.count) pieces carried the shout")
+}
+testInstructionWordsStillCarry()
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 print("")
 print("  Speech pipeline — \(checks) checks")
