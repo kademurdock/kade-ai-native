@@ -2276,11 +2276,23 @@ struct ConversationDetailView: View {
 
     private func loadAttachmentPhoto(_ item: PhotosPickerItem) async {
         let contentType = item.supportedContentTypes.first
-        let mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
-        let ext = contentType?.preferredFilenameExtension ?? "jpg"
-        guard let data = try? await item.loadTransferable(type: Data.self) else {
+        var mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
+        var ext = contentType?.preferredFilenameExtension ?? "jpg"
+        guard var data = try? await item.loadTransferable(type: Data.self) else {
             attachmentFailed("Couldn't load that photo. Try again.")
             return
+        }
+        /* KADE Aug 28 2026 — iPhone photos are HEIC by default and the vision
+         * lane speaks jpeg/png/webp/gif. Re-encode anything else to JPEG
+         * here so "I sent her a picture" just works, whatever the camera
+         * saved. Fail-soft: if UIImage can't read it, the original goes up
+         * unchanged (a PNG screenshot never hits this branch at all). */
+        let visionSafe = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+        if !visionSafe.contains(mimeType.lowercased()), let img = UIImage(data: data),
+           let jpeg = img.jpegData(compressionQuality: 0.85) {
+            data = jpeg
+            mimeType = "image/jpeg"
+            ext = "jpg"
         }
         await uploadAttachment(data: data, mimeType: mimeType, fileName: "photo.\(ext)")
     }
@@ -2462,7 +2474,15 @@ struct ConversationDetailView: View {
                 .disabled(
                     !isSending
                         && (voiceService.isRecording || voiceService.isTranscribing
-                            || draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            /* KADE Aug 28 2026 (her report: "send just an attachment
+                             * with no words, the send button is dimmed"): a ready
+                             * attachment IS a message. The web composer has always
+                             * allowed it and the server accepts empty text with
+                             * files — only this guard was stricter than the
+                             * platform. Uploading still disables (nothing real to
+                             * send yet). */
+                            || (draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && pendingAttachment == nil))
                 )
                 .accessibilityLabel(isSending ? "Stop" : "Send message")
                 .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
@@ -2560,7 +2580,9 @@ struct ConversationDetailView: View {
 
     private func send() async {
         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSending else { return }
+        /* Empty text with a ready attachment is a real send (Aug 28 2026) —
+         * the photo IS what they're saying. Kiana sees it natively now. */
+        guard !trimmed.isEmpty || pendingAttachment != nil, !isSending else { return }
         // A brand-new conversation has no agent_id for the server to fall
         // back on (an EXISTING conversation's turns can omit it and the
         // server still knows who's answering, per its own stored history --
@@ -2656,10 +2678,16 @@ struct ConversationDetailView: View {
         // already-stripped displayText of an old message.
         let nowMs = Int(Date().timeIntervalSince1970 * 1000)
         let stamped: String
-        switch thinkMode {
-        case .deep: stamped = trimmed + " [DEEP THINK \(nowMs)]"
-        case .instant: stamped = trimmed + " [INSTANT \(nowMs)]"
-        case .auto: stamped = trimmed
+        if trimmed.isEmpty {
+            /* Attachment-only send: no marker suffix — a bare "[DEEP THINK …]"
+             * with no words would read as the whole message. */
+            stamped = trimmed
+        } else {
+            switch thinkMode {
+            case .deep: stamped = trimmed + " [DEEP THINK \(nowMs)]"
+            case .instant: stamped = trimmed + " [INSTANT \(nowMs)]"
+            case .auto: stamped = trimmed
+            }
         }
         await performSend(text: stamped, parentId: parentId)
     }
