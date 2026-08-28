@@ -10,6 +10,9 @@ import SwiftUI
 /// announced. The remembering master switch (server-side personalization
 /// flag, same one the web panel flips) sits at the top.
 struct MemoriesView: View {
+    /// Kept for the ChatGPT-import push (Aug 28 2026) — the service wraps it
+    /// for card CRUD, but GptImportView needs the client itself.
+    private let apiClient: KadeAPIClient
     @StateObject private var service: MemoriesService
     @State private var page: MemoriesService.MemoriesPage?
     @State private var rememberingOn = true
@@ -20,8 +23,11 @@ struct MemoriesView: View {
     /// Aug 28 2026 — the week's consolidation trail ("what changed this
     /// week"). Empty = the section does not render at all.
     @State private var weekChanges: [MemoriesService.LedgerChange] = []
+    /// Bool-based push, the house pattern (see SettingsView's own doc note).
+    @State private var showingImport = false
 
     init(apiClient: KadeAPIClient) {
+        self.apiClient = apiClient
         _service = StateObject(wrappedValue: MemoriesService(client: apiClient))
     }
 
@@ -90,6 +96,22 @@ struct MemoriesView: View {
                 } else {
                     Text("Your companions file small memory cards about what you share — a good friend taking notes. Cards a character heard privately stay with that character.")
                 }
+            }
+
+            Section {
+                Button {
+                    showingImport = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Bring your ChatGPT memories")
+                            .font(.body.weight(.semibold))
+                        Text("Moving in? Paste the list ChatGPT kept about you, or upload your export — your companions know you from day one.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Bring your ChatGPT memories. Moving in? Paste the list ChatGPT kept about you, or upload your export. Opens the import screen.")
             }
 
             /// "What changed this week" (Aug 28 2026) — the ledger the
@@ -195,6 +217,9 @@ struct MemoriesView: View {
                 }
                 .accessibilityHint("Write a memory card yourself — it saves as a shared card every companion can see.")
             }
+        }
+        .navigationDestination(isPresented: $showingImport) {
+            GptImportView(apiClient: apiClient)
         }
         .refreshable { await reload() }
         .task { await reload() }
