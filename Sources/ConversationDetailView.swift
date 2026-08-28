@@ -3415,7 +3415,17 @@ struct ConversationDetailView: View {
             // "Keighty" as "Katie"), so the user always gets a chance to
             // hear/read what was transcribed and fix or confirm it before
             // it goes anywhere, exactly like iOS's own built-in dictation.
-            draftText = text
+            //
+            // KADE Aug 28 2026 — APPEND, NEVER REPLACE (her ask verbatim:
+            // "I can transcribe, stop and transcribe again, and it won't
+            // overwrite my first transcription. It just adds on to it").
+            // A second recording joins whatever is already in the composer
+            // (typed or dictated) with a single space — same behavior the
+            // web composer and the Transcribe tool already have. Recording
+            // over a draft used to silently eat the draft; a transcription
+            // can only ever ADD words now.
+            let existingDraft = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+            draftText = existingDraft.isEmpty ? text : existingDraft + " " + text
             voiceInputError = nil
             a11yFocus = .composerField
         } catch let error as VoiceService.VoiceError {

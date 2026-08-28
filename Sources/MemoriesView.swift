@@ -17,6 +17,9 @@ struct MemoriesView: View {
     @State private var addingNew = false
     @State private var cardPendingForget: MemoriesService.MemoryCard?
     @State private var busyMessage: String?
+    /// Aug 28 2026 — the week's consolidation trail ("what changed this
+    /// week"). Empty = the section does not render at all.
+    @State private var weekChanges: [MemoriesService.LedgerChange] = []
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: MemoriesService(client: apiClient))
@@ -41,6 +44,14 @@ struct MemoriesView: View {
             out.append((key, byAgent[key]!))
         }
         return out
+    }
+
+    private func weekChangeSpoken(_ change: MemoriesService.LedgerChange) -> String {
+        var parts = ["\(change.spokenKey), \(change.spokenAction)"]
+        if let note = change.note, !note.isEmpty { parts.append(note) }
+        let day = when(change.createdAt)
+        if !day.isEmpty { parts.append(day) }
+        return parts.joined(separator: ". ")
     }
 
     private func when(_ iso: String?) -> String {
@@ -78,6 +89,39 @@ struct MemoriesView: View {
                     Text(usageSentence(page))
                 } else {
                     Text("Your companions file small memory cards about what you share — a good friend taking notes. Cards a character heard privately stay with that character.")
+                }
+            }
+
+            /// "What changed this week" (Aug 28 2026) — the ledger the
+            /// consolidation pass has kept since Part 69, finally readable
+            /// here. One combined VoiceOver element per change: topic, what
+            /// happened to it, when, and the pass's own note if it left one.
+            /// Nothing here is editable — it is a trail, not a control; the
+            /// cards above are where corrections live.
+            if !weekChanges.isEmpty {
+                Section {
+                    ForEach(weekChanges) { change in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(change.spokenKey) — \(change.spokenAction)")
+                                .font(.subheadline.weight(.semibold))
+                            if let note = change.note, !note.isEmpty {
+                                Text(note)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if !when(change.createdAt).isEmpty {
+                                Text(when(change.createdAt))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(weekChangeSpoken(change))
+                    }
+                } header: {
+                    Text("What changed this week")
+                } footer: {
+                    Text("The housekeeping pass keeps a trail of every card it touches, so nothing is ever quietly lost.")
                 }
             }
 
@@ -212,6 +256,7 @@ struct MemoriesView: View {
 
     private func reload() async {
         page = await service.load()
+        weekChanges = await service.loadWeekChanges()
     }
 }
 

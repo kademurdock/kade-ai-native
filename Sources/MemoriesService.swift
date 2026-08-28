@@ -120,6 +120,57 @@ final class MemoriesService: ObservableObject {
         }
     }
 
+    struct LedgerChange: Decodable, Identifiable, Equatable {
+        let key: String
+        let action: String
+        let note: String?
+        let agentId: String?
+        let createdAt: String?
+        var id: String { "\(createdAt ?? "")::\(key)::\(action)" }
+        var spokenKey: String {
+            key.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+        /// The ledger's verb, phrased for the ear.
+        var spokenAction: String {
+            switch action.lowercased() {
+            case "create", "created", "add": return "added"
+            case "update", "updated", "rewrite": return "updated"
+            case "merge", "merged": return "merged with another card"
+            case "supersede", "superseded", "stale": return "marked out of date"
+            case "delete", "deleted", "forget": return "removed"
+            default: return action.lowercased()
+            }
+        }
+    }
+
+    private struct LedgerPage: Decodable {
+        let count: Int?
+        let changes: [LedgerChange]
+    }
+
+    /// Aug 28 2026 — "what changed this week": the caller's own consolidation
+    /// trail (GET /api/memories/ledger, shipped Part 69/92.33 as the readable
+    /// half of "never silent loss"; the UI half lived nowhere until now).
+    /// FAIL-SOFT: any error returns an empty list and the section simply
+    /// doesn't render — a missing trail must never block the cards screen.
+    func loadWeekChanges(limit: Int = 20) async -> [LedgerChange] {
+        do {
+            let req = client.request(
+                path: "api/memories/ledger",
+                authorized: true,
+                queryItems: [
+                    URLQueryItem(name: "sinceDays", value: "7"),
+                    URLQueryItem(name: "limit", value: String(limit)),
+                ]
+            )
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return [] }
+            return (try? decoder.decode(LedgerPage.self, from: data))?.changes ?? []
+        } catch {
+            return []
+        }
+    }
+
     func setRemembering(_ enabled: Bool) async throws {
         var req = client.request(path: "api/memories/preferences", method: "PATCH", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
