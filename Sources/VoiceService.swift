@@ -203,7 +203,7 @@ final class VoiceService: NSObject, ObservableObject {
     /// conceptually the same kind of setting as `playbackRate` right
     /// above -- one more small, non-sensitive speech preference, same
     /// persistence pattern, same home.
-    @Published var defaultReadAloudOn: Bool = UserDefaults.standard.bool(forKey: "kade.voiceMessage.defaultReadAloudOn") {
+    @Published var defaultReadAloudOn: Bool = VoiceService.loadDefaultReadAloud() {
         didSet {
             UserDefaults.standard.set(defaultReadAloudOn, forKey: "kade.voiceMessage.defaultReadAloudOn")
         }
@@ -231,6 +231,21 @@ final class VoiceService: NSObject, ObservableObject {
     /// True while the CURRENT clip is the streamed player's rather than an
     /// AVAudioPlayer — the pause/resume/rate routing key.
     private var streamedClipActive = false
+
+    /* Part 98.2 (her call) — READ ALOUD STARTS ON. It was the first thing
+     * flipped on every fresh install anyway, and a voice app whose voice is
+     * off until you find the switch has the default backwards.
+     *
+     * An EXPLICIT off is still honoured: `bool(forKey:)` cannot tell "never
+     * set" from "set to false" (the trap loadPlaybackRate documents right
+     * above), so the stored object is checked for existence first. Somebody
+     * who turned it off keeps it off; only a seat that never touched it gets
+     * the new default. */
+    private static func loadDefaultReadAloud() -> Bool {
+        let key = "kade.voiceMessage.defaultReadAloudOn"
+        guard UserDefaults.standard.object(forKey: key) != nil else { return true }
+        return UserDefaults.standard.bool(forKey: key)
+    }
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]

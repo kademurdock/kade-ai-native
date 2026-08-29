@@ -153,7 +153,6 @@ struct ConversationDetailView: View {
      * SentenceStreamer, first audio in 2-3s instead of 20-30s); the app never
      * got it. `spokenSoFar` tracks what the streamer already handed to the
      * voice queue so the reply is never spoken twice. */
-    @AppStorage("kade.speakWhileWriting") private var speakWhileWriting = true
     /// Aug 5 2026 crash hardening: raw think chunks accumulate here and get
     /// sanitized + published to `liveThink` at most every 250ms. Deep thinks
     /// stream ~34 chunks/second; sanitizing and re-laying-out a growing Text
@@ -174,7 +173,6 @@ struct ConversationDetailView: View {
     /// speaking as she writes). Split, and OFF by default: with
     /// speak-while-writing on, a progress line about writing is narrating
     /// something the ear is already hearing.
-    @AppStorage("kade.writingProgress.spoken") private var spokenWritingProgress = false
     // Aug 7 2026 (her "deep think off but still seems like she's thinking"):
     // LIVE REPLY STREAMING. The reply text was always on the wire; native
     // just waited for final. Now it grows on screen as she writes — and for
@@ -3060,7 +3058,12 @@ struct ConversationDetailView: View {
                      * build. Nothing here touches the transcript commit: the
                      * 216-to-225 freeze hunt is why that sentence is written
                      * down rather than assumed. */
-                    if readAloudEnabled, speakWhileWriting {
+                    /* Part 98.2 — speaking as she writes is no longer a
+                     * switch, it is the behaviour. It shipped ON, it has been
+                     * right since, and the only thing turning it off bought
+                     * was more silence. One less row to walk past in
+                     * Settings; read-aloud being on is still the gate. */
+                    if readAloudEnabled {
                         for piece in live.speech.push(chunk) {
                             live.spokenChars += piece.count
                             voiceService.enqueueSpeak(
@@ -3071,20 +3074,14 @@ struct ConversationDetailView: View {
                             )
                         }
                     }
-                    if spokenWritingProgress,
-                       UIAccessibility.isVoiceOverRunning,
-                       Date().timeIntervalSince(live.lastWriteProgressAnnounce) >= 20,
-                       live.replyRaw.count > 300 {
-                        live.lastWriteProgressAnnounce = Date()
-                        let words = max((live.replyRaw.split(separator: " ").count / 25) * 25, 25)
-                        UIAccessibility.post(
-                            notification: .announcement,
-                            argument: NSAttributedString(
-                                string: "Still writing — about \(words) words so far.",
-                                attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
-                            )
-                        )
-                    }
+                    /* Part 98.2 — the "Still writing" murmurs are GONE, her
+                     * call. They shipped OFF by default yesterday for the
+                     * reason that retires them entirely: with the reply
+                     * already being spoken as it is written, announcing a
+                     * word count over the top of it is the app talking about
+                     * itself while she is trying to listen. Thinking progress
+                     * (the wait that actually takes time) is untouched and
+                     * keeps its own switch. */
                 },
                 onThink: { chunk in
                     // Session 35 encore: thoughts pour into the live bubble
@@ -3277,7 +3274,7 @@ struct ConversationDetailView: View {
              * which is worse than the silence it replaced. `spokenSoFar` is
              * character-counted rather than compared, because the streamer
              * adds carried steering tags the stored reply does not have. */
-            let streamedThisTurn = readAloudEnabled && speakWhileWriting && live.spokenChars > 0
+            let streamedThisTurn = readAloudEnabled && live.spokenChars > 0
             if streamedThisTurn {
                 for piece in live.speech.flush() {
                     voiceService.enqueueSpeak(
@@ -4154,7 +4151,6 @@ private final class LiveStreamBuffers {
     var thinkRaw = ""
     var replyFlushScheduled = false
     var thinkFlushScheduled = false
-    var lastWriteProgressAnnounce = Date.distantPast
     var lastThinkProgressAnnounce = Date.distantPast
     var announcedThinking = false
 
@@ -4212,7 +4208,6 @@ private final class LiveStreamBuffers {
     func resetTurn() {
         replyRaw = ""
         thinkRaw = ""
-        lastWriteProgressAnnounce = .distantPast
         lastToolAnnounce = .distantPast
         lastToolSpoken = ""
         announcedThinking = false
