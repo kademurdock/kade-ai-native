@@ -23,12 +23,51 @@ final class KadeAPIClient: ObservableObject {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) " +
         "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
-    init() {
+    /// The one configuration. Everything that talks to kademurdock.com is
+    /// built from this, so the browser UA and the shared cookie jar can never
+    /// be half-applied by a caller that rolled its own.
+    private static func baseConfiguration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared   // persists the refresh cookie
         config.httpCookieAcceptPolicy = .always
         config.httpAdditionalHeaders = ["User-Agent": Self.browserUA]
-        self.session = URLSession(configuration: config)
+        return config
+    }
+
+    init() {
+        self.session = URLSession(configuration: Self.baseConfiguration())
+    }
+
+    /* ⭐ PART 98.4 — WHY A SECOND SESSION EXISTS AT ALL, AND WHY IT IS BUILT
+     * HERE INSTEAD OF WHEREVER IT IS NEEDED.
+     *
+     * The streamed voice lane needs DELEGATE-driven delivery: it wants each
+     * chunk of audio the moment it lands, and `URLSession.AsyncBytes` (what
+     * streamBytes hands back) yields ONE BYTE at a time — the wrong shape for
+     * a quarter-megabyte of PCM on the main actor.
+     *
+     * Part 98 built that session inline in StreamingClipPlayer with a bare
+     * `URLSessionConfiguration.default`, which meant no browser UA — and the
+     * comment at the top of this file already said what happens then: the
+     * abuse system refuses the request. It did. EVERY streamed synthesis her
+     * phone attempted was rejected before it reached the fork (the proxy
+     * logged zero of them across two builds), fell back to the buffered path,
+     * and cost her a failed round trip on every piece — heard as "3 or 4
+     * seconds between every couple sentences."
+     *
+     * So the config comes from here now, and the caller also takes the pacing
+     * gate below. One session's worth of manners, however many sessions exist. */
+    func makeAuxiliarySession(delegate: URLSessionDelegate, timeout: TimeInterval = 30) -> URLSession {
+        let config = Self.baseConfiguration()
+        config.timeoutIntervalForRequest = timeout
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+    }
+
+    /// The pacing clock, for a caller that sends on its own session. Auth
+    /// calls, data calls and the streamed voice lane all wait on the same one
+    /// — that is the whole point of the note at the top of this file.
+    func awaitPacingGate() async {
+        await waitForPacingGate()
     }
 
     /// The one choke point every buffered request goes through: enforce the

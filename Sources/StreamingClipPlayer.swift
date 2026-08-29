@@ -57,18 +57,25 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
     /// The request is built asynchronously (voice resolution is a network
     /// call) but the fetch object exists synchronously so the pump's inflight
     /// bookkeeping never has to await creation — same shape as prefetch().
-    init(requestProvider: @escaping @Sendable () async -> URLRequest?) {
+    /* Part 98.4 — the session comes from KadeAPIClient now (browser UA, the
+     * shared cookie jar) and the request waits on the app's ONE pacing clock
+     * before it goes out. The first cut built a bare URLSession here, which
+     * the abuse system refused on sight: every streamed synthesis was
+     * rejected before reaching the fork, silently fell back to buffered, and
+     * she heard the failed round trip as a gap between every couple of
+     * sentences. See makeAuxiliarySession's note for the full receipt. */
+    @MainActor
+    init(client: KadeAPIClient, requestProvider: @escaping @MainActor () async -> URLRequest?) {
         super.init()
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        let session = client.makeAuxiliarySession(delegate: self)
         self.session = session
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
             guard let request = await requestProvider() else {
                 self.finish(ok: false)
                 return
             }
+            await client.awaitPacingGate()
             self.lock.lock()
             let cancelled = self.finished
             if !cancelled {

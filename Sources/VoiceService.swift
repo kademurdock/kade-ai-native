@@ -1002,7 +1002,7 @@ final class VoiceService: NSObject, ObservableObject {
     /// way, so prefetch depth means exactly what it always has.
     private func prefetch(_ item: SpeakItem) -> InflightClip {
         if streamingPlaybackOn {
-            return .streamed(StreamingClipFetch(requestProvider: { [weak self] in
+            return .streamed(StreamingClipFetch(client: client, requestProvider: { [weak self] in
                 await self?.buildStreamedSynthRequest(item)
             }))
         }
