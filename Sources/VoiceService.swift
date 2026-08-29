@@ -656,12 +656,30 @@ final class VoiceService: NSObject, ObservableObject {
                 inflight.append((next, prefetch(next)))
             }
         }
-        topUp()
+        /* PART 97.3 (Aug 29 2026) — THE OPENER GETS A CLEAR LANE.
+         *
+         * Her report, an hour after build 249: "why is there such a big space
+         * between the received message and the tts reading out." Measured
+         * before touched: solo synth on her voice 1.4–2.1s, the same request
+         * with the pump's opening move (three synths at once, because topUp
+         * filled to depth BEFORE the first clip's data ever arrived) 2.3–2.5s
+         * — and during that afternoon's provider wobble the proxy logged
+         * single pieces at 3.5–5.6s, which is what a listener calls a big
+         * space. The opener was paying a contention tax to build a runway
+         * nobody could hear yet.
+         *
+         * So the first piece now synthesises ALONE, and the pipe fills the
+         * moment its data is in hand — every later synthesis runs under a
+         * clip that is actually PLAYING, which always outlasts a synth, so
+         * 92.12's depth-2 spike margin is untouched from piece two onward.
+         * The only trade: nothing overlaps the opener's synth, which is the
+         * point. */
+        if !speakQueue.isEmpty {
+            let first = speakQueue.removeFirst()
+            inflight.append((first, prefetch(first)))
+        }
         while !inflight.isEmpty {
             let current = inflight.removeFirst()
-            // Refill BEFORE awaiting, so the next syntheses run under this
-            // clip's playback instead of following it.
-            topUp()
             let data = await current.task.value
             // Stopped while that was in flight? Drop it, resume the waiter,
             // and leave — never speak past a stop.
@@ -677,6 +695,10 @@ final class VoiceService: NSObject, ObservableObject {
                 isPumping = false
                 return
             }
+            // Refill now that this clip's data is in hand — the next
+            // syntheses run under ITS playback (or its skip), never under
+            // the opener's synth. Part 97.3; see the note above the loop.
+            topUp()
             if let data {
                 // `?? streamedTurnKey` covers the pieces that were prefetched
                 // BEFORE the reload handed us an id — they are already out of
