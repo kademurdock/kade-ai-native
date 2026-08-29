@@ -778,22 +778,38 @@ final class VoiceService: NSObject, ObservableObject {
                     KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
                 }
             case .streamed(let fetch):
-                /* Part 98 — the streamed piece. First audio ARRIVING is this
-                 * clip's "data in hand" moment (97.3's clear-lane rule): the
-                 * refill below runs under a clip that is about to be audibly
-                 * playing, so every later synthesis still overlaps playback.
-                 * A fetch that dies BEFORE any byte falls back to the
-                 * buffered synthesize() and its retry ladder — worst case is
-                 * exactly build 249's behavior, plus one failed handshake. */
+                /* Part 98.2 — THE STREAMED PIECE, AND IT CAN NEVER COST HER
+                 * THE REPLY. First audio ARRIVING is this clip's "data in
+                 * hand" moment (97.3's clear-lane rule): the refill below runs
+                 * under a clip that is about to be audibly playing, so every
+                 * later synthesis still overlaps playback.
+                 *
+                 * ⭐ WHAT HER FIRST STREAMED REPLY TAUGHT (Aug 29 2026, build
+                 * 250, minutes after it shipped): "the voice clip gave me an
+                 * error when I switched the toggle on." 98.1 fell back to the
+                 * buffered lane when the FETCH died, but treated a fetch that
+                 * delivered bytes and then failed to PLAY as a dead piece —
+                 * straight to failedPieces, and a whole reply of those earns
+                 * Part 94's earcon. So a bug anywhere in a brand-new audio
+                 * path became a boop and a silent reply, which is the one
+                 * outcome a beta toggle must never produce.
+                 *
+                 * Now EVERY streamed failure — fetch, header, format, engine,
+                 * playback — falls back to the buffered path for that piece.
+                 * The worst case for a streamed bug is the latency she had on
+                 * build 249, never silence, and the breadcrumb names which
+                 * step gave up so the next session reads a cause instead of
+                 * guessing at a sound. */
                 let hasAudio = await fetch.waitForFirstAudio()
                 if generation != cancelGeneration {
                     bailCancelled(current)
                     return
                 }
                 topUp()
+                var streamedOK = false
                 if hasAudio {
                     streamedClipActive = true
-                    let played = await streamingPlayer.play(fetch: fetch, rate: playbackRate, onPlaybackStarted: { [weak self] in
+                    streamedOK = await streamingPlayer.play(fetch: fetch, rate: playbackRate, onPlaybackStarted: { [weak self] in
                         guard let self else { return }
                         self.isClipPlaying = true
                         self.isPaused = false
@@ -805,14 +821,17 @@ final class VoiceService: NSObject, ObservableObject {
                         bailCancelled(current)
                         return
                     }
-                    if played {
-                        playedAnything = true
-                    } else {
-                        failedPieces += 1
-                        KadeBreadcrumbs.drop("tts: streamed piece made no sound, skipped silently (\(failedPieces) this run)")
-                    }
                 } else {
-                    KadeBreadcrumbs.drop("tts: stream fetch got nothing, falling back to buffered for this piece")
+                    KadeBreadcrumbs.drop("tts-stream: fetch delivered nothing (\(fetch.failureNote)), falling back to buffered")
+                }
+                if streamedOK {
+                    playedAnything = true
+                } else {
+                    // The fallback. `synthesize()` brings its own retry ladder,
+                    // and playAudio is the path every build through 249 used.
+                    if hasAudio {
+                        KadeBreadcrumbs.drop("tts-stream: bytes arrived but playback failed, falling back to buffered")
+                    }
                     let data = await synthesize(
                         text: current.item.text,
                         agentId: current.item.agentId,

@@ -41,6 +41,18 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
     private var task: URLSessionDataTask?
     /// Total audio bytes handed out — zero means "safe to fall back".
     private(set) var deliveredBytes = 0
+    /// The HTTP status, once known, and any transport error text. Exists so a
+    /// fallback can say WHY in a breadcrumb — the Aug-29 lesson: her report
+    /// was "an error sound," and a sound cannot be debugged. A named status
+    /// in the diagnostics trail can.
+    private(set) var lastStatus: Int?
+    private(set) var lastErrorText: String?
+    var failureNote: String {
+        if let s = lastStatus, !(200 ..< 300).contains(s) { return "HTTP \(s)" }
+        if let e = lastErrorText { return e }
+        if lastStatus == nil { return "no response" }
+        return "empty stream"
+    }
 
     /// The request is built asynchronously (voice resolution is a network
     /// call) but the fetch object exists synchronously so the pump's inflight
@@ -148,6 +160,7 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
         let ok = (response as? HTTPURLResponse).map { (200 ..< 300).contains($0.statusCode) } ?? true
         lock.lock()
         httpOK = ok
+        lastStatus = (response as? HTTPURLResponse)?.statusCode
         lock.unlock()
         completionHandler(ok ? .allow : .cancel)
         if !ok { finish(ok: false) }
@@ -163,6 +176,11 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            lock.lock()
+            lastErrorText = error.localizedDescription
+            lock.unlock()
+        }
         // An error after bytes were delivered means a SHORT clip, not a dead
         // one — the pump's piece just ends early, the same shape as the
         // proxy's own mid-stream death. Only a byte-less failure reads as
@@ -241,6 +259,29 @@ final class StreamingClipPlayer {
         }
         rebuildGraphIfNeeded(sampleRate: fmt.sampleRate, avFormat: avFormat)
         setRate(rate)
+
+        /* ⭐ THE BUG THAT MADE HER FIRST STREAMED REPLY BOOP (Aug 29 2026, her
+         * report minutes after build 250: "the voice clip gave me an error
+         * when I switched the toggle on"). THIS PATH NEVER SET THE AUDIO
+         * SESSION. The buffered lane calls prepareOutputSession() inside
+         * playAudio() and has since session 14 — `.playback` + `.mixWithOthers`,
+         * which routes to the SPEAKER instead of the earpiece and keeps the
+         * app from ducking VoiceOver. The streamed lane went straight to
+         * engine.start().
+         *
+         * Why it bit immediately and not in any test: she had just been
+         * TALKING to it. Recording leaves the session on `.playAndRecord`
+         * (and a call leaves `.voiceChat` mode), and starting an engine
+         * against that inherited session is exactly the session-14 scar one
+         * layer down — the engine either refuses to start or plays into a
+         * route nobody can hear. Same category of bug, same fix, and the
+         * comment in prepareOutputSession() called it a month ago.
+         *
+         * Fail-soft on purpose, same as the buffered path: if the category
+         * cannot be set, still try to play. Wrong-sounding beats silent. */
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? session.setActive(true)
 
         do {
             if !engine.isRunning { try engine.start() }
