@@ -166,11 +166,20 @@ struct ConversationDetailView: View {
     /// her explicit rule is that thoughts are never read out loud by the
     /// voice). Togglable under Settings > Speech.
     @AppStorage("kade.thinkingProgress.spoken") private var spokenThinkingProgress = true
+    /// Aug 29 2026 (her report: "I thought I turned off the still writing
+    /// notifications, because thinking is what takes time, not writing"):
+    /// the writing-progress line used to RIDE THE THINKING TOGGLE, so there
+    /// was no way to keep "still thinking" (the long wait) while silencing
+    /// "still writing" (short, and already audible — the voice starts
+    /// speaking as she writes). Split, and OFF by default: with
+    /// speak-while-writing on, a progress line about writing is narrating
+    /// something the ear is already hearing.
+    @AppStorage("kade.writingProgress.spoken") private var spokenWritingProgress = false
     // Aug 7 2026 (her "deep think off but still seems like she's thinking"):
     // LIVE REPLY STREAMING. The reply text was always on the wire; native
     // just waited for final. Now it grows on screen as she writes — and for
     // the ear, an optional low-priority "still writing" line about every 20
-    // seconds (same toggle and manners as spoken thinking progress). The
+    // seconds (its own toggle since Aug 29 — was the thinking toggle). The
     // live view itself is VoiceOver-HIDDEN on purpose: live-mutating text is
     // exactly the churn that kept cutting readouts off; the finished
     // message announces and auto-reads exactly as before.
@@ -3062,7 +3071,7 @@ struct ConversationDetailView: View {
                             )
                         }
                     }
-                    if spokenThinkingProgress,
+                    if spokenWritingProgress,
                        UIAccessibility.isVoiceOverRunning,
                        Date().timeIntervalSince(live.lastWriteProgressAnnounce) >= 20,
                        live.replyRaw.count > 300 {
