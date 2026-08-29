@@ -229,6 +229,7 @@ struct SettingsView: View {
             thinkingProgressRow(searchStyle: false)
             writingProgressRow(searchStyle: false)
             speakWhileWritingRow(searchStyle: false)
+            streamingVoiceRow(searchStyle: false)
             whisperRow(searchStyle: false)
             speedRow(searchStyle: false)
             pronunciationRow(searchStyle: false)
@@ -414,7 +415,7 @@ struct SettingsView: View {
     /// person types the word THEY have, not the word the screen has.
     private enum SettingRow: String, CaseIterable, Identifiable {
         case mainAgent, ringtone
-        case voiceDefault, thinkingProgress, writingProgress, speakWhileWriting, whisper, speed, pronunciation
+        case voiceDefault, thinkingProgress, writingProgress, speakWhileWriting, streamingVoice, whisper, speed, pronunciation
         case longTaskPing, brief
         case memories, logbook
         case highContrast, font, spacing
@@ -434,6 +435,7 @@ struct SettingsView: View {
             case .thinkingProgress: return "Spoken thinking progress"
             case .writingProgress: return "Spoken writing progress"
             case .speakWhileWriting: return "Start speaking as she writes"
+            case .streamingVoice: return "Faster voice (streaming)"
             case .whisper: return "Whisper mode"
             case .speed: return "Voice message speed"
             case .pronunciation: return "Pronunciation Dictionary"
@@ -464,7 +466,7 @@ struct SettingsView: View {
             switch self {
             case .mainAgent: return "Main agent"
             case .ringtone: return "Calls"
-            case .voiceDefault, .thinkingProgress, .writingProgress, .speakWhileWriting, .whisper, .speed, .pronunciation: return "Voice & Audio"
+            case .voiceDefault, .thinkingProgress, .writingProgress, .speakWhileWriting, .streamingVoice, .whisper, .speed, .pronunciation: return "Voice & Audio"
             case .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook: return "Memory"
             case .highContrast, .font, .spacing: return "Accessibility"
@@ -484,6 +486,7 @@ struct SettingsView: View {
             case .thinkingProgress: return "thinking progress deep think spoken voiceover announce"
             case .writingProgress: return "writing progress still writing spoken voiceover announce words so far"
             case .speakWhileWriting: return "speak while writing streaming voice sentence early start talking sooner latency wait silence"
+            case .streamingVoice: return "faster voice streaming stream latency delay gap wait quick sooner beta first word space between message"
             case .whisper: return "whisper quiet night hushed gentle soft volume"
             case .speed: return "speed rate fast slow playback voice quicker talk faster"
             case .pronunciation: return "pronunciation pronounce names dictionary say saying word words"
@@ -553,6 +556,7 @@ struct SettingsView: View {
         case .thinkingProgress: thinkingProgressRow(searchStyle: true)
         case .writingProgress: writingProgressRow(searchStyle: true)
         case .speakWhileWriting: speakWhileWritingRow(searchStyle: true)
+        case .streamingVoice: streamingVoiceRow(searchStyle: true)
         case .whisper: whisperRow(searchStyle: true)
         case .speed: speedRow(searchStyle: true)
         case .pronunciation: pronunciationRow(searchStyle: true)
@@ -636,6 +640,13 @@ struct SettingsView: View {
             Text(searchStyle ? searchLabel(.writingProgress, "Spoken writing progress") : "Spoken writing progress")
         }
         .accessibilityHint("While a long reply is being written, VoiceOver quietly says about how many words have arrived so far, every twenty seconds or so. Off by default — with Start speaking as she writes on, you are already hearing the reply itself. The wait that actually takes time is thinking, which has its own toggle above.")
+    }
+
+    private func streamingVoiceRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $voiceService.streamingPlaybackOn) {
+            Text(searchStyle ? searchLabel(.streamingVoice, "Faster voice (streaming)") : "Faster voice (streaming)")
+        }
+        .accessibilityHint("Her voice starts almost immediately instead of waiting for each whole clip to arrive — the gap between a message landing and hearing it gets much shorter. New and still being tested: if a voice reply ever sounds odd, turn this off and it plays the old way.")
     }
 
     private func speakWhileWritingRow(searchStyle: Bool) -> some View {

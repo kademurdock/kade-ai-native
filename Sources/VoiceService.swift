@@ -75,6 +75,23 @@ final class VoiceService: NSObject, ObservableObject {
     /// path is byte-identical in behavior: nil/nil/nil.
     /// Part 91.10 — named so the prefetcher can take one whole.
     typealias SpeakItem = (text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)
+    /* Part 98 — one queue, two kinds of clip. `.buffered` is the path every
+     * build through 249 shipped: a Task that resolves to the whole clip's
+     * Data. `.streamed` starts the HTTP call at prefetch time exactly like
+     * the buffered Task does, but hands bytes out as they arrive so the
+     * player can start on the first of them. The pump treats both with the
+     * same discipline: started at topUp, cancelled on the generation flag,
+     * one piece audible at a time. */
+    enum InflightClip {
+        case buffered(Task<Data?, Never>)
+        case streamed(StreamingClipFetch)
+        func cancel() {
+            switch self {
+            case .buffered(let task): task.cancel()
+            case .streamed(let fetch): fetch.cancel()
+            }
+        }
+    }
     private var speakQueue: [SpeakItem] = []
     private var isPumping = false
     /* PART 91.9 — THE SECOND PUMP, and it is why she heard "a couple of
@@ -140,6 +157,8 @@ final class VoiceService: NSObject, ObservableObject {
             // Applies mid-clip, so a rate change while a long reply is
             // playing takes effect immediately instead of at the next one.
             currentPlayer?.rate = playbackRate
+            // Part 98: the streamed player honors the same live change.
+            streamingPlayer.setRate(playbackRate)
         }
     }
 
@@ -189,6 +208,29 @@ final class VoiceService: NSObject, ObservableObject {
             UserDefaults.standard.set(defaultReadAloudOn, forKey: "kade.voiceMessage.defaultReadAloudOn")
         }
     }
+
+    /* Part 98 (Aug 29 2026) — STREAMING PLAYBACK, OFF BY DEFAULT.
+     * When on, each piece's audio starts playing as its bytes arrive from the
+     * proxy's streamed lane instead of after the whole clip downloads —
+     * measured 0.25–0.7s to first audio against the ~2s whole-clip floor
+     * (Part 97.3). OFF means every code path in this file behaves
+     * byte-identically to build 249: the flag is read in exactly one place
+     * (prefetch) and the streamed case never runs. Settings > Voice & Audio
+     * carries the switch; this stays a UserDefaults preference like the
+     * rest of the small speech preferences above. Her ear gates the default
+     * ever flipping — kill switch from day one, old path retained whole. */
+    @Published var streamingPlaybackOn: Bool = UserDefaults.standard.bool(forKey: "kade.voiceMessage.streamingPlayback") {
+        didSet {
+            UserDefaults.standard.set(streamingPlaybackOn, forKey: "kade.voiceMessage.streamingPlayback")
+        }
+    }
+    /// The one-clip-at-a-time streamed player. Exists even while the flag is
+    /// off (it is inert until played through) so the stop/pause/resume
+    /// routing below never has to ask whether it exists.
+    private let streamingPlayer = StreamingClipPlayer()
+    /// True while the CURRENT clip is the streamed player's rather than an
+    /// AVAudioPlayer — the pause/resume/rate routing key.
+    private var streamedClipActive = false
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
@@ -528,6 +570,10 @@ final class VoiceService: NSObject, ObservableObject {
         cancelGeneration &+= 1
         currentPlayer?.stop()
         currentPlayer = nil
+        // Part 98: the streamed player obeys the same stop, and its parked
+        // play() await resumes so the pump can run its cancel check.
+        streamingPlayer.stop()
+        streamedClipActive = false
         playbackContinuation?.resume()
         playbackContinuation = nil
         isSpeaking = false
@@ -547,6 +593,14 @@ final class VoiceService: NSObject, ObservableObject {
     /// pausing a clip that's still FETCHING has nothing to pause yet, and
     /// the composer button routes that case to a full stop instead.
     func pauseSpeaking() {
+        // Part 98: while the streamed player owns the clip, it takes the
+        // pause — same contract (a pause is not a stop; the queue waits).
+        if streamedClipActive {
+            guard streamingPlayer.isPlaying else { return }
+            streamingPlayer.pause()
+            isPaused = true
+            return
+        }
         guard let player = currentPlayer, player.isPlaying else { return }
         player.pause()
         isPaused = true
@@ -556,6 +610,12 @@ final class VoiceService: NSObject, ObservableObject {
     /// output session first -- the same defensive move `playAudio` makes --
     /// because a call or recording may have re-routed audio while paused.
     func resumeSpeaking() {
+        if streamedClipActive, isPaused {
+            prepareOutputSession()
+            streamingPlayer.resume()
+            isPaused = false
+            return
+        }
         guard let player = currentPlayer, isPaused else { return }
         prepareOutputSession()
         if player.play() {
@@ -618,7 +678,7 @@ final class VoiceService: NSObject, ObservableObject {
          * survives a worse night, because it tolerates VARIANCE instead of just
          * moving the threshold. (Forge's call, asked for by Kade before shipping.) */
         let prefetchDepth = 2
-        var inflight: [(item: SpeakItem, task: Task<Data?, Never>)] = []
+        var inflight: [(item: SpeakItem, clip: InflightClip)] = []
         /* ⭐ PART 94 — AN ERROR TONE IN THE MIDDLE OF A REPLY IS A LIE.
          *
          * Her report, Aug 28 2026: "one of the sections of voiceclip gave an
@@ -678,38 +738,100 @@ final class VoiceService: NSObject, ObservableObject {
             let first = speakQueue.removeFirst()
             inflight.append((first, prefetch(first)))
         }
+        /// Stopped while a clip was in flight? Drop everything, resume every
+        /// waiter, and leave — never speak past a stop. (The 91.10 rule,
+        /// shared by both clip kinds now.)
+        func bailCancelled(_ current: (item: SpeakItem, clip: InflightClip)) {
+            current.clip.cancel()
+            current.item.completion?.resume()
+            for pending in inflight {
+                pending.clip.cancel()
+                pending.item.completion?.resume()
+            }
+            inflight.removeAll()
+            isSpeaking = false
+            isPumping = false
+        }
         while !inflight.isEmpty {
             let current = inflight.removeFirst()
-            let data = await current.task.value
-            // Stopped while that was in flight? Drop it, resume the waiter,
-            // and leave — never speak past a stop.
-            if generation != cancelGeneration {
-                current.task.cancel()
-                current.item.completion?.resume()
-                for pending in inflight {
-                    pending.task.cancel()
-                    pending.item.completion?.resume()
+            switch current.clip {
+            case .buffered(let task):
+                let data = await task.value
+                if generation != cancelGeneration {
+                    bailCancelled(current)
+                    return
                 }
-                inflight.removeAll()
-                isSpeaking = false
-                isPumping = false
-                return
-            }
-            // Refill now that this clip's data is in hand — the next
-            // syntheses run under ITS playback (or its skip), never under
-            // the opener's synth. Part 97.3; see the note above the loop.
-            topUp()
-            if let data {
-                // `?? streamedTurnKey` covers the pieces that were prefetched
-                // BEFORE the reload handed us an id — they are already out of
-                // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                await playAudio(data, key: current.item.key ?? streamedTurnKey)
-                playedAnything = true
-            } else {
-                // Session 23's boop lives on below, at the END of the pump and
-                // only if nothing at all was spoken. See the note up top.
-                failedPieces += 1
-                KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
+                // Refill now that this clip's data is in hand — the next
+                // syntheses run under ITS playback (or its skip), never under
+                // the opener's synth. Part 97.3; see the note above the loop.
+                topUp()
+                if let data {
+                    // `?? streamedTurnKey` covers the pieces that were prefetched
+                    // BEFORE the reload handed us an id — they are already out of
+                    // speakQueue, so adoptStreamedTurn cannot reach them directly.
+                    await playAudio(data, key: current.item.key ?? streamedTurnKey)
+                    playedAnything = true
+                } else {
+                    // Session 23's boop lives on below, at the END of the pump and
+                    // only if nothing at all was spoken. See the note up top.
+                    failedPieces += 1
+                    KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
+                }
+            case .streamed(let fetch):
+                /* Part 98 — the streamed piece. First audio ARRIVING is this
+                 * clip's "data in hand" moment (97.3's clear-lane rule): the
+                 * refill below runs under a clip that is about to be audibly
+                 * playing, so every later synthesis still overlaps playback.
+                 * A fetch that dies BEFORE any byte falls back to the
+                 * buffered synthesize() and its retry ladder — worst case is
+                 * exactly build 249's behavior, plus one failed handshake. */
+                let hasAudio = await fetch.waitForFirstAudio()
+                if generation != cancelGeneration {
+                    bailCancelled(current)
+                    return
+                }
+                topUp()
+                if hasAudio {
+                    streamedClipActive = true
+                    let played = await streamingPlayer.play(fetch: fetch, rate: playbackRate, onPlaybackStarted: { [weak self] in
+                        guard let self else { return }
+                        self.isClipPlaying = true
+                        self.isPaused = false
+                        self.nowPlayingKey = current.item.key ?? self.streamedTurnKey
+                    })
+                    streamedClipActive = false
+                    isClipPlaying = false
+                    if generation != cancelGeneration {
+                        bailCancelled(current)
+                        return
+                    }
+                    if played {
+                        playedAnything = true
+                    } else {
+                        failedPieces += 1
+                        KadeBreadcrumbs.drop("tts: streamed piece made no sound, skipped silently (\(failedPieces) this run)")
+                    }
+                } else {
+                    KadeBreadcrumbs.drop("tts: stream fetch got nothing, falling back to buffered for this piece")
+                    let data = await synthesize(
+                        text: current.item.text,
+                        agentId: current.item.agentId,
+                        agentName: current.item.agentName,
+                        explicitVoice: current.item.explicitVoice,
+                        explicitRate: current.item.explicitRate
+                    )
+                    if generation != cancelGeneration {
+                        bailCancelled(current)
+                        return
+                    }
+                    if let data {
+                        await playAudio(data, key: current.item.key ?? streamedTurnKey)
+                        playedAnything = true
+                    } else {
+                        failedPieces += 1
+                        KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
+                    }
+                }
             }
             current.item.completion?.resume()
             nowPlayingKey = nil
@@ -806,9 +928,17 @@ final class VoiceService: NSObject, ObservableObject {
     }
 
     /// Kick a synthesis off now and hand back the handle. Nothing awaits this
-    /// until its turn comes, which is the whole point.
-    private func prefetch(_ item: SpeakItem) -> Task<Data?, Never> {
-        Task { [weak self] in
+    /// until its turn comes, which is the whole point. Part 98: with
+    /// streaming playback on, the handle is a byte-streaming fetch instead of
+    /// a whole-clip Task — the network call still starts RIGHT NOW either
+    /// way, so prefetch depth means exactly what it always has.
+    private func prefetch(_ item: SpeakItem) -> InflightClip {
+        if streamingPlaybackOn {
+            return .streamed(StreamingClipFetch(requestProvider: { [weak self] in
+                await self?.buildStreamedSynthRequest(item)
+            }))
+        }
+        return .buffered(Task { [weak self] in
             guard let self else { return nil }
             return await self.synthesize(
                 text: item.text,
@@ -817,7 +947,27 @@ final class VoiceService: NSObject, ObservableObject {
                 explicitVoice: item.explicitVoice,
                 explicitRate: item.explicitRate
             )
+        })
+    }
+
+    /// The streamed lane's request: same endpoint, same fields, same voice
+    /// resolution as synthesize() — plus stream=1, which the fork forwards
+    /// as x-kade-tts-stream and the proxy answers with audio-as-it-arrives.
+    /// The proxy falls back to buffered SERVER-side when it cannot stream
+    /// (fish voices, multi-chunk shapes), so this request is always safe to
+    /// send; a response that turns out to be a whole WAV at once simply
+    /// plays as a fast stream.
+    private func buildStreamedSynthRequest(_ item: SpeakItem) async -> URLRequest? {
+        let (voice, speed): (String?, Double?)
+        if let explicitVoice = item.explicitVoice, !explicitVoice.isEmpty {
+            (voice, speed) = (explicitVoice, item.explicitRate)
+        } else {
+            (voice, speed) = await resolveVoice(agentId: item.agentId, agentName: item.agentName)
         }
+        var fields: [(String, String)] = [("input", item.text), ("stream", "1")]
+        if let voice { fields.append(("voice", voice)) }
+        if let speed { fields.append(("speed", String(speed))) }
+        return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
     }
 
     /// FIX (Kade, session 14): "if the auto play is switched on in a text

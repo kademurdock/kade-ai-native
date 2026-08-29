@@ -81,5 +81,5 @@ fi
 
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
-"$SWIFTC" -o "$OUT/speechtests" Sources/SpeechStreamer.swift SpeechPipelineTests/main.swift
+"$SWIFTC" -o "$OUT/speechtests" Sources/SpeechStreamer.swift Sources/StreamingWavParser.swift SpeechPipelineTests/main.swift
 "$OUT/speechtests"

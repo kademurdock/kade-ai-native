@@ -642,6 +642,137 @@ func testInstructionWordsStillCarry() {
 }
 testInstructionWordsStillCarry()
 
+// ── Part 98: the streaming player's pure half (StreamingWavParser) ──────────
+//
+// The streamed lane's failure modes that ARE catchable here: header math off
+// by one, a torn header parsed as garbage, a declared length trusted when the
+// stream lies by design, and the sample a chunk boundary cuts in half. The
+// AVAudioEngine half is named in the not-covered list below.
+
+func makeWavHeader(dataLen: UInt32, rate: UInt32 = 24000, channels: UInt16 = 1, bits: UInt16 = 16) -> Data {
+    var d = Data()
+    func u32(_ v: UInt32) { d.append(contentsOf: [UInt8(v & 0xff), UInt8((v >> 8) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]) }
+    func u16(_ v: UInt16) { d.append(contentsOf: [UInt8(v & 0xff), UInt8((v >> 8) & 0xff)]) }
+    d.append(contentsOf: Array("RIFF".utf8)); u32(dataLen == 0xffffffff ? 0xffffffff : 36 + dataLen)
+    d.append(contentsOf: Array("WAVE".utf8))
+    d.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(channels); u32(rate)
+    u32(rate * UInt32(channels) * UInt32(bits) / 8); u16(channels * bits / 8); u16(bits)
+    d.append(contentsOf: Array("data".utf8)); u32(dataLen)
+    return d
+}
+
+func pcmBytes(_ samples: [Int16]) -> Data {
+    var d = Data()
+    for s in samples {
+        let u = UInt16(bitPattern: s)
+        d.append(UInt8(u & 0xff)); d.append(UInt8(u >> 8))
+    }
+    return d
+}
+
+func testStreamingHeaderParses() {
+    let pcm = pcmBytes([100, -100, 32000])
+    let wav = makeWavHeader(dataLen: UInt32(pcm.count)) + pcm
+    guard let parsed = StreamingWavParser.parseHeader(wav) else {
+        check("stream: real header parses", false, "got nil"); return
+    }
+    check("stream: real header parses", true)
+    checkEqual("stream: sample rate", parsed.format.sampleRate, 24000)
+    checkEqual("stream: channels", parsed.format.numChannels, 1)
+    checkEqual("stream: bits", parsed.format.bitsPerSample, 16)
+    checkEqual("stream: pcm starts after the 44-byte header", parsed.pcmStart, 44)
+}
+testStreamingHeaderParses()
+
+func testStreamingSentinelLengthsAreIgnored() {
+    // The proxy's streaming header declares 0xFFFFFFFF for both sizes because
+    // it cannot know the total. Trusting either would be a wrong offset or an
+    // instant overflow — the parser must read the fmt and find the data tag.
+    let pcm = pcmBytes([1, 2, 3, 4])
+    let wav = makeWavHeader(dataLen: 0xffffffff) + pcm
+    guard let parsed = StreamingWavParser.parseHeader(wav) else {
+        check("stream: sentinel-length header parses", false, "got nil"); return
+    }
+    check("stream: sentinel-length header parses", true)
+    checkEqual("stream: sentinel pcm start", parsed.pcmStart, 44)
+    checkEqual("stream: pcm bytes after sentinel header", wav.count - parsed.pcmStart, pcm.count)
+}
+testStreamingSentinelLengthsAreIgnored()
+
+func testTornHeaderReturnsNilNotGarbage() {
+    let pcm = pcmBytes([7, 8, 9])
+    let wav = makeWavHeader(dataLen: UInt32(pcm.count)) + pcm
+    for cut in [0, 4, 11, 12, 20, 35, 43] {
+        if StreamingWavParser.parseHeader(wav.prefix(cut)) != nil {
+            check("stream: torn header at \(cut) bytes returns nil", false, "parsed something from \(cut) bytes")
+            return
+        }
+    }
+    check("stream: torn headers return nil, never garbage", true)
+}
+testTornHeaderReturnsNilNotGarbage()
+
+func testNotAWavReturnsNil() {
+    check("stream: raw PCM without RIFF returns nil",
+          StreamingWavParser.parseHeader(pcmBytes([Int16](repeating: 1000, count: 60))) == nil)
+}
+testNotAWavReturnsNil()
+
+func testHeaderParseSurvivesNonZeroDataIndex() {
+    // Data slices carry a non-zero startIndex — the exact off-by-startIndex
+    // class the manual byte reads in the parser must survive. Prepend junk
+    // and slice past it so startIndex != 0.
+    let pcm = pcmBytes([42, -42])
+    let junk = Data([0xde, 0xad, 0xbe, 0xef])
+    let whole = junk + makeWavHeader(dataLen: UInt32(pcm.count)) + pcm
+    let sliced = whole.dropFirst(junk.count)
+    guard let parsed = StreamingWavParser.parseHeader(sliced) else {
+        check("stream: sliced-Data header parses (startIndex != 0)", false, "got nil"); return
+    }
+    check("stream: sliced-Data header parses (startIndex != 0)", true)
+    checkEqual("stream: sliced pcm start", parsed.pcmStart, 44)
+}
+testHeaderParseSurvivesNonZeroDataIndex()
+
+func testAccumulatorConvertsAndScales() {
+    var acc = PcmSampleAccumulator()
+    let out = acc.append(pcmBytes([0, 16384, -16384, 32767, -32768]))
+    checkEqual("stream: accumulator sample count", out.count, 5)
+    check("stream: zero is zero", out[0] == 0)
+    check("stream: +16384 is +0.5", abs(out[1] - 0.5) < 0.0001, "got \(out[1])")
+    check("stream: -16384 is -0.5", abs(out[2] + 0.5) < 0.0001, "got \(out[2])")
+    check("stream: full scale stays inside ±1", out[3] <= 1.0 && out[4] >= -1.0)
+}
+testAccumulatorConvertsAndScales()
+
+func testAccumulatorCarriesTornSample() {
+    // A 16-bit sample cut in half by a chunk boundary must come out whole,
+    // in order, exactly once.
+    var acc = PcmSampleAccumulator()
+    let whole = pcmBytes([12345, -12345, 555])
+    let first = acc.append(whole.prefix(3))      // one full sample + a lone byte
+    let second = acc.append(whole.dropFirst(3))  // the byte's other half + the rest
+    checkEqual("stream: torn-sample piece one count", first.count, 1)
+    checkEqual("stream: torn-sample piece two count", second.count, 2)
+    let joined = first + second
+    check("stream: torn sample survives intact",
+          abs(joined[0] - Float(12345) / 32768) < 0.0001 &&
+          abs(joined[1] - Float(-12345) / 32768) < 0.0001 &&
+          abs(joined[2] - Float(555) / 32768) < 0.0001,
+          "got \(joined)")
+}
+testAccumulatorCarriesTornSample()
+
+func testAccumulatorHandlesEmptyAndSingleByte() {
+    var acc = PcmSampleAccumulator()
+    checkEqual("stream: empty append yields nothing", acc.append(Data()).count, 0)
+    checkEqual("stream: a lone byte yields nothing yet", acc.append(Data([0x39])).count, 0)
+    let out = acc.append(Data([0x30]))
+    checkEqual("stream: its partner completes the sample", out.count, 1)
+    check("stream: carried sample assembled LE", abs(out[0] - Float(0x3039) / 32768) < 0.0001, "got \(out[0])")
+}
+testAccumulatorHandlesEmptyAndSingleByte()
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 print("")
@@ -659,6 +790,9 @@ if failures.isEmpty {
     print("    - nothing here plays audio or listens to it. This proves the TEXT that")
     print("      reaches the synthesiser is whole, ordered and sensibly cut. It cannot")
     print("      prove what comes out of the speaker.")
+    print("    - the streamed player's engine half (scheduling, pause/stop, the 0.3s")
+    print("      primer, underrun behaviour) needs a device. Only its byte logic is")
+    print("      proven here; her ear on a real phone gates the streaming toggle.")
     print("")
     exit(0)
 } else {
