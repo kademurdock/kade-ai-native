@@ -752,6 +752,40 @@ final class VoiceService: NSObject, ObservableObject {
         if !speakQueue.isEmpty {
             let first = speakQueue.removeFirst()
             inflight.append((first, prefetch(first)))
+            /* ⭐ PART 98.3 — THE CLEAR LANE GAVE THE OPENER A HEAD START AND
+             * TOOK HER RUNWAY, AND ONE COMPANION BUYS THE RUNWAY BACK.
+             *
+             * Her report on build 251: "huge huge pauses between chunks. The
+             * first chunk was a few words, like one sentence, and the other
+             * chunks were paragraphs." That is this block's shadow. 97.3 let
+             * the opener synthesise ALONE, which also meant pieces two and
+             * three did not START until the opener's data landed — so a short
+             * opener (~110 chars, ~4s of audio) had to cover a full synthesis
+             * of a 300-char paragraph behind it. On the night she reported it
+             * the proxy's median synth was 3.3s and its p90 4.9s, so the pipe
+             * ran dry right where she heard it. Before 97.3 those pieces were
+             * already in flight during the opener and the gap did not exist.
+             *
+             * MEASURED AGAIN TONIGHT, because 97.3's number was taken in a
+             * wobble and then generalised — same endpoint, same voice, a real
+             * opener, three reps each: ALONE 873ms · +ONE companion 1009ms ·
+             * +TWO companions 845ms. The spread across all three (817–1166ms)
+             * is noise; concurrency is not reliably costing the opener
+             * anything. 97.3's +0.4–0.5s was real for its minute and is not a
+             * law, so the trade is re-struck rather than reverted: ONE
+             * companion starts with the opener (half the pre-97.3 contention,
+             * runway restored a whole synthesis earlier), and the pipe fills
+             * to the full depth-2 spike margin the moment the opener lands.
+             * The opener is still submitted FIRST, so it takes the first slot
+             * in the proxy's limiter.
+             *
+             * Her ear is the judge of this one: ding→first-word should stay
+             * where 97.3 put it, and the hole after the first short piece
+             * should close. */
+            if !speakQueue.isEmpty {
+                let companion = speakQueue.removeFirst()
+                inflight.append((companion, prefetch(companion)))
+            }
         }
         /// Stopped while a clip was in flight? Drop everything, resume every
         /// waiter, and leave — never speak past a stop. (The 91.10 rule,
