@@ -873,7 +873,39 @@ struct ConversationDetailView: View {
                 }
             }
             else if case .sending = old, case .idle = new {
-                Earcons.shared.play(.messageReceived)
+                /* ⭐ PART 98.5 — THE DING ANNOUNCES A REPLY THAT ALREADY
+                 * ANNOUNCED ITSELF.
+                 *
+                 * Her report the night streaming finally worked: "the audio is
+                 * playing before the ping plays alerting you that the message
+                 * came in in the first place. Maybe the ping should only exist
+                 * when voice messages are turned off."
+                 *
+                 * She is right, and the streamed lane is what exposed it. This
+                 * earcon fires at sending→idle, which is when the reply is
+                 * COMPLETE — but with read-aloud on, her voice starts on the
+                 * first finished sentence, now 235ms after the request (proxy
+                 * receipt, measured on her own phone). So the sound whose whole
+                 * job is "it's here" arrives well after she has been listening
+                 * to it, which is worse than useless: it is a notification for
+                 * something she is already doing.
+                 *
+                 * Same doctrine as 91.7 one step further — when the voice owns
+                 * the soundstage, it owns the announcing too. The haptic knock
+                 * below is deliberately KEPT: it is a different channel, it
+                 * cannot collide with speech, and it still confirms arrival in
+                 * her hand.
+                 *
+                 * The `!isSpeaking` half is the safety net, not decoration:
+                 * read-aloud can be on while the voice lane never took this
+                 * turn (nothing speakable after scrubbing, speech stopped
+                 * mid-flight). `isSpeaking` flips true when the QUEUE starts,
+                 * before any fetch, so it means exactly "the voice has this
+                 * one." If it does not, she gets her ding and is never left
+                 * with a reply that arrived in total silence. */
+                if !readAloudEnabled || !voiceService.isSpeaking {
+                    Earcons.shared.play(.messageReceived)
+                }
                 // Aug 6 2026 (her "haptics to match visuals" ask): the reply
                 // lands in the hand too — soft double-knock now, and any
                 // Game Parlor sound cues in the reply fire their FELT twins
