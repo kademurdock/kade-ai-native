@@ -500,6 +500,15 @@ struct ConversationDetailView: View {
         /// there — double-tap-again-to-stop always works.
         case micButton
         case voiceError
+        /// Build 254 (her report, Aug 30 2026: "when you hit send, it reads
+        /// your message because that's the focus"): the send moment's anchor.
+        /// Build 220 parked VoiceOver on the message row she had just sent,
+        /// and a row is ONE element whose label is the whole message body —
+        /// so every send read her own paragraph back at her. The anchor was
+        /// the right idea; the paragraph was the wrong place to put it. This
+        /// button is stable across the whole send (same Button, label flips
+        /// Send -> Stop), says one word, and is already under her thumb.
+        case sendButton
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
     /// Build 217: the replying row's decorative layer is skipped entirely
@@ -982,7 +991,19 @@ struct ConversationDetailView: View {
             if playing, case .sending = sendState { Earcons.shared.stopWaitingLoop() }
         }
         .onChange(of: voiceService.isSpeaking) { was, speaking in
-            if was, !speaking, awaitingSpokenReply { endSpeechWait() }
+            if was, !speaking, awaitingSpokenReply {
+                /* Build 254: reaching here means the speak queue drained
+                 * without a clip ever starting -- the isClipPlaying watcher
+                 * above clears `awaitingSpokenReply` the moment one does -- so
+                 * TTS never spoke this reply. The completion path skipped its
+                 * VoiceOver focus move on the promise that the voice would
+                 * deliver it, and that promise just broke. Make the move now,
+                 * or the reply sits unread by either voice. */
+                if UIAccessibility.isVoiceOverRunning {
+                    a11yFocus = messages.last.map { .message($0.id) }
+                }
+                endSpeechWait()
+            }
         }
         // Same Phase B ask, "recording start/stop" -- driven directly by
         // VoiceService's own published `isRecording` so this can never drift
@@ -2525,6 +2546,9 @@ struct ConversationDetailView: View {
                 )
                 .accessibilityLabel(isSending ? "Stop" : "Send message")
                 .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
+                // Build 254: the send moment's focus anchor -- see `case
+                // sendButton`. Focus lands here instead of on her own message.
+                .accessibilityFocused($a11yFocus, equals: .sendButton)
             }
         }
         .padding()
@@ -2696,8 +2720,14 @@ struct ConversationDetailView: View {
         KadeBreadcrumbs.drop(
             "send tapped (\(trimmed.count) chars\(UIAccessibility.isVoiceOverRunning ? ", vo" : ""))"
         )
+        /* ⭐ BUILD 254 — this anchor was the worse half of her report. It
+         * fires BEFORE the optimistic row is appended, so `messages.last` was
+         * the assistant's PREVIOUS reply: every send after the first started
+         * reading the last answer aloud, then got cut off mid-sentence when
+         * the new row stole focus. Now it lands on the button she just tapped,
+         * which says "Stop" and nothing else. */
         if UIAccessibility.isVoiceOverRunning {
-            a11yFocus = messages.last.map { .message($0.id) }
+            a11yFocus = .sendButton
         }
         draftText = ""
         await Self.nextRunLoopTurn()
@@ -2978,12 +3008,14 @@ struct ConversationDetailView: View {
         messages.append(optimisticMessage)
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("optimistic row painted")
-        /* Build 220: the row she just sent is the right place for VoiceOver
-         * to be standing. Its own transaction and its own crumb, keeping
-         * build 211's one-mutation-per-commit discipline -- fusing it into
-         * the `sendState` flip would rebuild exactly the pileup 211 split. */
+        /* Build 220 put VoiceOver on the row she just sent; BUILD 254 moves
+         * it to the send button instead, because that row's label is the whole
+         * message and it read her own words back to her on every send. The
+         * transaction and the crumb stay exactly as 220 built them -- keeping
+         * build 211's one-mutation-per-commit discipline, since fusing this
+         * into the `sendState` flip would rebuild the pileup 211 split. */
         if UIAccessibility.isVoiceOverRunning {
-            a11yFocus = .message(optimisticMessage.id)
+            a11yFocus = .sendButton
         }
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("focus anchored")
@@ -3267,7 +3299,29 @@ struct ConversationDetailView: View {
                 // Spent successfully -- the server owns it now.
                 pendingAttachment = nil
             }
-            a11yFocus = messages.last.map { .message($0.id) }
+            /* ⭐ BUILD 254 — HER REPORT, Aug 30 2026: "voiceover on the native
+             * app reads the message at the same time as tts does when voice
+             * messages are turned on."
+             *
+             * This focus move and the `enqueueSpeak` below fire in the same
+             * breath, and the row's label is the ENTIRE reply -- so with voice
+             * messages on, VoiceOver read the reply off the focus move while
+             * the character's own voice read the same words out of the
+             * speaker. Two voices, same text, nothing synchronising them.
+             *
+             * Her call: when read-aloud is on, the spoken reply IS the
+             * delivery, so leave focus where she left it -- the arrival ding
+             * still marks the moment. With read-aloud off nothing else would
+             * announce the reply, so the move stays exactly as it was.
+             *
+             * `awaitingSpokenReply` (set immediately above) is the precise
+             * flag for "speech is coming for this turn" -- read-aloud on AND
+             * an assistant message to speak. If TTS then fails to play
+             * anything, the isSpeaking watcher makes this move after the
+             * fact; see its comment. */
+            if !awaitingSpokenReply {
+                a11yFocus = messages.last.map { .message($0.id) }
+            }
             if wasNewConversation {
                 // Session 24 (Kade: new chats "all say new chat"): now that
                 // the first send carries the NO_PARENT sentinel (see
@@ -3371,6 +3425,13 @@ struct ConversationDetailView: View {
             // newest message) -- if a partial reply made it through before
             // the stop landed, she should hear it the same way she'd hear
             // any other new reply, not have to go hunting for it.
+            //
+            // ⚠️ BUILD 254 DELIBERATELY DID NOT GATE THIS ONE on read-aloud
+            // the way the completion path above is now gated. Nothing on the
+            // stop path calls `enqueueSpeak` -- a stopped turn is never
+            // spoken -- so VoiceOver is the ONLY voice that can deliver a
+            // partial reply here. Gate it and a stopped reply goes unread by
+            // anything. Check that assumption before copying the gate here.
             a11yFocus = messages.last.map { .message($0.id) }
             UIAccessibility.post(notification: .announcement, argument: "Stopped.")
         } catch let error as MessageSendingService.SendError {
