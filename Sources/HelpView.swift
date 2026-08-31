@@ -189,7 +189,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Interrupting",
-                body: "Stop Talking cuts her off mid-sentence so you can get a word in. You can also just start talking over her; she'll stop on her own."
+                body: "Just start talking over her and she stops, the same way the phone line has always worked \u2014 she tries to ignore the room and only stops for an actual word, so a TV or your screen reader shouldn't set her off. Stop Talking is still there for the times you'd rather not make a sound, and it's the only thing that works while your microphone is muted, since a muted mic gives her nothing to hear."
+            ),
+            HelpEntry(
+                title: "Deep Think, mid-conversation",
+                body: "Deep Think on the call screen is for when you ask something you'd rather she took her time on. Double-tap it, ask your question, and she thinks it through instead of answering straight off. It turns itself off after that one answer, so the rest of the call stays quick \u2014 and you can say \"deep think on\" out loud instead if your hands are busy."
             ),
             HelpEntry(
                 title: "Your Spotter",
