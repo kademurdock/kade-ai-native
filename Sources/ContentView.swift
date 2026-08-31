@@ -62,12 +62,34 @@ struct ContentView: View {
     /// Siri Shortcuts park what they want here (see `KadeAppIntents.swift`).
     /// Observed rather than owned: it's a singleton that outlives any view.
     @ObservedObject private var router = IntentRouter.shared
-    /// Programmatic navigation for the two new home-screen destinations AND
-    /// for anything Siri asks for. ONE `navigationDestination(item:)`, ONE
-    /// brand-new type, declared exactly once at the root of this stack --
-    /// the invariant build 122 exists to protect. `KadeConversation` still
-    /// has exactly one destination in the whole app, and it is not this one.
-    @State private var route: HomeRoute?
+    /// Programmatic navigation for the home-screen destinations AND for
+    /// anything Siri asks for. Part 112 (her ask, verbatim: "no matter what
+    /// conversation I'm in, when I get out of it, it should take me to my
+    /// conversations"): this moved from ONE `navigationDestination(item:)`
+    /// over an optional to a real path, because `item:` physically cannot
+    /// express a two-deep push — and the launch chat needs Conversations
+    /// UNDERNEATH it so Back lands on the list, not the home screen.
+    /// Still ONE registration for HomeRoute in the whole stack (the
+    /// invariant build 122 exists to protect — `navigationDestination`
+    /// registers by TYPE for the entire enclosing NavigationStack, and a
+    /// second registration for the same type is silently ignored).
+    /// `KadeConversation` still has exactly one destination in the whole
+    /// app, and it is not this one.
+    @State private var path: [HomeRoute] = []
+
+    /// The one door onto `path`. Every programmatic navigation goes through
+    /// here so the conversations-underneath rule lives in exactly one place:
+    /// `.mainChat` — the ONLY HomeRoute that IS a conversation — gets the
+    /// Conversations list pushed beneath it; every other screen pushes
+    /// alone, so a dictate, Settings, or Help push never grows a surprise
+    /// list under it (her rule is about conversations, nothing else).
+    private func go(_ destination: HomeRoute) {
+        if destination == .mainChat {
+            path = [.conversations, .mainChat]
+        } else {
+            path = [destination]
+        }
+    }
 
     // Focus targets for VoiceOver.
     private enum Focus: Hashable { case status, error, email }
@@ -90,7 +112,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     // Session 11: the "Welcome to Kade-AI" hero line
@@ -206,7 +228,7 @@ struct ContentView: View {
             } message: {
                 Text("Check your connection and try again.")
             }
-            .navigationDestination(item: $route) { destination in
+            .navigationDestination(for: HomeRoute.self) { destination in
                 switch destination {
                 case .mainChat:
                     // The launch chat: seeded with the stored main agent
@@ -266,6 +288,10 @@ struct ContentView: View {
                     AccessRequestsView(apiClient: apiClient)
                 case .alerts:
                     AlertsView(apiClient: apiClient)
+                case .announcements:
+                    // Part 112: the broadcast push's deep link — What's New
+                    // digests, full text, newest first, including missed ones.
+                    AnnouncementsView(apiClient: apiClient)
                 case .myCreations:
                     MyCreationsView(apiClient: apiClient)
                 case .wallOfFame:
@@ -294,7 +320,7 @@ struct ContentView: View {
                 // ordinary foreground can't double-start a session.
                 UserDefaults(suiteName: "group.com.kademurdock.kadeai")?
                     .removeObject(forKey: "kadeKeys.transcribeRequest.v1")
-                route = .kadeKeysDictate
+                go(.kadeKeysDictate)
             }
         }
         // Aug 5 2026 ROUND 3 of the Transcribe key (her tap-1-silence
@@ -516,7 +542,7 @@ struct ContentView: View {
             // button and the Siri phrase through one optional `HomeRoute`
             // makes a second copy structurally impossible: one optional can
             // only hold one destination at a time.
-            Button { route = .conversations } label: {
+            Button { go(.conversations) } label: {
                 Label("Your conversations", systemImage: "bubble.left.and.bubble.right")
                     .frame(maxWidth: .infinity)
             }
@@ -547,13 +573,24 @@ struct ContentView: View {
             // you), not Tools. No Siri phrase (the provider sits at
             // Apple's 10-shortcut cap — see KadeAppIntents) and no Quick
             // Action (iOS shows 4; five are already declared).
-            Button { route = .alerts } label: {
+            Button { go(.alerts) } label: {
                 Label("Alerts", systemImage: "bell")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeCardButtonStyle())
             .labelStyle(KadeTileLabelStyle(tint: .orange))
             .accessibilityHint("Your recent reminders and check-ins, and how they reach you.")
+
+            // Part 112: What's New lands somewhere readable. A push banner
+            // truncates and then evaporates; this row is the record — the
+            // same list the broadcast push's tap opens on build 258+.
+            Button { go(.announcements) } label: {
+                Label("Announcements", systemImage: "megaphone")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .purple))
+            .accessibilityHint("What's New announcements from Kade-AI, full text, newest first.")
 
             Text("Tools")
                 .font(.headline)
@@ -645,7 +682,7 @@ struct ContentView: View {
             // moved under here too -- see SettingsView's doc comment; this
             // resolves the "still-open tabs decision" its own previous
             // doc comment had flagged.
-            Button { route = .settings } label: {
+            Button { go(.settings) } label: {
                 Label("Settings", systemImage: "gearshape")
                     .frame(maxWidth: .infinity)
             }
@@ -653,7 +690,7 @@ struct ContentView: View {
             .labelStyle(KadeTileLabelStyle(tint: .gray))
             .accessibilityHint("Speech, accessibility, and pronunciation dictionary settings.")
 
-            Button { route = .help } label: {
+            Button { go(.help) } label: {
                 Label("Help", systemImage: "questionmark.circle")
                     .frame(maxWidth: .infinity)
             }
@@ -680,7 +717,7 @@ struct ContentView: View {
                     .padding(.top, 8)
                     .accessibilityAddTraits(.isHeader)
 
-                Button { route = .admin } label: {
+                Button { go(.admin) } label: {
                     Label("Admin dashboard", systemImage: "chart.bar.doc.horizontal")
                         .frame(maxWidth: .infinity)
                 }
@@ -701,7 +738,7 @@ struct ContentView: View {
     /// so tiles fit two-up; the SPOKEN label is pinned to the exact phrase
     /// the old full-width row used, so the grid change is invisible by ear.
     private func toolTile(_ title: String, spoken: String, icon: String, tint: Color, hint: String, destination: HomeRoute) -> some View {
-        Button { route = destination } label: {
+        Button { go(destination) } label: {
             Label(title, systemImage: icon)
                 .frame(maxWidth: .infinity)
         }
@@ -718,7 +755,7 @@ struct ContentView: View {
             // answerable without leaving for a browser, and someone looking
             // for help is exactly the person least well served by being
             // handed a web view.
-            Button { route = .help } label: {
+            Button { go(.help) } label: {
                 Label("Help", systemImage: "questionmark.circle")
                     .frame(maxWidth: .infinity)
             }
@@ -828,7 +865,7 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             let stops: [HomeRoute?] = [nil, .conversations, .debateRoom, .prompts, .settings]
             for stop in stops {
-                if let stop { route = stop } else { route = nil }
+                if let stop { go(stop) } else { path = [] }
                 try? await Task.sleep(nanoseconds: 7_000_000_000)
             }
         }
@@ -847,31 +884,31 @@ struct ContentView: View {
             // whole point of the phrase.
             callingSpotter = true
         case .transcribe:
-            route = .transcribe
+            go(.transcribe)
         case .conversations:
-            route = .conversations
+            go(.conversations)
         case .describe:
-            route = .describe
+            go(.describe)
         case .quickDictate:
-            route = .quickDictate
+            go(.quickDictate)
         case .matchmaker:
-            route = .matchmaker
+            go(.matchmaker)
         case .gameRoom:
-            route = .gameRoom
+            go(.gameRoom)
         case .debateRoom:
-            route = .debateRoom
+            go(.debateRoom)
         case .agentBuilder:
-            route = .agentBuilder
+            go(.agentBuilder)
         case .settings:
-            route = .settings
+            go(.settings)
         case .brief:
             briefAutoListen = false
-            route = .brief
+            go(.brief)
         case .briefListen:
             briefAutoListen = true
-            route = .brief
+            go(.brief)
         case .accessRequests:
-            route = .accessRequests
+            go(.accessRequests)
         case .agentCall:
             // Part 75: the payload was parked next to the destination --
             // consume it the same one-shot way. A ring with no payload
@@ -881,9 +918,11 @@ struct ContentView: View {
                 agentCallPayload = call
             }
         case .feedbackReports:
-            route = .feedbackReports
+            go(.feedbackReports)
         case .adminHub:
-            route = .admin
+            go(.admin)
+        case .announcements:
+            go(.announcements)
         }
     }
 
@@ -918,7 +957,7 @@ struct ContentView: View {
             try? FileManager.default.removeItem(at: marker)
         }
         guard stamp > 0, Date().timeIntervalSince1970 - stamp < 180 else { return }
-        route = .kadeKeysDictate
+        go(.kadeKeysDictate)
     }
 
     private func handleStateChange() {
@@ -931,8 +970,13 @@ struct ContentView: View {
             // chat — unless a Siri intent is already waiting (it routes
             // right after this and must win) or something is already
             // pushed. Home remains one Back away underneath.
-            if route == nil && router.pending == nil {
-                route = .mainChat
+            // Part 112: the launch push is now TWO-DEEP — the
+            // Conversations list rides underneath the fresh chat, so Back
+            // out of it lands on the list (her rule about exits). Pushed as
+            // one path assignment so SwiftUI animates once, straight to the
+            // chat; the list should not visibly flash — device test owed.
+            if path.isEmpty && router.pending == nil {
+                go(.mainChat)
             }
         case .failed:
             a11yFocus = .error           // error gets spoken
@@ -1020,7 +1064,12 @@ enum HomeRoute: Identifiable, Hashable {
     /// open the app is land in a chat with an agent... What if I'm rushing
     /// and need to say something quick to my main agent?"): the launch
     /// destination — a fresh chat pointed at the main agent, pushed the
-    /// moment sign-in lands. Home stays one Back away underneath it.
+    /// moment sign-in lands. Part 112 (her rule, about EXITS, not entries:
+    /// "no matter what conversation I'm in, when I get out of it, it should
+    /// take me to my conversations"): the Conversations list now rides
+    /// UNDERNEATH this push, so Back lands on the list. The old "Home stays
+    /// one Back away" line described the stack that happened to result, not
+    /// anything she asked for — see `go(_:)` in ContentView.
     case mainChat
     case transcribe
     case help
@@ -1045,6 +1094,10 @@ enum HomeRoute: Identifiable, Hashable {
     case feedbackReports
     case brief
     case accessRequests
+    /// Part 112: the What's New history — where a broadcast push's tap lands
+    /// (route name "announcements"), and where a digest you MISSED can still
+    /// be read. See AnnouncementsView for the whole story.
+    case announcements
 
     var id: String {
         switch self {
@@ -1072,6 +1125,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .feedbackReports: return "feedbackReports"
         case .brief: return "brief"
         case .accessRequests: return "accessRequests"
+        case .announcements: return "announcements"
         }
     }
 }

@@ -50,6 +50,10 @@ extension IntentRouter.Destination {
         case .accessRequests:  return "access-requests"
         case .feedbackReports: return "feedback"
         case .adminHub:        return "admin"
+        // Part 112: broadcasts default to this route bridge-side, so a
+        // What's New push's tap opens the history instead of the launch
+        // default (the Part-83 failure that came back for digests).
+        case .announcements:   return "announcements"
         // No outside name, and that is the decision: an agent call cannot be
         // asked for by name because it needs a payload (who is calling, why,
         // which plan). It arrives as its own push category with that payload

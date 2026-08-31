@@ -81,6 +81,9 @@ final class IntentRouter: ObservableObject {
         // A String-raw enum can't carry the payload (who/why/planId), so
         // it parks in `pendingAgentCall` below and this case says go look.
         case agentCall
+        // Part 112: the What's New announcements screen — the broadcast
+        // push's landing place (route "announcements", build 258+).
+        case announcements
         // Part 83 (Aug 21 2026, her report: tapping the bug-report push
         // landed in a NEW CONVERSATION -- the app's launch default -- instead
         // of the bug window): pushes now carry a route home. The bridge
