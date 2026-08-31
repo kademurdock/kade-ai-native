@@ -125,6 +125,9 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// noise, no captions from the TV. Deliberately NOT persisted -- every
     /// call starts with the mic live, same as every phone ever made.
     @Published private(set) var micMuted = false
+    /// Part 110: true while the NEXT answer is armed to think hard. Server-
+    /// owned (see `setDeepThink`) — never set optimistically on tap.
+    @Published private(set) var deepThinkArmed = false
 
     func setMicMuted(_ muted: Bool) {
         micMuted = muted
@@ -355,7 +358,22 @@ final class StreamingCallService: NSObject, ObservableObject {
         // bridge seeds the agent with its recent turns and the post-call
         // ingest appends the transcript there instead of minting a new
         // conversation.
-        var hello: [String: Any] = ["type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect]
+        // Part 110 (Aug 31 2026, her ask: "I don't want the stop talking button,
+        // I want automatic like the phone line"). The bridge has accepted this
+        // key since July 24 2026 and no client has ever sent it, so app calls
+        // have been silently defaulting to Stop-button-only that whole time --
+        // which is the entire reason barge-in "wasn't working" in the app.
+        // Nothing was broken; the request was never made.
+        //
+        // Sending it EXPLICITLY rather than relying on the server default, even
+        // though the server default now matches: a client that states what it
+        // wants keeps working when the server's default moves again, and the
+        // one line here is the only place to look when someone next asks why an
+        // app call interrupts and a web call does not.
+        var hello: [String: Any] = [
+            "type": "hello", "ticket": ticket, "spotterDirect": callSpotterDirect,
+            "bargeMode": "auto",
+        ]
         if let pendingConversationId {
             hello["conversationId"] = pendingConversationId
         }
@@ -390,6 +408,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         receiveLoopTask?.cancel()
         receiveLoopTask = nil
         teardownAudio()
+        deepThinkArmed = false   // Part 110: never inherited by the next call
         status = .ended(graceful: graceful)
     }
 
@@ -399,6 +418,21 @@ final class StreamingCallService: NSObject, ObservableObject {
     func barge() {
         flushPlayback()
         sendJSON(["type": "barge"])
+    }
+
+    /// DEEP THINK on the call screen (Aug 31 2026, Part 110). Her ask: "I'd
+    /// like to have a deep think button or something in case you don't want an
+    /// instant answer in the middle of a conversation."
+    ///
+    /// ONE-SHOT, and it is the server that says so. The bridge answers every
+    /// `deepthink` with `{armed}`, and again with `armed:false` the moment the
+    /// turn spends it, so this flag is never a local guess. That matters more
+    /// here than anywhere else in the app: this control's whole job is to be
+    /// believed, and a VoiceOver value that says "on" while the server thinks
+    /// it is off is worse than no button — she would ask a hard question and
+    /// silently get the quick answer.
+    func setDeepThink(_ on: Bool) {
+        sendJSON(["type": "deepthink", "on": on])
     }
 
     /// Toggle Spotter/Live mode. `ack` must be true only on the SECOND call
@@ -576,6 +610,10 @@ final class StreamingCallService: NSObject, ObservableObject {
             liveMinutesLeft = msg.minutesLeft
             if let m = msg.message { liveNotice = m }
             if engineRunning { updateNowPlayingInfo() }
+        case "deepthink":
+            // Both the ack and the "it just got spent" notice land here, and
+            // both carry `armed`. One assignment, no state machine.
+            deepThinkArmed = msg.armed ?? false
         case "live-notice":
             liveNotice = msg.text
         case "video-notice":
@@ -1637,4 +1675,8 @@ private struct CallServerMessage: Decodable {
     let reason: String?
     let spotterName: String?
     let minutesLeft: Int?
+    /// Part 110: the server's answer on the Deep Think button. Authoritative —
+    /// the button renders THIS, never its own optimistic guess, so a tap that
+    /// never reached the bridge cannot leave the label lying to VoiceOver.
+    let armed: Bool?
 }

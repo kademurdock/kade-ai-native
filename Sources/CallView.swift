@@ -106,6 +106,7 @@ struct CallView: View {
                     cameraButton
                 }
                 spotterButton
+                deepThinkButton
                 stopTalkingButton
                 controls
             }
@@ -446,6 +447,65 @@ struct CallView: View {
         )
     }
 
+    /// DEEP THINK, on the call screen (Aug 31 2026, Part 110). Her ask, in the
+    /// same breath as the barge-in one: "I'd like to have a deep think button
+    /// or something in case you don't want an instant answer in the middle of a
+    /// conversation."
+    ///
+    /// That sentence is the whole spec, and it explains why this arms the NEXT
+    /// answer rather than latching: the case she named is a single hard
+    /// question inside an otherwise ordinary conversation. A mode would make
+    /// every answer after it slow, and leaving it on by accident is the failure
+    /// nobody notices until the call feels sluggish.
+    ///
+    /// ⚠️ THE STATE SHOWN HERE IS THE SERVER'S, NOT THIS VIEW'S. `deepThinkArmed`
+    /// is only ever set from the bridge's reply, so a tap that never landed
+    /// leaves the button reading "Off" instead of confidently lying. On a screen
+    /// somebody is driving entirely by ear, a control whose VALUE is a guess is
+    /// worse than no control: she would ask the hard question, hear "on", and
+    /// silently get the quick answer anyway.
+    private var deepThinkButton: some View {
+        Button {
+            let want = !callService.deepThinkArmed
+            callService.setDeepThink(want)
+            KadeHaptics.tap()
+            // Announce the INTENT, present tense. The value below is what
+            // reports the settled truth once the server answers.
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: want
+                    ? "Deep think on for your next question."
+                    : "Deep think off."
+            )
+        } label: {
+            Label(
+                callService.deepThinkArmed ? "Deep Think is on for your next question" : "Deep Think",
+                // One symbol for both states, deliberately. A wrong SF Symbol
+                // name renders as NOTHING rather than failing to compile, and
+                // the filled variant of this glyph has moved names across SF
+                // Symbols releases — a silent blank icon on the state that
+                // matters most is not a trade worth making. The tint, the
+                // label and the accessibility value all carry the state.
+                systemImage: "brain.head.profile"
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(callService.deepThinkArmed ? .accentColor : nil)
+        .disabled(callService.status == .reconnecting)
+        // Session 26, the Amber rule: label names the control, value carries
+        // the state, hint says what a double-tap does. Never all three in one
+        // string -- VoiceOver reads them in that order and a label that already
+        // contains the state stutters.
+        .accessibilityLabel("Deep think")
+        .accessibilityValue(callService.deepThinkArmed ? "On for your next question" : "Off")
+        .accessibilityHint(
+            callService.deepThinkArmed
+                ? "Double-tap to go back to quick answers."
+                : "Double-tap so \(currentSpeakerName) takes her time on your next question. It turns itself off after that one answer."
+        )
+    }
+
     /// Aug 17 2026, her call: OFF the main strip, not gone. She asked why it
     /// still exists at all -- "barge should handle that correctly, and of
     /// course you can mute yourself" -- and the honest answer is that auto
@@ -455,6 +515,15 @@ struct CallView: View {
     /// muted, or to stop one without having to make noise. It keeps its full
     /// label and hint for VoiceOver; it just no longer eats a third of the
     /// primary row, which is now the two controls she actually reaches for.
+    ///
+    /// ⭐ PART 110 UPDATE, and it makes her Aug-17 question finally have the
+    /// answer she expected: "barge should handle that correctly" was TRUE of
+    /// the phone line and false of this screen. App calls had been running
+    /// bargeMode 'push' since July 24 2026, so on this surface the auto
+    /// barge-in she was reasoning about did not exist and this button was doing
+    /// all the work. The hello now asks for 'auto'. The button stays for
+    /// exactly the reason written above — a muted mic makes no sound to barge
+    /// with — and that reason is now the ONLY one.
     private var stopTalkingButton: some View {
         Button {
             callService.barge()
