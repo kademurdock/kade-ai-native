@@ -168,6 +168,21 @@ struct ContentView: View {
             }
             .navigationTitle("Kade-AI")
             .navigationBarTitleDisplayMode(.inline)
+            /* ⭐ PART 109 — the data-use gate sits on the ROOT stack, not on any
+             * one button, so it covers every screen this app can reach and the
+             * signed-out -> signed-in transition too. `.constant` is deliberate:
+             * the cover is owned by auth state plus stored consent, never by a
+             * local toggle, so no stray dismiss can leave a signed-in session
+             * behind an unanswered ask. */
+            .fullScreenCover(isPresented: .constant(consentPending)) {
+                if let uid = signedInUserId {
+                    DataUseConsentView(
+                        userId: uid,
+                        onAgree: { consentBump &+= 1 },
+                        onDecline: { auth.signOut() }
+                    )
+                }
+            }
             .sheet(isPresented: $showingWeb) {
                 SafariView(url: URL(string: "https://kademurdock.com")!, loadFailed: $webLoadFailed)
                     .ignoresSafeArea()
@@ -731,6 +746,42 @@ struct ContentView: View {
     private var isSignedIn: Bool {
         if case .signedIn = auth.state { return true }
         return false
+    }
+
+    /* ⭐ PART 109 — THE DATA-USE GATE. App Review rejected build 245 under
+     * 5.1.1(i)/5.1.2(i) because the app sent a person's words to third-party AI
+     * services without telling them what was sent, who received it, or asking
+     * first — and Apple said in as many words that putting it in the privacy
+     * policy alone "is not sufficient."
+     *
+     * So this is a fullScreenCover, not a banner and not a link. It sits over
+     * the whole app the instant a session becomes signed-in, has no dismiss
+     * gesture and no skip, and the only ways past it are Agree or sign out.
+     * That ordering is the actual requirement: NOTHING the user types, records,
+     * photographs or shares can reach a server before they have said yes,
+     * because none of the screens that could send anything are reachable until
+     * this cover goes away.
+     *
+     * It reads `auth.state` directly rather than caching a Bool, so a restored
+     * session at launch (AuthService.restore sets .signedIn optimistically,
+     * offline, before any network call) is gated exactly like a fresh sign-in.
+     * An account that has already agreed to the CURRENT version never sees it
+     * again; see DataUseConsent for why the version, not a bare flag. */
+    /// UserDefaults does not publish, so recording consent would not by itself
+    /// re-run `body` and the cover would stay up over an agreed session.
+    /// Reading this inside `consentPending` — which `body` reads — is what makes
+    /// Agree take effect immediately. `&+=` because it only has to CHANGE.
+    @State private var consentBump = 0
+
+    private var consentPending: Bool {
+        _ = consentBump
+        guard case .signedIn(let user) = auth.state else { return false }
+        return !DataUseConsent.hasAgreed(userId: user.id)
+    }
+
+    private var signedInUserId: String? {
+        if case .signedIn(let user) = auth.state { return user.id }
+        return nil
     }
 
     /// For `AgentManagerView`, which needs to filter `GET /api/agents` down

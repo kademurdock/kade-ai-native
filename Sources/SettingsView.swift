@@ -389,10 +389,62 @@ struct SettingsView: View {
         // trail of recent app events -- see KadeDiagnostics.swift.
         Section {
             diagnosticsRow(searchStyle: false)
+            dataUseRow
         } header: {
             sectionHeader("Support")
         } footer: {
             Text("If the app ever crashes, open it again and share diagnostics here -- the crash report plus a timeline of what the app was doing. Never your conversations.")
+        }
+    }
+
+    /* ⭐ PART 109 — the data-use disclosure, findable again after you agree.
+     * The consent screen itself is shown once at sign-in (App Review, 5.1.1(i)
+     * and 5.1.2(i)), and a disclosure a person can only ever read once is not
+     * much of a disclosure — this is the permanent home for it. Read-only on
+     * purpose: revoking here would leave a signed-in account that cannot send
+     * anything, which reads as the app being broken. Signing out is the honest
+     * revoke and it is already one row away in Account. */
+    @State private var showingDataUse = false
+    private var dataUseRow: some View {
+        Button { showingDataUse = true } label: {
+            Label("What Kade-AI sends, and who to", systemImage: "hand.raised")
+        }
+        .accessibilityHint("Opens the list of what leaves your phone and which companies receive it, the same one you agreed to when you signed in.")
+        .sheet(isPresented: $showingDataUse) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Group {
+                            Text("What gets sent").font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(DataUseConsentView.whatIsSent)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Group {
+                            Text("Who receives it").font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(DataUseConsentView.whoReceivesIt)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Group {
+                            Text("What they may do with it").font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(DataUseConsentView.promise)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Link("Read the full privacy policy", destination: DataUseConsent.policyURL)
+                            .accessibilityHint("Opens the complete privacy policy in your browser.")
+                        Text("To stop sharing, sign out. Kade-AI cannot answer you without sending your words to these services.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                }
+                .navigationTitle("Your data")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingDataUse = false }
+                    }
+                }
+            }
         }
     }
 
