@@ -409,6 +409,40 @@ struct ConversationDetailView: View {
     /// never visibly drains (a hang, not a clean failure), stop ticking
     /// after 12s rather than forever.
     @State private var speechWaitWatchdog: Task<Void, Never>? = nil
+    /* ⭐ PART 109 — THE BUBBLES COME BACK BETWEEN TALKING POINTS.
+     *
+     * Her report, Aug 31 2026: "sometimes Kiana talks in the middle of
+     * thinking... hold up, let me look this up, then do a web search then
+     * think, then maybe talk a little more then think... bubbles stop
+     * playing the thinking sound after the first phrase. So that thinking
+     * sound needs to fade back in or whatever between talking points."
+     *
+     * Exactly right, and the code says why. Part 91.7 wired the streamed
+     * lane's handoff as a one-way door: the first clip to start during a
+     * send calls `stopWaitingLoop()`, which RELEASES the player. Nothing
+     * ever creates a new one, because every other start site is the send
+     * itself. So an agentic turn — speak, search, think, speak again —
+     * gets bubbles for its opening wait and dead air for every wait after
+     * it, which is the stretch where a blind listener most needs to know
+     * the thing is still alive.
+     *
+     * These two hold the resume. `spokenTurnLive` is true from a
+     * read-aloud send until that turn's speech is finished or given up on,
+     * which is the ONLY window a resume belongs in — it deliberately
+     * excludes a manual "Read aloud" on an old message, where a gap is
+     * just a synthesis pause and not a character thinking.
+     * `speechGapResume` is the debounce: clip-to-clip seams inside one
+     * spoken phrase are routinely a few hundred milliseconds, and bubbling
+     * through those would stutter. Only a gap that outlasts
+     * `speechGapResumeDelay` is a real wait.
+     */
+    @State private var spokenTurnLive = false
+    @State private var speechGapResume: Task<Void, Never>? = nil
+    /// Long enough that ordinary clip-to-clip seams never trigger it (the
+    /// pump pre-fetches the next sentence while the current one plays, so a
+    /// healthy seam is well under half a second), short enough that a real
+    /// tool call or a slow synthesis is covered almost from its start.
+    private let speechGapResumeDelay: UInt64 = 800_000_000
     /// Session 23 (Kade: "no deepthink switch on native iOS. That's not
     /// good at all."): parity with the web composer's sticky Deep Think
     /// toggle (DeepThinkToggle.tsx). While armed, every FRESH send gets an
@@ -880,6 +914,10 @@ struct ConversationDetailView: View {
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     if case .sending = sendState { Earcons.shared.startWaitingLoop() }
                 }
+                // Part 109: this turn owns the soundstage until its speech is
+                // done. Armed only when read-aloud is on, because that is the
+                // only case where the loop gets torn down mid-turn.
+                spokenTurnLive = readAloudEnabled
             }
             else if case .sending = old, case .idle = new {
                 /* ⭐ PART 98.5 — THE DING ANNOUNCES A REPLY THAT ALREADY
@@ -967,6 +1005,7 @@ struct ConversationDetailView: View {
                 }
             }
             else if case .failed = new {
+                spokenTurnLive = false
                 endSpeechWait()
                 Earcons.shared.play(.error)
             }
@@ -989,6 +1028,47 @@ struct ConversationDetailView: View {
              * moment any clip starts during a send, the voice owns the
              * soundstage. stopWaitingLoop is safe to call redundantly. */
             if playing, case .sending = sendState { Earcons.shared.stopWaitingLoop() }
+            /* ⭐ PART 109 — the other half of that door, and the reason her
+             * agentic turns went quiet. A clip STARTING means the voice has
+             * the floor; a clip ENDING while the turn is still alive means
+             * she is waiting again, and the bubbles are what say so. */
+            if playing {
+                speechGapResume?.cancel()
+                speechGapResume = nil
+                /* And the loop this fix may have RESUMED has to bow out the
+                 * same way the original one does. The line above only stops
+                 * it while sendState is .sending; a resume can outlive that
+                 * (the tail of a completed reply still has gaps), so without
+                 * this the bubbles would play under her voice — the exact
+                 * thing 91.7 was written to stop. */
+                if spokenTurnLive { Earcons.shared.stopWaitingLoop() }
+            } else if spokenTurnLive {
+                speechGapResume?.cancel()
+                speechGapResume = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: speechGapResumeDelay)
+                    guard !Task.isCancelled, spokenTurnLive,
+                          !voiceService.isClipPlaying, !voiceService.isPaused else { return }
+                    /* The one check that keeps this from bubbling forever
+                     * after a finished reply. More audio can only still be
+                     * coming if the reply is STILL BEING WRITTEN (.sending —
+                     * more sentences will stream in) or the speak pump is
+                     * still running (isSpeaking — pieces are queued behind
+                     * this silence). Neither one means the turn is over, so
+                     * disarm rather than resume.
+                     *
+                     * ⚠️ Do NOT be tempted to hang this on `isSpeaking`
+                     * alone. Mid-turn the queue genuinely DRAINS during a
+                     * tool call — the pump exits, isSpeaking goes false, and
+                     * it comes back true when the next piece arrives. That
+                     * gap is the exact silence this whole fix exists to
+                     * fill, so isSpeaking==false is not evidence of an
+                     * ending while sendState is still .sending. */
+                    var stillComing = voiceService.isSpeaking
+                    if case .sending = sendState { stillComing = true }
+                    guard stillComing else { spokenTurnLive = false; return }
+                    Earcons.shared.startWaitingLoop(fadeIn: 0.45)
+                }
+            }
         }
         .onChange(of: voiceService.isSpeaking) { was, speaking in
             if was, !speaking, awaitingSpokenReply {
@@ -2895,6 +2975,10 @@ struct ConversationDetailView: View {
         awaitingSpokenReply = false
         speechWaitWatchdog?.cancel()
         speechWaitWatchdog = nil
+        // Part 109: a pending resume must die with the wait it belonged to,
+        // or an 800ms-old timer can bubble up AFTER the turn is over.
+        speechGapResume?.cancel()
+        speechGapResume = nil
         Earcons.shared.stopWaitingLoop()
     }
 

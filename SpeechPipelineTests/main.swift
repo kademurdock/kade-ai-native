@@ -774,6 +774,91 @@ func testAccumulatorHandlesEmptyAndSingleByte() {
 testAccumulatorHandlesEmptyAndSingleByte()
 
 // ─────────────────────────────────────────────────────────────────────────────
+// T21 — PART 109. THE FLOOR MUST COUNT WHAT COMES OUT OF THE SPEAKER.
+//
+// Her report, Aug 31 2026: "sometimes kiana will synthesise a really short
+// sentence, like maybe five words, then there will be a long pause when the
+// rest of the chunks follow... I'm thinking that first chunk can be a
+// liiiittle bigger."
+//
+// 91.8's absorb-forward exists to make that impossible, and T3 proves it works
+// — for untagged text. The hole was that the floor measured RAW characters,
+// and T12's own note wrote the consequence down without seeing it: "these tags
+// run 60-80 characters, which clears minPieceChars."
+//
+//   %%%settling in like i've been waiting for somebody to ask this%%% Hold up.
+//
+// is 74 raw characters against the opener's floor of 60, so it clears, so it
+// does NOT absorb — and the synthesiser then strips the tag and speaks two
+// words. The longer and more expressive the direction, the SHORTER the spoken
+// opener, which is the wrong way round. Then the next piece has to reach 160
+// characters before it can follow, and that is her long pause.
+//
+// The fix measures the piece with a leading tag removed. These checks pin both
+// halves: a tagged short opener must absorb, and untagged text must be
+// untouched (T13's fast start is the thing that would quietly pay for a
+// careless fix here).
+
+do {
+    var s = SpeechStreamer()
+    let emitted = s.push("%%%settling in like i've been waiting for somebody to ask this%%% Hold up. ")
+        + s.push("Let me actually go look that up before I say something dumb. ")
+        + s.push("It matters which year they changed the rule. ")
+    check("T21: nothing is emitted before there are real words to say",
+          !emitted.isEmpty, "emitted nothing at all")
+    let first = emitted[0]
+    // The tag is stripped by the synthesiser, so what SHE hears is whatever
+    // follows it. That is the number the floor was always trying to protect.
+    var spoken = Substring(first).drop(while: { $0.isWhitespace })
+    if spoken.hasPrefix("%%%"),
+       let close = spoken.range(of: "%%%", range: spoken.index(spoken.startIndex, offsetBy: 3)..<spoken.endIndex) {
+        spoken = spoken[close.upperBound...]
+    }
+    let spokenText = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+    check("T21: the tagged opener absorbed forward instead of speaking two words",
+          spokenText.count >= 60,
+          "opener would have spoken \(spokenText.count) chars: \(spokenText)")
+    check("T21: the direction is still there to steer it",
+          first.hasPrefix("%%%settling in"), "opener was: \(first)")
+    check("T21: her actual first words are still first",
+          spokenText.hasPrefix("Hold up."), "spoke: \(spokenText)")
+}
+
+do {
+    // The half that must NOT move: no tag, no change. Same shape as T13's
+    // fast-start guarantee — a ~70-char untagged opener clears 60 on its own
+    // and must still go out alone, or time-to-first-word regresses for every
+    // ordinary reply to fix a case that only happens when a tag is present.
+    var s = SpeechStreamer()
+    let emitted = s.push("Somebody born in 1885 saw horse-drawn everything and died after the moon landing. ")
+        + s.push("That is the whole argument in one sentence and I will defend it. ")
+    check("T21: an untagged opener still starts fast (single sentence)",
+          emitted.first.map { !$0.contains("whole argument") } ?? false,
+          "opener was: \(emitted.first ?? "<none>")")
+}
+
+do {
+    // A tag with nothing but a tag after it must still be dropped, not held —
+    // T12's deadlock rule. The new length check makes the piece measure ZERO
+    // speakable characters, which is the most tempting possible input for a
+    // regression that stalls the lane.
+    var s = SpeechStreamer()
+    let emitted = s.push("%%%picking up a little momentum%%%\n\n")
+        + s.push("The rule changed in 1974 and everything after it reads differently. ")
+        + s.push("That is the part people skip. ")
+    check("T21: a tag-only paragraph never deadlocks the splitter",
+          emitted.contains { $0.contains("1974") }, "emitted: \(emitted)")
+    let tagOnly = emitted.filter { piece -> Bool in
+        guard piece.hasPrefix("%%%"),
+              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+        else { return false }
+        return piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    check("T21: and still never emits a tag with nothing to say",
+          tagOnly.isEmpty, "would have booped on: \(tagOnly)")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 print("")
 print("  Speech pipeline — \(checks) checks")

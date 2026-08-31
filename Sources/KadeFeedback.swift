@@ -549,7 +549,14 @@ final class Earcons {
     private var waitingPlayer: AVAudioPlayer?
     private var waitingData: Data?
 
-    func startWaitingLoop() {
+    /// `fadeIn` (Part 109, her report: "bubbles stop playing the thinking
+    /// sound after the first phrase... it needs to fade back in or whatever
+    /// between talking points") — when the loop RESUMES mid-turn, in a gap
+    /// between two spoken chunks, it must not pop in at full volume the way a
+    /// fresh send can. Zero keeps the original send-time behaviour byte for
+    /// byte; a resume passes ~0.45s and the bubbles swell back under the
+    /// silence instead of snapping on.
+    func startWaitingLoop(fadeIn: TimeInterval = 0) {
         guard FeedbackPrefs.shared.soundEffects, waitingPlayer == nil else { return }
         // July 22 2026: Kade's bubbling Thinking loop (shipped pre-trimmed —
         // the raw master carries ~1.16s of MP3 encoder silence that made
@@ -562,9 +569,11 @@ final class Earcons {
             // July 22: 0.55 -> 0.22. Aug 4 2026 (Kade: bubbles "quieter than the
             // received sound by quite a bit... turned up a bit"): 0.22 -> 0.4, to
             // match the web loop. Still under the received bloop.
-            player.volume = 0.4
+            let target: Float = 0.4
+            player.volume = fadeIn > 0 ? 0.0 : target
             player.prepareToPlay()
             player.play()
+            if fadeIn > 0 { player.setVolume(target, fadeDuration: fadeIn) }
             waitingPlayer = player
             return
         }
@@ -590,9 +599,11 @@ final class Earcons {
         }
         guard let data = waitingData, let player = try? AVAudioPlayer(data: data) else { return }
         player.numberOfLoops = -1
-        player.volume = 0.9
+        let synthTarget: Float = 0.9
+        player.volume = fadeIn > 0 ? 0.0 : synthTarget
         player.prepareToPlay()
         player.play()
+        if fadeIn > 0 { player.setVolume(synthTarget, fadeDuration: fadeIn) }
         waitingPlayer = player
     }
 

@@ -198,7 +198,7 @@ struct SpeechStreamer {
         while let end = sentenceEndIndex(from: searchFrom) {
             let piece = String(buffer[buffer.startIndex..<end])
             if piece.count > runawayCeiling { break }
-            if piece.trimmingCharacters(in: .whitespacesAndNewlines).count >= pieceFloor {
+            if Self.speakableLength(of: piece) >= pieceFloor {
                 buffer = String(buffer[end...])
                 return piece
             }
@@ -224,6 +224,54 @@ struct SpeechStreamer {
          * broke in strange places. Now a short sentence simply absorbs the one
          * after it until the piece is worth speaking. That absorb-forward rule
          * is the loop above; this note is what bought it. */
+
+    /* ⭐ PART 109 — THE FLOOR HAS TO COUNT WORDS, NOT CHARACTERS, BECAUSE A
+     * STEERING TAG IS NEITHER.
+     *
+     * Her report, Aug 31 2026: "sometimes kiana will synthesise a really
+     * short sentence, like maybe five words, then there will be a long pause
+     * when the rest of the chunks follow... I'm thinking that first chunk can
+     * be a liiiittle bigger."
+     *
+     * 91.8's absorb-forward was supposed to make exactly that impossible: a
+     * piece under the floor swallows the next sentence until it is worth a
+     * synthesis call. It had a blind spot, and 92.11 wrote the blind spot
+     * down in this very file without noticing it was one — "these tags run
+     * 60-80 characters, which clears minPieceChars."
+     *
+     * That is the bug, one floor over. A piece of
+     *
+     *     %%%settling in like i've been waiting for somebody to ask this%%% Hold up.
+     *
+     * measures 74 characters against the opener's 60-character floor, so it
+     * clears, so it does NOT absorb — and then the synthesiser STRIPS the tag
+     * and speaks two words. Five words of audio, roughly a third of a second,
+     * and the next piece has to reach 160 characters before it can follow.
+     * That hole is the "long pause when the rest of the chunks follow," and
+     * the more expressive her persona gets the more often it opens, because
+     * a longer tag makes a SHORTER spoken opener.
+     *
+     * So the floor now measures what will actually come out of the speaker.
+     * A tagged two-word opener is 8 speakable characters, absorbs forward as
+     * 91.8 always intended, and she gets a couple of sentences instead of a
+     * fragment. Untagged text is unchanged to the character — which is why
+     * the fast-start guarantee (T13) still holds and time-to-first-word does
+     * not move for the ordinary reply.
+     *
+     * Note this deliberately does NOT raise `firstPieceChars`. Raising it
+     * would cost time-to-first-word on EVERY reply to fix a case that only
+     * happens when a tag is present; this costs nothing on the replies that
+     * were already fine. */
+    private static func speakableLength(of piece: String) -> Int {
+        var body = Substring(piece).drop(while: { $0.isWhitespace })
+        if body.hasPrefix("%%%") {
+            let afterOpen = body.index(body.startIndex, offsetBy: 3)
+            if let close = body.range(of: "%%%", range: afterOpen..<body.endIndex) {
+                body = body[close.upperBound...]
+            }
+        }
+        return body.trimmingCharacters(in: .whitespacesAndNewlines).count
+    }
 
     /// Index just past the first real sentence terminator at or after `from`.
     private func sentenceEndIndex(from: String.Index? = nil) -> String.Index? {
