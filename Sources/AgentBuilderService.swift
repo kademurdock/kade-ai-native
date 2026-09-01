@@ -579,7 +579,7 @@ final class AgentBuilderService: ObservableObject {
         answers: [PersonaAnswer] = [],
         round: Int = 1
     ) async throws -> PersonaDraft {
-        var req = client.request(path: "api/kade/builder/write-persona", method: "POST", authorized: true, timeout: 200)
+        var req = client.request(path: "api/kade/builder/write-persona", method: "POST", authorized: true, timeout: 320) // PART 115: matches the fork route at 300 s plus slack
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["description": description, "round": round]
         if !name.isEmpty { body["name"] = name }
