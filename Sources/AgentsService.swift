@@ -89,8 +89,37 @@ final class AgentsService: ObservableObject {
     private let decoder = JSONDecoder()
     private var hasLoadedOnce = false
 
+    private var changeObserver: NSObjectProtocol?
+
     init(client: KadeAPIClient) {
         self.client = client
+        /* Part 116 (Sep 1 2026, build 260) — the cache learns about writes.
+         * "Loaded once and cached for the app session" was fine until the
+         * builder could CREATE characters: Amber A built Della on native and
+         * her own picker did not show it until a force-quit. Any builder
+         * write (create / save / delete / duplicate / share) posts
+         * `AgentBuilderService.agentsChanged`; this drops the cache and
+         * refetches, so the picker is right the next time it opens. */
+        changeObserver = NotificationCenter.default.addObserver(
+            forName: AgentBuilderService.agentsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.refresh()
+            }
+        }
+    }
+
+    deinit {
+        if let changeObserver { NotificationCenter.default.removeObserver(changeObserver) }
+    }
+
+    /// Drop the cached list and fetch again. Keeps the old rows on screen
+    /// until the new ones land, so a picker that happens to be open never
+    /// blinks empty.
+    func refresh() async {
+        hasLoadedOnce = false
+        loadError = nil
+        await loadIfNeeded()
     }
 
     /// Looked up by callers that only have an agentId (e.g. a conversation's

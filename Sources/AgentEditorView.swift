@@ -21,17 +21,35 @@ import UIKit
 struct AgentEditorView: View {
     let apiClient: KadeAPIClient
     let existingId: String?
+    /// Part 116: who is editing, so the marketplace toggle shows only to the
+    /// author. nil = unknown; the section still shows and the server decides.
+    let currentUserId: String?
     let onSaved: () -> Void
 
     @StateObject private var service: AgentBuilderService
     @Environment(\.dismiss) private var dismiss
 
-    init(apiClient: KadeAPIClient, existingId: String?, onSaved: @escaping () -> Void) {
+    init(apiClient: KadeAPIClient, existingId: String?, currentUserId: String? = nil, onSaved: @escaping () -> Void) {
         self.apiClient = apiClient
         self.existingId = existingId
+        self.currentUserId = currentUserId
         self.onSaved = onSaved
         _service = StateObject(wrappedValue: AgentBuilderService(client: apiClient))
     }
+
+    /* Part 116 (build 260) — "SHARE ON THE MARKETPLACE" (her add, Sep 1 2026:
+     * "on native iOS, Amber A wants to share her agent on the public
+     * marketplace"). Native had no publish door at all; the web has
+     * LibreChat's share dialog. One brain, two surfaces: this toggle calls
+     * the same PUT /api/permissions/agent/{_id} the web calls, after a plain
+     * confirmation that says exactly what it means. */
+    @State private var mongoId: String?
+    @State private var authorId: String?
+    @State private var isPublic = false
+    @State private var isPublicLoaded = false
+    @State private var pendingPublic: Bool?
+    @State private var shareBusy = false
+    @State private var shareNote: String?
 
     @State private var hasLoadedLookups = false
     @State private var isLoadingDetail = false
@@ -405,6 +423,29 @@ struct AgentEditorView: View {
                             .accessibilityValue(loadedVersions.isEmpty ? "No earlier versions yet" : "\(loadedVersions.count) earlier version\(loadedVersions.count == 1 ? "" : "s")")
                             .accessibilityHint("Every save keeps the version it replaced. Open to restore any earlier one.")
                         }
+                        if mongoId != nil, currentUserId == nil || authorId == nil || authorId == currentUserId {
+                            Section {
+                                Toggle(isOn: Binding(
+                                    get: { isPublic },
+                                    set: { want in if want != isPublic { pendingPublic = want } }
+                                )) {
+                                    Text("Share on the marketplace")
+                                }
+                                .disabled(!isPublicLoaded || shareBusy)
+                                .accessibilityLabel("Share on the marketplace")
+                                .accessibilityValue(!isPublicLoaded ? "Checking" : (isPublic ? "On. Everyone on Kade-AI can find this character." : "Off. Only you can see this character."))
+                                .accessibilityHint("Asks you to confirm, then puts this character where everyone on Kade-AI can find and talk to them. Turn it off to make them private again.")
+                                if let shareNote {
+                                    Text(shareNote).font(.caption).foregroundStyle(.secondary)
+                                }
+                            } header: {
+                                Text("Marketplace")
+                            } footer: {
+                                Text(isPublic
+                                    ? "Public. Anyone on Kade-AI can find and talk to this character."
+                                    : "Private. Only you can see and talk to this character.")
+                            }
+                        }
                     }
                     if let saveError {
                         Section { Text(saveError).foregroundStyle(.red) }
@@ -414,7 +455,26 @@ struct AgentEditorView: View {
             .navigationTitle(existingId == nil ? "New agent" : "Edit agent")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
-                VoicePickerView(apiClient: apiClient, selection: $voice)
+                // Part 116: the picker auditions with THIS character's own lines.
+                VoicePickerView(
+                    apiClient: apiClient,
+                    selection: $voice,
+                    agentLines: VoicePickerView.extractAgentLines(instructions: instructions, description: description)
+                )
+            }
+            .alert(
+                pendingPublic == true ? "Share on the marketplace?" : "Take it off the marketplace?",
+                isPresented: Binding(get: { pendingPublic != nil }, set: { if !$0 { pendingPublic = nil } })
+            ) {
+                Button(pendingPublic == true ? "Share it" : "Take it off") {
+                    if let want = pendingPublic { Task { await applyPublic(want) } }
+                    pendingPublic = nil
+                }
+                Button("Cancel", role: .cancel) { pendingPublic = nil }
+            } message: {
+                Text(pendingPublic == true
+                    ? "Everyone on Kade-AI will be able to find and talk to \(name.isEmpty ? "this character" : name). Your saved persona, voice, and picture go with it. You can take it off again any time."
+                    : "\(name.isEmpty ? "This character" : name) will only be visible to you again. People already talking to them lose access.")
             }
             .sheet(isPresented: $showingWriter) {
                 PersonaWriterSheet(
@@ -510,6 +570,14 @@ struct AgentEditorView: View {
                 if provider.isEmpty, let firstProvider = modelsConfig.keys.sorted().first {
                     provider = firstProvider
                     model = modelsConfig[firstProvider]?.first ?? ""
+                }
+                /* Part 116: a NEW character with no category lands in the
+                 * "Other" bucket at the very bottom of browse (where Amber A
+                 * could not find Della). Default to "companions" when the
+                 * server offers it; the picker still lets anyone change it. */
+                if existingId == nil, category.isEmpty,
+                   let companions = selectableCategories.first(where: { $0.value == "companions" }) {
+                    category = companions.value
                 }
 
                 guard let existingId else { return }
@@ -616,11 +684,50 @@ struct AgentEditorView: View {
             selectedTools = Set(agentTools.filter { known.contains($0) })
             preservedUnknownTools = agentTools.filter { !known.contains($0) }
             loadedVersions = detail.versions ?? []
+            mongoId = detail.mongoId
+            authorId = detail.author
             loadError = nil
         } catch {
             loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
         }
         isLoadingDetail = false
+        // Sharing state is a second, fail-soft read: a 403 here (not the
+        // author) just leaves the toggle disabled with "Checking" -- it never
+        // blocks the editor.
+        if let mongoId {
+            isPublicLoaded = false
+            if let flag = try? await service.loadIsPublic(mongoId: mongoId) {
+                isPublic = flag
+                isPublicLoaded = true
+            }
+        }
+    }
+
+    /// Flip marketplace visibility after the confirmation. Announces the
+    /// result for VoiceOver either way; the toggle only moves when the
+    /// server said yes.
+    private func applyPublic(_ want: Bool) async {
+        guard let mongoId, !shareBusy else { return }
+        shareBusy = true
+        shareNote = nil
+        defer { shareBusy = false }
+        do {
+            try await service.setIsPublic(mongoId: mongoId, isPublic: want)
+            isPublic = want
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
+            let said = want
+                ? "\(name.isEmpty ? "This character" : name) is on the marketplace now. Everyone on Kade-AI can find them."
+                : "\(name.isEmpty ? "This character" : name) is private again."
+            shareNote = said
+            UIAccessibility.post(notification: .announcement, argument: said)
+        } catch {
+            let msg = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't change sharing. Try again."
+            shareNote = msg
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
+            UIAccessibility.post(notification: .announcement, argument: msg)
+        }
     }
 
     private static let maxStarters = 4

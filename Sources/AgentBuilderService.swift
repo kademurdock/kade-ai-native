@@ -58,6 +58,20 @@ final class AgentBuilderService: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var loadError: String?
 
+    /// Part 116 (Sep 1 2026, build 260) — THE PICKER FINDS OUT.
+    ///
+    /// Her report the night before: "She doesn't see Della in her native
+    /// agent list." Root cause, read in code: `AgentsService` fetches
+    /// `/api/agents` once per app session and NOTHING here told it a
+    /// character had been created, renamed, deleted, duplicated or
+    /// published — so anything built on native was invisible in the
+    /// builder's own picker until the app was force-quit. Every write in
+    /// this service now posts this; `AgentsService` listens and refetches.
+    static let agentsChanged = Notification.Name("kadeAgentsChanged")
+    private func announceAgentsChanged() {
+        NotificationCenter.default.post(name: Self.agentsChanged, object: nil)
+    }
+
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
 
@@ -210,6 +224,7 @@ final class AgentBuilderService: ObservableObject {
         guard (200...299).contains(http.statusCode) else {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't create the agent."))
         }
+        announceAgentsChanged()
         return try decoder.decode(AgentDetail.self, from: data)
     }
 
@@ -221,6 +236,7 @@ final class AgentBuilderService: ObservableObject {
         guard http.statusCode == 200 else {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't save your changes."))
         }
+        announceAgentsChanged()
         return try decoder.decode(AgentDetail.self, from: data)
     }
 
@@ -230,6 +246,7 @@ final class AgentBuilderService: ObservableObject {
         guard http.statusCode == 200 else {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't delete that agent."))
         }
+        announceAgentsChanged()
     }
 
     /// POST /api/agents/:id/duplicate — the server clones the agent (name
@@ -242,7 +259,47 @@ final class AgentBuilderService: ObservableObject {
             throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't duplicate that agent."))
         }
         struct DuplicateResponse: Decodable { let agent: AgentDetail }
+        announceAgentsChanged()
         return try decoder.decode(DuplicateResponse.self, from: data).agent
+    }
+
+    // MARK: - Marketplace sharing (Part 116, build 260)
+
+    /// Whether the agent is on the public marketplace. Reads
+    /// `GET /api/permissions/agent/{mongoId}` — the SAME record the web
+    /// share dialog reads — and answers its `public` flag. Marketplace
+    /// visibility on this platform is the ACL's public principal, not the
+    /// document's legacy `isPublic` field (Part 115 measured Della: ACL
+    /// public, `isPublic` still false). Needs the Mongo `_id`, never the
+    /// `agent_xxx` id; the route 403s for anyone without SHARE on the agent,
+    /// which is why the toggle is only shown to the author.
+    func loadIsPublic(mongoId: String) async throws -> Bool {
+        let req = client.request(path: "api/permissions/agent/\(mongoId)", authorized: true)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't read the sharing state."))
+        }
+        struct PermissionsResponse: Decodable { let `public`: Bool? }
+        return (try? decoder.decode(PermissionsResponse.self, from: data))?.public ?? false
+    }
+
+    /// Put the agent on the marketplace, or take it off. Same
+    /// `PUT /api/permissions/agent/{mongoId}` body the web dialog sends:
+    /// `{updated: [], removed: [], public, publicAccessRoleId: "agent_viewer"}`.
+    /// Checked before building (Sep 1 2026): the USER role on this platform
+    /// holds AGENTS SHARE_PUBLIC, so a regular family seat can do this for
+    /// its own creations — the server enforces it either way.
+    func setIsPublic(mongoId: String, isPublic: Bool) async throws {
+        var req = client.request(path: "api/permissions/agent/\(mongoId)", method: "PUT", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["updated": [], "removed": [], "public": isPublic]
+        if isPublic { body["publicAccessRoleId"] = "agent_viewer" }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: isPublic ? "Couldn't share on the marketplace." : "Couldn't take it off the marketplace."))
+        }
+        announceAgentsChanged()
     }
 
     /// POST /api/agents/:agent_id/avatar/ — multipart, field name "file"
@@ -648,6 +705,8 @@ struct AgentSummary: Decodable, Identifiable, Hashable {
 struct AgentDetail: Decodable, Identifiable, Hashable {
     struct TTSInfo: Decodable, Hashable { let voiceId: String? }
     let id: String
+    /// Raw `_id` — what the permissions routes key on (Part 116).
+    let mongoId: String?
     let name: String?
     let description: String?
     let instructions: String?
@@ -669,6 +728,12 @@ struct AgentDetail: Decodable, Identifiable, Hashable {
     /// full agent document, but only these fields are needed to label a
     /// history row and pick one to restore.
     let versions: [AgentVersion]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, instructions, category, provider, model, author, tts
+        case conversation_starters, tools, versions
+        case mongoId = "_id"
+    }
 }
 
 /// One entry of an agent's `versions` array (a full prior snapshot,

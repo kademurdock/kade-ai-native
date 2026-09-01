@@ -100,7 +100,7 @@ struct AgentManagerView: View {
                     Task { await reload() }
                 }
             case .edit(let agentId):
-                AgentEditorView(apiClient: apiClient, existingId: agentId) {
+                AgentEditorView(apiClient: apiClient, existingId: agentId, currentUserId: currentUserId) {
                     Task { await reload() }
                 }
             }

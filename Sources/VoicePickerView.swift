@@ -25,6 +25,12 @@ import UIKit
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
+    /// Part 116 (build 260, proposal 6): the character's own quotable lines.
+    /// Non-empty = previews read one of THESE (a different one each play)
+    /// instead of the generic pooled script, so the voice is heard as "your
+    /// agent's voice" — her words for why the long script fell short.
+    let agentLines: [String]
+    @State private var lastAgentLine: String?
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var voice: VoiceService
@@ -48,10 +54,57 @@ struct VoicePickerView: View {
     /// by design (it serves labels, not audio).
     private static let catalogURL = URL(string: "https://inworld-tts-proxy-production.up.railway.app/voices.json")!
 
-    init(apiClient: KadeAPIClient, selection: Binding<String>) {
+    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = []) {
         self.apiClient = apiClient
         self._selection = selection
+        self.agentLines = agentLines
         _voice = StateObject(wrappedValue: VoiceService(client: apiClient))
+    }
+
+    /// Mirror of the web builder's `extractAgentLines` (fork,
+    /// AgentVoicePicker.tsx) so both surfaces pick the same kinds of lines:
+    /// quoted spans 25–220 chars from the persona first (example exchanges
+    /// are almost always in quotes), then sentences from the description.
+    /// Anything that looks like a template, tag, or link is skipped.
+    static func extractAgentLines(instructions: String?, description: String?) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        func push(_ raw: String) {
+            let t = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            guard t.count >= 25, t.count <= 220 else { return }
+            if t.contains("{") || t.contains("}") || t.contains("<") || t.contains(">") || t.contains("http://") || t.contains("https://") { return }
+            let k = t.lowercased()
+            if !seen.contains(k) { seen.insert(k); out.append(t) }
+        }
+        let text = instructions ?? ""
+        if let re = try? NSRegularExpression(pattern: "[\"\u{201C}]([^\"\u{201C}\u{201D}\n]{25,220})[\"\u{201D}]") {
+            let ns = text as NSString
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) where m.numberOfRanges > 1 {
+                push(ns.substring(with: m.range(at: 1)))
+            }
+        }
+        if out.isEmpty, let description, !description.isEmpty {
+            var sentence = ""
+            for ch in description {
+                sentence.append(ch)
+                if ".!?".contains(ch) { push(sentence); sentence = "" }
+            }
+            push(sentence)
+        }
+        return Array(out.prefix(40))
+    }
+
+    /// One of the agent's lines, never the same one twice in a row.
+    private func nextAgentSample(long: Bool) -> String? {
+        guard !agentLines.isEmpty else { return nil }
+        var pool = agentLines
+        if pool.count > 1, let last = lastAgentLine { pool.removeAll { $0 == last } }
+        guard let first = pool.randomElement() else { return nil }
+        lastAgentLine = first
+        guard long, agentLines.count > 1 else { return first }
+        // the long audition strings up to three different lines
+        let rest = agentLines.filter { $0 != first }.shuffled().prefix(2)
+        return ([first] + rest).joined(separator: " ")
     }
 
     /// Numeric-aware order ("Voice 2" before "Voice 10") and search filter.
@@ -230,7 +283,11 @@ struct VoicePickerView: View {
             return
         }
         previewing = v
-        await voice.previewVoice(v, long: long)
+        if let sample = nextAgentSample(long: long) {
+            await voice.previewVoice(v, sample: sample)
+        } else {
+            await voice.previewVoice(v, long: long)
+        }
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }
     }
