@@ -26,6 +26,13 @@ struct CharacterQuizView: View {
     private enum Phase {
         case loading
         case failed(String)
+        /// Part 113: the front door. Describe them in your own words, or take
+        /// the eight questions. The describe door is new and is the one she
+        /// asked for; the quiz is exactly where it was.
+        case door
+        case describing
+        case writing
+        case persona
         case asking
         case composing
         case review
@@ -52,6 +59,15 @@ struct CharacterQuizView: View {
     @State private var isPainting = false
     @State private var paintNote: String?
     @State private var errorNote: String?
+    // Part 113 — the description box
+    @State private var describeText = ""
+    @State private var describeName = ""
+    @State private var personaQuestions: [String] = []
+    @State private var personaAnswers: [String] = ["", "", ""]
+    @State private var personaNotes: String?
+    @State private var personaRound = 0
+    @State private var personaCost: Double?
+    @State private var personaNote: String?
 
     var body: some View {
         NavigationStack {
@@ -67,6 +83,15 @@ struct CharacterQuizView: View {
                             .buttonStyle(.borderedProminent)
                     }
                     .padding()
+                case .door:
+                    doorForm
+                case .describing:
+                    describeForm
+                case .writing:
+                    ProgressView("Writing their personality…")
+                        .accessibilityLabel("Writing their personality. This takes up to a minute.")
+                case .persona:
+                    personaForm
                 case .asking:
                     questionForm
                 case .composing:
@@ -114,8 +139,11 @@ struct CharacterQuizView: View {
             phase = .failed("The quiz couldn't load. Check the connection and try again.")
             return
         }
-        phase = .asking
-        announceStep()
+        phase = .door
+        UIAccessibility.post(
+            notification: .screenChanged,
+            argument: "How would you like to start? Describe them in your own words, or answer eight quick questions."
+        )
     }
 
     private func announceStep() {
@@ -124,6 +152,224 @@ struct CharacterQuizView: View {
         UIAccessibility.post(
             notification: .screenChanged,
             argument: "Question \(step + 1) of \(quiz.count). \(q.ask)"
+        )
+    }
+
+    // MARK: - The front door and the description box (Part 113)
+
+    private var doorForm: some View {
+        Form {
+            Section {
+                Button {
+                    phase = .describing
+                    UIAccessibility.post(
+                        notification: .screenChanged,
+                        argument: "Describe the character or agent you want. A sentence is enough to start."
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Describe them in your own words").fontWeight(.semibold)
+                            .foregroundStyle(Color.primary)
+                        Text("Say who they are however it comes out, and a full, detailed personality gets written for you — then it asks you a couple of questions to make it deeper. About a penny.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Describe them in your own words")
+                .accessibilityHint("Writes a full detailed personality from a description. Costs about one cent of credit.")
+
+                Button {
+                    step = 0
+                    phase = .asking
+                    announceStep()
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Answer eight quick questions").fontWeight(.semibold)
+                            .foregroundStyle(Color.primary)
+                        Text("Every one answered by picking. Free, and it builds a shorter starter personality you can grow later.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Answer eight quick questions")
+                .accessibilityHint("Free. Nothing here needs you to know anything about A I.")
+            } header: {
+                Text("How would you like to start?")
+            } footer: {
+                Text("Either way you can edit every word before anybody comes to life.")
+            }
+        }
+    }
+
+    private var describeForm: some View {
+        Form {
+            Section {
+                TextField(
+                    "An acceptance-and-commitment therapist who also borrows from other approaches when it fits.",
+                    text: $describeText,
+                    axis: .vertical
+                )
+                .lineLimit(5...20)
+                .accessibilityLabel("Your description")
+                .accessibilityHint("Say who they are, what they're for, and how they should feel to talk to. There is no wrong way to write this.")
+                TextField("Their name, if you have one", text: $describeName)
+                    .accessibilityLabel("Their name")
+                    .accessibilityHint("Optional. Leave it blank and names get suggested later.")
+            } header: {
+                Text("Describe the character or agent you want")
+            } footer: {
+                Text("A sentence is enough to start with — you get follow-up questions afterwards, and the answers make it deeper each time.")
+            }
+            Section {
+                Button("Back") { phase = .door }
+                Button("Write their personality (about 1 cent)") {
+                    Task { await writePersona(round: 1, existing: "", answers: []) }
+                }
+                .fontWeight(.semibold)
+                .disabled(describeText.trimmingCharacters(in: .whitespacesAndNewlines).count < 8)
+                if let personaNote {
+                    Text(personaNote).font(.footnote).foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private var personaForm: some View {
+        Form {
+            Section {
+                TextField("Personality", text: $editedInstructions, axis: .vertical)
+                    .lineLimit(8...40)
+                    .accessibilityLabel("Their personality")
+                    .accessibilityHint("The full written personality. Edit any word of it — it's yours.")
+            } header: {
+                Text("Their personality")
+            } footer: {
+                Text("\(editedInstructions.count) characters, written from your description. Edit anything.")
+            }
+            if let personaNotes, !personaNotes.isEmpty {
+                Section("What the writer says") {
+                    Text(personaNotes).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if !personaQuestions.isEmpty {
+                Section {
+                    ForEach(Array(personaQuestions.enumerated()), id: \.offset) { idx, q in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(q).font(.subheadline)
+                            TextField("Your answer", text: Binding(
+                                get: { idx < personaAnswers.count ? personaAnswers[idx] : "" },
+                                set: { v in
+                                    while personaAnswers.count <= idx { personaAnswers.append("") }
+                                    personaAnswers[idx] = v
+                                }
+                            ), axis: .vertical)
+                            .lineLimit(1...6)
+                            .accessibilityLabel("Answer to: \(q)")
+                        }
+                    }
+                    Button("Deepen it with my answers (about 1 cent)") {
+                        let pairs = zip(personaQuestions, personaAnswers)
+                            .filter { !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                            .map { AgentBuilderService.PersonaAnswer(q: $0.0, a: $0.1) }
+                        Task { await writePersona(round: personaRound + 1, existing: editedInstructions, answers: pairs) }
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(personaAnswers.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                } header: {
+                    Text("Answer any of these and it gets deeper")
+                } footer: {
+                    Text("These are the questions the writer says would most improve the next draft. Answer one, two, all three, or none — skipping is fine.")
+                }
+            }
+            Section {
+                Button("Start the description over") { phase = .describing }
+                Button("Use this personality") {
+                    Task { await useWrittenPersona() }
+                }
+                .fontWeight(.bold)
+                if let personaNote {
+                    Text(personaNote).font(.footnote).foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    /// One call, both doors — round 1 from a description, later rounds from
+    /// the draft plus her answers. Fail-soft: a failure leaves whatever draft
+    /// was already on screen exactly where it was, because losing a persona
+    /// somebody just paid for and read is the worst failure this screen has.
+    private func writePersona(round: Int, existing: String, answers: [AgentBuilderService.PersonaAnswer]) async {
+        /* `Phase` carries associated values and is deliberately not Equatable,
+         * so remember where to fall BACK to as a plain flag rather than
+         * comparing cases. */
+        let cameFromPersona = personaRound > 0
+        personaNote = nil
+        phase = .writing
+        UIAccessibility.post(notification: .announcement, argument: "Writing their personality. This takes up to a minute.")
+        do {
+            let out = try await service.writePersona(
+                description: describeText.trimmingCharacters(in: .whitespacesAndNewlines),
+                name: describeName.trimmingCharacters(in: .whitespacesAndNewlines),
+                existing: existing,
+                answers: answers,
+                round: round
+            )
+            editedInstructions = out.instructions
+            personaQuestions = out.questions
+            personaAnswers = ["", "", ""]
+            personaNotes = out.notes
+            personaRound = out.round
+            personaCost = out.costUSD
+            phase = .persona
+            let qLine = out.questions.isEmpty
+                ? "You can edit it, or use it as it stands."
+                : "There are \(out.questions.count) follow-up questions that would make it deeper, and a button to use it as it stands."
+            UIAccessibility.post(
+                notification: .screenChanged,
+                argument: "Their personality is written, \(out.instructions.count) characters. \(qLine)"
+            )
+        } catch {
+            phase = cameFromPersona ? .persona : .describing
+            personaNote = error.localizedDescription
+            UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
+        }
+    }
+
+    /// The written persona hands off to the SAME review screen the quiz uses —
+    /// name, engine, portrait, create. The quiz brain supplies the defaults
+    /// for the parts a description doesn't cover, so there is exactly one
+    /// review screen and one create path.
+    private func useWrittenPersona() async {
+        let written = editedInstructions
+        if draft == nil {
+            phase = .composing
+            do {
+                var answers: [String: Any] = [:]
+                let typed = describeName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !typed.isEmpty { answers["name"] = typed }
+                let d = try await service.composeQuiz(answers: answers)
+                draft = d
+                pickedName = d.names.first ?? "Friend"
+                pickedModelKey = d.modelKey
+                let firstSentence = describeText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .split(whereSeparator: { ".!?".contains($0) })
+                    .first
+                    .map(String.init)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let line = (firstSentence?.isEmpty == false ? firstSentence! : d.description)
+                editedDescription = String(line.prefix(140))
+            } catch {
+                phase = .persona
+                personaNote = error.localizedDescription
+                return
+            }
+        }
+        editedInstructions = written
+        phase = .review
+        UIAccessibility.post(
+            notification: .screenChanged,
+            argument: "The character is drafted. Review the name, the description, the engine, and the picture, then bring them to life."
         )
     }
 
@@ -284,10 +530,22 @@ struct CharacterQuizView: View {
                         .lineLimit(6...30)
                         .accessibilityLabel("Personality")
                         .accessibilityHint("The full written personality. Edit anything, or leave it as drafted.")
+                    /* Part 113 — the second door, reachable from the quiz's own
+                     * review: take the short template draft and have it written
+                     * out properly. This is the door Amber A actually needs —
+                     * she knows what she wants, she needs help expressing it. */
+                    Button("Have it written out properly (about 1 cent)") {
+                        if describeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            describeText = editedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                        describeName = finalName()
+                        Task { await writePersona(round: 1, existing: editedInstructions, answers: []) }
+                    }
+                    .font(.footnote)
                 } header: {
                     Text("Their personality")
                 } footer: {
-                    Text("Written from your answers. Every word can be changed, now or later.")
+                    Text("Written from your answers. Every word can be changed, now or later. Having it written out properly turns this into a full, detailed personality and asks you a couple of questions to deepen it — nothing changes until you look at it.")
                 }
                 Section {
                     ForEach(menu) { entry in
@@ -359,10 +617,14 @@ struct CharacterQuizView: View {
                     Text("Their picture")
                 }
                 Section {
-                    Button("Back to the questions") {
-                        phase = .asking
-                        step = quiz.count - 1
-                        announceStep()
+                    Button(describeText.isEmpty ? "Back to the questions" : "Back to the description") {
+                        if describeText.isEmpty {
+                            phase = .asking
+                            step = quiz.count - 1
+                            announceStep()
+                        } else {
+                            phase = .persona
+                        }
                     }
                     Button("Bring them to life") {
                         Task { await create() }

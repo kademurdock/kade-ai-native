@@ -545,6 +545,56 @@ final class AgentBuilderService: ObservableObject {
         return try decoder.decode(ComposeEnvelope.self, from: data).draft
     }
 
+    // MARK: - The description box (Part 113, Sep 1 2026)
+    //
+    // Her brief: "a box where you describe what you want in an agent or
+    // character, and the ai generates a robust system prompt like Kiana's. So
+    // people who can't find the words can get them eventually."
+    //
+    // "Eventually" is the requirement, not a hedge — the person who needs this
+    // most cannot describe what they want on the first try. So the route is a
+    // LOOP: it drafts, hands back the two or three questions whose answers
+    // would most improve the next draft, and deepens on each pass. Native and
+    // web ride the identical route, same as the quiz does.
+
+    struct PersonaDraft: Decodable {
+        let instructions: String
+        let questions: [String]
+        let notes: String?
+        let round: Int
+        let costUSD: Double?
+        let remainingToday: Int?
+    }
+
+    struct PersonaAnswer { let q: String; let a: String }
+
+    /// Ask the writing desk for a system prompt. `existing` opens the second
+    /// door — improve the prompt I already have — which is the one that makes
+    /// the loop possible at all. Generous timeout: a long persona on a
+    /// thinking model can take most of a minute.
+    func writePersona(
+        description: String,
+        name: String = "",
+        existing: String = "",
+        answers: [PersonaAnswer] = [],
+        round: Int = 1
+    ) async throws -> PersonaDraft {
+        var req = client.request(path: "api/kade/builder/write-persona", method: "POST", authorized: true, timeout: 200)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["description": description, "round": round]
+        if !name.isEmpty { body["name"] = name }
+        if !existing.isEmpty { body["existingInstructions"] = existing }
+        if !answers.isEmpty { body["answers"] = answers.map { ["q": $0.q, "a": $0.a] } }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(
+                message: errorMessage(from: data, fallback: "The writing desk is having a moment. Try again — nothing was charged.")
+            )
+        }
+        return try decoder.decode(PersonaDraft.self, from: data)
+    }
+
     private struct PortraitEnvelope: Decodable { let image_b64: String; let remainingToday: Int? }
 
     /// The one paid action in the whole builder: three cents of picture

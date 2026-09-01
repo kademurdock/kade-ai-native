@@ -533,6 +533,32 @@ final class VoiceService: NSObject, ObservableObject {
         guard isPaused else { return }
         currentPlayer?.stop()
         currentPlayer = nil
+        /* Part 113 — HER REPORT, Aug 31 2026: "if you pause a clip, and start
+         * another clip, you can't go back to the other clips. It's like it
+         * confuses it about which clip you wanna play."
+         *
+         * This function was written in August for the BUFFERED player and was
+         * never taught about the STREAMED one Part 98 added -- the same disease
+         * as the what's-new cap and the appendReminder carve-outs: an old fix
+         * that never reached a newer lane. `stopSpeaking()` two functions down
+         * WAS taught; this one was not, and the three consequences are exactly
+         * what she described:
+         *   1. `streamingPlayer.play(fetch:)` is awaited and only returns when
+         *      the clip ENDS or is STOPPED. A paused stream returns nothing, so
+         *      the pump parked forever and the newly tapped clip sat in
+         *      `speakQueue` unplayed -- the Aug-4 hostage bug, resurrected on a
+         *      lane that did not exist in August.
+         *   2. `streamedClipActive` stayed true (it is only cleared on the line
+         *      AFTER that await returns), so the next pause/resume drove the
+         *      STALE clip instead of the one she just asked for.
+         *   3. `nowPlayingKey` went nil while that stale clip still owned the
+         *      player, so every row read .idle and the first clip became
+         *      unreachable.
+         * Mirror `stopSpeaking()` exactly: stop the streamed player so its
+         * parked await returns, and clear the flag so pause/resume stops
+         * driving a dead clip. */
+        streamingPlayer.stop()
+        streamedClipActive = false
         isPaused = false
         isClipPlaying = false
         nowPlayingKey = nil

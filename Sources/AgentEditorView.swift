@@ -69,6 +69,11 @@ struct AgentEditorView: View {
     /// quick, warm, good memory"); the raw provider/model pickers stay one
     /// toggle away so an expert loses nothing.
     @State private var modelMenu: [AgentBuilderService.ModelMenuEntry] = []
+    /* Part 113 — the description box, from inside the ordinary editor. This is
+     * the door Amber A actually asked for: her agent already exists and she
+     * knows exactly what she wants it to be; what she needs is help EXPRESSING
+     * it, not inventing it. Same route the quiz's describe door rides. */
+    @State private var showingWriter = false
     @State private var showTechnicalModels = false
     @State private var isPainting = false
     @State private var paintNote: String?
@@ -110,10 +115,19 @@ struct AgentEditorView: View {
                         TextField("A short line describing them", text: $description, axis: .vertical)
                             .accessibilityLabel("Description")
                     }
-                    Section("Persona and instructions") {
+                    Section {
                         TextField("Who they are, how they talk, what they know", text: $instructions, axis: .vertical)
                             .lineLimit(6...20)
                             .accessibilityLabel("Persona and instructions")
+                        Button("Help me write this (about 1 cent)") {
+                            showingWriter = true
+                        }
+                        .font(.footnote)
+                        .accessibilityHint("Opens a box where you say what you want this character to be, and a full detailed personality gets written from it. You see it and edit it before anything changes here.")
+                    } header: {
+                        Text("Persona and instructions")
+                    } footer: {
+                        Text("This is the whole of who they are. There's no length limit — the platform's own main character runs about forty thousand characters. If the words won't come, the writing desk will draft it from a description and ask you questions to deepen it.")
                     }
                     Section("Category") {
                         if selectableCategories.isEmpty {
@@ -401,6 +415,20 @@ struct AgentEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 VoicePickerView(apiClient: apiClient, selection: $voice)
+            }
+            .sheet(isPresented: $showingWriter) {
+                PersonaWriterSheet(
+                    service: service,
+                    characterName: name,
+                    existing: instructions,
+                    onUse: { written in
+                        instructions = written
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: "Personality replaced, \(written.count) characters. Nothing is saved until you tap Save."
+                        )
+                    }
+                )
             }
             .navigationDestination(isPresented: $showingActions) {
                 if let existingId {
