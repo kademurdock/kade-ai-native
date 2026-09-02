@@ -455,12 +455,11 @@ struct AgentEditorView: View {
             .navigationTitle(existingId == nil ? "New agent" : "Edit agent")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
-                // Part 116: the picker auditions with THIS character's own lines.
-                VoicePickerView(
-                    apiClient: apiClient,
-                    selection: $voice,
-                    agentLines: VoicePickerView.extractAgentLines(instructions: instructions, description: description)
-                )
+                // Part 116 gave the picker THIS character's own lines; Part 116.8
+                // (same night, her word on the web version): quoted persona text
+                // is mostly RULES, not dialogue, so it read her instructions. Off
+                // until the extractor can tell a line from a rule. Pooled scripts.
+                VoicePickerView(apiClient: apiClient, selection: $voice)
             }
             .alert(
                 pendingPublic == true ? "Share on the marketplace?" : "Take it off the marketplace?",
