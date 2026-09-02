@@ -83,7 +83,7 @@ struct VoicePickerView: View {
         let short: String       // what the wheel shows: the name without its group
         let voices: [String]
     }
-    struct Group: Hashable {
+    struct Who: Hashable {          // not "Group": that name is SwiftUI's
         let name: String
         let kinds: [Kind]
     }
@@ -165,10 +165,10 @@ struct VoicePickerView: View {
     /// Her four groups, each holding the proxy's categories that start with
     /// its name, plus "More" for anything the list carries that no category
     /// claims. No catalog → one group, one kind, every voice in served order.
-    private var groups: [Group] {
+    private var groups: [Who] {
         let present = Set(voices)
         guard !catalog.categories.isEmpty else {
-            return [Group(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
+            return [Who(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
         }
         var seen = Set<String>()
         var byGroup: [String: [Kind]] = [:]
@@ -185,14 +185,14 @@ struct VoicePickerView: View {
         if !rest.isEmpty {
             byGroup[Self.moreGroup, default: []].append(Kind(name: "Not yet described", short: "Not yet described", voices: rest))
         }
-        var out: [Group] = []
+        var out: [Who] = []
         for g in Self.groupOrder + [Self.moreGroup] {
-            if let ks = byGroup[g], !ks.isEmpty { out.append(Group(name: g, kinds: ks)) }
+            if let ks = byGroup[g], !ks.isEmpty { out.append(Who(name: g, kinds: ks)) }
         }
         return out
     }
 
-    private var activeGroup: Group? { groups.first { $0.name == group } ?? groups.first }
+    private var activeGroup: Who? { groups.first { $0.name == group } ?? groups.first }
     private var activeKind: Kind? { activeGroup?.kinds.first { $0.name == kind } ?? activeGroup?.kinds.first }
     private var wheelVoices: [String] { activeKind?.voices ?? [] }
 
