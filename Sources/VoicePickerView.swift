@@ -42,6 +42,17 @@ import UIKit
 /// Spoken labels: the catalog writes "smooth grown man · cleat". VoiceOver
 /// read the middle dot as "dot" (her note on 262), so every label this view
 /// SHOWS or SPEAKS uses a comma instead. The stored value keeps the dot.
+///
+/// Part 119.3 (build 264), her word on 263: "take those categories out from
+/// under the main 4... the textures and whatnot can go, and the description
+/// in the name can go. Just say the name of the voice... sample longer
+/// samples, if you're tired of hearing it you can move on... a toggle for the
+/// voice you picked, basically controlling the temp, or delivery." So: no
+/// Kind wheel — Who, then ONE wheel of every voice in that group, each row
+/// just the voice's name (its tag word: "Flurry", "Cleat"); flicking plays
+/// the FULL audition and moving on cuts it; and a Delivery control (Steady /
+/// Balanced / Lively) saved per character on this phone and sent with every
+/// clip that character speaks.
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
@@ -54,6 +65,10 @@ struct VoicePickerView: View {
     /// conversation it is "the character's own voice" (clear my override);
     /// in the builder it is "no specific voice". nil = do not offer it.
     let defaultLabel: String?
+    /// Part 119.3: whose delivery this picker sets (an agent id). nil = no
+    /// Delivery control on this surface.
+    let deliveryAgentId: String?
+    @State private var delivery: String = ""   // "" = the proxy's default
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var voice: VoiceService
@@ -93,11 +108,12 @@ struct VoicePickerView: View {
     private static let moreGroup = "More"
     private static let groupOrder = ["Women", "Men", "Kids and teens", "Characters"]
 
-    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil) {
+    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil, deliveryAgentId: String? = nil) {
         self.apiClient = apiClient
         self._selection = selection
         self.agentLines = agentLines
         self.defaultLabel = defaultLabel
+        self.deliveryAgentId = deliveryAgentId
         _voice = StateObject(wrappedValue: VoiceService(client: apiClient))
     }
 
@@ -185,9 +201,13 @@ struct VoicePickerView: View {
         if !rest.isEmpty {
             byGroup[Self.moreGroup, default: []].append(Kind(name: "Not yet described", short: "Not yet described", voices: rest))
         }
+        // Part 119.3: the kinds fold into ONE wheel per group, in the
+        // catalog's order (which already runs bright -> husky -> seasoned).
         var out: [Who] = []
         for g in Self.groupOrder + [Self.moreGroup] {
-            if let ks = byGroup[g], !ks.isEmpty { out.append(Who(name: g, kinds: ks)) }
+            guard let ks = byGroup[g], !ks.isEmpty else { continue }
+            let all = ks.flatMap { $0.voices }
+            out.append(Who(name: g, kinds: [Kind(name: g, short: g, voices: all)]))
         }
         return out
     }
@@ -255,7 +275,7 @@ struct VoicePickerView: View {
                     Button("Done") { commit() }
                         .accessibilityHint(useDefault
                             ? "Clears your own pick."
-                            : "Picks the voice the wheel is on: \(Self.spoken(wheelVoice)).")
+                            : "Picks the voice the wheel is on: \(catalog.name(of: wheelVoice)).")
                 }
             }
             .task { await load() }
@@ -300,40 +320,19 @@ struct VoicePickerView: View {
                         }
                     }
 
-                    if let g = activeGroup, g.kinds.count > 1 {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Kind").font(.footnote).foregroundStyle(.secondary)
-                                .accessibilityHidden(true)
-                            Picker("Kind", selection: $kind) {
-                                ForEach(g.kinds, id: \.name) { k in
-                                    Text("\(k.short) (\(k.voices.count))").tag(k.name)
-                                }
-                            }
-                            .pickerStyle(.wheel)
-                            .frame(height: 110)
-                            .clipped()
-                            .accessibilityLabel("Kind of voice")
-                            .accessibilityHint("Swipe up or down to change the kind. The voice wheel below follows.")
-                            .onChange(of: kind) { _, _ in
-                                guard !seeding else { return }
-                                wheelVoice = wheelVoices.first ?? ""
-                            }
-                        }
-                    }
-
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Voice").font(.footnote).foregroundStyle(.secondary)
                             .accessibilityHidden(true)
                         Picker("Voice", selection: $wheelVoice) {
                             ForEach(wheelVoices, id: \.self) { v in
-                                Text(Self.spoken(v)).tag(v)
+                                Text(catalog.name(of: v)).tag(v)
                             }
                         }
                         .pickerStyle(.wheel)
                         .frame(height: 170)
                         .clipped()
                         .accessibilityLabel("Voice")
-                        .accessibilityHint("Swipe up or down to flick through the voices. Each one says hello as you land on it. Done picks the one you are on.")
+                        .accessibilityHint("Swipe up or down to flick through the voices. Each one plays its audition as you land on it; move on whenever you have heard enough. Done picks the one you are on.")
                         .accessibilityActions {
                             Button(previewing == wheelVoice ? "Stop" : "Play full audition") {
                                 Task { await preview(wheelVoice, long: true) }
@@ -350,7 +349,8 @@ struct VoicePickerView: View {
                             previewTask = Task {
                                 try? await Task.sleep(nanoseconds: 350_000_000)
                                 guard !Task.isCancelled else { return }
-                                await preview(v, long: false, force: true)
+                                // Part 119.3, her word: the long one. Moving on cuts it.
+                                await preview(v, long: true, force: true)
                             }
                         }
                     }
@@ -363,6 +363,34 @@ struct VoicePickerView: View {
                                     .foregroundStyle(.secondary)
                                     .accessibilityLabel("About this voice: \(about)")
                             }
+                            if deliveryAgentId != nil {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Delivery").font(.footnote).foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
+                                    Picker("Delivery", selection: $delivery) {
+                                        Text("Default").tag("")
+                                        ForEach(VoiceService.deliveryOptions, id: \.value) { o in
+                                            Text(o.label).tag(o.value)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .accessibilityLabel("Delivery")
+                                    .accessibilityHint("How much this voice varies its delivery. Steady is consistent, Lively has the most emotional range. Default is the platform setting. Saved for this character on this phone; the next audition and every reply use it.")
+                                    .onChange(of: delivery) { _, v in
+                                        guard !seeding, let id = deliveryAgentId else { return }
+                                        VoiceService.setDelivery(v.isEmpty ? nil : v, forAgent: id)
+                                        touched = true
+                                        let spoken = VoiceService.deliveryOptions.first { $0.value == v }?.spoken ?? "Default delivery."
+                                        UIAccessibility.post(notification: .announcement, argument: spoken)
+                                        previewTask?.cancel()
+                                        previewTask = Task {
+                                            try? await Task.sleep(nanoseconds: 600_000_000)
+                                            guard !Task.isCancelled, !wheelVoice.isEmpty else { return }
+                                            await preview(wheelVoice, long: true, force: true)
+                                        }
+                                    }
+                                }
+                            }
                             HStack(spacing: 12) {
                                 Button {
                                     Task { await preview(wheelVoice, long: true) }
@@ -371,7 +399,7 @@ struct VoicePickerView: View {
                                           systemImage: previewing == wheelVoice ? "stop.fill" : "speaker.wave.2.fill")
                                 }
                                 .buttonStyle(.bordered)
-                                .accessibilityHint("Plays the long audition in \(Self.spoken(wheelVoice)).")
+                                .accessibilityHint("Plays the long audition in \(catalog.name(of: wheelVoice)).")
                                 if wheelVoice == current {
                                     Label("Your current voice", systemImage: "checkmark.circle.fill")
                                         .font(.footnote)
@@ -415,12 +443,13 @@ struct VoicePickerView: View {
         return HStack {
             Button {
                 selection = v
-                UIAccessibility.post(notification: .announcement, argument: "\(Self.spoken(v)) selected.")
+                UIAccessibility.post(notification: .announcement, argument: "\(catalog.name(of: v)) selected.")
                 dismiss()
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.spoken(v))
+                        Text(catalog.name(of: v))
+                        Text(Self.spoken(v)).font(.footnote).foregroundStyle(.secondary)
                         if let about {
                             Text(about).font(.footnote).foregroundStyle(.secondary)
                         }
@@ -438,7 +467,7 @@ struct VoicePickerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(Self.spoken(v))
+            .accessibilityLabel("\(catalog.name(of: v)), \(Self.spoken(v))")
             .accessibilityValue(isCurrent ? "Selected" : "")
             .accessibilityHint(about ?? "Picks this voice.")
             .accessibilityActions {
@@ -476,7 +505,7 @@ struct VoicePickerView: View {
         } else if touched, !wheelVoice.isEmpty, wheelVoice != selection {
             selection = wheelVoice
             RecentVoices.record(wheelVoice)
-            UIAccessibility.post(notification: .announcement, argument: "\(Self.spoken(wheelVoice)) selected.")
+            UIAccessibility.post(notification: .announcement, argument: "\(catalog.name(of: wheelVoice)) selected.")
         }
         dismiss()
     }
@@ -494,6 +523,7 @@ struct VoicePickerView: View {
         catalog = await catalogTask
         // Seed the wheels from the stored pick, silently.
         seeding = true
+        delivery = VoiceService.delivery(forAgent: deliveryAgentId) ?? ""
         useDefault = defaultLabel != nil && selection.isEmpty
         if let c = current {
             point(at: c)
@@ -519,8 +549,12 @@ struct VoicePickerView: View {
         if force { voice.stopSpeaking() }
         RecentVoices.record(v)
         previewing = v
+        let d = delivery.isEmpty ? nil : delivery
         if let sample = nextAgentSample(long: long) {
-            await voice.previewVoice(v, sample: sample)
+            await voice.previewVoice(v, sample: sample, delivery: d)
+        } else if long, d != nil {
+            // The long audition sentinel, with the delivery choice attached.
+            await voice.previewVoice(v, sample: "Hi there. This is how I sound.", delivery: d)
         } else {
             await voice.previewVoice(v, long: long)
         }

@@ -1196,7 +1196,7 @@ struct ConversationDetailView: View {
                 ShareSheet(item: item)
             case .voicePicker:
                 // Build 261: the way back to the creator's voice is the first row.
-                VoicePickerView(apiClient: apiClient, selection: $voiceOverride, defaultLabel: "Use \(agentDisplayLabel)'s own voice")
+                VoicePickerView(apiClient: apiClient, selection: $voiceOverride, defaultLabel: "Use \(agentDisplayLabel)'s own voice", deliveryAgentId: selectedAgentId)
             }
         }
         // Save the user's voice pick for the current agent whenever it

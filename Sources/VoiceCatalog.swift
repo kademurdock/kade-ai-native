@@ -35,7 +35,10 @@ actor VoiceCatalog {
         let categories: [Category]
         let renames: [String: String]
         let describe: [String: String]
-        static let empty = Snapshot(categories: [], renames: [:], describe: [:])
+        /// label -> its one-word tag ("flurry"). Part 119.3: the wheel shows
+        /// this as the voice's NAME, her word ("just say the name of the voice").
+        let tags: [String: String]
+        static let empty = Snapshot(categories: [], renames: [:], describe: [:], tags: [:])
         var isEmpty: Bool { categories.isEmpty && renames.isEmpty && describe.isEmpty }
     }
 
@@ -69,6 +72,7 @@ actor VoiceCatalog {
             let categories: [CategoryDTO]?
             let renames: [String: String]?
             let describe: [String: String]?
+            let tags: [String: String]?
         }
         var req = URLRequest(url: catalogURL)
         req.timeoutInterval = 8
@@ -80,7 +84,8 @@ actor VoiceCatalog {
         return Snapshot(
             categories: (dto.categories ?? []).map { Category(name: $0.name, voices: $0.voices) },
             renames: dto.renames ?? [:],
-            describe: dto.describe ?? [:]
+            describe: dto.describe ?? [:],
+            tags: dto.tags ?? [:]
         )
     }
 }
@@ -117,5 +122,13 @@ extension VoiceCatalog.Snapshot {
     /// The category a label is filed under, if any.
     func category(of label: String) -> String? {
         categories.first { $0.voices.contains(label) }?.name
+    }
+
+    /// The voice's NAME for the wheel: its tag word, capitalised ("Flurry").
+    /// A voice with no tag yet (not described) shows its full label with the
+    /// middle dot spoken as a comma.
+    func name(of label: String) -> String {
+        if let t = tags[label], !t.isEmpty { return t.prefix(1).uppercased() + t.dropFirst() }
+        return label.replacingOccurrences(of: " · ", with: ", ")
     }
 }

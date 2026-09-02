@@ -462,7 +462,7 @@ struct AgentEditorView: View {
                 // (same night, her word on the web version): quoted persona text
                 // is mostly RULES, not dialogue, so it read her instructions. Off
                 // until the extractor can tell a line from a rule. Pooled scripts.
-                VoicePickerView(apiClient: apiClient, selection: $voice, defaultLabel: "No specific voice (default)")
+                VoicePickerView(apiClient: apiClient, selection: $voice, defaultLabel: "No specific voice (default)", deliveryAgentId: existingId)
             }
             .alert(
                 pendingPublic == true ? "Share on the marketplace?" : "Take it off the marketplace?",

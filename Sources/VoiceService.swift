@@ -156,13 +156,69 @@ final class VoiceService: NSObject, ObservableObject {
             UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey)
             // Applies mid-clip, so a rate change while a long reply is
             // playing takes effect immediately instead of at the next one.
-            currentPlayer?.rate = playbackRate
+            // Part 119.3: the playing clip was already synthesized at some
+            // API speed, so only the remainder rides the player.
+            let live = playbackRate / synthSpeedFactor
+            currentPlayer?.rate = live
             // Part 98: the streamed player honors the same live change.
-            streamingPlayer.setRate(playbackRate)
+            streamingPlayer.setRate(live)
         }
     }
 
     private static let playbackRateKey = "kade.voiceMessage.playbackRate"
+
+    /* Part 119.3 (Sep 2 2026), her ask: the player's time-stretch "does sound
+     * like it's been slowed down or sped up based on the sampling quality...
+     * changing the speed through the api instead." So the speed preference now
+     * rides the synthesis request (`speed`, which the proxy hands to Inworld
+     * as speakingRate / fish as prosody.speed) and the player only makes up
+     * what the API cannot: the API's hard range is 0.5-1.5, the picker offers
+     * up to 2x, so 2x = synth at 1.5 and play at 1.33. The agent's own
+     * configured rate multiplies in first. `synthSpeedFactor` remembers what
+     * the clip in flight was synthesized at so a live rate change and the
+     * player's rate stay consistent. */
+    private var synthSpeedFactor: Float = 1.0
+
+    /// (speed to send, residual player rate) for an agent's base rate and
+    /// the user's playback preference. `speed` is nil when nothing is asked
+    /// (base nil, rate 1.0) so the payload matches the pre-119.3 shape.
+    nonisolated static func apiSpeed(base: Double?, playbackRate: Float) -> (speed: Double?, factor: Float) {
+        let effective = (base ?? 1.0) * Double(playbackRate)
+        if base == nil, abs(playbackRate - 1.0) < 0.001 { return (nil, 1.0) }
+        let clamped = min(1.5, max(0.5, effective))
+        return (clamped, Float(clamped / (base ?? 1.0)))
+    }
+
+    /// The residual the PLAYER applies after the API took its share.
+    nonisolated static func residualRate(playbackRate: Float, factor: Float) -> Float {
+        let r = playbackRate / max(0.01, factor)
+        return min(2.0, max(0.5, (abs(r - 1.0) < 0.01) ? 1.0 : r))
+    }
+
+    // MARK: Delivery (Part 119.3)
+
+    /// Per-agent delivery — STABLE, BALANCED or CREATIVE (Inworld's tts-2
+    /// deliveryMode; the proxy maps the same word onto fish temperature).
+    /// nil = the proxy's default (CREATIVE today). Kept on the phone in
+    /// UserDefaults keyed by agent id: her picker's control, her phone.
+    static let deliveryOptions: [(value: String, label: String, spoken: String)] = [
+        ("STABLE", "Steady", "Steady. Consistent, predictable delivery."),
+        ("BALANCED", "Balanced", "Balanced. Between steady and lively."),
+        ("CREATIVE", "Lively", "Lively. The most emotional range and variation."),
+    ]
+    private static func deliveryKey(_ agentId: String) -> String { "kade.voiceDelivery." + agentId }
+    static func delivery(forAgent agentId: String?) -> String? {
+        guard let agentId, !agentId.isEmpty else { return nil }
+        let v = UserDefaults.standard.string(forKey: "kade.voiceDelivery." + agentId) ?? ""
+        return deliveryOptions.contains { $0.value == v } ? v : nil
+    }
+    static func setDelivery(_ value: String?, forAgent agentId: String) {
+        if let value, deliveryOptions.contains(where: { $0.value == value }) {
+            UserDefaults.standard.set(value, forKey: deliveryKey(agentId))
+        } else {
+            UserDefaults.standard.removeObject(forKey: deliveryKey(agentId))
+        }
+    }
 
     /// The speeds offered in the picker. Deliberately a short, opinionated
     /// list rather than a slider: a slider is fiddly with VoiceOver and
@@ -686,9 +742,12 @@ final class VoiceService: NSObject, ObservableObject {
         await previewVoice(voiceId, sample: sample)
     }
 
-    func previewVoice(_ voiceId: String, sample: String) async {
+    func previewVoice(_ voiceId: String, sample: String, delivery: String? = nil) async {
         stopSpeaking()
-        let fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
+        var fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
+        if let delivery { fields.append(("delivery", delivery)) }
+        // Previews play at the picker's own pace, whatever the reply speed is.
+        synthSpeedFactor = playbackRate
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { return }
         await playAudio(data)
@@ -884,7 +943,7 @@ final class VoiceService: NSObject, ObservableObject {
                 var streamedOK = false
                 if hasAudio {
                     streamedClipActive = true
-                    streamedOK = await streamingPlayer.play(fetch: fetch, rate: playbackRate, onPlaybackStarted: { [weak self] in
+                    streamedOK = await streamingPlayer.play(fetch: fetch, rate: Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor), onPlaybackStarted: { [weak self] in
                         guard let self else { return }
                         self.isClipPlaying = true
                         self.isPaused = false
@@ -977,7 +1036,11 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", text)]
         if let voice { fields.append(("voice", voice)) }
-        if let speed { fields.append(("speed", String(speed))) }
+        // Part 119.3: the speed preference rides the API; the player gets the rest.
+        let tuned = Self.apiSpeed(base: speed, playbackRate: playbackRate)
+        if let s = tuned.speed { fields.append(("speed", String(s))) }
+        synthSpeedFactor = tuned.factor
+        if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
         /* ⭐ PART 94 — ONE RETRY, BECAUSE THE FAILURE CLASS HERE IS LATENCY.
          *
@@ -1060,7 +1123,10 @@ final class VoiceService: NSObject, ObservableObject {
         }
         var fields: [(String, String)] = [("input", item.text), ("stream", "1")]
         if let voice { fields.append(("voice", voice)) }
-        if let speed { fields.append(("speed", String(speed))) }
+        let tuned = Self.apiSpeed(base: speed, playbackRate: playbackRate) // Part 119.3
+        if let s = tuned.speed { fields.append(("speed", String(s))) }
+        synthSpeedFactor = tuned.factor
+        if let delivery = Self.delivery(forAgent: item.agentId) { fields.append(("delivery", delivery)) }
         return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
     }
 
@@ -1114,7 +1180,7 @@ final class VoiceService: NSObject, ObservableObject {
                 // afterwards silently does nothing, which is the kind of
                 // thing that looks fine in review and is dead on device.
                 player.enableRate = true
-                player.rate = playbackRate
+                player.rate = Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor) // Part 119.3
                 currentPlayer = player
                 playbackContinuation = continuation
                 if !player.play() {
@@ -1148,7 +1214,8 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", trimmed)]
         if let voice { fields.append(("voice", voice)) }
-        if let speed { fields.append(("speed", String(speed))) }
+        if let s = Self.apiSpeed(base: speed, playbackRate: playbackRate).speed { fields.append(("speed", String(s))) } // Part 119.3
+        if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {
