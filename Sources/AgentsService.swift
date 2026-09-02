@@ -84,6 +84,11 @@ final class AgentsService: ObservableObject {
     /// GET /api/kade/agent-default (conversation counts, server truth).
     /// Empty until loaded or on any failure — pickers just stay alphabetical.
     @Published private(set) var defaultAgentIds: [String] = []
+    /// Build 261 (her ask, Sep 2 2026: "faving them or whatever"): the
+    /// person's own starred characters, from LibreChat's
+    /// `GET/POST /api/settings/favorites` — the same store the web's
+    /// Favorites shelf reads, so a star on the phone shows on the web.
+    @Published private(set) var favoriteIds: [String] = []
 
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
@@ -136,8 +141,44 @@ final class AgentsService: ObservableObject {
     func reset() {
         agents = []
         defaultAgentIds = []
+        favoriteIds = []
         hasLoadedOnce = false
         loadError = nil
+    }
+
+    private struct FavoriteRow: Decodable { let agentId: String? }
+
+    /// Fail-soft: a failed load leaves no stars, never an error surface.
+    private func loadFavorites() async {
+        do {
+            let req = client.request(path: "api/settings/favorites", authorized: true)
+            let (data, http) = try await client.send(req)
+            guard http.statusCode == 200 else { return }
+            let rows = try decoder.decode([FavoriteRow].self, from: data)
+            favoriteIds = rows.compactMap { $0.agentId }
+        } catch {
+            // quiet by design
+        }
+    }
+
+    func isFavorite(_ agentId: String) -> Bool { favoriteIds.contains(agentId) }
+
+    /// Star or unstar. Sends the WHOLE list (that is the route's contract);
+    /// updates locally first so the row flips at once, rolls back on failure.
+    @discardableResult
+    func toggleFavorite(_ agentId: String) async -> Bool {
+        let before = favoriteIds
+        var next = before
+        if let i = next.firstIndex(of: agentId) { next.remove(at: i) } else { next.insert(agentId, at: 0) }
+        favoriteIds = next
+        var req = client.request(path: "api/settings/favorites", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["favorites": next.map { ["agentId": $0] }])
+        if let (_, http) = try? await client.send(req), http.statusCode == 200 {
+            return true
+        }
+        favoriteIds = before
+        return false
     }
 
     private struct AgentDefaultResponse: Decodable {
@@ -194,6 +235,7 @@ final class AgentsService: ObservableObject {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
             await loadDefaultAgents()
+            await loadFavorites()
             hasLoadedOnce = true
         } catch {
             loadError = "Couldn't load the agent list. Try again."

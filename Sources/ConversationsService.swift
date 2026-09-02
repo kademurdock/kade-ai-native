@@ -9,11 +9,15 @@ struct KadeConversation: Codable, Identifiable, Hashable {
     let agentId: String?
     let createdAt: String
     let updatedAt: String
+    /// Build 261 (her ask): LibreChat's own `pinned` flag, written by
+    /// `POST /api/convos/pin`. Optional so older rows decode unchanged.
+    var pinned: Bool?
 
     var id: String { conversationId }
+    var isPinned: Bool { pinned == true }
 
     enum CodingKeys: String, CodingKey {
-        case conversationId, title, createdAt, updatedAt
+        case conversationId, title, createdAt, updatedAt, pinned
         case agentId = "agent_id"
     }
 
@@ -429,6 +433,33 @@ final class ConversationsService: ObservableObject {
     /// it's still reachable on the web app. Worth saying out loud in the
     /// confirmation copy, since "archive" and "delete" are easy to confuse
     /// when you're navigating by ear.
+    /// Build 261: pin or unpin. `POST /api/convos/pin {arg:{conversationId, pinned}}`
+    /// — the same flag the web writes. The list route does not sort by it, so
+    /// the list view floats pinned rows to the top of what it has loaded.
+    @discardableResult
+    func setPinned(id: String, pinned: Bool, title: String) async -> Bool {
+        var req = client.request(path: "api/convos/pin", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["arg": ["conversationId": id, "pinned": pinned]]
+        )
+        do {
+            let (_, http) = try await client.send(req)
+            guard (200...201).contains(http.statusCode) else {
+                actionMessage = "Couldn't \(pinned ? "pin" : "unpin") \(title). Try again."
+                return false
+            }
+            if let i = conversations.firstIndex(where: { $0.conversationId == id }) {
+                conversations[i].pinned = pinned
+            }
+            actionMessage = pinned ? "Pinned \(title) to the top." : "Unpinned \(title)."
+            return true
+        } catch {
+            actionMessage = "Couldn't \(pinned ? "pin" : "unpin") \(title). Try again."
+            return false
+        }
+    }
+
     @discardableResult
     func archiveConversation(id: String, title: String) async -> Bool {
         var req = client.request(path: "api/convos/archive", method: "POST", authorized: true)

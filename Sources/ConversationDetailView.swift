@@ -1195,7 +1195,8 @@ struct ConversationDetailView: View {
             case .share(let item):
                 ShareSheet(item: item)
             case .voicePicker:
-                VoicePickerView(apiClient: apiClient, selection: $voiceOverride)
+                // Build 261: the way back to the creator's voice is the first row.
+                VoicePickerView(apiClient: apiClient, selection: $voiceOverride, defaultLabel: "Use \(agentDisplayLabel)'s own voice")
             }
         }
         // Save the user's voice pick for the current agent whenever it
@@ -1205,9 +1206,9 @@ struct ConversationDetailView: View {
             guard let id = selectedAgentId else { return }
             Task {
                 await voiceService.setUserVoiceOverride(agentId: id, voice: v.isEmpty ? nil : v)
-                if !v.isEmpty {
-                    UIAccessibility.post(notification: .announcement, argument: "\(agentDisplayLabel) will now speak in \(v).")
-                }
+                UIAccessibility.post(notification: .announcement, argument: v.isEmpty
+                    ? "\(agentDisplayLabel) will speak in the voice their creator chose."
+                    : "\(agentDisplayLabel) will now speak in \(v).")
             }
         }
         .alert(

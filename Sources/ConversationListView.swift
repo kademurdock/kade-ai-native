@@ -189,7 +189,12 @@ struct ConversationListView: View {
 
     private var filteredConversations: [KadeConversation] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return conversationsService.conversations }
+        // Build 261: pinned rows first (stable within each group), the way
+        // the voice picker keeps your voices up top.
+        guard !query.isEmpty else {
+            let all = conversationsService.conversations
+            return all.filter { $0.isPinned } + all.filter { !$0.isPinned }
+        }
         return conversationsService.conversations.filter {
             $0.displayTitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
@@ -285,6 +290,17 @@ struct ConversationListView: View {
                 // with the swipe kept as the sighted affordance. Do NOT
                 // re-add `.accessibilityActions` alongside the swipe -- that
                 // is exactly what caused the duplication.
+                // Build 261: pin/unpin on the leading edge; surfaces in the
+                // Actions rotor like the others (no accessibilityActions --
+                // that would read twice).
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    Button {
+                        Task { await conversationsService.setPinned(id: convo.id, pinned: !convo.isPinned, title: convo.displayTitle) }
+                    } label: {
+                        Label(convo.isPinned ? "Unpin" : "Pin to top", systemImage: convo.isPinned ? "pin.slash" : "pin")
+                    }
+                    .tint(.orange)
+                }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingConversation = convo
@@ -415,16 +431,22 @@ struct ConversationListView: View {
     }
 
     private func accessibleLabel(for convo: KadeConversation) -> String {
+        let pin = convo.isPinned ? "Pinned. " : ""
         if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
-            return "\(convo.displayTitle). \(relative)"
+            return "\(pin)\(convo.displayTitle). \(relative)"
         }
-        return convo.displayTitle
+        return pin + convo.displayTitle
     }
 
     private func row(for convo: KadeConversation) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(convo.displayTitle)
-                .font(.body)
+            HStack(spacing: 6) {
+                if convo.isPinned {
+                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                }
+                Text(convo.displayTitle)
+                    .font(.body)
+            }
             if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
                 Text(relative)
                     .font(.caption)

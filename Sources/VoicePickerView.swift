@@ -31,6 +31,13 @@ struct VoicePickerView: View {
     /// agent's voice" — her words for why the long script fell short.
     let agentLines: [String]
     @State private var lastAgentLine: String?
+    /// Build 261: what the empty pick means on THIS surface. In a
+    /// conversation it is "the character's own voice" (clear my override);
+    /// in the builder it is "no specific voice". nil = do not offer a row.
+    let defaultLabel: String?
+    /// Build 261: the last eight voices you auditioned, newest first, so
+    /// comparing across hundreds stops being a memory test.
+    @State private var recentlyHeard: [String] = RecentVoices.ids
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var voice: VoiceService
@@ -54,10 +61,11 @@ struct VoicePickerView: View {
     /// by design (it serves labels, not audio).
     private static let catalogURL = URL(string: "https://inworld-tts-proxy-production.up.railway.app/voices.json")!
 
-    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = []) {
+    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil) {
         self.apiClient = apiClient
         self._selection = selection
         self.agentLines = agentLines
+        self.defaultLabel = defaultLabel
         _voice = StateObject(wrappedValue: VoiceService(client: apiClient))
     }
 
@@ -168,6 +176,43 @@ struct VoicePickerView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
+                        // Build 261 (her ask: "no way to go back to the agent
+                        // default voice"): the way back, first in the list.
+                        if let defaultLabel {
+                            Section {
+                                Button {
+                                    selection = ""
+                                    UIAccessibility.post(notification: .announcement, argument: "\(defaultLabel). Your own pick is cleared.")
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Label(defaultLabel, systemImage: "arrow.uturn.backward")
+                                        if selection.isEmpty {
+                                            Spacer()
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(defaultLabel)
+                                .accessibilityValue(selection.isEmpty ? "Selected" : "")
+                                .accessibilityHint("Clears your own voice pick so this character speaks in the voice its creator chose.")
+                            }
+                        }
+                        if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !recentlyHeard.isEmpty {
+                            Section {
+                                ForEach(recentlyHeard.filter { voices.contains($0) }, id: \.self) { v in
+                                    voiceRow(v)
+                                }
+                            } header: {
+                                Text("Recently heard")
+                                    .accessibilityAddTraits(.isHeader)
+                            } footer: {
+                                Text("The last few voices you auditioned, newest first.")
+                            }
+                        }
                         ForEach(sections, id: \.self) { group in
                             if let name = group.name {
                                 Section(name) {
@@ -231,6 +276,12 @@ struct VoicePickerView: View {
                 Button("Quick preview") {
                     Task { await preview(v, long: false) }
                 }
+                // Build 261: every sample is drawn fresh from the proxy's
+                // bucket, so "another" is simply "again" -- named so a
+                // listener knows it will be different.
+                Button("Hear another sample") {
+                    Task { await preview(v, long: true, force: true) }
+                }
             }
 
             Button {
@@ -276,12 +327,15 @@ struct VoicePickerView: View {
         return cats.map { VoiceGroup(name: $0.name, voices: $0.voices) }
     }
 
-    private func preview(_ v: String, long: Bool = true) async {
-        if previewing == v, long {
+    private func preview(_ v: String, long: Bool = true, force: Bool = false) async {
+        if previewing == v, long, !force {
             voice.stopSpeaking()
             previewing = nil
             return
         }
+        if force { voice.stopSpeaking() }
+        RecentVoices.record(v)
+        recentlyHeard = RecentVoices.ids
         previewing = v
         if let sample = nextAgentSample(long: long) {
             await voice.previewVoice(v, sample: sample)
@@ -290,5 +344,27 @@ struct VoicePickerView: View {
         }
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }
+    }
+}
+
+
+/// Build 261: the last eight voices auditioned on this device, newest first.
+/// Same shape as `RecentAgents` in AgentPickerView.
+enum RecentVoices {
+    private static let key = "kade.recentVoiceLabels"
+    private static let maxEntries = 8
+
+    static var ids: [String] {
+        UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+
+    static func record(_ label: String) {
+        var current = ids
+        current.removeAll { $0 == label }
+        current.insert(label, at: 0)
+        if current.count > maxEntries {
+            current = Array(current.prefix(maxEntries))
+        }
+        UserDefaults.standard.set(current, forKey: key)
     }
 }

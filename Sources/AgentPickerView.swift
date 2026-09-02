@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Phase 4: pick which agent/character answers the NEXT message in an
 /// open conversation.
@@ -84,7 +85,15 @@ struct AgentPickerView: View {
     /// fetch lands or if it fails: the picker is then exactly what it was.
     private var yourAgents: [KadeAgent] {
         let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        return agentsService.defaultAgentIds.compactMap { byId[$0] }
+        let starred = Set(agentsService.favoriteIds)
+        return agentsService.defaultAgentIds.compactMap { byId[$0] }.filter { !starred.contains($0.id) }
+    }
+
+    /// Build 261: the person's starred characters, first of all. Same store
+    /// as the web's Favorites shelf.
+    private var favoriteAgents: [KadeAgent] {
+        let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return agentsService.favoriteIds.compactMap { byId[$0] }
     }
 
     private var recentAgents: [KadeAgent] {
@@ -237,6 +246,18 @@ struct AgentPickerView: View {
                     rowButton(for: agent)
                 }
             } else {
+                if !favoriteAgents.isEmpty {
+                    Section {
+                        ForEach(favoriteAgents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text("Favorites")
+                            .accessibilityAddTraits(.isHeader)
+                    } footer: {
+                        Text("The ones you starred. Swipe a character, or use the Actions rotor, to star or unstar.")
+                    }
+                }
                 if !yourAgents.isEmpty {
                     Section {
                         ForEach(yourAgents) { agent in
@@ -291,12 +312,29 @@ struct AgentPickerView: View {
     /// one place that owns the accessibility contract instead of three
     /// copies that could drift apart.
     private func rowButton(for agent: KadeAgent) -> some View {
-        Button {
+        let starred = agentsService.isFavorite(agent.id)
+        return Button {
             RecentAgents.record(agent.id)
             onSelect(agent)
             dismiss()
         } label: {
             row(for: agent)
+        }
+        // Build 261: star/unstar. swipeActions surface in the Actions rotor
+        // on their own (the Session 21g lesson: never ALSO add
+        // accessibilityActions, or it reads twice).
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                Task {
+                    let ok = await agentsService.toggleFavorite(agent.id)
+                    UIAccessibility.post(notification: .announcement, argument: ok
+                        ? (starred ? "\(agent.name) removed from favorites." : "\(agent.name) added to favorites.")
+                        : "Couldn't change favorites. Try again.")
+                }
+            } label: {
+                Label(starred ? "Unstar" : "Star", systemImage: starred ? "star.slash" : "star")
+            }
+            .tint(.yellow)
         }
         .buttonStyle(.plain)
         // Session 26, the Amber rule (build 139 / the df915e2 sweep):
