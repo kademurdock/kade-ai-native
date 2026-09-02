@@ -64,6 +64,9 @@ struct AgentEditorView: View {
     @State private var provider = ""
     @State private var model = ""
     @State private var voice = ""
+    /// Part 119: the described catalog, so a voice stored in an old spelling
+    /// ("Voice 69") reads as its described label here, as it does in the picker.
+    @State private var voiceCatalog: VoiceCatalog.Snapshot = .empty
     @State private var showingVoicePicker = false
     @State private var starters: [String] = []
     @State private var availableTools: [AvailableTool] = []
@@ -244,7 +247,7 @@ struct AgentEditorView: View {
                                 Text("Voice")
                                     .foregroundStyle(Color.primary)
                                 Spacer()
-                                Text(voice.isEmpty ? "Default" : voice)
+                                Text(voice.isEmpty ? "Default" : voiceCatalog.displayLabel(voice))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -258,7 +261,7 @@ struct AgentEditorView: View {
                         // An explicit label keeps the reading clean; the native
                         // element keeps it a real button.
                         .accessibilityLabel("Voice")
-                        .accessibilityValue(voice.isEmpty ? "Default" : voice)
+                        .accessibilityValue(voice.isEmpty ? "Default" : voiceCatalog.displayLabel(voice))
                         .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
                     }
                     Section {
@@ -561,7 +564,9 @@ struct AgentEditorView: View {
                 async let models = service.loadModelsConfig()
                 async let tools = service.loadAvailableTools()
                 async let menu = service.loadModelMenu()
+                async let vcat = VoiceCatalog.shared.snapshot()
                 categories = await cats
+                voiceCatalog = await vcat
                 modelsConfig = await models
                 availableTools = await tools
                 modelMenu = await menu

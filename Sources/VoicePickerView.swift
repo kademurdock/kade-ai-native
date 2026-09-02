@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Browse, preview, and pick a TTS voice from the full catalog
-/// ("Voice 1"..., `GET /api/files/speech/tts/voices`). Session 21g
+/// (`GET /api/files/speech/tts/voices`). Session 21g
 /// (Kade: "needs to be a way to go through the voices in the agent builder").
 ///
 /// Self-contained on purpose: it takes a `KadeAPIClient` and stands up its own
@@ -16,12 +16,24 @@ import UIKit
 /// uses so the Actions rotor never lists a thing twice.
 ///
 /// July 23 2026 (Kade: "I'd like to have voices loosely categorised... so the
-/// madness and chaos has some form and shape"): the list is now grouped into
-/// loose sections served by the TTS proxy (/voices.json `categories` -- the
-/// same public endpoint the web pickers read). Fail-soft: if the category
-/// fetch misses, the flat numeric list renders exactly as before. Searching
-/// always searches the WHOLE catalog flat -- sections are a browsing aid, not
-/// a filter.
+/// madness and chaos has some form and shape"): sections served by the TTS
+/// proxy (/voices.json `categories`).
+///
+/// Part 119 (Sep 2 2026) — catch-up to the described catalog (Part 118):
+///   * CATEGORY FIRST, her ask, the web builder is the spec: one "Category"
+///     row at the top (23 described categories with counts, "All voices"
+///     last), then the list for that category. Opens on the category that
+///     holds the current pick, so the checkmark is on the first screen.
+///   * A pick stored in an OLD spelling ("Voice 69", "Voice 340 (Beta)")
+///     keeps its checkmark: the proxy's `renames` map says which described
+///     label it became. Nothing is rewritten until she picks again — the old
+///     spelling still speaks, the proxy resolves it forever.
+///   * Each row carries the proxy's one-sentence `describe` as its VoiceOver
+///     hint and as a second line for sighted eyes; search matches it too, so
+///     "husky" or "storyteller" finds voices.
+///   Fail-soft throughout: if /voices.json misses, the flat list renders
+///   exactly as before, no category row. Searching always searches the WHOLE
+///   catalog flat -- sections are a browsing aid, not a filter.
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
@@ -43,11 +55,14 @@ struct VoicePickerView: View {
     @StateObject private var voice: VoiceService
 
     @State private var voices: [String] = []
-    @State private var categories: [VoiceGroup] = []
+    @State private var catalog: VoiceCatalog.Snapshot = .empty
     @State private var isLoading = true
     @State private var loadFailed = false
     @State private var search = ""
     @State private var previewing: String?
+    /// The category she chose this open. nil = not chosen yet, so the picker
+    /// derives one (the current pick's category, else the first).
+    @State private var chosenCategory: String?
 
     /// One picker section. `name == nil` means "render flat, no header".
     struct VoiceGroup: Hashable {
@@ -55,11 +70,11 @@ struct VoicePickerView: View {
         let voices: [String]
     }
 
-    /// The proxy's public catalog endpoint -- same host the fork's
-    /// `speech.tts.openai.url` points at, same /voices.json the web client
-    /// fetches cross-origin for audition text + categories. Unauthenticated
-    /// by design (it serves labels, not audio).
-    private static let catalogURL = URL(string: "https://inworld-tts-proxy-production.up.railway.app/voices.json")!
+    /// The "All voices" choice in the category row. Last, as on the web.
+    private static let allCategories = "__all__"
+    /// Voices the served list carries that no category claims (a voice added
+    /// after the last catalog build). Never hidden — they get their own group.
+    private static let moreCategory = "Not yet described"
 
     init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil) {
         self.apiClient = apiClient
@@ -115,44 +130,80 @@ struct VoicePickerView: View {
         return ([first] + rest).joined(separator: " ")
     }
 
-    /// Numeric-aware order ("Voice 2" before "Voice 10") and search filter.
-    private var filtered: [String] {
-        let base = voices.sorted { lhs, rhs in
-            let ln = Int(lhs.filter(\.isNumber)) ?? 0
-            let rn = Int(rhs.filter(\.isNumber)) ?? 0
-            return ln == rn ? lhs < rhs : ln < rn
-        }
-        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return base }
-        return base.filter { $0.localizedCaseInsensitiveContains(q) }
+    // MARK: - Selection
+
+    /// The stored pick mapped onto the served list (old spelling -> described
+    /// label). nil when nothing is picked or the pick is unknown to the list.
+    private var current: String? {
+        catalog.normalize(selection, in: voices)
     }
 
-    /// Sections for the current view state. Searching (or no category data)
-    /// collapses to one flat unnamed group -- the pre-categories behavior.
-    private var sections: [VoiceGroup] {
-        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.isEmpty, !categories.isEmpty else {
-            return [VoiceGroup(name: nil, voices: filtered)]
-        }
+    /// Selection match, tolerant of a stored old spelling: "Voice 69" checks
+    /// the described row it became; "Voice 340 (Beta)" checks "Voice 340".
+    private func isSelected(_ v: String) -> Bool {
+        v == current
+    }
+
+    // MARK: - Categories
+
+    /// The served categories, each trimmed to voices the list actually has,
+    /// plus a trailing group for anything no category claims.
+    private var groups: [VoiceGroup] {
+        guard !catalog.categories.isEmpty else { return [] }
         let present = Set(voices)
         var seen = Set<String>()
         var out: [VoiceGroup] = []
-        for group in categories {
-            let vs = group.voices.filter { present.contains($0) && !seen.contains($0) }
+        for c in catalog.categories {
+            let vs = c.voices.filter { present.contains($0) && !seen.contains($0) }
             vs.forEach { seen.insert($0) }
-            if !vs.isEmpty { out.append(VoiceGroup(name: group.name, voices: vs)) }
+            if !vs.isEmpty { out.append(VoiceGroup(name: c.name, voices: vs)) }
         }
-        let rest = filtered.filter { !seen.contains($0) }
+        let rest = voices.filter { !seen.contains($0) }
         if !rest.isEmpty {
-            out.append(VoiceGroup(name: out.isEmpty ? nil : "More voices", voices: rest))
+            out.append(VoiceGroup(name: Self.moreCategory, voices: rest))
         }
         return out
     }
 
-    /// Selection match, tolerant of a stored beta-era spelling
-    /// ("Voice 340 (Beta)" selects "Voice 340" after the July 23 graduation).
-    private func isSelected(_ v: String) -> Bool {
-        v == selection || v == selection.replacingOccurrences(of: " (Beta)", with: "")
+    /// Which category the list is showing: her choice this open, else the
+    /// one holding the current pick, else the first served category.
+    private var activeCategory: String {
+        if let chosenCategory { return chosenCategory }
+        if let current, let g = groups.first(where: { $0.voices.contains(current) })?.name { return g }
+        return groups.first?.name ?? Self.allCategories
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Whole-catalog search: label OR the proxy's description ("husky",
+    /// "British", "storyteller"). Served order, no numeric sort -- the
+    /// described list is already in category order.
+    private var searched: [String] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return voices }
+        return voices.filter {
+            $0.localizedCaseInsensitiveContains(q)
+                || (catalog.describe[$0] ?? "").localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    /// Sections for the current view state.
+    ///   searching            -> one flat group of matches across the catalog
+    ///   no categories served -> one flat group (the pre-July behaviour)
+    ///   "All voices"         -> every category with its header
+    ///   a category           -> that category alone, no header (the row above names it)
+    private var sections: [VoiceGroup] {
+        if isSearching { return [VoiceGroup(name: nil, voices: searched)] }
+        let gs = groups
+        guard !gs.isEmpty else { return [VoiceGroup(name: nil, voices: voices)] }
+        let active = activeCategory
+        if active == Self.allCategories { return gs }
+        if let g = gs.first(where: { $0.name == active }) {
+            return [VoiceGroup(name: nil, voices: g.voices)]
+        }
+        return gs
     }
 
     var body: some View {
@@ -201,16 +252,43 @@ struct VoicePickerView: View {
                                 .accessibilityHint("Clears your own voice pick so this character speaks in the voice its creator chose.")
                             }
                         }
-                        if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !recentlyHeard.isEmpty {
+                        // Part 119: category first. A pushed list of the 23
+                        // described categories with counts, "All voices" last.
+                        // Hidden while searching -- search is whole-catalog.
+                        if !isSearching, groups.count > 1 {
                             Section {
-                                ForEach(recentlyHeard.filter { voices.contains($0) }, id: \.self) { v in
-                                    voiceRow(v)
+                                Picker(selection: Binding(
+                                    get: { activeCategory },
+                                    set: { chosenCategory = $0 }
+                                )) {
+                                    ForEach(groups, id: \.self) { g in
+                                        Text("\(g.name ?? "") (\(g.voices.count))").tag(g.name ?? "")
+                                    }
+                                    Text("All voices (\(voices.count))").tag(Self.allCategories)
+                                } label: {
+                                    Text("Category")
                                 }
-                            } header: {
-                                Text("Recently heard")
-                                    .accessibilityAddTraits(.isHeader)
+                                .pickerStyle(.navigationLink)
+                                .accessibilityHint("Opens the list of voice categories. Pick one and the voices below change to that category.")
                             } footer: {
-                                Text("The last few voices you auditioned, newest first.")
+                                Text(activeCategory == Self.allCategories
+                                    ? "Every voice, grouped by category."
+                                    : "Showing one category. Search finds voices in every category.")
+                            }
+                        }
+                        if !isSearching, !recentlyHeard.isEmpty {
+                            let recent = recentlyHeard.compactMap { catalog.normalize($0, in: voices) }
+                            if !recent.isEmpty {
+                                Section {
+                                    ForEach(recent, id: \.self) { v in
+                                        voiceRow(v)
+                                    }
+                                } header: {
+                                    Text("Recently heard")
+                                        .accessibilityAddTraits(.isHeader)
+                                } footer: {
+                                    Text("The last few voices you auditioned, newest first.")
+                                }
                             }
                         }
                         ForEach(sections, id: \.self) { group in
@@ -221,8 +299,14 @@ struct VoicePickerView: View {
                                     }
                                 }
                             } else {
-                                ForEach(group.voices, id: \.self) { v in
-                                    voiceRow(v)
+                                Section {
+                                    ForEach(group.voices, id: \.self) { v in
+                                        voiceRow(v)
+                                    }
+                                } footer: {
+                                    if isSearching && group.voices.isEmpty {
+                                        Text("No voice matches that. Try a word about the sound — husky, bright, Southern, British, storyteller.")
+                                    }
                                 }
                             }
                         }
@@ -244,14 +328,22 @@ struct VoicePickerView: View {
     }
 
     private func voiceRow(_ v: String) -> some View {
-        HStack {
+        let about = catalog.describe[v]
+        return HStack {
             Button {
                 selection = v
                 UIAccessibility.post(notification: .announcement, argument: "\(v) selected.")
                 dismiss()
             } label: {
                 HStack {
-                    Text(v)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(v)
+                        if let about {
+                            Text(about)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     if isSelected(v) {
                         Spacer()
                         Image(systemName: "checkmark.circle.fill")
@@ -264,7 +356,10 @@ struct VoicePickerView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(v)
             .accessibilityValue(isSelected(v) ? "Selected" : "")
-            .accessibilityHint("Picks this voice.")
+            // Part 119: the proxy's one sentence about the sound is the hint,
+            // so a swipe through the list says what each voice IS before
+            // the audition is asked for.
+            .accessibilityHint(about ?? "Picks this voice.")
             .accessibilityActions {
                 // Aug 6 2026 (her premium-native pass): BOTH lengths, named
                 // honestly. Full audition = the steered four-mood monologue
@@ -297,34 +392,15 @@ struct VoicePickerView: View {
     private func load() async {
         isLoading = true
         loadFailed = false
-        let list = await voice.availableVoices()
+        // Both fetches in flight together: the served list (authorised) and
+        // the public catalog (categories, renames, describe).
+        async let listTask = voice.availableVoices()
+        async let catalogTask = VoiceCatalog.shared.snapshot()
+        let list = await listTask
         voices = list
         loadFailed = list.isEmpty
-        if !list.isEmpty {
-            categories = await Self.fetchCategories()
-        }
+        catalog = await catalogTask
         isLoading = false
-    }
-
-    /// GET the proxy's /voices.json and pull `categories`. Any failure --
-    /// network, shape, empty -- returns [] and the picker stays flat.
-    private static func fetchCategories() async -> [VoiceGroup] {
-        struct CatalogDTO: Decodable {
-            struct CategoryDTO: Decodable {
-                let name: String
-                let voices: [String]
-            }
-            let categories: [CategoryDTO]?
-        }
-        var req = URLRequest(url: catalogURL)
-        req.timeoutInterval = 6
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let dto = try? JSONDecoder().decode(CatalogDTO.self, from: data),
-              let cats = dto.categories, !cats.isEmpty else {
-            return []
-        }
-        return cats.map { VoiceGroup(name: $0.name, voices: $0.voices) }
     }
 
     private func preview(_ v: String, long: Bool = true, force: Bool = false) async {
