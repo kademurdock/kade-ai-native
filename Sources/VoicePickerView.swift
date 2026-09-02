@@ -1,55 +1,59 @@
 import SwiftUI
 import UIKit
 
-/// Browse, preview, and pick a TTS voice from the full catalog
-/// (`GET /api/files/speech/tts/voices`). Session 21g
-/// (Kade: "needs to be a way to go through the voices in the agent builder").
+/// Pick a TTS voice from the described catalog
+/// (`GET /api/files/speech/tts/voices` + the proxy's public `/voices.json`).
 ///
 /// Self-contained on purpose: it takes a `KadeAPIClient` and stands up its own
 /// `VoiceService` for the catalog + preview, so it can be dropped into any
-/// surface (Agent Builder today, a conversation/settings override next)
-/// without depending on an injected environment object being present.
+/// surface (Agent Builder, a conversation's voice override) without depending
+/// on an injected environment object being present.
 ///
-/// Blind-first: each row is ONE button that PICKS the voice, with a rotor
-/// "Preview" action to hear it; the visible speaker button is the sighted
-/// affordance and is hidden from VoiceOver, the same pattern the message row
-/// uses so the Actions rotor never lists a thing twice.
+/// Part 119.1 (Sep 2 2026) — HER DESIGN, after hearing build 262's list:
+/// "a native picker, or multiple of them, that play the voice preview as you
+/// flick through the voices. Like you could have grown men, grown women, kids
+/// and teens, characters. Then because it's a picker, when you hit done that
+/// would be the voice you pick. You could have a picker for the voices under
+/// each category. Something to make it look smaller and cleaner and more
+/// organised."
 ///
-/// July 23 2026 (Kade: "I'd like to have voices loosely categorised... so the
-/// madness and chaos has some form and shape"): sections served by the TTS
-/// proxy (/voices.json `categories`).
+/// So, top to bottom:
+///   1. "Use the character's own voice" — a switch (conversation surface) or
+///      "No specific voice" (builder). On = the pickers fold away.
+///   2. WHO — a segmented control: Women · Men · Kids and teens · Characters.
+///   3. KIND — a wheel of that group's categories from the proxy ("bright and
+///      high, young" … "from abroad"). Hidden when the group has one kind.
+///   4. VOICE — a wheel of that category's voices. **Flicking it plays the
+///      quick preview of the voice you land on** (debounced, so a fast spin
+///      does not stack hellos). VoiceOver: the wheel is adjustable — swipe up
+///      or down, hear the label, then hear the voice.
+///   5. One sentence about the voice under the wheel, and a Play button for
+///      the full audition (also on the rotor).
+///   Done commits whatever the wheel shows. Cancel leaves the pick alone.
 ///
-/// Part 119 (Sep 2 2026) — catch-up to the described catalog (Part 118):
-///   * CATEGORY FIRST, her ask, the web builder is the spec: one "Category"
-///     row at the top (23 described categories with counts, "All voices"
-///     last), then the list for that category. Opens on the category that
-///     holds the current pick, so the checkmark is on the first screen.
-///   * A pick stored in an OLD spelling ("Voice 69", "Voice 340 (Beta)")
-///     keeps its checkmark: the proxy's `renames` map says which described
-///     label it became. Nothing is rewritten until she picks again — the old
-///     spelling still speaks, the proxy resolves it forever.
-///   * Each row carries the proxy's one-sentence `describe` as its VoiceOver
-///     hint and as a second line for sighted eyes; search matches it too, so
-///     "husky" or "storyteller" finds voices.
-///   Fail-soft throughout: if /voices.json misses, the flat list renders
-///   exactly as before, no category row. Searching always searches the WHOLE
-///   catalog flat -- sections are a browsing aid, not a filter.
+/// The search field is still there: type "husky" or "British" and the wheels
+/// give way to a flat list of matches across every category (the descriptions
+/// are searched too); tap one to pick it.
+///
+/// An old pick ("Voice 69") opens the wheels on the described label it became
+/// (the proxy's `renames`); nothing is written back until Done. Fail-soft: no
+/// catalog → one wheel of every voice in served order.
+///
+/// Spoken labels: the catalog writes "smooth grown man · cleat". VoiceOver
+/// read the middle dot as "dot" (her note on 262), so every label this view
+/// SHOWS or SPEAKS uses a comma instead. The stored value keeps the dot.
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
     /// Part 116 (build 260, proposal 6): the character's own quotable lines.
     /// Non-empty = previews read one of THESE (a different one each play)
-    /// instead of the generic pooled script, so the voice is heard as "your
-    /// agent's voice" — her words for why the long script fell short.
+    /// instead of the generic pooled script.
     let agentLines: [String]
     @State private var lastAgentLine: String?
     /// Build 261: what the empty pick means on THIS surface. In a
     /// conversation it is "the character's own voice" (clear my override);
-    /// in the builder it is "no specific voice". nil = do not offer a row.
+    /// in the builder it is "no specific voice". nil = do not offer it.
     let defaultLabel: String?
-    /// Build 261: the last eight voices you auditioned, newest first, so
-    /// comparing across hundreds stops being a memory test.
-    @State private var recentlyHeard: [String] = RecentVoices.ids
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var voice: VoiceService
@@ -60,21 +64,34 @@ struct VoicePickerView: View {
     @State private var loadFailed = false
     @State private var search = ""
     @State private var previewing: String?
-    /// The category she chose this open. nil = not chosen yet, so the picker
-    /// derives one (the current pick's category, else the first).
-    @State private var chosenCategory: String?
+    @State private var previewTask: Task<Void, Never>?
 
-    /// One picker section. `name == nil` means "render flat, no header".
-    struct VoiceGroup: Hashable {
-        let name: String?
+    // The wheels.
+    @State private var useDefault = false
+    @State private var group: String = ""
+    @State private var kind: String = ""
+    @State private var wheelVoice: String = ""
+    /// True while the wheels are being set from the stored pick, so the seed
+    /// does not play a preview or count as a change.
+    @State private var seeding = true
+    /// She moved something. Done writes only if this is true (or the switch
+    /// moved), so opening and closing the sheet never picks a voice for her.
+    @State private var touched = false
+
+    struct Kind: Hashable {
+        let name: String        // the proxy's full category name
+        let short: String       // what the wheel shows: the name without its group
         let voices: [String]
     }
+    struct Group: Hashable {
+        let name: String
+        let kinds: [Kind]
+    }
 
-    /// The "All voices" choice in the category row. Last, as on the web.
-    private static let allCategories = "__all__"
     /// Voices the served list carries that no category claims (a voice added
     /// after the last catalog build). Never hidden — they get their own group.
-    private static let moreCategory = "Not yet described"
+    private static let moreGroup = "More"
+    private static let groupOrder = ["Women", "Men", "Kids and teens", "Characters"]
 
     init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil) {
         self.apiClient = apiClient
@@ -86,9 +103,9 @@ struct VoicePickerView: View {
 
     /// Mirror of the web builder's `extractAgentLines` (fork,
     /// AgentVoicePicker.tsx) so both surfaces pick the same kinds of lines:
-    /// quoted spans 25–220 chars from the persona first (example exchanges
-    /// are almost always in quotes), then sentences from the description.
-    /// Anything that looks like a template, tag, or link is skipped.
+    /// quoted spans 25–220 chars from the persona first, then sentences from
+    /// the description. Anything that looks like a template, tag, or link is
+    /// skipped.
     static func extractAgentLines(instructions: String?, description: String?) -> [String] {
         var out: [String] = []
         var seen = Set<String>()
@@ -125,61 +142,65 @@ struct VoicePickerView: View {
         guard let first = pool.randomElement() else { return nil }
         lastAgentLine = first
         guard long, agentLines.count > 1 else { return first }
-        // the long audition strings up to three different lines
         let rest = agentLines.filter { $0 != first }.shuffled().prefix(2)
         return ([first] + rest).joined(separator: " ")
     }
 
-    // MARK: - Selection
+    // MARK: - Labels
 
-    /// The stored pick mapped onto the served list (old spelling -> described
+    /// "smooth grown man · cleat" → "smooth grown man, cleat". What is shown
+    /// and what VoiceOver says; the stored value keeps the dot.
+    static func spoken(_ label: String) -> String {
+        label.replacingOccurrences(of: " · ", with: ", ")
+    }
+
+    /// The stored pick mapped onto the served list (old spelling → described
     /// label). nil when nothing is picked or the pick is unknown to the list.
     private var current: String? {
         catalog.normalize(selection, in: voices)
     }
 
-    /// Selection match, tolerant of a stored old spelling: "Voice 69" checks
-    /// the described row it became; "Voice 340 (Beta)" checks "Voice 340".
-    private func isSelected(_ v: String) -> Bool {
-        v == current
-    }
+    // MARK: - Groups and kinds
 
-    // MARK: - Categories
-
-    /// The served categories, each trimmed to voices the list actually has,
-    /// plus a trailing group for anything no category claims.
-    private var groups: [VoiceGroup] {
-        guard !catalog.categories.isEmpty else { return [] }
+    /// Her four groups, each holding the proxy's categories that start with
+    /// its name, plus "More" for anything the list carries that no category
+    /// claims. No catalog → one group, one kind, every voice in served order.
+    private var groups: [Group] {
         let present = Set(voices)
+        guard !catalog.categories.isEmpty else {
+            return [Group(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
+        }
         var seen = Set<String>()
-        var out: [VoiceGroup] = []
+        var byGroup: [String: [Kind]] = [:]
         for c in catalog.categories {
             let vs = c.voices.filter { present.contains($0) && !seen.contains($0) }
             vs.forEach { seen.insert($0) }
-            if !vs.isEmpty { out.append(VoiceGroup(name: c.name, voices: vs)) }
+            guard !vs.isEmpty else { continue }
+            let g = Self.groupOrder.first { c.name == $0 || c.name.hasPrefix($0 + ",") || c.name.hasPrefix($0 + " ") } ?? Self.moreGroup
+            var short = c.name
+            if short.hasPrefix(g + ", ") { short = String(short.dropFirst(g.count + 2)) }
+            byGroup[g, default: []].append(Kind(name: c.name, short: short, voices: vs))
         }
         let rest = voices.filter { !seen.contains($0) }
         if !rest.isEmpty {
-            out.append(VoiceGroup(name: Self.moreCategory, voices: rest))
+            byGroup[Self.moreGroup, default: []].append(Kind(name: "Not yet described", short: "Not yet described", voices: rest))
+        }
+        var out: [Group] = []
+        for g in Self.groupOrder + [Self.moreGroup] {
+            if let ks = byGroup[g], !ks.isEmpty { out.append(Group(name: g, kinds: ks)) }
         }
         return out
     }
 
-    /// Which category the list is showing: her choice this open, else the
-    /// one holding the current pick, else the first served category.
-    private var activeCategory: String {
-        if let chosenCategory { return chosenCategory }
-        if let current, let g = groups.first(where: { $0.voices.contains(current) })?.name { return g }
-        return groups.first?.name ?? Self.allCategories
-    }
+    private var activeGroup: Group? { groups.first { $0.name == group } ?? groups.first }
+    private var activeKind: Kind? { activeGroup?.kinds.first { $0.name == kind } ?? activeGroup?.kinds.first }
+    private var wheelVoices: [String] { activeKind?.voices ?? [] }
 
     private var isSearching: Bool {
         !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Whole-catalog search: label OR the proxy's description ("husky",
-    /// "British", "storyteller"). Served order, no numeric sort -- the
-    /// described list is already in category order.
+    /// Whole-catalog search: label OR the proxy's description.
     private var searched: [String] {
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return voices }
@@ -189,22 +210,19 @@ struct VoicePickerView: View {
         }
     }
 
-    /// Sections for the current view state.
-    ///   searching            -> one flat group of matches across the catalog
-    ///   no categories served -> one flat group (the pre-July behaviour)
-    ///   "All voices"         -> every category with its header
-    ///   a category           -> that category alone, no header (the row above names it)
-    private var sections: [VoiceGroup] {
-        if isSearching { return [VoiceGroup(name: nil, voices: searched)] }
-        let gs = groups
-        guard !gs.isEmpty else { return [VoiceGroup(name: nil, voices: voices)] }
-        let active = activeCategory
-        if active == Self.allCategories { return gs }
-        if let g = gs.first(where: { $0.name == active }) {
-            return [VoiceGroup(name: nil, voices: g.voices)]
+    /// Put the wheels on a voice: its group, its kind, itself.
+    private func point(at v: String) {
+        for g in groups {
+            for k in g.kinds where k.voices.contains(v) {
+                group = g.name
+                kind = k.name
+                wheelVoice = v
+                return
+            }
         }
-        return gs
     }
+
+    // MARK: - Body
 
     var body: some View {
         NavigationStack {
@@ -220,160 +238,216 @@ struct VoicePickerView: View {
                     } actions: {
                         Button("Try again") { Task { await load() } }
                     }
+                } else if isSearching {
+                    searchResults
                 } else {
-                    List {
-                        if selection.isEmpty {
-                            Text("No voice picked yet — this agent uses its default voice.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        // Build 261 (her ask: "no way to go back to the agent
-                        // default voice"): the way back, first in the list.
-                        if let defaultLabel {
-                            Section {
-                                Button {
-                                    selection = ""
-                                    UIAccessibility.post(notification: .announcement, argument: "\(defaultLabel). Your own pick is cleared.")
-                                    dismiss()
-                                } label: {
-                                    HStack {
-                                        Label(defaultLabel, systemImage: "arrow.uturn.backward")
-                                        if selection.isEmpty {
-                                            Spacer()
-                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(defaultLabel)
-                                .accessibilityValue(selection.isEmpty ? "Selected" : "")
-                                .accessibilityHint("Clears your own voice pick so this character speaks in the voice its creator chose.")
-                            }
-                        }
-                        // Part 119: category first. A pushed list of the 23
-                        // described categories with counts, "All voices" last.
-                        // Hidden while searching -- search is whole-catalog.
-                        if !isSearching, groups.count > 1 {
-                            Section {
-                                Picker(selection: Binding(
-                                    get: { activeCategory },
-                                    set: { chosenCategory = $0 }
-                                )) {
-                                    ForEach(groups, id: \.self) { g in
-                                        Text("\(g.name ?? "") (\(g.voices.count))").tag(g.name ?? "")
-                                    }
-                                    Text("All voices (\(voices.count))").tag(Self.allCategories)
-                                } label: {
-                                    Text("Category")
-                                }
-                                .pickerStyle(.navigationLink)
-                                .accessibilityHint("Opens the list of voice categories. Pick one and the voices below change to that category.")
-                            } footer: {
-                                Text(activeCategory == Self.allCategories
-                                    ? "Every voice, grouped by category."
-                                    : "Showing one category. Search finds voices in every category.")
-                            }
-                        }
-                        if !isSearching, !recentlyHeard.isEmpty {
-                            let recent = recentlyHeard.compactMap { catalog.normalize($0, in: voices) }
-                            if !recent.isEmpty {
-                                Section {
-                                    ForEach(recent, id: \.self) { v in
-                                        voiceRow(v)
-                                    }
-                                } header: {
-                                    Text("Recently heard")
-                                        .accessibilityAddTraits(.isHeader)
-                                } footer: {
-                                    Text("The last few voices you auditioned, newest first.")
-                                }
-                            }
-                        }
-                        ForEach(sections, id: \.self) { group in
-                            if let name = group.name {
-                                Section(name) {
-                                    ForEach(group.voices, id: \.self) { v in
-                                        voiceRow(v)
-                                    }
-                                }
-                            } else {
-                                Section {
-                                    ForEach(group.voices, id: \.self) { v in
-                                        voiceRow(v)
-                                    }
-                                } footer: {
-                                    if isSearching && group.voices.isEmpty {
-                                        Text("No voice matches that. Try a word about the sound — husky, bright, Southern, British, storyteller.")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.plain)
+                    wheels
                 }
             }
-            .searchable(text: $search, prompt: "Search voices")
+            .searchable(text: $search, prompt: "Search voices — husky, British, storyteller")
             .navigationTitle("Choose a voice")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { commit() }
+                        .accessibilityHint(useDefault
+                            ? "Clears your own pick."
+                            : "Picks the voice the wheel is on: \(Self.spoken(wheelVoice)).")
                 }
             }
             .task { await load() }
-            .onDisappear { voice.stopSpeaking() }
+            .onDisappear {
+                previewTask?.cancel()
+                voice.stopSpeaking()
+            }
         }
+    }
+
+    /// The wheels, her design. A plain scroll of controls, not a List, so the
+    /// wheel pickers get their natural height.
+    private var wheels: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let defaultLabel {
+                    Toggle(isOn: $useDefault) {
+                        Label(defaultLabel, systemImage: "arrow.uturn.backward")
+                    }
+                    .accessibilityHint(useDefault
+                        ? "On. This character speaks in the voice its creator chose. Turn off to pick your own."
+                        : "Off. Turn on to clear your own pick.")
+                    .onChange(of: useDefault) { _, on in
+                        if !seeding { touched = true }
+                        if on { previewTask?.cancel(); voice.stopSpeaking(); previewing = nil }
+                    }
+                }
+
+                if !useDefault {
+                    if groups.count > 1 {
+                        Picker("Who", selection: $group) {
+                            ForEach(groups, id: \.name) { g in
+                                Text(g.name).tag(g.name)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Who")
+                        .onChange(of: group) { _, _ in
+                            guard !seeding else { return }
+                            kind = activeGroup?.kinds.first?.name ?? ""
+                            wheelVoice = wheelVoices.first ?? ""
+                        }
+                    }
+
+                    if let g = activeGroup, g.kinds.count > 1 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Kind").font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                            Picker("Kind", selection: $kind) {
+                                ForEach(g.kinds, id: \.name) { k in
+                                    Text("\(k.short) (\(k.voices.count))").tag(k.name)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(height: 110)
+                            .clipped()
+                            .accessibilityLabel("Kind of voice")
+                            .accessibilityHint("Swipe up or down to change the kind. The voice wheel below follows.")
+                            .onChange(of: kind) { _, _ in
+                                guard !seeding else { return }
+                                wheelVoice = wheelVoices.first ?? ""
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Voice").font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Picker("Voice", selection: $wheelVoice) {
+                            ForEach(wheelVoices, id: \.self) { v in
+                                Text(Self.spoken(v)).tag(v)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(height: 170)
+                        .clipped()
+                        .accessibilityLabel("Voice")
+                        .accessibilityHint("Swipe up or down to flick through the voices. Each one says hello as you land on it. Done picks the one you are on.")
+                        .accessibilityActions {
+                            Button(previewing == wheelVoice ? "Stop" : "Play full audition") {
+                                Task { await preview(wheelVoice, long: true) }
+                            }
+                            Button("Hear another sample") {
+                                Task { await preview(wheelVoice, long: true, force: true) }
+                            }
+                        }
+                        .onChange(of: wheelVoice) { _, v in
+                            guard !seeding, !v.isEmpty else { return }
+                            touched = true
+                            // Debounced: a fast spin lands once, then speaks once.
+                            previewTask?.cancel()
+                            previewTask = Task {
+                                try? await Task.sleep(nanoseconds: 350_000_000)
+                                guard !Task.isCancelled else { return }
+                                await preview(v, long: false, force: true)
+                            }
+                        }
+                    }
+
+                    if !wheelVoice.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let about = catalog.describe[wheelVoice] {
+                                Text(about)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("About this voice: \(about)")
+                            }
+                            HStack(spacing: 12) {
+                                Button {
+                                    Task { await preview(wheelVoice, long: true) }
+                                } label: {
+                                    Label(previewing == wheelVoice ? "Stop" : "Play full audition",
+                                          systemImage: previewing == wheelVoice ? "stop.fill" : "speaker.wave.2.fill")
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityHint("Plays the long audition in \(Self.spoken(wheelVoice)).")
+                                if wheelVoice == current {
+                                    Label("Your current voice", systemImage: "checkmark.circle.fill")
+                                        .font(.footnote)
+                                        .foregroundStyle(.tint)
+                                        .accessibilityLabel("This is your current voice.")
+                                }
+                            }
+                        }
+                    }
+                } else if selection.isEmpty {
+                    Text("No voice picked yet — this character uses its default voice.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+        }
+    }
+
+    /// Search: a flat list of matches across every category. Tap picks.
+    private var searchResults: some View {
+        List {
+            Section {
+                ForEach(searched, id: \.self) { v in
+                    voiceRow(v)
+                }
+            } footer: {
+                if searched.isEmpty {
+                    Text("No voice matches that. Try a word about the sound — husky, bright, Southern, British, storyteller.")
+                } else {
+                    Text("\(searched.count) voices. Tap one to pick it; the Preview action on the rotor plays it.")
+                }
+            }
+        }
+        .listStyle(.plain)
     }
 
     private func voiceRow(_ v: String) -> some View {
         let about = catalog.describe[v]
+        let isCurrent = v == current
         return HStack {
             Button {
                 selection = v
-                UIAccessibility.post(notification: .announcement, argument: "\(v) selected.")
+                UIAccessibility.post(notification: .announcement, argument: "\(Self.spoken(v)) selected.")
                 dismiss()
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(v)
+                        Text(Self.spoken(v))
                         if let about {
-                            Text(about)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            Text(about).font(.footnote).foregroundStyle(.secondary)
                         }
                     }
-                    if isSelected(v) {
+                    if isCurrent {
                         Spacer()
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.tint)
+                            // The value below already says it; the symbol's
+                            // own label made 262 say "Selected" twice.
+                            .accessibilityHidden(true)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(v)
-            .accessibilityValue(isSelected(v) ? "Selected" : "")
-            // Part 119: the proxy's one sentence about the sound is the hint,
-            // so a swipe through the list says what each voice IS before
-            // the audition is asked for.
+            .accessibilityLabel(Self.spoken(v))
+            .accessibilityValue(isCurrent ? "Selected" : "")
             .accessibilityHint(about ?? "Picks this voice.")
             .accessibilityActions {
-                // Aug 6 2026 (her premium-native pass): BOTH lengths, named
-                // honestly. Full audition = the steered four-mood monologue
-                // (same one the web builder plays); quick = a two-second
-                // hello for fast browsing.
                 Button(previewing == v ? "Stop preview" : "Play full audition") {
                     Task { await preview(v, long: true) }
                 }
                 Button("Quick preview") {
                     Task { await preview(v, long: false) }
                 }
-                // Build 261: every sample is drawn fresh from the proxy's
-                // bucket, so "another" is simply "again" -- named so a
-                // listener knows it will be different.
                 Button("Hear another sample") {
                     Task { await preview(v, long: true, force: true) }
                 }
@@ -389,18 +463,51 @@ struct VoicePickerView: View {
         }
     }
 
+    // MARK: - Commit
+
+    private func commit() {
+        previewTask?.cancel()
+        voice.stopSpeaking()
+        if useDefault {
+            if !selection.isEmpty || touched {
+                selection = ""
+                UIAccessibility.post(notification: .announcement, argument: "\(defaultLabel ?? "Default voice"). Your own pick is cleared.")
+            }
+        } else if touched, !wheelVoice.isEmpty, wheelVoice != selection {
+            selection = wheelVoice
+            RecentVoices.record(wheelVoice)
+            UIAccessibility.post(notification: .announcement, argument: "\(Self.spoken(wheelVoice)) selected.")
+        }
+        dismiss()
+    }
+
+    // MARK: - Load and preview
+
     private func load() async {
         isLoading = true
         loadFailed = false
-        // Both fetches in flight together: the served list (authorised) and
-        // the public catalog (categories, renames, describe).
         async let listTask = voice.availableVoices()
         async let catalogTask = VoiceCatalog.shared.snapshot()
         let list = await listTask
         voices = list
         loadFailed = list.isEmpty
         catalog = await catalogTask
+        // Seed the wheels from the stored pick, silently.
+        seeding = true
+        useDefault = defaultLabel != nil && selection.isEmpty
+        if let c = current {
+            point(at: c)
+        } else if let last = RecentVoices.ids.compactMap({ catalog.normalize($0, in: voices) }).first {
+            point(at: last)      // the last voice she auditioned, a better start than row one
+        } else {
+            group = groups.first?.name ?? ""
+            kind = activeGroup?.kinds.first?.name ?? ""
+            wheelVoice = wheelVoices.first ?? ""
+        }
         isLoading = false
+        // Let the seeded values settle before onChange starts counting.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        seeding = false
     }
 
     private func preview(_ v: String, long: Bool = true, force: Bool = false) async {
@@ -411,7 +518,6 @@ struct VoicePickerView: View {
         }
         if force { voice.stopSpeaking() }
         RecentVoices.record(v)
-        recentlyHeard = RecentVoices.ids
         previewing = v
         if let sample = nextAgentSample(long: long) {
             await voice.previewVoice(v, sample: sample)
@@ -425,7 +531,8 @@ struct VoicePickerView: View {
 
 
 /// Build 261: the last eight voices auditioned on this device, newest first.
-/// Same shape as `RecentAgents` in AgentPickerView.
+/// Same shape as `RecentAgents` in AgentPickerView. Part 119.1: also what
+/// the wheels open on when nothing is picked yet.
 enum RecentVoices {
     private static let key = "kade.recentVoiceLabels"
     private static let maxEntries = 8
