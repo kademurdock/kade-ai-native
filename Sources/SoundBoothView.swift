@@ -52,6 +52,9 @@ struct SoundBoothView: View {
     @State private var readback = ""
     @State private var voiceLabel = ""
     @State private var mood = ""
+    /// "words" or "brief" — what the text box is holding. Drives the box's own
+    /// label and the single button beneath it.
+    @State private var inputMode = "words"
     /// Every engine setting, keyed by the guide's own key. Text and choice
     /// values are strings, numbers are their text, toggles are "1"/"". One
     /// dictionary, so a setting the guide adds tomorrow needs no new @State.
@@ -146,6 +149,9 @@ struct SoundBoothView: View {
          * second tap can never spend on something she has since edited. Same
          * for a switched engine: the price is different, so the quote is. */
         .onChange(of: script) { _, _ in confirmArmed = false }
+        .onChange(of: inputMode) { _, _ in
+            if let m = currentInput { announce("\(m.boxLabel). \(m.boxHint)") }
+        }
         .onChange(of: engine) { _, e in
             confirmArmed = false
             estimate = nil
@@ -180,6 +186,9 @@ struct SoundBoothView: View {
     // MARK: - Engine (from the guide)
 
     private var currentEngine: SoundBoothGuide.Engine? { guide?.engines[engine] }
+    private var currentInput: SoundBoothGuide.InputMode? {
+        guide?.input?.modes.first { $0.key == inputMode }
+    }
 
     private var engineSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -284,12 +293,34 @@ struct SoundBoothView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("What should it say?").font(.headline).accessibilityAddTraits(.isHeader)
 
+            /* ⭐ THE FIX FOR THE REAL CONFUSION (Part 121.1, her question).
+             * The two buttons were never the problem: ONE BOX MEANT TWO
+             * THINGS. Typing "a bedtime story about a fox" and pressing
+             * "Turn my words into a script" performs those words out loud —
+             * it succeeds, it spends, and by ear nothing announces the
+             * mistake. So the choice sits ABOVE the box, the box's own label
+             * changes with it, and only ONE button exists at a time. */
+            if let input = guide?.input {
+                Text(input.question).font(.subheadline.bold())
+                Picker(input.question, selection: $inputMode) {
+                    ForEach(input.modes) { m in Text(m.label).tag(m.key) }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel(input.question)
+                .accessibilityHint(currentInput?.boxHint ?? "")
+            }
+
+            if let m = currentInput {
+                Text(m.boxLabel).font(.subheadline)
+                Text(m.boxHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+
             TextEditor(text: $text)
                 .frame(minHeight: 140)
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
-                .accessibilityLabel("What should it say")
-                .accessibilityHint("Type the words you want performed and use Turn my words into a script. Or describe a piece and use Write me one.")
+                .accessibilityLabel(currentInput?.boxLabel ?? "What should it say")
+                .accessibilityHint(currentInput?.boxHint ?? "Type the words you want performed.")
 
             if let g = currentEngine {
                 DisclosureGroup(isExpanded: $showHowTo) {
@@ -340,23 +371,13 @@ struct SoundBoothView: View {
 
             Button {
                 KadeHaptics.press()
-                Task { await makeScript(kind: "format") }
+                Task { await makeScript(kind: inputMode == "brief" ? "write" : "format") }
             } label: {
-                Text("Turn my words into a script").frame(maxWidth: .infinity)
+                Text(currentInput?.button ?? "Turn my words into a script").frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeCardButtonStyle())
             .disabled(isWriting || isRendering)
-            .accessibilityHint("Keeps every word you wrote and only adds the structure the engine needs.")
-
-            Button {
-                KadeHaptics.press()
-                Task { await makeScript(kind: "write") }
-            } label: {
-                Text("Write me one").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .disabled(isWriting || isRendering)
-            .accessibilityHint("Writes a whole piece from what you described in the box above.")
+            .accessibilityHint(currentInput?.buttonHint ?? "")
         }
     }
 
@@ -771,6 +792,9 @@ struct SoundBoothView: View {
             estimate = r.estimate
             confirmArmed = false
             var parts: [String] = []
+            /* The mismatch question speaks FIRST — it is the one thing that
+             * can make everything after it wrong. */
+            if let mm = r.mismatch, !mm.isEmpty { parts.append(mm) }
             if let rb = r.readback, !rb.isEmpty { parts.append(rb) }
             if let sp = r.estimate?.spoken { parts.append(sp) }
             if let p = r.problem { parts.append("One thing to fix first: \(p)") }

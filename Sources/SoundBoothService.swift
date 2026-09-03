@@ -120,6 +120,10 @@ struct SoundBoothScriptResult: Decodable {
     let script: String
     let readback: String?
     let estimate: SoundBoothEstimate?
+    /// Non-nil when the text reads like a DESCRIPTION but was sent to be
+    /// formatted — which would have performed the description out loud. A
+    /// question, not a refusal; spoken before anything else.
+    let mismatch: String?
     /// Non-nil when the script came back structurally wrong. Said out loud
     /// rather than shown, and Render stays available — she may want to fix it
     /// by hand in Advanced.
@@ -161,6 +165,19 @@ struct SoundBoothStatus: Decodable {
 struct SoundBoothGuide: Decodable {
     struct Rule: Decodable, Hashable { let pick: String; let when: String }
     struct Chooser: Decodable { let question: String; let answer: String; let rules: [Rule] }
+    /// What the box is holding, and therefore which button exists. Part 121.1:
+    /// one text box meant two different things depending on which button was
+    /// pressed, and the box could not say which — so the choice moves above it.
+    struct InputMode: Decodable, Identifiable, Hashable {
+        let key: String
+        let label: String
+        let boxLabel: String
+        let boxHint: String
+        let button: String
+        let buttonHint: String
+        var id: String { key }
+    }
+    struct InputChoice: Decodable { let question: String; let modes: [InputMode] }
     struct Setting: Decodable, Identifiable, Hashable {
         let key: String
         let label: String
@@ -208,6 +225,7 @@ struct SoundBoothGuide: Decodable {
         }
     }
     let chooser: Chooser
+    let input: InputChoice?
     let engines: [String: Engine]
 }
 
