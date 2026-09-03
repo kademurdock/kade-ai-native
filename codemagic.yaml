@@ -102,11 +102,14 @@ workflows:
             --scheme "KadeAI" 2>&1 | tee "$CM_BUILD_DIR/build-ipa.log"
           STATUS=$?
           if [ $STATUS -ne 0 ]; then
-            # The cli tool keeps xcodebuild's full output in its own log files;
-            # gather every one written in the last half hour.
-            find "$HOME/Library/Logs" /tmp "$CM_BUILD_DIR" -name '*xcodebuild*.log' -mmin -30 2>/dev/null | while read f; do
-              echo "=== $f ===" >> "$CM_BUILD_DIR/build-ipa.log"; cat "$f" >> "$CM_BUILD_DIR/build-ipa.log"
-            done
+            # The cli tool swallows xcodebuild's output (three builds proved
+            # it: nine lines, no reason). So on failure the archive is run
+            # AGAIN, bare, with the output kept — a signing error surfaces in
+            # the first seconds, so this is cheap when it matters.
+            echo "=== bare xcodebuild archive, for the reason ===" >> "$CM_BUILD_DIR/build-ipa.log"
+            xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -archivePath /tmp/diag.xcarchive archive \
+              COMPILER_INDEX_STORE_ENABLE=NO DEVELOPMENT_TEAM=JQPWZ2RL9P 'CODE_SIGN_IDENTITY=Apple Distribution' CODE_SIGN_STYLE=Manual \
+              2>&1 | tail -n 200 >> "$CM_BUILD_DIR/build-ipa.log"
             grep -m 20 -E '(error:|error :|Provisioning profile|doesn.t (include|support)|entitlement|No profiles|requires a provisioning)' "$CM_BUILD_DIR/build-ipa.log" \
               > "$CM_BUILD_DIR/archive-first-errors.txt" || true
             echo "--- archive first errors ---"
