@@ -68,10 +68,15 @@ workflows:
           # group.com.kademurdock.kadeai assigned) and rerun. Nothing else in
           # the build depends on it — the app itself signs and ships either
           # way, which is why the Sound Booth went out on its own build first.
-          app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
-            --type IOS_APP_STORE \
-            --certificate-key=@file:/tmp/cert_key.pem \
-            --create
+          # PARKED with the target itself (project.yml has the whole story
+          # and the one-minute portal step). Fetching a profile for a target
+          # that is not built is harmless but misleading in the log, and the
+          # day the portal step is done this line and the target come back
+          # together.
+          # app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
+          #   --type IOS_APP_STORE \
+          #   --certificate-key=@file:/tmp/cert_key.pem \
+          #   --create
           keychain add-certificates
           xcode-project use-profiles
       - name: Auto-increment the TestFlight build number (floor 100 for native)
