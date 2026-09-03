@@ -129,7 +129,12 @@ class ShareViewController: SLComposeServiceViewController {
     /// a share that says nothing is indistinguishable from one that failed.
     private func finish(saying message: String, success: Bool) {
         UIAccessibility.post(notification: .announcement, argument: message)
-        let done = { [weak self] in
+        /* Explicitly () -> Void. Inferred, this closure's type is () -> Void?
+         * — `self?.extensionContext?.completeRequest(...)` is an optional
+         * chain, so its result is Void? — and asyncAfter(execute:) then reads
+         * it as a DispatchWorkItem and refuses. Caught by the compile gate on
+         * the first run, for a few cents and no build on her phone. */
+        let done: () -> Void = { [weak self] in
             self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
         }
         if success {
