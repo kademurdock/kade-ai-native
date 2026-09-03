@@ -606,7 +606,8 @@ struct SoundBoothView: View {
             let seedOK = h.engines["seed"]?.configured ?? false
             /* The first thing the screen says is the one-line answer to the
              * question she said people would have. */
-            statusLine = "Ready. " + (h.guide?.chooser.answer ?? "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up").")"
+            let fallback = "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up")."
+            statusLine = "Ready. " + (h.guide?.chooser.answer ?? fallback)
         } catch {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
         }
