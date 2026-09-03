@@ -292,6 +292,8 @@ struct ContentView: View {
                     // Part 112: the broadcast push's deep link — What's New
                     // digests, full text, newest first, including missed ones.
                     AnnouncementsView(apiClient: apiClient)
+                case .soundBooth:
+                    SoundBoothView(apiClient: apiClient)
                 case .myCreations:
                     MyCreationsView(apiClient: apiClient)
                 case .wallOfFame:
@@ -644,6 +646,29 @@ struct ContentView: View {
              * at all, because reading order in a two-column grid and in a
              * stack of pairs is identical. The only difference is that every
              * one of them now exists before VoiceOver comes looking. */
+            /* Part 120 (Sep 3 2026) — THE SOUND BOOTH, and why it is a
+             * full-width button instead of the thirteenth tile.
+             *
+             * She asked for it as "a new tab in the tab bar." This app has
+             * never had a tab bar: session 18 put that exact choice to her
+             * ("grouped sections" over real bottom tabs) and grouped sections
+             * won. So the honest translation of "a tab" here is a
+             * destination that is ONE flick past the section heading rather
+             * than the sixth pair down a grid — a full-width card at the top
+             * of Tools, the shape Settings and Help already use.
+             *
+             * If she wants it higher still, moving it above "Talk" is one
+             * line; Spotter staying the first button in the first section is
+             * the only placement rule that is standing law. */
+            Button { go(.soundBooth) } label: {
+                Label("Sound Booth", systemImage: "mic.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .blue))
+            .accessibilityLabel("The Sound Booth")
+            .accessibilityHint("Write something and have it performed. One actor with real acting on Kade's own machine, or a whole scene with several voices, music and sound effects.")
+
             VStack(spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     toolTile("Transcribe", spoken: "Transcribe a voice memo", icon: "waveform", tint: .purple, hint: "Records what you say and turns it into text you can edit, tidy up and share.", destination: .transcribe)
@@ -1088,6 +1113,11 @@ enum HomeRoute: Identifiable, Hashable {
     case prompts
     case settings
     case alerts
+    /// Part 120 (Sep 3 2026) — the Sound Booth. Her ask was "a new tab in
+    /// the tab bar"; this app has no tab bar, it has a home screen of
+    /// sections, so the equivalent first-class placement is a full-width
+    /// button at the TOP of Tools rather than a tile in the grid.
+    case soundBooth
     case myCreations
     case wallOfFame
     case admin
@@ -1119,6 +1149,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .prompts: return "prompts"
         case .settings: return "settings"
         case .alerts: return "alerts"
+        case .soundBooth: return "soundBooth"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"
