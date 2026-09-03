@@ -87,9 +87,23 @@ workflows:
           agvtool new-version -all $NEXT
       - name: Build signed .ipa
         script: |
+          set -o pipefail
+          # Part 121: the archive's OWN errors, captured. Two failed builds
+          # (266, 267) ended in "Failed to archive" with nothing else the API
+          # could show, and the cause was guessed. Now the first real
+          # xcodebuild error lines land in an artifact the next session can
+          # read — the same doctrine as the compile gate's first-errors.txt.
           xcode-project build-ipa \
             --project "KadeAI.xcodeproj" \
-            --scheme "KadeAI"
+            --scheme "KadeAI" 2>&1 | tee "$CM_BUILD_DIR/build-ipa.log"
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            grep -m 12 -E '(error:|error :|Provisioning profile|doesn.t (include|support)|entitlement)' "$CM_BUILD_DIR/build-ipa.log" \
+              > "$CM_BUILD_DIR/archive-first-errors.txt" || true
+            echo "--- archive first errors ---"
+            cat "$CM_BUILD_DIR/archive-first-errors.txt"
+            exit $STATUS
+          fi
       - name: Simulator screenshots — the App Store tour (blind-friendly loop)
         script: |
           set -e
@@ -145,6 +159,8 @@ workflows:
       - build/ios/ipa/*.ipa
       - tour-*.png
       - asc-issuer.txt
+      - archive-first-errors.txt
+      - build-ipa.log
     publishing:
       app_store_connect:
         auth: integration
