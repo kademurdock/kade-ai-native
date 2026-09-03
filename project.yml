@@ -26,6 +26,25 @@ targets:
       # rides embedded in the app. XcodeGen embeds app-extension targets
       # into the app's PlugIns automatically from this dependency.
       - target: KadeKeyboard
+      # SHARE TO YOUR AGENT — PARKED, ATTEMPT THREE, and the state of the
+      # App ID is now KNOWN rather than assumed. Part 121.1: she assigned the
+      # group and saved, and the build failed DIFFERENTLY —
+      #   "doesn't include the App Groups capability"
+      # where before it was "doesn't support the group". The API confirmed it:
+      # the capability was GONE from com.kademurdock.kadeai.share entirely.
+      # Saving the App ID with the App Groups box unticked REMOVED the
+      # capability the API had added, so the save undid the half that worked
+      # and never added the half that was missing.
+      #
+      # The capability has been re-added by API and the stale profiles
+      # deleted, so the box should already read as ticked when the page opens.
+      # What remains is the ONE thing no API can do:
+      #   developer.apple.com/account → Identifiers → App IDs →
+      #   com.kademurdock.kadeai.share → App Groups: press EDIT beside it,
+      #   tick group.com.kademurdock.kadeai, Continue — and only THEN Save.
+      # Saving before the group is chosen is what has now failed twice.
+      #
+      # (Old note kept below for the API findings, which still stand.)
       # SHARE TO YOUR AGENT — STILL PARKED, and Part 121 finally has the
       # ARCHIVE'S OWN WORDS instead of a guess:
       #
@@ -55,7 +74,7 @@ targets:
       #
       # Commented, not deleted: an unsignable target fails EVERY build, not
       # just this feature's. Full tree: branch `share-extension-parked`.
-      - target: KadeShare
+      # - target: KadeShare
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
@@ -223,45 +242,45 @@ targets:
   # keyboard already uses and which is already registered on the portal, so
   # this target needs no new capability — only its own bundle id and profile
   # (codemagic.yaml fetches one the same way it does for the keyboard).
-  KadeShare:
-    type: app-extension
-    platform: iOS
-    sources:
-      - ShareExtension
-      # The store is ONE file shared by both processes on purpose: the
-      # container path, the key, the JSON shape and the staleness rule are
-      # the whole contract between them, and a second copy is how two
-      # processes start disagreeing about where the file went.
-      - path: Sources/KadeShareStore.swift
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
-        MARKETING_VERSION: "2.0"
-        CURRENT_PROJECT_VERSION: 100
-        DEVELOPMENT_TEAM: JQPWZ2RL9P
-        TARGETED_DEVICE_FAMILY: "1"
-        SWIFT_VERSION: "5.9"
-        CODE_SIGN_STYLE: Manual
-    entitlements:
-      path: KadeShare.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.com.kademurdock.kadeai
-    info:
-      path: ShareExtension/Info.plist
-      properties:
-        CFBundleDisplayName: Send to Kade-AI
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.share-services
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
-          NSExtensionAttributes:
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsImageWithMaxCount: 1
-              NSExtensionActivationSupportsMovieWithMaxCount: 1
-              NSExtensionActivationSupportsFileWithMaxCount: 1
-              NSExtensionActivationSupportsText: true
+#  KadeShare:
+#    type: app-extension
+#    platform: iOS
+#    sources:
+#      - ShareExtension
+#      # The store is ONE file shared by both processes on purpose: the
+#      # container path, the key, the JSON shape and the staleness rule are
+#      # the whole contract between them, and a second copy is how two
+#      # processes start disagreeing about where the file went.
+#      - path: Sources/KadeShareStore.swift
+#    settings:
+#      base:
+#        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
+#        MARKETING_VERSION: "2.0"
+#        CURRENT_PROJECT_VERSION: 100
+#        DEVELOPMENT_TEAM: JQPWZ2RL9P
+#        TARGETED_DEVICE_FAMILY: "1"
+#        SWIFT_VERSION: "5.9"
+#        CODE_SIGN_STYLE: Manual
+#    entitlements:
+#      path: KadeShare.entitlements
+#      properties:
+#        com.apple.security.application-groups:
+#          - group.com.kademurdock.kadeai
+#    info:
+#      path: ShareExtension/Info.plist
+#      properties:
+#        CFBundleDisplayName: Send to Kade-AI
+#        CFBundleShortVersionString: $(MARKETING_VERSION)
+#        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+#        NSExtension:
+#          NSExtensionPointIdentifier: com.apple.share-services
+#          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+#          NSExtensionAttributes:
+#            NSExtensionActivationRule:
+#              NSExtensionActivationSupportsImageWithMaxCount: 1
+#              NSExtensionActivationSupportsMovieWithMaxCount: 1
+#              NSExtensionActivationSupportsFileWithMaxCount: 1
+#              NSExtensionActivationSupportsText: true
 
   # GAP 3 (Aug 2026) — Apple's performAccessibilityAudit, run in CI on the
   # Codemagic Mac. Simulator only, never signed, never published; see
