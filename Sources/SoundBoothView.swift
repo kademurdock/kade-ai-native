@@ -51,28 +51,25 @@ struct SoundBoothView: View {
     @State private var script = ""
     @State private var readback = ""
     @State private var voiceLabel = ""
-    @State private var voiceDescription = ""
-    @State private var gender = "female"
     @State private var mood = ""
-    @State private var referenceURL = ""
-    @State private var referenceName = ""
-
-    // Advanced
-    @State private var scene = ""
-    @State private var shot = ""
-    @State private var paceText = ""
-    @State private var seedText = ""
-    @State private var backgroundSFX = false
-    @State private var studioQuality = false
+    /// Every engine setting, keyed by the guide's own key. Text and choice
+    /// values are strings, numbers are their text, toggles are "1"/"". One
+    /// dictionary, so a setting the guide adds tomorrow needs no new @State.
+    @State private var values: [String: String] = [:]
+    /// Imported clips, in order. Seed uses up to three (@Audio1–3); Scenema
+    /// uses the first.
+    @State private var clips: [(url: String, name: String)] = []
 
     // Live state
     @State private var health: SoundBoothHealth?
+    @State private var guide: SoundBoothGuide?
     @State private var projects: [SoundBoothProject] = []
     @State private var estimate: SoundBoothEstimate?
     @State private var statusLine = "Loading the Sound Booth…"
     @State private var isWriting = false
     @State private var isRendering = false
     @State private var isImporting = false
+    @State private var isSuggesting = false
     @State private var confirmArmed = false
     @State private var currentProjectId: String?
     @State private var currentJobId: String?
@@ -80,6 +77,8 @@ struct SoundBoothView: View {
     @State private var savingTakeId: String?
     @State private var activeSheet: BoothSheet?
     @State private var showFileImporter = false
+    @State private var showChooser = false
+    @State private var showHowTo = false
     @State private var catalog: VoiceCatalog.Snapshot = .empty
 
     @AccessibilityFocusState private var focusStatus: Bool
@@ -147,7 +146,13 @@ struct SoundBoothView: View {
          * second tap can never spend on something she has since edited. Same
          * for a switched engine: the price is different, so the quote is. */
         .onChange(of: script) { _, _ in confirmArmed = false }
-        .onChange(of: engine) { _, _ in confirmArmed = false; estimate = nil }
+        .onChange(of: engine) { _, e in
+            confirmArmed = false
+            estimate = nil
+            if let g = guide?.engines[e] {
+                announce("\(g.name). \(g.tagline) \(g.where)")
+            }
+        }
         .onAppear { Task { await load() } }
         .onDisappear { pollTask?.cancel(); pollTask = nil }
     }
@@ -172,28 +177,82 @@ struct SoundBoothView: View {
         .accessibilityFocused($focusStatus)
     }
 
-    // MARK: - Engine
+    // MARK: - Engine (from the guide)
+
+    private var currentEngine: SoundBoothGuide.Engine? { guide?.engines[engine] }
 
     private var engineSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Engine").font(.headline).accessibilityAddTraits(.isHeader)
-            Picker("Engine", selection: $engine) {
-                Text("Scenema").tag("scenema")
-                Text("Seed Audio").tag("seed")
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Engine")
-            .accessibilityHint(engineHint)
-            Text(engineHint).font(.footnote).foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-        }
-    }
 
-    private var engineHint: String {
-        if engine == "seed" {
-            return "Seed Audio: a whole scene in one pass — up to three voices, music, sound effects, ambience. Back in seconds, about nineteen cents a minute. It is made on fal's servers, so the audio leaves the house."
+            if let guide {
+                /* Two DESCRIBED cards instead of a two-word segmented control.
+                 * Her ask: "people will not know the difference." Each card
+                 * says what it is, where it runs, what it costs, what it is
+                 * for and not for — as one spoken element, then a button. */
+                ForEach(["scenema", "seed"], id: \.self) { key in
+                    if let g = guide.engines[key] {
+                        Button {
+                            KadeHaptics.press()
+                            engine = key
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("\(g.name) — \(g.tagline)").font(.subheadline.bold())
+                                    Spacer()
+                                    if engine == key {
+                                        Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
+                                    }
+                                }
+                                Text(g.where).font(.caption)
+                                Text(g.cost).font(.caption)
+                                Text("Best for: \(g.bestFor.joined(separator: "; ")).").font(.caption)
+                                Text("Not for: \(g.notFor.joined(separator: "; ")).").font(.caption).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(engine == key ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.08)))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(engine == key ? Color.accentColor : Color.clear, lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(g.spoken)
+                        .accessibilityValue(engine == key ? "Selected" : "")
+                        .accessibilityHint(engine == key ? "This is the engine you are using." : "Double tap to use this engine.")
+                    }
+                }
+
+                DisclosureGroup(isExpanded: $showChooser) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(guide.chooser.answer).font(.footnote)
+                        ForEach(guide.chooser.rules, id: \.self) { r in
+                            Text("\(r.pick == "seed" ? "Seed Audio" : "Scenema") when \(r.when).")
+                                .font(.footnote)
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Text(guide.chooser.question).font(.subheadline.bold())
+                }
+                .accessibilityHint("Opens a short explanation of when to use which engine.")
+
+                Button {
+                    Task { await suggestEngine() }
+                } label: {
+                    HStack {
+                        Label("Pick one for me from what I typed", systemImage: "wand.and.stars")
+                        if isSuggesting { ProgressView().accessibilityHidden(true) }
+                    }
+                }
+                .disabled(isSuggesting)
+                .accessibilityHint("Reads what is in the box and says which engine fits, and why. Free.")
+            } else {
+                Picker("Engine", selection: $engine) {
+                    Text("Scenema").tag("scenema")
+                    Text("Seed Audio").tag("seed")
+                }
+                .pickerStyle(.segmented)
+            }
         }
-        return "Scenema: one actor performing, any length, real stage directions, on Kade's own graphics card — nothing leaves the house. It is queued, so it takes about a minute and a half per minute of audio, and about two cents a minute."
     }
 
     // MARK: - Mode
@@ -209,11 +268,17 @@ struct SoundBoothView: View {
             .accessibilityLabel("Mode")
             .accessibilityHint(mode == "easy"
                 ? "Easy. Type what you want said, pick a voice and a mood, and the script desk shapes it."
-                : "Advanced. Every field the engine has, and the raw script to edit yourself.")
+                : "Advanced. Every setting this engine has, and the raw script to edit yourself.")
         }
     }
 
     // MARK: - Writing
+
+    /// Which settings Easy shows. Everything else waits behind Advanced.
+    private static let easyKeys: [String: [String]] = [
+        "scenema": ["voice_description", "gender", "reference_voice_url"],
+        "seed": ["voice", "audio_urls"],
+    ]
 
     private var writingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -224,39 +289,45 @@ struct SoundBoothView: View {
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel("What should it say")
-                .accessibilityHint("Type the words you want performed, or describe a piece and use Write me one.")
+                .accessibilityHint("Type the words you want performed and use Turn my words into a script. Or describe a piece and use Write me one.")
 
-            Button {
-                KadeHaptics.press()
-                activeSheet = .voicePicker
-            } label: {
-                HStack {
-                    Text("Voice")
-                    Spacer()
-                    Text(voiceLabel.isEmpty ? "Not picked" : catalog.name(of: voiceLabel))
-                        .foregroundStyle(.secondary)
+            if let g = currentEngine {
+                DisclosureGroup(isExpanded: $showHowTo) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in
+                            Text(tip).font(.footnote)
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Text("How to write for \(g.name)").font(.subheadline.bold())
+                }
+                .accessibilityHint("Opens the tips for getting a good result from this engine.")
+            }
+
+            if engine == "scenema" {
+                Button {
+                    KadeHaptics.press()
+                    activeSheet = .voicePicker
+                } label: {
+                    HStack {
+                        Text("Voice from the wheel")
+                        Spacer()
+                        Text(voiceLabel.isEmpty ? "Not picked" : catalog.name(of: voiceLabel))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("Voice from the wheel, \(voiceLabel.isEmpty ? "not picked" : catalog.name(of: voiceLabel))")
+                .accessibilityHint("Opens the voice wheel. The voice you land on is described in words for the engine, into the Describe the voice box below.")
+            }
+
+            if let g = currentEngine {
+                let keys = Self.easyKeys[engine] ?? []
+                let shown = g.settings.filter { mode == "advanced" || keys.contains($0.key) }
+                ForEach(shown) { setting in
+                    settingRow(setting)
                 }
             }
-            .accessibilityLabel("Voice, \(voiceLabel.isEmpty ? "not picked" : catalog.name(of: voiceLabel))")
-            .accessibilityHint("Opens the voice wheel. The voice you land on is described in words for the engine — a clip you import beats a description for a specific person.")
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Or describe a voice in words").font(.subheadline)
-                TextField("Woman in her sixties, Ozarks, warm and a little gravelly.", text: $voiceDescription, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...3)
-                    .accessibilityLabel("Describe a voice in words")
-                    .accessibilityHint("Age, sex, build, accent, texture, manner. A description misses the age more often than it hits it, so import a clip when you want a specific person.")
-            }
-
-            Picker("Voice sex", selection: $gender) {
-                Text("Female").tag("female")
-                Text("Male").tag("male")
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Voice sex")
-
-            importRow
 
             if let moods = health?.moods, !moods.isEmpty {
                 Picker("Mood", selection: $mood) {
@@ -267,19 +338,15 @@ struct SoundBoothView: View {
                 .accessibilityHint("Becomes a note to the actor between your sentences — what the speaker is doing and feeling, never how the recording should sound.")
             }
 
-            if mode == "advanced" { advancedFields }
-
-            HStack(spacing: 12) {
-                Button {
-                    KadeHaptics.press()
-                    Task { await makeScript(kind: "format") }
-                } label: {
-                    Text("Turn my words into a script").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(KadeCardButtonStyle())
-                .disabled(isWriting || isRendering)
-                .accessibilityHint("Keeps every word you wrote and only adds the structure the engine needs.")
+            Button {
+                KadeHaptics.press()
+                Task { await makeScript(kind: "format") }
+            } label: {
+                Text("Turn my words into a script").frame(maxWidth: .infinity)
             }
+            .buttonStyle(KadeCardButtonStyle())
+            .disabled(isWriting || isRendering)
+            .accessibilityHint("Keeps every word you wrote and only adds the structure the engine needs.")
 
             Button {
                 KadeHaptics.press()
@@ -293,74 +360,94 @@ struct SoundBoothView: View {
         }
     }
 
-    private var importRow: some View {
+    /// One setting, rendered from the guide. The hint is the accessibility
+    /// hint AND the visible footnote, so what a sighted person reads and what
+    /// VoiceOver says are the same sentence.
+    @ViewBuilder
+    private func settingRow(_ st: SoundBoothGuide.Setting) -> some View {
+        switch st.kind {
+        case "text":
+            VStack(alignment: .leading, spacing: 4) {
+                Text(st.label).font(.subheadline)
+                TextField(st.hint, text: binding(st.key), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...3)
+                    .accessibilityLabel(st.label)
+                    .accessibilityHint(st.hint)
+                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        case "choice":
+            VStack(alignment: .leading, spacing: 4) {
+                Picker(st.label, selection: binding(st.key, fallback: st.defaultString ?? "")) {
+                    ForEach(st.options ?? [], id: \.self) { o in
+                        Text(o.isEmpty ? "None" : o.replacingOccurrences(of: "_", with: " ").capitalized).tag(o)
+                    }
+                }
+                .accessibilityLabel(st.label)
+                .accessibilityHint(st.hint)
+                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        case "toggle":
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(st.label, isOn: Binding(
+                    get: { values[st.key] == "1" },
+                    set: { values[st.key] = $0 ? "1" : "" }
+                ))
+                .accessibilityHint(st.hint)
+                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        case "number":
+            VStack(alignment: .leading, spacing: 4) {
+                Text(st.label).font(.subheadline)
+                TextField(st.defaultNumber.map { "normal is \($0.formatted())" } ?? "leave empty", text: binding(st.key))
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(st.label)
+                    .accessibilityHint(st.hint)
+                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        case "clip":
+            importRow(setting: st)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func binding(_ key: String, fallback: String = "") -> Binding<String> {
+        Binding(get: { values[key] ?? fallback }, set: { values[key] = $0 })
+    }
+
+    private func importRow(setting st: SoundBoothGuide.Setting) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
                 KadeHaptics.press()
                 showFileImporter = true
             } label: {
                 HStack {
-                    Label("Import a clip to clone", systemImage: "square.and.arrow.down")
+                    Label(st.label, systemImage: "square.and.arrow.down")
                     Spacer()
                     if isImporting { ProgressView().accessibilityHidden(true) }
                 }
             }
-            .disabled(isImporting)
-            .accessibilityLabel(referenceName.isEmpty ? "Import a clip to clone" : "Imported clip, \(referenceName). Double tap to pick a different one.")
-            .accessibilityHint("Opens Files. Ten to twenty seconds of somebody talking is enough, and it is the reliable way to get a specific person's voice.")
+            .disabled(isImporting || clips.count >= st.clipMax)
+            .accessibilityLabel(clips.isEmpty ? st.label : "\(st.label). \(clips.count) of \(st.clipMax) imported.")
+            .accessibilityHint(st.hint + " Opens Files.")
+            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
-            if !referenceName.isEmpty {
+            ForEach(Array(clips.prefix(st.clipMax).enumerated()), id: \.offset) { i, clip in
                 HStack {
-                    Text("Cloning: \(referenceName)").font(.footnote).foregroundStyle(.secondary)
+                    Text("\(st.clipMax > 1 ? "@Audio\(i + 1): " : "Cloning: ")\(clip.name)")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Button("Remove") {
-                        referenceURL = ""
-                        referenceName = ""
-                        announce("Reference clip removed.")
+                        clips.remove(at: i)
+                        announce("Clip removed.")
                     }
                     .font(.footnote)
-                    .accessibilityLabel("Remove the imported clip")
+                    .accessibilityLabel("Remove \(clip.name)")
                 }
             }
         }
-    }
-
-    private var advancedFields: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Engine settings").font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
-
-            TextField("Scene — a kitchen at dawn, rain outside", text: $scene)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Scene")
-                .accessibilityHint("Where this happens. Sound from the scene is only added if you turn on scene sound below.")
-
-            Picker("Shot", selection: $shot) {
-                Text("Not set").tag("")
-                Text("Close up").tag("closeup")
-                Text("Wide").tag("wide")
-                Text("Scene").tag("scene")
-            }
-            .accessibilityLabel("Shot")
-            .accessibilityHint("How far away the listener is. Wide and Scene put the voice in a room instead of at your ear.")
-
-            TextField("Pace — 1.0 is normal", text: $paceText)
-                .keyboardType(.decimalPad)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Pace")
-                .accessibilityHint("Between zero point five and three. One is normal speed.")
-
-            TextField("Seed — leave empty for a new take", text: $seedText)
-                .keyboardType(.numberPad)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Seed")
-                .accessibilityHint("The same seed with the same script gives the same take again. Leave it empty for something new each time.")
-
-            Toggle("Scene sound around the voice", isOn: $backgroundSFX)
-                .accessibilityHint("Adds the room and the weather around the speaker instead of a clean voice on its own.")
-            Toggle("Studio quality", isOn: $studioQuality)
-                .accessibilityHint("Forty-eight kilohertz, a bigger file, and the same price.")
-        }
-        .padding(.vertical, 4)
     }
 
     // MARK: - Script
@@ -384,9 +471,21 @@ struct SoundBoothView: View {
                     .accessibilityLabel("What you will hear. \(readback)")
             }
 
+            if engine == "scenema" {
+                Button {
+                    KadeHaptics.press()
+                    Task { await renderTapped(preview: true) }
+                } label: {
+                    Text("Hear this voice first — 15 seconds, about a penny").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                .disabled(isRendering || currentJobId != nil)
+                .accessibilityHint("Renders one short sample line in the voice you described, so you can hear the actor before spending on the whole piece.")
+            }
+
             Button {
                 KadeHaptics.press()
-                Task { await renderTapped() }
+                Task { await renderTapped(preview: false) }
             } label: {
                 Text(confirmArmed ? "Render — confirm" : "Render").frame(maxWidth: .infinity)
             }
@@ -502,9 +601,12 @@ struct SoundBoothView: View {
         do {
             let h = try await service.health()
             health = h
+            guide = h.guide
             let scenemaOK = h.engines["scenema"]?.configured ?? false
             let seedOK = h.engines["seed"]?.configured ?? false
-            statusLine = "Ready. Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up")."
+            /* The first thing the screen says is the one-line answer to the
+             * question she said people would have. */
+            statusLine = "Ready. " + (h.guide?.chooser.answer ?? "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up").")"
         } catch {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
         }
@@ -539,7 +641,7 @@ struct SoundBoothView: View {
          * second vocabulary. Fall back to the label with the middle dot
          * spoken as a comma. */
         let described = catalog.describe[label] ?? label.replacingOccurrences(of: " · ", with: ", ")
-        voiceDescription = described
+        values["voice_description"] = described
         announce("Voice set to \(catalog.name(of: label)). \(described)")
     }
 
@@ -567,11 +669,10 @@ struct SoundBoothView: View {
                     fileName: url.lastPathComponent,
                     mimeType: mimeType(for: url)
                 )
-                referenceURL = imported.url
-                referenceName = imported.name
+                clips.append((url: imported.url, name: imported.name))
                 Earcons.shared.play(.actionDone)
                 KadeHaptics.success()
-                announce(imported.spoken)
+                announce(imported.spoken + (engine == "seed" ? " It is @Audio\(clips.count). Name it in the script." : ""))
             } catch {
                 Earcons.shared.play(.error)
                 announce((error as? LocalizedError)?.errorDescription ?? "Couldn't read that file. \(error.localizedDescription)")
@@ -595,6 +696,53 @@ struct SoundBoothView: View {
         }
     }
 
+    /// Everything the guide's settings hold, typed for the wire. Toggles go
+    /// only when on; numbers only when they parse and sit in range; empty
+    /// strings are dropped. The guide's own min/max are the rails, so a value
+    /// the engine cannot take never leaves the phone.
+    private func collectedSettings() -> [String: Any] {
+        var out: [String: Any] = [:]
+        guard let g = currentEngine else { return out }
+        for st in g.settings {
+            let raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            switch st.kind {
+            case "toggle":
+                if raw == "1" { out[st.key] = st.key == "audio_quality" ? "high" : true }
+            case "number":
+                guard let n = Double(raw) else { continue }
+                if let lo = st.min, n < lo { continue }
+                if let hi = st.max, n > hi { continue }
+                out[st.key] = (st.key == "seed" || st.key == "pitch") ? Int(n.rounded()) : n
+            case "clip":
+                continue
+            default:
+                if !raw.isEmpty { out[st.key] = raw }
+            }
+        }
+        if out["gender"] == nil { out["gender"] = "female" }
+        if !clips.isEmpty {
+            if engine == "seed" { out["audio_urls"] = clips.prefix(3).map { $0.url } }
+            else { out["reference_voice_url"] = clips[0].url }
+        }
+        return out
+    }
+
+    private func suggestEngine() async {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 3 else { announce("Type something in the box first, then I can suggest."); return }
+        isSuggesting = true
+        defer { isSuggesting = false }
+        do {
+            let r = try await service.suggest(text: t)
+            engine = r.engine
+            // The engine change announces its own card; the reason follows.
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            announce(r.reason + (r.sure ? "" : " Change it if that is not what you meant."))
+        } catch {
+            announce((error as? LocalizedError)?.errorDescription ?? "Couldn't suggest right now.")
+        }
+    }
+
     private func makeScript(kind: String) async {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.count >= 3 else {
@@ -604,16 +752,18 @@ struct SoundBoothView: View {
         isWriting = true
         defer { isWriting = false }
         announce(kind == "write" ? "Writing it…" : "Shaping your words…")
+        let st = collectedSettings()
         do {
             let r = try await service.makeScript(
                 engine: engine,
                 mode: kind,
                 text: body,
-                voiceDescription: voiceDescription.isEmpty ? nil : voiceDescription,
-                gender: gender,
+                voiceDescription: st["voice_description"] as? String,
+                gender: (st["gender"] as? String) ?? "female",
                 mood: mood.isEmpty ? nil : mood,
-                scene: scene.isEmpty ? nil : scene,
-                shot: shot.isEmpty ? nil : shot
+                scene: st["scene"] as? String,
+                shot: st["shot"] as? String,
+                clipURLs: clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             )
             script = r.script
             readback = r.readback ?? ""
@@ -631,49 +781,52 @@ struct SoundBoothView: View {
         }
     }
 
-    private func renderTapped() async {
+    private func renderTapped(preview: Bool) async {
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return }
-        /* HER STANDING RULE: the cost is SAID before it runs. First tap says
-         * the price and arms; second tap spends. The armed state is dropped
-         * whenever the script changes, so a stale confirm can never spend on
-         * something she has since edited. */
-        if !confirmArmed {
-            confirmArmed = true
-            let spoken = estimate?.spoken ?? localEstimateSentence(for: s)
-            announce("\(spoken) Press Render again to go ahead.")
-            return
+        let st = collectedSettings()
+        if preview {
+            guard !s.isEmpty || st["voice_description"] != nil else {
+                announce("Describe the voice first, or write a script, so there is a voice to preview.")
+                return
+            }
+        } else {
+            guard !s.isEmpty else { return }
+            /* HER STANDING RULE: the cost is SAID before it runs. First tap
+             * says the price and arms; second tap spends. The armed state is
+             * dropped whenever the script or engine changes. A preview costs
+             * about a penny and says so on its own button, so it runs on one
+             * tap. */
+            if !confirmArmed {
+                confirmArmed = true
+                let spoken = estimate?.spoken ?? localEstimateSentence(for: s)
+                announce("\(spoken) Press Render again to go ahead.")
+                return
+            }
         }
         confirmArmed = false
         isRendering = true
         defer { isRendering = false }
-        var body: [String: Any] = [
-            "engine": engine,
-            "mode": mode,
-            "script": s,
-            "sourceText": text,
-            "readback": readback,
-            "gender": gender,
-        ]
-        if let pid = currentProjectId { body["projectId"] = pid }
-        if !voiceDescription.isEmpty { body["voice_description"] = voiceDescription }
-        if !referenceURL.isEmpty { body["reference_voice_url"] = referenceURL }
-        if mode == "advanced" {
-            if !scene.isEmpty { body["scene"] = scene }
-            if !shot.isEmpty { body["shot"] = shot }
-            if let p = Double(paceText), p >= 0.5, p <= 3 { body["pace"] = p }
-            if let sd = Int(seedText), sd >= 0 { body["seed"] = sd }
-            if backgroundSFX { body["background_sfx"] = true }
-            if studioQuality { body["audio_quality"] = "high" }
+        var body: [String: Any] = st
+        body["engine"] = engine
+        body["mode"] = mode
+        body["sourceText"] = text
+        body["readback"] = readback
+        if s.isEmpty, preview {
+            let voice = (st["voice_description"] as? String ?? "A warm, clear adult voice.").replacingOccurrences(of: "\"", with: "&quot;")
+            body["script"] = "<speak voice=\"\(voice)\" gender=\"\((st["gender"] as? String) ?? "female")\">Here is how I sound.</speak>"
+        } else {
+            body["script"] = s
         }
-        announce("Sending it…")
+        if preview { body["preview"] = true }
+        if let pid = currentProjectId { body["projectId"] = pid }
+        announce(preview ? "Making a fifteen second sample…" : "Sending it…")
         do {
             let r = try await service.render(body: body)
             currentProjectId = r.projectId ?? currentProjectId
             if r.queued == true, let job = r.jobId {
                 currentJobId = job
                 Earcons.shared.play(.actionStart)
-                announce("Queued. \(r.estimate?.spoken ?? "") The phone will buzz when it is ready, and this screen will say so.")
+                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + " The phone will buzz when it is ready, and this screen will say so.")
                 startPolling(job)
             } else {
                 Earcons.shared.play(.actionDone)
@@ -769,6 +922,11 @@ struct SoundBoothView: View {
         readback = p.readback ?? ""
         estimate = nil
         confirmArmed = false
+        if let opts = p.options {
+            for (k, v) in opts {
+                if let t = v.asFieldText { values[k] = (k == "audio_quality" && t == "high") ? "1" : t }
+            }
+        }
         announce("Opened \(p.title). Change what you like and render again.")
         focusStatus = true
     }

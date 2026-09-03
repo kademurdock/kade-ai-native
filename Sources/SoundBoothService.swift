@@ -48,8 +48,35 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     }
 }
 
+/// A loosely-typed JSON value, for the project's saved `options` — the
+/// server stores whatever settings made the take, and their shapes differ
+/// per engine and per key.
+enum SoundBoothJSON: Decodable, Equatable {
+    case string(String), number(Double), bool(Bool), null, other
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null; return }
+        if let b = try? c.decode(Bool.self) { self = .bool(b); return }
+        if let n = try? c.decode(Double.self) { self = .number(n); return }
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        self = .other
+    }
+
+    /// The value as the settings dictionary stores it.
+    var asFieldText: String? {
+        switch self {
+        case .string(let s): return s
+        case .number(let n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case .bool(let b): return b ? "1" : ""
+        default: return nil
+        }
+    }
+}
+
 struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let id: String
+    let options: [String: SoundBoothJSON]?
     let title: String
     let engine: String
     let mode: String
@@ -124,6 +151,72 @@ struct SoundBoothStatus: Decodable {
     var isFinished: Bool { state == "done" || state == "failed" || state == "cancelled" }
 }
 
+/// THE GUIDE (Part 121). Her ask: "I don't think people will know the
+/// difference between seedaudio and scenema, much less how to use the
+/// settings and prompt it." The explanation lives on the SERVER, once
+/// (kadeSoundBooth.js GUIDE), written from the two engines' own docs, and
+/// this screen renders it — a wording fix is a deploy, not a build. Every
+/// setting the screen shows comes from here with its own hint, range and
+/// default, so the phone can never show a knob the engine does not have.
+struct SoundBoothGuide: Decodable {
+    struct Rule: Decodable, Hashable { let pick: String; let when: String }
+    struct Chooser: Decodable { let question: String; let answer: String; let rules: [Rule] }
+    struct Setting: Decodable, Identifiable, Hashable {
+        let key: String
+        let label: String
+        let hint: String
+        /// text · choice · toggle · number · clip
+        let kind: String
+        let options: [String]?
+        let min: Double?
+        /// For a number: the upper bound. For a clip row: how many clips.
+        let max: Double?
+        let defaultString: String?
+        let defaultNumber: Double?
+        let defaultBool: Bool?
+        var id: String { key }
+        var clipMax: Int { Int(max ?? 1) }
+
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, `default` }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            key = try c.decode(String.self, forKey: .key)
+            label = try c.decode(String.self, forKey: .label)
+            hint = try c.decode(String.self, forKey: .hint)
+            kind = try c.decode(String.self, forKey: .kind)
+            options = try c.decodeIfPresent([String].self, forKey: .options)
+            min = try? c.decodeIfPresent(Double.self, forKey: .min)
+            max = try? c.decodeIfPresent(Double.self, forKey: .max)
+            // `default` is one of three shapes depending on the kind.
+            defaultString = try? c.decodeIfPresent(String.self, forKey: .default)
+            defaultNumber = try? c.decodeIfPresent(Double.self, forKey: .default)
+            defaultBool = try? c.decodeIfPresent(Bool.self, forKey: .default)
+        }
+    }
+    struct Engine: Decodable {
+        let name: String
+        let tagline: String
+        let `where`: String
+        let cost: String
+        let bestFor: [String]
+        let notFor: [String]
+        let howToWrite: [String]
+        let settings: [Setting]
+        /// The card, as one spoken paragraph.
+        var spoken: String {
+            "\(name). \(tagline) \(`where`) \(cost) Best for: \(bestFor.joined(separator: "; ")). Not for: \(notFor.joined(separator: "; "))."
+        }
+    }
+    let chooser: Chooser
+    let engines: [String: Engine]
+}
+
+struct SoundBoothSuggestion: Decodable {
+    let engine: String
+    let sure: Bool
+    let reason: String
+}
+
 struct SoundBoothHealth: Decodable {
     struct Engine: Decodable { let configured: Bool; let queued: Bool?; let usdPerMin: Double? }
     struct Mood: Decodable, Identifiable, Hashable { let key: String; let label: String; var id: String { key } }
@@ -132,6 +225,7 @@ struct SoundBoothHealth: Decodable {
     let scriptDesk: Bool
     let moods: [Mood]
     let limits: Limits?
+    let guide: SoundBoothGuide?
 }
 
 @MainActor
@@ -170,6 +264,12 @@ final class SoundBoothService: ObservableObject {
         try await get("api/kade/sound-booth/health", fallback: "Couldn't open the Sound Booth.")
     }
 
+    /// Free, instant, explainable: the server reads her text and says which
+    /// engine, with a reason she can hear. Not a model call.
+    func suggest(text: String) async throws -> SoundBoothSuggestion {
+        try await post("api/kade/sound-booth/suggest", body: ["text": text], timeout: 30, fallback: "Couldn't suggest right now.")
+    }
+
     /// mode "format" keeps her words verbatim and only adds structure;
     /// "write" drafts a whole piece from a description.
     func makeScript(
@@ -180,13 +280,17 @@ final class SoundBoothService: ObservableObject {
         gender: String,
         mood: String?,
         scene: String?,
-        shot: String?
+        shot: String?,
+        clipURLs: [String] = []
     ) async throws -> SoundBoothScriptResult {
         var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "gender": gender]
         if let v = voiceDescription, !v.isEmpty { body["voice_description"] = v }
         if let m = mood, !m.isEmpty { body["mood"] = m }
         if let s = scene, !s.isEmpty { body["scene"] = s }
         if let s = shot, !s.isEmpty { body["shot"] = s }
+        if !clipURLs.isEmpty {
+            if engine == "seed" { body["audio_urls"] = clipURLs } else { body["reference_voice_url"] = clipURLs[0] }
+        }
         // The script desk calls a model; 90 s server-side is normal, and the
         // 60-second URLSession default is exactly the trap build 169 fell in.
         return try await post("api/kade/sound-booth/script", body: body, timeout: 120, fallback: "The script desk had trouble. Try again.")

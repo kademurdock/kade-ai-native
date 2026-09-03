@@ -73,10 +73,10 @@ workflows:
           # that is not built is harmless but misleading in the log, and the
           # day the portal step is done this line and the target come back
           # together.
-          # app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
-          #   --type IOS_APP_STORE \
-          #   --certificate-key=@file:/tmp/cert_key.pem \
-          #   --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
           keychain add-certificates
           xcode-project use-profiles
       - name: Auto-increment the TestFlight build number (floor 100 for native)
