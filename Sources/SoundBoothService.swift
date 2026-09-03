@@ -349,11 +349,14 @@ final class SoundBoothService: ObservableObject {
     /// file exists.
     struct ImportedReference { let url: String; let name: String; let spoken: String }
 
-    func importReference(data: Data, fileName: String, mimeType: String) async throws -> ImportedReference {
+
+    func importReference(data: Data, fileName: String, mimeType: String, engine: String) async throws -> ImportedReference {
         var req = client.multipartRequest(
             path: "api/kade/sound-booth/reference",
             authorized: true,
-            fields: [],
+            // The server judges the format against the ENGINE — Scenema takes
+            // WAV/MP3/M4A, Seed also takes OGG — so it has to know which.
+            fields: [("engine", engine)],
             fileField: "clip",
             fileData: data,
             fileName: fileName,
@@ -361,7 +364,7 @@ final class SoundBoothService: ObservableObject {
         )
         req.timeoutInterval = 180
         let (respData, http) = try await client.send(req)
-        struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let error: String? }
+        struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let error: String?; let ext: String? }
         let r = try? JSONDecoder().decode(Resp.self, from: respData)
         guard http.statusCode == 200, let remote = r?.url, !remote.isEmpty else {
             throw BoothError(message: r?.error ?? "That clip could not be imported.")

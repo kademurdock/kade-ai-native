@@ -137,9 +137,16 @@ struct SoundBoothView: View {
          * is where a voice memo actually lives on this phone — and it reaches
          * iCloud Drive, Dropbox and anything else with a Files provider, so
          * "share from" and "import" are the same door here. */
+        /* Part 121.3: the types each ENGINE can actually read, not a
+         * wildcard. Scenema's README says reference audio is WAV or MP3;
+         * M4A rides along because that is what a voice memo actually is.
+         * Seed also takes OGG. An .ogg offered to Scenema is refused with a
+         * sentence that says so, rather than rendering without the clone. */
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio],
+            allowedContentTypes: engine == "seed"
+                ? [.wav, .mp3, .mpeg4Audio, .init(filenameExtension: "ogg") ?? .audio]
+                : [.wav, .mp3, .mpeg4Audio],
             allowsMultipleSelection: false
         ) { result in
             Task { await handleImport(result) }
@@ -460,6 +467,16 @@ struct SoundBoothView: View {
                     Text("\(st.clipMax > 1 ? "@Audio\(i + 1): " : "Cloning: ")\(clip.name)")
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
+                    /* Her ask. Hearing the sample is the only way to know the
+                     * right one is attached — believing it is not the same. */
+                    Button {
+                        guard let u = URL(string: clip.url) else { return }
+                        activeSheet = .player(u, clip.name)
+                    } label: {
+                        Label("Play", systemImage: "play.circle")
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Play the imported clip, \(clip.name)")
                     Button("Remove") {
                         clips.remove(at: i)
                         announce("Clip removed.")
@@ -689,7 +706,8 @@ struct SoundBoothView: View {
                 let imported = try await service.importReference(
                     data: data,
                     fileName: url.lastPathComponent,
-                    mimeType: mimeType(for: url)
+                    mimeType: mimeType(for: url),
+                    engine: engine
                 )
                 clips.append((url: imported.url, name: imported.name))
                 Earcons.shared.play(.actionDone)
@@ -824,7 +842,14 @@ struct SoundBoothView: View {
             if !confirmArmed {
                 confirmArmed = true
                 let spoken = estimate?.spoken ?? localEstimateSentence(for: s)
-                announce("\(spoken) Press Render again to go ahead.")
+                /* ⭐ THE ELEVEN-CENT LESSON (Part 121.3): her first web render
+                 * was quoted, confirmed and paid for with no clip attached,
+                 * and she only found out by listening. The quote says which
+                 * it is, every time, before the money moves. */
+                let cloneLine = clips.isEmpty
+                    ? " No clip attached, so the voice comes from your description."
+                    : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
+                announce("\(spoken)\(cloneLine) Press Render again to go ahead.")
                 return
             }
         }
