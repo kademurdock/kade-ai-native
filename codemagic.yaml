@@ -87,6 +87,10 @@ workflows:
           agvtool new-version -all $NEXT
       - name: Build signed .ipa
         script: |
+          # Codemagic runs every script under `set -e`; without +e the failing
+          # pipeline exits the step before a single diagnostic line runs —
+          # which is exactly what the first attempt at this block did.
+          set +e
           set -o pipefail
           # Part 121: the archive's OWN errors, captured. Two failed builds
           # (266, 267) ended in "Failed to archive" with nothing else the API
@@ -98,7 +102,12 @@ workflows:
             --scheme "KadeAI" 2>&1 | tee "$CM_BUILD_DIR/build-ipa.log"
           STATUS=$?
           if [ $STATUS -ne 0 ]; then
-            grep -m 12 -E '(error:|error :|Provisioning profile|doesn.t (include|support)|entitlement)' "$CM_BUILD_DIR/build-ipa.log" \
+            # The cli tool keeps xcodebuild's full output in its own log files;
+            # gather every one written in the last half hour.
+            find "$HOME/Library/Logs" /tmp "$CM_BUILD_DIR" -name '*xcodebuild*.log' -mmin -30 2>/dev/null | while read f; do
+              echo "=== $f ===" >> "$CM_BUILD_DIR/build-ipa.log"; cat "$f" >> "$CM_BUILD_DIR/build-ipa.log"
+            done
+            grep -m 20 -E '(error:|error :|Provisioning profile|doesn.t (include|support)|entitlement|No profiles|requires a provisioning)' "$CM_BUILD_DIR/build-ipa.log" \
               > "$CM_BUILD_DIR/archive-first-errors.txt" || true
             echo "--- archive first errors ---"
             cat "$CM_BUILD_DIR/archive-first-errors.txt"
