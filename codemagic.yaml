@@ -60,6 +60,18 @@ workflows:
             --type IOS_APP_STORE \
             --certificate-key=@file:/tmp/cert_key.pem \
             --create
+          # Part 120 (Sep 3 2026) — the share extension, third bundle id.
+          # Same --create story as the keyboard: if THIS line is what a red
+          # build points at, the ASC key's role cannot create bundle ids, so
+          # register com.kademurdock.kadeai.share by hand in the developer
+          # portal (Identifiers > App IDs, App Groups capability on, group
+          # group.com.kademurdock.kadeai assigned) and rerun. Nothing else in
+          # the build depends on it — the app itself signs and ships either
+          # way, which is why the Sound Booth went out on its own build first.
+          app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
           keychain add-certificates
           xcode-project use-profiles
       - name: Auto-increment the TestFlight build number (floor 100 for native)

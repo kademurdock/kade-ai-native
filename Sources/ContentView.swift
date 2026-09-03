@@ -38,6 +38,12 @@ struct ContentView: View {
     /// the cover's own dismissal (item:-keyed).
     @State private var agentCallPayload: AgentCallPayload?
     @State private var spotterTranscript: SpotterTranscriptHandoff?
+    /// Part 120 (Sep 3 2026) — a file waiting in the App Group from the share
+    /// sheet. Non-nil pushes a chat with the default agent, the file already
+    /// attaching. Its OWN handoff type, deliberately: three
+    /// `navigationDestination(item:)` modifiers keyed to the same type is the
+    /// build-121 regression that stopped conversation rows opening.
+    @State private var pendingShare: SharedFileHandoff?
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -338,12 +344,14 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             consumePendingKadeKeysRequest()
+            consumePendingShare()
         }
         .onAppear {
 #if DEBUG
             startScreenshotTourIfAsked()
 #endif
             consumePendingKadeKeysRequest()
+            consumePendingShare()
         }
         .onChange(of: authStateID) { _, _ in
             handleStateChange()
@@ -529,6 +537,19 @@ struct ContentView: View {
             // fixes (three `navigationDestination(item:)` modifiers all
             // keyed to `KadeConversation` in one stack, which broke the
             // conversation list's row taps).
+            /* The shared file opens a chat with whoever her main agent is —
+             * "Kiana, my default agent," her words — with the file already
+             * attaching and her note pre-typed. She still presses Send: a
+             * share sheet must not be able to post into a conversation
+             * without a person deciding to. */
+            .navigationDestination(item: $pendingShare) { handoff in
+                ConversationDetailView(
+                    conversation: nil,
+                    initialAgentId: DefaultAgentStore.resolveId(in: agentsService.agents),
+                    initialDraft: handoff.note,
+                    initialSharedFileURL: handoff.url
+                )
+            }
             .navigationDestination(item: $spotterTranscript) { handoff in
                 ConversationDetailView(conversation: handoff.conversation)
             }
@@ -985,6 +1006,26 @@ struct ContentView: View {
         go(.kadeKeysDictate)
     }
 
+    /* SHARE TO YOUR AGENT (Part 120). The extension parked a file in the App
+     * Group and told her to open the app; this is the catcher. Same shape as
+     * consumePendingKadeKeysRequest right above — consume once, honour a
+     * staleness window, and do nothing at all when signed out (the share
+     * survives in the container until she signs in, and the 30-minute window
+     * in KadeShareStore is what stops it surprising her days later). */
+    private func consumePendingShare() {
+        guard isSignedIn, pendingShare == nil else { return }
+        guard let taken = KadeShareStore.take() else { return }
+        pendingShare = SharedFileHandoff(
+            url: taken.url,
+            displayName: taken.pending.displayName,
+            note: taken.pending.note
+        )
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Opening a chat to send \(taken.pending.displayName)."
+        )
+    }
+
     private func handleStateChange() {
         switch auth.state {
         case .signedIn:
@@ -1071,6 +1112,18 @@ struct SafariView: UIViewControllerRepresentable {
 struct SpotterTranscriptHandoff: Identifiable, Hashable {
     let conversation: KadeConversation
     var id: String { conversation.conversationId }
+}
+
+/// Part 120 — a file handed over by the share extension, on its way into a
+/// chat. Its own single-purpose type for the same reason
+/// `SpotterTranscriptHandoff` is one: `navigationDestination(item:)` registers
+/// by TYPE across the whole stack, and build 121 shipped three of them all
+/// keyed to `KadeConversation?`, which made conversation rows stop opening.
+struct SharedFileHandoff: Identifiable, Hashable {
+    let url: URL
+    let displayName: String
+    let note: String?
+    var id: String { url.absoluteString }
 }
 
 /// The home screen's own programmatic destinations. Its own dedicated type,

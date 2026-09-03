@@ -57,6 +57,19 @@ struct ConversationDetailView: View {
     /// stomp something the user already started typing. Same defaulted-
     /// `var` memberwise-init reasoning as `initialAgentId` above.
     var initialDraft: String? = nil
+    /// Part 120 (Sep 3 2026) — SHARE SHEET HAND-OFF. Her ask: "put a share
+    /// with your Kade-AI agent. Like, if I want to send a picture or file to
+    /// Kiana, my default agent."
+    ///
+    /// The share extension cannot send anything itself (it has no session —
+    /// see KadeShareStore for why that is deliberate), so it parks the file in
+    /// the App Group and the app carries it here. Non-nil = attach this file
+    /// the moment the conversation appears, exactly as if she had tapped the
+    /// paperclip and picked it: same upload, same spoken confirmation, same
+    /// one-attachment rule. It is consumed once — a re-appear after a push-pop
+    /// must not upload it twice, which is what `sharedFileConsumed` guards.
+    var initialSharedFileURL: URL? = nil
+    @State private var sharedFileConsumed = false
     /// True only for the ONE call site below that presents a fresh
     /// instance of this very view as the ROOT of its own sheet-hosted
     /// `NavigationStack` (the post-call transcript handoff). That instance
@@ -752,6 +765,17 @@ struct ConversationDetailView: View {
             if let seed = initialDraft,
                draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 draftText = seed
+            }
+            /* The shared file rides the ordinary attachment path rather than
+             * a second uploader: one wire contract, one spoken confirmation,
+             * one place a bug can live. Consume-once by design. */
+            if let shared = initialSharedFileURL, !sharedFileConsumed {
+                sharedFileConsumed = true
+                await importAttachmentFile(shared)
+                /* The extension copied the file into the App Group so it
+                 * would survive the hand-off; once it is uploaded, the copy
+                 * is somebody else's disk space. */
+                try? FileManager.default.removeItem(at: shared)
             }
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see

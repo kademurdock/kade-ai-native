@@ -26,6 +26,11 @@ targets:
       # rides embedded in the app. XcodeGen embeds app-extension targets
       # into the app's PlugIns automatically from this dependency.
       - target: KadeKeyboard
+      # Part 120 (Sep 3 2026) — SHARE TO YOUR AGENT. Her ask: "put a share
+      # with your Kade-ai agent... if I want to send a picture or file to
+      # Kiana, my default agent." Same embedding rule as the keyboard:
+      # naming it as a dependency is what puts it in the app's PlugIns.
+      - target: KadeShare
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
@@ -185,6 +190,53 @@ targets:
             # portal step (see the KadeAI target's comment). Flip this to
             # true in the same commit that uncomments the entitlements.
             RequestsOpenAccess: true
+
+  # SHARE EXTENSION (Part 120, Sep 3 2026) — "Send to Kade-AI" in any app's
+  # share sheet. It writes the item into the App Group and the APP does the
+  # sending; see KadeShareStore.swift for why the extension deliberately holds
+  # no session of its own. The App Group entitlement is the same one the
+  # keyboard already uses and which is already registered on the portal, so
+  # this target needs no new capability — only its own bundle id and profile
+  # (codemagic.yaml fetches one the same way it does for the keyboard).
+  KadeShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ShareExtension
+      # The store is ONE file shared by both processes on purpose: the
+      # container path, the key, the JSON shape and the staleness rule are
+      # the whole contract between them, and a second copy is how two
+      # processes start disagreeing about where the file went.
+      - path: Sources/KadeShareStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
+        MARKETING_VERSION: "2.0"
+        CURRENT_PROJECT_VERSION: 100
+        DEVELOPMENT_TEAM: JQPWZ2RL9P
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Manual
+    entitlements:
+      path: KadeShare.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.kademurdock.kadeai
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Send to Kade-AI
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsImageWithMaxCount: 1
+              NSExtensionActivationSupportsMovieWithMaxCount: 1
+              NSExtensionActivationSupportsFileWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
 
   # GAP 3 (Aug 2026) — Apple's performAccessibilityAudit, run in CI on the
   # Codemagic Mac. Simulator only, never signed, never published; see
