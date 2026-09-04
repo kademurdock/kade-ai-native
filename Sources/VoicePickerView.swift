@@ -80,6 +80,13 @@ struct VoicePickerView: View {
     @State private var search = ""
     @State private var previewing: String?
     @State private var previewTask: Task<Void, Never>?
+    /// Part 129: "some of the voices are miscategorised" (a friend's word,
+    /// relayed). The catalog's headings came from one machine ear on one
+    /// neutral read; a person's ear beats it. One tap files the voice, its
+    /// heading and what it actually sounds like on the feedback board, so
+    /// the next catalog pass has receipts instead of a rumour.
+    @State private var flagging = false
+    @State private var flagBusy = false
 
     // The wheels.
     @State private var useDefault = false
@@ -407,6 +414,27 @@ struct VoicePickerView: View {
                                         .accessibilityLabel("This is your current voice.")
                                 }
                             }
+                            Button {
+                                flagging = true
+                            } label: {
+                                Label("Wrong section?", systemImage: "flag")
+                                    .font(.footnote)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(flagBusy)
+                            .accessibilityHint("Tell Kade this voice is filed under the wrong heading. You say what it sounds like; the voice's name and its current heading go to the feedback board.")
+                            .confirmationDialog(
+                                "What does \(catalog.name(of: wheelVoice)) actually sound like?",
+                                isPresented: $flagging,
+                                titleVisibility: .visible
+                            ) {
+                                ForEach(Self.flagChoices, id: \.self) { choice in
+                                    Button(choice) { Task { await flagVoice(as: choice) } }
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("It is filed under \(group) right now.")
+                            }
                         }
                     }
                 } else if selection.isEmpty {
@@ -538,6 +566,31 @@ struct VoicePickerView: View {
         // Let the seeded values settle before onChange starts counting.
         try? await Task.sleep(nanoseconds: 100_000_000)
         seeding = false
+    }
+
+    static let flagChoices = ["A woman", "A man", "A kid or a teen", "A character or cartoon", "An older person", "A younger person"]
+
+    /// File the miscategorisation as a plain feedback row (the same pile the
+    /// Report-a-problem screen writes; Kade reads it on the feedback board).
+    @MainActor private func flagVoice(as heard: String) async {
+        let label = wheelVoice
+        guard !label.isEmpty else { return }
+        flagBusy = true
+        defer { flagBusy = false }
+        let name = catalog.name(of: label)
+        let heading = group.isEmpty ? "(unknown heading)" : group
+        do {
+            try await FeedbackReportService(apiClient: apiClient).submit(
+                category: "bug",
+                subject: "Voice in the wrong section: \(name)",
+                detail: "Filed from the voice picker on the phone. Voice: \(label). Filed under \"\(heading)\" — sounds like: \(heard.lowercased())."
+            )
+            Earcons.shared.play(.actionDone)
+            UIAccessibility.post(notification: .announcement, argument: "Sent. \(name) reported as \(heard.lowercased()). Thank you.")
+        } catch {
+            Earcons.shared.play(.error)
+            UIAccessibility.post(notification: .announcement, argument: "Couldn't send that report. \(error.localizedDescription)")
+        }
     }
 
     private func preview(_ v: String, long: Bool = true, force: Bool = false) async {

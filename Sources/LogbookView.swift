@@ -34,6 +34,10 @@ struct LogbookView: View {
      * `transcriptWindowMaxTested` writeup for why that sentence is there. */
     private static let entryWindow = 120
     @State private var windowGenerations = 1
+    /// Part 129: search the whole logbook (text, day, who wrote it). A
+    /// search ignores the earlier-entries window — a match on a day from
+    /// three months ago is the whole point of searching. Empty = the window.
+    @State private var search = ""
 
     /* Aug 20 2026 — FOCUS MANAGEMENT (her report: "still kinda weird with vo
      * focus"). The relayout fixed the CONTAINER; this fixes where focus goes
@@ -92,11 +96,21 @@ struct LogbookView: View {
         let newestFirst = page.entries.sorted {
             $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
         }
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty {
+            return newestFirst.filter {
+                $0.text.localizedCaseInsensitiveContains(q)
+                    || $0.spokenDate.localizedCaseInsensitiveContains(q)
+                    || $0.date.contains(q)
+                    || ($0.agentName ?? "").localizedCaseInsensitiveContains(q)
+            }
+        }
         return Array(newestFirst.prefix(Self.entryWindow * windowGenerations))
     }
 
     private var hiddenEarlierCount: Int {
         guard let page else { return 0 }
+        if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return 0 }
         return max(0, page.entries.count - windowedEntries.count)
     }
 
@@ -236,6 +250,7 @@ struct LogbookView: View {
         }
         .navigationTitle("Your Logbook")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "Search your logbook")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

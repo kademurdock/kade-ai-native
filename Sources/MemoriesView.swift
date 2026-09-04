@@ -25,6 +25,9 @@ struct MemoriesView: View {
     @State private var weekChanges: [MemoriesService.LedgerChange] = []
     /// Bool-based push, the house pattern (see SettingsView's own doc note).
     @State private var showingImport = false
+    /// Part 129: search across every card — key and text — the way the
+    /// Android manager and the web panel already do. Empty = everything.
+    @State private var search = ""
 
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
@@ -35,7 +38,13 @@ struct MemoriesView: View {
         guard let page else { return [] }
         var shared: [MemoriesService.MemoryCard] = []
         var byAgent: [String: [MemoriesService.MemoryCard]] = [:]
-        for card in page.memories {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cards = q.isEmpty ? page.memories : page.memories.filter {
+            $0.spokenKey.localizedCaseInsensitiveContains(q)
+                || $0.value.localizedCaseInsensitiveContains(q)
+                || ($0.agentName ?? "").localizedCaseInsensitiveContains(q)
+        }
+        for card in cards {
             if let name = card.agentName, !(card.agentId ?? "").isEmpty {
                 byAgent[name, default: []].append(card)
             } else if !(card.agentId ?? "").isEmpty {
@@ -208,6 +217,7 @@ struct MemoriesView: View {
             }
         }
         .navigationTitle("Memories")
+        .searchable(text: $search, prompt: "Search memories")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
