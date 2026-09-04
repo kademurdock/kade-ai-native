@@ -89,6 +89,7 @@ struct SettingsView: View {
     @State private var showingPronunciationDictionary = false
     @State private var showingMemories = false
     @State private var showingLogbook = false
+    @State private var showingMemorySharing = false
     /// Same Bool-push house pattern as the dictionary above.
     @State private var showingUsage = false
     /// Aug 4 2026: Kade Keys phrases screen, same Bool-push pattern.
@@ -171,6 +172,9 @@ struct SettingsView: View {
         }
         .navigationDestination(isPresented: $showingLogbook) {
             LogbookView(apiClient: apiClient)
+        }
+        .navigationDestination(isPresented: $showingMemorySharing) {
+            MemorySharingView(apiClient: apiClient)
         }
         .navigationDestination(isPresented: $showingKeyboardPhrases) {
             KeyboardPhrasesView(apiClient: apiClient)
@@ -264,6 +268,7 @@ struct SettingsView: View {
         Section {
             memoriesRow(searchStyle: false)
             logbookRow(searchStyle: false)
+            memorySharingRow(searchStyle: false)
         } header: {
             sectionHeader("Memory")
         } footer: {
@@ -465,7 +470,7 @@ struct SettingsView: View {
         case mainAgent, ringtone
         case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, pronunciation
         case longTaskPing, brief
-        case memories, logbook
+        case memories, logbook, memorySharing
         case highContrast, font, spacing
         case soundEffects, haptics, sensorySync, simpleTranscript, simpleComposer, reduceMotion
         case keyboardPhrases, keyboardClean
@@ -489,6 +494,7 @@ struct SettingsView: View {
             case .brief: return "Morning brief"
             case .memories: return "Memories"
             case .logbook: return "Your Logbook"
+            case .memorySharing: return "Memory sharing"
             case .highContrast: return "High contrast"
             case .font: return "Easy-read font"
             case .spacing: return "Line spacing"
@@ -514,7 +520,7 @@ struct SettingsView: View {
             case .ringtone: return "Calls"
             case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .pronunciation: return "Voice & Audio"
             case .longTaskPing, .brief: return "Notifications"
-            case .memories, .logbook: return "Memory"
+            case .memories, .logbook, .memorySharing: return "Memory"
             case .highContrast, .font, .spacing: return "Accessibility"
             case .soundEffects, .haptics, .sensorySync, .simpleTranscript, .simpleComposer, .reduceMotion: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
@@ -538,6 +544,7 @@ struct SettingsView: View {
             case .brief: return "morning brief briefing rundown daily news push"
             case .memories: return "memory memories remember cards forget companions know"
             case .logbook: return "logbook diary journal days record entries"
+            case .memorySharing: return "share sharing companions together both kiana della tell twice"
             case .highContrast: return "contrast dark black theme appearance display low vision"
             case .font: return "font text typeface easy read dyslexic letters"
             case .spacing: return "spacing line space text gap read"
@@ -606,6 +613,7 @@ struct SettingsView: View {
         case .brief: briefRow(searchStyle: true)
         case .memories: memoriesRow(searchStyle: true)
         case .logbook: logbookRow(searchStyle: true)
+        case .memorySharing: memorySharingRow(searchStyle: true)
         case .highContrast: highContrastRow(searchStyle: true)
         case .font: fontRow(searchStyle: true)
         case .spacing: spacingRow(searchStyle: true)
@@ -782,6 +790,17 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.logbook, "Your Logbook") : "Your Logbook")
         .accessibilityHint("The dated record your companions keep of your days — browse by day, add a line by voice, or forget entries for good.")
+    }
+
+    private func memorySharingRow(searchStyle: Bool) -> some View {
+        Button {
+            showingMemorySharing = true
+        } label: {
+            Label("Memory sharing", systemImage: "person.2.wave.2")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(searchStyle ? searchLabel(.memorySharing, "Memory sharing") : "Memory sharing")
+        .accessibilityHint("Let your companions share the facts you tell each of them — memory cards and logbook lines, marked secondhand — so you never say a thing twice. Their opinions stay their own.")
     }
 
     private func highContrastRow(searchStyle: Bool) -> some View {
