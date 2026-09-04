@@ -1114,7 +1114,7 @@ struct AdminLogsMessagesView: View {
         }
     }
 
-    private func playFrom(_ start: Int) {
+    @MainActor private func playFrom(_ start: Int) {
         stopPlaying()
         playTask = Task {
             for i in start..<messages.count {
@@ -1126,7 +1126,7 @@ struct AdminLogsMessagesView: View {
         }
     }
 
-    private func stopPlaying() {
+    @MainActor private func stopPlaying() {
         playTask?.cancel()
         playTask = nil
         playingIndex = nil
