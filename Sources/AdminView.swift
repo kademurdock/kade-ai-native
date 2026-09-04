@@ -1031,7 +1031,19 @@ struct AdminLogsMessagesView: View {
                 }
                 .accessibilityLabel("Refresh this conversation")
             }
+            // Part 129: a Stop that is always one place, however deep the list.
+            ToolbarItem(placement: .topBarTrailing) {
+                if playTask != nil {
+                    Button {
+                        stopPlaying()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                    }
+                    .accessibilityLabel("Stop playing")
+                }
+            }
         }
+        .onDisappear { stopPlaying() }
         .task {
             if messages.isEmpty { await load() }
         }
@@ -1087,6 +1099,17 @@ struct AdminLogsMessagesView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .accessibilityHint("Reads the rest of the conversation aloud from this line")
+                /* Part 129, her report: "I can't make it stop once it starts."
+                 * The only Stop sat at the top of the page, above eighty rows;
+                 * from inside the list it was a long flick away while the
+                 * voice kept going. Now Stop is in the row that is playing
+                 * AND on every row's actions rotor, like the chat transcript. */
+                if playTask != nil {
+                    Button("Stop") { stopPlaying() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .accessibilityLabel("Stop playing")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1099,8 +1122,15 @@ struct AdminLogsMessagesView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(isPlaying ? Color.orange : Color.clear, lineWidth: 3)
         )
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken + (isPlaying ? ". Playing." : ""))
+        .accessibilityHint("Actions: hear it, play from here, stop playing.")
+        .accessibilityAction(named: message.isUser ? "Hear it" : "Hear it in their voice") {
+            stopPlaying()
+            playTask = Task { await speak(message); await MainActor.run { playTask = nil } }
+        }
+        .accessibilityAction(named: "Play from here") { playFrom(index) }
+        .accessibilityAction(named: "Stop playing") { stopPlaying() }
     }
 
     /// One line, in the voice they heard (character) or the default (person).
