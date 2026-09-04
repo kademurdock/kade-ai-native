@@ -3743,8 +3743,10 @@ private struct MessageRow: View {
     let onDelete: (() -> Void)?
     let isPreparingVoiceMessage: Bool
 
+    /// Part 126: the day AND the time, like the web ("Today 4:32 PM",
+    /// "Yesterday 9:10 AM", "Aug 21, 9:10 AM"). Her ask, Sep 3 2026.
     private var timeLabel: String {
-        KadeDateFormatting.time(from: message.createdAt) ?? ""
+        KadeDateFormatting.stamp(from: message.createdAt) ?? KadeDateFormatting.time(from: message.createdAt) ?? ""
     }
 
     /// `readableText`, not `displayText` -- this is a surface a human

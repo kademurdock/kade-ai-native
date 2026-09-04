@@ -245,8 +245,20 @@ final class AdminService: ObservableObject {
         return try decoder.decode(Wrapper.self, from: data).convos
     }
 
+    /// Part 126 (Sep 4 2026): the route now also names the VOICE this seat had
+    /// chosen for the character (`voice`), so a log line can be heard the way
+    /// they heard it — re-made, since the original clip is not kept.
+    struct AdminLogPage: Decodable {
+        let messages: [AdminLogMessage]
+        let voice: String?
+        let agentId: String?
+    }
+
     func logsMessages(conversationId: String) async throws -> [AdminLogMessage] {
-        struct Wrapper: Decodable { let messages: [AdminLogMessage] }
+        try await logsPage(conversationId: conversationId).messages
+    }
+
+    func logsPage(conversationId: String) async throws -> AdminLogPage {
         let req = client.request(
             path: "api/kade/admin/logs-messages",
             authorized: true,
@@ -254,7 +266,7 @@ final class AdminService: ObservableObject {
         )
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else { throw AdminError.server(http.statusCode) }
-        return try decoder.decode(Wrapper.self, from: data).messages
+        return try decoder.decode(AdminLogPage.self, from: data)
     }
 }
 
@@ -919,10 +931,18 @@ struct AdminLogsConvosView: View {
 
 struct AdminLogsMessagesView: View {
     @ObservedObject var service: AdminService
+    /// Part 126: the same speaker every other screen uses, so a log line plays
+    /// through the one queue and can never talk over a chat reply.
+    @EnvironmentObject private var voiceService: VoiceService
     let convo: AdminLogConvo
     let ownerName: String
 
     @State private var messages: [AdminLogMessage] = []
+    /// The voice this seat chose for the character in this conversation, or nil.
+    @State private var theirVoice: String?
+    /// Index of the row currently being read by "Play from here", for the label.
+    @State private var playingIndex: Int?
+    @State private var playTask: Task<Void, Never>?
     @State private var isLoading = true
     @State private var loadError: String?
     /// Aug 21 2026 (Kade, using this exact screen to catch three real bugs
@@ -958,6 +978,17 @@ struct AdminLogsMessagesView: View {
                         Text("Read-only log of \(ownerName)'s conversation, oldest first. The text shown is what they actually saw — voice tags and tool markup are already stripped by the server.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        // Part 126, her ask: hear these the way she hears her own chats.
+                        Text(theirVoice != nil
+                             ? "Character lines play in the voice \(ownerName) chose for this character. Their own lines are read in the default voice."
+                             : "No voice could be resolved for this conversation, so lines play in the default voice.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if playTask != nil {
+                            Button("Stop playing") { stopPlaying() }
+                                .buttonStyle(.bordered)
+                                .accessibilityHint("Stops reading this conversation aloud")
+                        }
                         if messages.count > visibleCount {
                             Button("Show earlier messages (\(messages.count - visibleCount) more)") {
                                 let was = min(visibleCount, messages.count)
@@ -976,8 +1007,8 @@ struct AdminLogsMessagesView: View {
                         ForEach(
                             Array(messages.enumerated()).suffix(min(visibleCount, messages.count)),
                             id: \.offset
-                        ) { _, message in
-                            messageCard(message)
+                        ) { index, message in
+                            messageCard(message, index: index)
                         }
                     }
                     .padding()
@@ -1025,14 +1056,38 @@ struct AdminLogsMessagesView: View {
         }
     }
 
-    private func messageCard(_ message: AdminLogMessage) -> some View {
+    private func messageCard(_ message: AdminLogMessage, index: Int) -> some View {
         let shown = message.text.isEmpty ? "(nothing shown — tool activity only)" : message.text
-        let spoken = "\(message.sender): \(shown)"
+        // Part 126: the day and the time on every line, like the web.
+        let stamp = KadeDateFormatting.stamp(from: message.createdAt ?? "") ?? ""
+        let spoken = "\(message.sender)\(stamp.isEmpty ? "" : ", \(stamp)"): \(shown)"
+        let isPlaying = playingIndex == index
         return VStack(alignment: .leading, spacing: 4) {
-            Text(message.sender)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(message.sender)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !stamp.isEmpty {
+                    Text(stamp)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
             Text(shown)
+            HStack(spacing: 12) {
+                Button(message.isUser ? "Hear it" : "Hear it in their voice") {
+                    stopPlaying()
+                    playTask = Task { await speak(message); await MainActor.run { playTask = nil } }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel(message.isUser ? "Hear this message" : "Hear this reply in the voice they heard")
+                Button("Play from here") { playFrom(index) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityHint("Reads the rest of the conversation aloud from this line")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -1040,15 +1095,51 @@ struct AdminLogsMessagesView: View {
             (message.isUser ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.12)),
             in: RoundedRectangle(cornerRadius: 12)
         )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isPlaying ? Color.orange : Color.clear, lineWidth: 3)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(spoken + (isPlaying ? ". Playing." : ""))
+    }
+
+    /// One line, in the voice they heard (character) or the default (person).
+    private func speak(_ message: AdminLogMessage) async {
+        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if message.isUser {
+            await voiceService.speakLine(text: "\(message.sender) said: \(text)", voiceId: nil, rate: nil)
+        } else {
+            await voiceService.speakLine(text: text, voiceId: theirVoice, rate: nil)
+        }
+    }
+
+    private func playFrom(_ start: Int) {
+        stopPlaying()
+        playTask = Task {
+            for i in start..<messages.count {
+                if Task.isCancelled { break }
+                await MainActor.run { playingIndex = i }
+                await speak(messages[i])
+            }
+            await MainActor.run { playingIndex = nil; playTask = nil }
+        }
+    }
+
+    private func stopPlaying() {
+        playTask?.cancel()
+        playTask = nil
+        playingIndex = nil
+        voiceService.stopSpeaking()
     }
 
     private func load() async {
         isLoading = messages.isEmpty
         loadError = nil
         do {
-            messages = try await service.logsMessages(conversationId: convo.conversationId)
+            let page = try await service.logsPage(conversationId: convo.conversationId)
+            messages = page.messages
+            theirVoice = page.voice
         } catch {
             loadError = "Couldn't load this conversation's log. Check your connection and try again."
         }

@@ -904,7 +904,12 @@ struct SoundBoothView: View {
         let cents = engine == "seed"
             ? max(1, Int((Double(secs) / 60.0 * 18.75).rounded()))
             : max(1, Int((Double(secs) / 60.0 * 2.0).rounded()) + 2)
-        let wait = engine == "seed" ? "a few seconds to make" : "a couple of minutes to make"
+        // Part 126 (Sep 4 2026): the honest wait. A cold graphics card measured
+        // up to seven minutes and a warm one under a minute (Part 122–123), so
+        // "a couple of minutes" was a promise the booth could not keep either
+        // way. The server's estimate names which case she is in; this is only
+        // the fallback when it did not answer.
+        let wait = engine == "seed" ? "a few seconds to make" : "under a minute if a card is awake, up to seven if one has to wake up"
         return "About \(secs) seconds of audio, \(wait), about \(cents) cents."
     }
 
@@ -912,11 +917,18 @@ struct SoundBoothView: View {
         pollTask?.cancel()
         pollTask = Task {
             var last = ""
+            var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled { return }
                 guard let st = try? await service.status(jobId: jobId) else { continue }
-                if st.state != last {
+                ticks += 1
+                // Part 126: speak on a state CHANGE, on the finish, and every
+                // other poll (30 s) while unfinished — the web's rule since
+                // Part 122. Silence between "queued" and "done" is what a
+                // screen reader turns into "this app is broken", and the
+                // server's line now counts the wait and names the give-up.
+                if st.state != last || st.isFinished || ticks % 2 == 0 {
                     last = st.state
                     announce(st.spoken ?? st.state)
                 }
