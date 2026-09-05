@@ -52,6 +52,19 @@ struct UsageView: View {
                 } footer: {
                     Text("What this account has cost so far this month, by kind of thing.")
                 }
+                // Part 132 (Sep 5 2026), her ask from Part 131: what this
+                // person has ACTUALLY cost the server since the 1st, beside
+                // the balance -- the same line the web's Feed the Server
+                // page carries. Charged / multiplier + metered extras.
+                if let c = service.myCost {
+                    Section {
+                        row("What you actually cost the server", c.totalUSD, prominent: true)
+                    } header: {
+                        Text("Real cost this month")
+                    } footer: {
+                        Text(costFooter(c))
+                    }
+                }
                 Section("All time") {
                     row("Total", u.allTime.totalUSD, prominent: true)
                 }
@@ -95,6 +108,16 @@ struct UsageView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label). \(Self.spokenDollars(usd))\(detail.map { ". \($0)" } ?? "")")
+    }
+
+    private func costFooter(_ c: UsageService.MyCost) -> String {
+        var parts: [String] = []
+        if let spoken = c.spoken, !spoken.isEmpty { parts.append(spoken) }
+        if let m = c.multiplier, m != 1 {
+            let mult = m.rounded() == m ? String(Int(m)) : String(format: "%.1f", m)
+            parts.append("Balances are charged \(mult) times real model cost to help cover the rest of the platform.")
+        }
+        return parts.joined(separator: " ")
     }
 
     private func quantity(_ value: Double, _ unit: String) -> String? {
