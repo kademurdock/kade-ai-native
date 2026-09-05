@@ -309,23 +309,37 @@ final class MessageSendingService: ObservableObject {
     /// `kade_read_page`). This turns one into something worth hearing.
     /// An unknown name still beats silence, so the fallback tidies rather than
     /// hides: drop the action suffix, split the snake case, say it plainly.
+    /* Sep 5 2026 (Part 132.2), her word: "Kiana is using tool name" is wordy.
+     * Short labels now — "web search", "weather", "memory" — and the caller
+     * announces the label alone, no "<agent> is …" wrapper. */
     static func spokenToolName(_ raw: String) -> String {
         let known: [String: String] = [
-            "web_search": "searching the web",
-            "file_search": "searching your files",
+            "web_search": "web search",
+            "file_search": "your files",
             "kade_read_page": "reading a page",
-            "kade_research": "starting deep research",
-            "kade_memory_search": "checking memory",
-            "kade_living_memory": "checking memory",
-            "kade_weather": "checking the weather",
-            "kade_news": "checking the news",
-            "kade_wikipedia": "looking it up",
-            "kade_notify": "sending a notification",
-            "kade_feedback": "filing that with Kade",
-            "kade_code": "running some code",
-            "kade_errand": "working the errand desk",
-            "kade_phone_call": "placing a call",
-            "flux": "making a picture",
+            "kade_research": "deep research",
+            "kade_memory_search": "memory",
+            "kade_living_memory": "memory",
+            "kade_weather": "weather",
+            "kade_news": "news",
+            "kade_wikipedia": "wikipedia",
+            "kade_notify": "reminder",
+            "kade_feedback": "feedback",
+            "kade_code": "code",
+            "kade_errand": "errand",
+            "kade_phone_call": "phone",
+            "kade_call_me": "call",
+            "kade_location": "location",
+            "kade_help": "help pages",
+            "kade_joke": "jokes",
+            "kade_games": "game parlor",
+            "kade_lyrics": "lyrics",
+            "kade_media": "media",
+            "kade_transcribe": "transcript",
+            "kade_make_file": "file",
+            "kade_message": "message",
+            "flux": "picture",
+            "fal_studio": "studio",
         ]
         var base = raw
         if let r = base.range(of: "_action_") { base = String(base[base.startIndex..<r.lowerBound]) }

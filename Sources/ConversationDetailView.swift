@@ -1509,11 +1509,11 @@ struct ConversationDetailView: View {
                      * animation — a spinner in a transcript commit is what
                      * builds 216 through 225 were about. */
                     if !liveToolNote.isEmpty, liveReply.isEmpty, case .sending = sendState {
-                        Text("\(agentDisplayLabel) is \(liveToolNote)…")
+                        Text("\(liveToolNote)…")
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("\(agentDisplayLabel) is \(liveToolNote)")
+                            .accessibilityLabel(liveToolNote)
                     }
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
@@ -3370,7 +3370,7 @@ struct ConversationDetailView: View {
                     UIAccessibility.post(
                         notification: .announcement,
                         argument: NSAttributedString(
-                            string: "\(agentDisplayLabel) is \(spoken).",
+                            string: spoken,
                             attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
                         )
                     )
