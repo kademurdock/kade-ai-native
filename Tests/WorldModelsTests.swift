@@ -22,6 +22,8 @@ import Foundation
         precondition(WorldSoundIdentity.cacheIdentity(a) != WorldSoundIdentity.cacheIdentity(changed))
         let other = URL(string: "https://example.invalid/reverie-sounds/coin.m4a?versionId=v1")!
         precondition(WorldSoundIdentity.cacheIdentity(a) != WorldSoundIdentity.cacheIdentity(other))
-        print("World models: 9 checks passed. This checks decoding and cache identity, not VoiceOver playback.")
+        precondition(WorldSoundIdentity.cacheIdentity(a, revision: "installed-1") == WorldSoundIdentity.cacheIdentity(b, revision: "installed-1"))
+        precondition(WorldSoundIdentity.cacheIdentity(a, revision: "installed-1") != WorldSoundIdentity.cacheIdentity(a, revision: "installed-2"))
+        print("World models: 11 checks passed. This checks decoding and cache identity, not VoiceOver playback.")
     }
 }

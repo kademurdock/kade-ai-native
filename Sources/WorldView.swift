@@ -35,6 +35,7 @@ struct WorldView: View {
     /// engine now sends. The manifest has always had this scope; nothing
     /// could reach it until the room started saying its own name.
     @State private var roomSounds: [String: String] = [:]
+    @State private var soundVersions: [String: String] = [:]
     @State private var currentRoomId: String?
     @State private var currentDistrict: String?
     @FocusState private var inputFocused: Bool
@@ -260,7 +261,7 @@ struct WorldView: View {
     }
 
     private func announce(_ text: String) {
-        guard isVisible, !text.isEmpty else { return }
+        guard isVisible, scenePhase == .active, !text.isEmpty else { return }
         UIAccessibility.post(notification: .announcement, argument: text)
     }
 
@@ -369,9 +370,10 @@ struct WorldView: View {
     /// ward-bed ambience for wherever she is standing.
     private func loadWorldSounds() async {
         guard let manifest = await service.fetchSoundManifest() else { return }
+        soundVersions = manifest.versions ?? [:]
         for (kind, urlStr) in manifest.event ?? [:] {
             if Task.isCancelled || !isVisible { return }
-            if let local = await WorldService.cachedSoundFile(for: urlStr) {
+            if let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["event:" + kind]) {
                 WorldTones.shared.installEventSound(kind: kind, fileURL: local)
                 // Build 197: the same file, measured for its haptic shape.
                 // Sound and touch are installed together from one source, so
@@ -386,20 +388,22 @@ struct WorldView: View {
     }
 
     private func refreshAmbience() async {
-        guard soundsOn, ambienceOn, isVisible, let d = currentDistrict, let urlStr = districtSounds[d] else {
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let d = currentDistrict, let urlStr = districtSounds[d] else {
             WorldTones.shared.setAmbience(key: nil, fileURL: nil)
             return
         }
-        let local = await WorldService.cachedSoundFile(for: urlStr)
+        let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["district:" + d])
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentDistrict == d else { return }
         WorldTones.shared.setAmbience(key: d, fileURL: local)
     }
 
     private func refreshRoomTone() async {
-        guard soundsOn, ambienceOn, isVisible, let r = currentRoomId, let urlStr = roomSounds[r] else {
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let r = currentRoomId, let urlStr = roomSounds[r] else {
             WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
             return
         }
-        let local = await WorldService.cachedSoundFile(for: urlStr)
+        let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["room:" + r])
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == r else { return }
         WorldTones.shared.setRoomTone(key: r, fileURL: local)
     }
 

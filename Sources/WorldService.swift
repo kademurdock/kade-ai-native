@@ -76,6 +76,7 @@ final class WorldService: ObservableObject {
         let event: [String: String]?
         let room: [String: String]?
         let district: [String: String]?
+        let versions: [String: String]?
     }
 
     func fetchSoundManifest() async -> WorldSoundManifest? {
@@ -87,12 +88,12 @@ final class WorldService: ObservableObject {
     /// Download-once cache. Stable SHA-256 name (hashValue changes every
     /// launch — learned class, not repeated). Returns nil quietly on any
     /// trouble: a missing sound file must never cost more than silence.
-    nonisolated static func cachedSoundFile(for urlString: String) async -> URL? {
+    nonisolated static func cachedSoundFile(for urlString: String, revision: String? = nil) async -> URL? {
         guard let remote = URL(string: urlString), remote.scheme?.hasPrefix("http") == true else { return nil }
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("world-sounds", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let digest = SHA256.hash(data: Data(WorldSoundIdentity.cacheIdentity(remote).utf8))
+        let digest = SHA256.hash(data: Data(WorldSoundIdentity.cacheIdentity(remote, revision: revision).utf8))
             .map { String(format: "%02x", $0) }.joined().prefix(24)
         let ext = remote.pathExtension.isEmpty ? "snd" : remote.pathExtension
         let local = dir.appendingPathComponent("\(digest).\(ext)")
@@ -165,6 +166,7 @@ final class WorldService: ObservableObject {
                 } catch {
                     if Task.isCancelled { break }
                 }
+                guard !Task.isCancelled, listeningGeneration == generation else { break }
                 isLive = false
                 liveStatus = "Reconnecting. Commands still work."
                 do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) } catch { break }

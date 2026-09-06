@@ -59,7 +59,7 @@ struct WorldStreamUpdate: Decodable {
 }
 
 enum WorldSoundIdentity {
-    static func cacheIdentity(_ url: URL) -> String {
+    static func cacheIdentity(_ url: URL, revision: String? = nil) -> String {
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
         parts.fragment = nil
         let kept = (parts.queryItems ?? []).filter { item in
@@ -67,6 +67,7 @@ enum WorldSoundIdentity {
             return !key.hasPrefix("x-amz-") && !["awsaccesskeyid", "signature", "expires"].contains(key)
         }.sorted { $0.name == $1.name ? ($0.value ?? "") < ($1.value ?? "") : $0.name < $1.name }
         parts.queryItems = kept.isEmpty ? nil : kept
-        return parts.string ?? url.absoluteString
+        let identity = parts.string ?? url.absoluteString
+        return identity + (revision.map { "#revision=" + $0 } ?? "")
     }
 }
