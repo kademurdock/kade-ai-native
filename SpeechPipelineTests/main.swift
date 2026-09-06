@@ -861,6 +861,17 @@ do {
 // ─────────────────────────────────────────────────────────────────────────────
 
 print("")
+// Thinking feedback follows work events, never synthesis gaps.
+for phase in [SpeechWaitPolicy.Phase.waiting, .reply, .finished] {
+    check("speech gap stays quiet for phase \(phase)", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
+}
+for phase in [SpeechWaitPolicy.Phase.thinking, .tool] {
+    check("real work resumes feedback for phase \(phase)", SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
+    check("queued speech owns the gap for phase \(phase)", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: true))
+    check("no thinking under a playing clip", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: true, paused: false, speechQueued: false))
+    check("paused speech stays quiet", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: true, speechQueued: false))
+    check("an ended turn stays quiet", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: false, clipPlaying: false, paused: false, speechQueued: false))
+}
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")

@@ -183,7 +183,7 @@ struct WorldView: View {
             }
             if mode != "create" {
                 if let hud {
-                    DisclosureGroup("Your character: \(hud.name ?? "you"), \(hud.coin ?? 0) coin, feeling \(hud.mood ?? "okay")") {
+                    DisclosureGroup("Your character: \(hud.name ?? "you"), $\(hud.coin ?? 0), feeling \(hud.mood ?? "okay")") {
                         VStack(alignment: .leading, spacing: 10) {
                             if let clock = hud.clock { Text(clock) }
                             ForEach(hud.meters ?? []) { meter in
