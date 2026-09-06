@@ -52,7 +52,7 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
 /// server stores whatever settings made the take, and their shapes differ
 /// per engine and per key.
 enum SoundBoothJSON: Decodable, Equatable {
-    case string(String), number(Double), bool(Bool), null, other
+    case string(String), number(Double), bool(Bool), array([SoundBoothJSON]), null, other
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -60,6 +60,7 @@ enum SoundBoothJSON: Decodable, Equatable {
         if let b = try? c.decode(Bool.self) { self = .bool(b); return }
         if let n = try? c.decode(Double.self) { self = .number(n); return }
         if let s = try? c.decode(String.self) { self = .string(s); return }
+        if let a = try? c.decode([SoundBoothJSON].self) { self = .array(a); return }
         self = .other
     }
 
@@ -81,6 +82,8 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let engine: String
     let mode: String
     let sourceText: String?
+    let screenplay: String?
+    let voiceSeed: Int?
     let script: String
     let readback: String?
     let jobs: [String]?
@@ -163,6 +166,8 @@ struct SoundBoothStatus: Decodable {
 /// setting the screen shows comes from here with its own hint, range and
 /// default, so the phone can never show a knob the engine does not have.
 struct SoundBoothGuide: Decodable {
+    struct Starter: Decodable, Identifiable { let id: String; let title: String; let engine: String; let script: String }
+    let starters: [Starter]?
     struct Rule: Decodable, Hashable { let pick: String; let when: String }
     struct Chooser: Decodable { let question: String; let answer: String; let rules: [Rule] }
     /// What the box is holding, and therefore which button exists. Part 121.1:
@@ -324,9 +329,9 @@ final class SoundBoothService: ObservableObject {
         try await get("api/kade/sound-booth/status/\(jobId)", fallback: "Couldn't read that render.")
     }
 
-    func cancel(jobId: String) async throws {
-        struct Ok: Decodable { let ok: Bool? }
-        let _: Ok = try await post("api/kade/sound-booth/cancel/\(jobId)", body: [:], timeout: 30, fallback: "Couldn't stop that render.")
+    struct CancelResult: Decodable { let ok: Bool?; let state: String?; let spoken: String? }
+    func cancel(jobId: String) async throws -> CancelResult {
+        try await post("api/kade/sound-booth/cancel/\(jobId)", body: [:], timeout: 30, fallback: "Couldn't stop that render.")
     }
 
     func projects() async throws -> [SoundBoothProject] {

@@ -74,6 +74,10 @@ struct SoundBoothView: View {
     @State private var isImporting = false
     @State private var isSuggesting = false
     @State private var confirmArmed = false
+    @State private var confirmPreview = false
+    @State private var quoteVersion = 0
+    @State private var starterId = ""
+    @State private var newVoice = false
     @State private var currentProjectId: String?
     @State private var currentJobId: String?
     @State private var pollTask: Task<Void, Never>?
@@ -109,6 +113,7 @@ struct SoundBoothView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 statusBlock
+                starterSection
                 engineSection
                 modeSection
                 writingSection
@@ -155,19 +160,48 @@ struct SoundBoothView: View {
         /* An armed confirm is dropped the moment the script changes, so a
          * second tap can never spend on something she has since edited. Same
          * for a switched engine: the price is different, so the quote is. */
-        .onChange(of: script) { _, _ in confirmArmed = false }
+        .onChange(of: script) { _, _ in invalidateQuote() }
+        .onChange(of: values) { _, _ in invalidateQuote() }
+        .onChange(of: clips.map { $0.url }) { _, _ in invalidateQuote() }
         .onChange(of: inputMode) { _, _ in
             if let m = currentInput { announce("\(m.boxLabel). \(m.boxHint)") }
         }
         .onChange(of: engine) { _, e in
-            confirmArmed = false
-            estimate = nil
+            invalidateQuote()
             if let g = guide?.engines[e] {
                 announce("\(g.name). \(g.tagline) \(g.where)")
             }
         }
         .onAppear { Task { await load() } }
         .onDisappear { pollTask?.cancel(); pollTask = nil }
+    }
+
+    private func invalidateQuote() {
+        confirmArmed = false
+        estimate = nil
+        quoteVersion += 1
+    }
+
+    private var starterSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Start something").font(.headline)
+            Picker("A starting script", selection: $starterId) {
+                Text("Choose a starting point").tag("")
+                ForEach(guide?.starters ?? []) { item in Text(item.title).tag(item.id) }
+            }
+            Button("Start a new project from this") {
+                guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
+                currentProjectId = nil; values = [:]; clips = []; newVoice = false
+                engine = starter.engine; script = starter.script; text = ""; readback = ""
+                invalidateQuote()
+                announce("Starting \(starter.title). The script is ready to edit. Nothing has been generated.")
+            }.disabled(starterId.isEmpty || isRendering || currentJobId != nil)
+            Text("Free to load. These replace the current editor; finish or save your work first. Audio generates only after you confirm its price.").font(.caption)
+            Button("Try a different designed voice next time") {
+                newVoice = true; values.removeValue(forKey: "seed"); invalidateQuote()
+                announce("The next preview or render will try a new voice. Imported clips still supply their own voice identity.")
+            }.disabled(engine != "scenema" || currentJobId != nil || isRendering)
+        }
     }
 
     // MARK: - Status
@@ -825,71 +859,47 @@ struct SoundBoothView: View {
     }
 
     private func renderTapped(preview: Bool) async {
-        let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         let st = collectedSettings()
-        if preview {
-            guard !s.isEmpty || st["voice_description"] != nil else {
-                announce("Describe the voice first, or write a script, so there is a voice to preview.")
-                return
-            }
-        } else {
-            guard !s.isEmpty else { return }
-            /* HER STANDING RULE: the cost is SAID before it runs. First tap
-             * says the price and arms; second tap spends. The armed state is
-             * dropped whenever the script or engine changes. A preview costs
-             * about a penny and says so on its own button, so it runs on one
-             * tap. */
-            if !confirmArmed {
-                confirmArmed = true
-                let spoken = estimate?.spoken ?? localEstimateSentence(for: s)
-                /* ⭐ THE ELEVEN-CENT LESSON (Part 121.3): her first web render
-                 * was quoted, confirmed and paid for with no clip attached,
-                 * and she only found out by listening. The quote says which
-                 * it is, every time, before the money moves. */
-                let cloneLine = clips.isEmpty
-                    ? " No clip attached, so the voice comes from your description."
-                    : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
-                announce("\(spoken)\(cloneLine) Press Render again to go ahead.")
-                return
-            }
-        }
-        confirmArmed = false
+        let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard preview || !s.isEmpty else { announce("Write a script first."); return }
+        var body = st
+        body["engine"] = engine; body["mode"] = mode
+        body["sourceText"] = text; body["readback"] = readback
+        if s.isEmpty {
+            let voice = (st["voice_description"] as? String ?? "A warm, clear adult voice.").replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+            body["script"] = "<speak voice=\"\(voice)\" gender=\"\((st["gender"] as? String) ?? "female")\"></speak>"
+        } else { body["script"] = s }
+        if preview { body["preview"] = true }
+        if newVoice { body["newVoice"] = true }
+        if let pid = currentProjectId { body["projectId"] = pid }
         isRendering = true
         defer { isRendering = false }
-        var body: [String: Any] = st
-        body["engine"] = engine
-        body["mode"] = mode
-        body["sourceText"] = text
-        body["readback"] = readback
-        if s.isEmpty, preview {
-            let voice = (st["voice_description"] as? String ?? "A warm, clear adult voice.").replacingOccurrences(of: "\"", with: "&quot;")
-            body["script"] = "<speak voice=\"\(voice)\" gender=\"\((st["gender"] as? String) ?? "female")\">Here is how I sound.</speak>"
-        } else {
-            body["script"] = s
-        }
-        if preview { body["preview"] = true }
-        if let pid = currentProjectId { body["projectId"] = pid }
-        announce(preview ? "Making a fifteen second sample…" : "Sending it…")
         do {
+            if !confirmArmed || confirmPreview != preview {
+                let version = quoteVersion
+                body["estimateOnly"] = true
+                let quote = try await service.render(body: body)
+                guard quoteVersion == version else { announce("The script or settings changed. Press again for an updated price."); return }
+                estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
+                let clipLine = clips.isEmpty ? " No reference clip attached." : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
+                announce((quote.estimate?.spoken ?? "Estimate unavailable.") + clipLine + " Press " + (preview ? "Hear this voice first" : "Render") + " again to confirm.")
+                return
+            }
+            confirmArmed = false
+            announce(preview ? "Sending the voice sample…" : "Sending the render…")
             let r = try await service.render(body: body)
-            currentProjectId = r.projectId ?? currentProjectId
+            newVoice = false; currentProjectId = r.projectId ?? currentProjectId
             if r.queued == true, let job = r.jobId {
-                currentJobId = job
-                Earcons.shared.play(.actionStart)
-                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + " The phone will buzz when it is ready, and this screen will say so.")
+                currentJobId = job; Earcons.shared.play(.actionStart)
+                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + " Progress will be read here. Long pieces continue while this screen is open.")
                 startPolling(job)
             } else {
-                Earcons.shared.play(.actionDone)
-                KadeHaptics.success()
-                let cents = max(1, Int(((r.costUSD ?? 0) * 100).rounded()))
-                announce("Ready. \(r.seconds ?? 0) seconds of audio, about \(cents) cents. It is in your library below and in My Creations.")
+                Earcons.shared.play(.actionDone); KadeHaptics.success()
+                announce("Ready. The recording is in your library below and in My Creations.")
                 await loadProjects()
             }
-        } catch {
-            Earcons.shared.play(.error)
-            KadeHaptics.error()
-            announce((error as? LocalizedError)?.errorDescription ?? "That render could not start.")
-        }
+        } catch { announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.") }
     }
 
     /// Only used when the server has not given us an estimate yet (she edited
@@ -918,10 +928,17 @@ struct SoundBoothView: View {
         pollTask = Task {
             var last = ""
             var ticks = 0
+            var failures = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 if Task.isCancelled { return }
-                guard let st = try? await service.status(jobId: jobId) else { continue }
+                let st: SoundBoothStatus
+                do { st = try await service.status(jobId: jobId); failures = 0 }
+                catch {
+                    failures += 1
+                    if failures == 1 || failures % 4 == 0 { announce("Cannot check progress right now. The render may still be working. Checking again shortly.") }
+                    continue
+                }
                 ticks += 1
                 // Part 126: speak on a state CHANGE, on the finish, and every
                 // other poll (30 s) while unfinished — the web's rule since
@@ -949,10 +966,11 @@ struct SoundBoothView: View {
 
     private func stopRender(_ jobId: String) async {
         do {
-            try await service.cancel(jobId: jobId)
+            let result = try await service.cancel(jobId: jobId)
+            if result.state == "done" { announce(result.spoken ?? "That take just finished. Checking its result."); return }
             pollTask?.cancel(); pollTask = nil
             currentJobId = nil
-            announce("Stopped.")
+            announce(result.spoken ?? "Stopped. Completed recordings are kept.")
             await loadProjects()
         } catch {
             announce((error as? LocalizedError)?.errorDescription ?? "Couldn't stop that render.")
@@ -980,16 +998,21 @@ struct SoundBoothView: View {
         engine = p.engine
         mode = p.mode == "advanced" ? "advanced" : "easy"
         text = p.sourceText ?? ""
-        script = p.script
+        script = p.screenplay ?? p.script
         readback = p.readback ?? ""
         estimate = nil
         confirmArmed = false
+        values = [:]; clips = []; newVoice = false
+        if let seed = p.voiceSeed { values["seed"] = String(seed) }
         if let opts = p.options {
             for (k, v) in opts {
                 if let t = v.asFieldText { values[k] = (k == "audio_quality" && t == "high") ? "1" : t }
             }
         }
-        announce("Opened \(p.title). Change what you like and render again.")
+        if p.engine == "seed", case .array(let references) = p.options?["audio_urls"] {
+            clips = references.compactMap { if case .string(let url) = $0 { return (url: url, name: "Saved reference") }; return nil }
+        } else if case .string(let url) = p.options?["reference_voice_url"] { clips = [(url: url, name: "Saved reference")] }
+        announce("Opened \(p.title). Voice settings and reference clips restored. Change what you like and render again.")
         focusStatus = true
     }
 
