@@ -13,6 +13,14 @@ import UIKit
 @MainActor
 final class WorldService: ObservableObject {
     @Published private(set) var isSending = false
+    @Published private(set) var isLive = false
+    @Published private(set) var liveStatus = "Live listening off"
+    private var listeningTask: Task<Void, Never>?
+    private var listeningGeneration = UUID()
+    private var listener: (([WorldEvent]) -> Void)?
+    private var cursor: Int?
+    private var seenSeqs = Set<Int>()
+    private var pendingEvents: [WorldEvent] = []
 
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
@@ -42,6 +50,15 @@ final class WorldService: ObservableObject {
         let kinds: [String]?
         let district: String?
         let error: String?
+        let hud: WorldHUD?
+        let actions: [WorldAction]?
+        let people: [WorldPerson]?
+        let exits: [WorldExit]?
+        let choices: [WorldAction]?
+        let mode: String?
+        let step: String?
+        let freeText: Bool?
+        let seenSeqs: [Int]?
     }
 
     struct WorldError: LocalizedError {
@@ -75,7 +92,7 @@ final class WorldService: ObservableObject {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("world-sounds", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let digest = SHA256.hash(data: Data(urlString.utf8))
+        let digest = SHA256.hash(data: Data(WorldSoundIdentity.cacheIdentity(remote).utf8))
             .map { String(format: "%02x", $0) }.joined().prefix(24)
         let ext = remote.pathExtension.isEmpty ? "snd" : remote.pathExtension
         let local = dir.appendingPathComponent("\(digest).\(ext)")
@@ -88,17 +105,92 @@ final class WorldService: ObservableObject {
     }
 
     func send(command: String) async throws -> WorldResult {
+        guard !isSending else { throw WorldError(message: "A command is already on its way. Give it a moment.") }
         isSending = true
-        defer { isSending = false }
+        defer { isSending = false; deliverPending() }
         var req = client.request(path: "api/world/command", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["command": command])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["command": command, "live": isLive])
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
             let server = (try? decoder.decode(WorldResult.self, from: data))?.error
             throw WorldError(message: server ?? "The world flickered (\(http.statusCode)). Try again.")
         }
-        return try decoder.decode(WorldResult.self, from: data)
+        let result = try decoder.decode(WorldResult.self, from: data)
+        seenSeqs.formUnion(result.seenSeqs ?? [])
+        return result
+    }
+
+    func here() async -> WorldResult? {
+        let req = client.request(path: "api/world/here", authorized: true)
+        guard let (data, response) = try? await client.send(req), response.statusCode == 200 else { return nil }
+        return try? decoder.decode(WorldResult.self, from: data)
+    }
+
+    func startListening(onEvents: @escaping ([WorldEvent]) -> Void) {
+        guard listeningTask == nil else { return }
+        listener = onEvents
+        let generation = UUID()
+        listeningGeneration = generation
+        listeningTask = Task { [weak self] in
+            guard let self else { return }
+            var delay: UInt64 = 2
+            while !Task.isCancelled {
+                liveStatus = "Connecting to the room"
+                do {
+                    let query = cursor.map { [URLQueryItem(name: "after", value: String($0))] }
+                    var req = client.request(path: "api/world/stream", authorized: true, queryItems: query)
+                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    let (bytes, response) = try await client.streamBytes(req)
+                    guard !Task.isCancelled, listeningGeneration == generation else { return }
+                    guard response.statusCode == 200 else {
+                        if response.statusCode == 401 || response.statusCode == 403 {
+                            liveStatus = "Live listening unavailable. Commands still work."
+                            break
+                        }
+                        throw URLError(.badServerResponse)
+                    }
+                    isLive = true
+                    liveStatus = "Hearing the room live"
+                    delay = 2
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        guard line.hasPrefix("data:"), let data = line.dropFirst(5).data(using: .utf8),
+                              let update = try? decoder.decode(WorldStreamUpdate.self, from: data) else { continue }
+                        if update.end != nil { break }
+                        if let received = update.cursor { cursor = received }
+                        pendingEvents.append(contentsOf: update.events ?? [])
+                        if !isSending { deliverPending() }
+                    }
+                } catch {
+                    if Task.isCancelled { break }
+                }
+                isLive = false
+                liveStatus = "Reconnecting. Commands still work."
+                do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) } catch { break }
+                delay = min(delay * 2, 30)
+            }
+            if listeningGeneration == generation { isLive = false; listeningTask = nil }
+        }
+    }
+
+    func stopListening() {
+        listeningTask?.cancel()
+        listeningGeneration = UUID()
+        listeningTask = nil
+        listener = nil
+        isLive = false
+        liveStatus = "Live listening off"
+    }
+
+    private func deliverPending() {
+        let fresh = pendingEvents.filter { event in
+            guard let seq = event.seq else { return true }
+            return seenSeqs.insert(seq).inserted
+        }
+        pendingEvents.removeAll(keepingCapacity: true)
+        if seenSeqs.count > 300 { seenSeqs = Set(seenSeqs.sorted().suffix(200)) }
+        if !fresh.isEmpty { listener?(fresh) }
     }
 }
 

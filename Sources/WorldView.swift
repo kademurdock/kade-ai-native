@@ -14,6 +14,20 @@ struct WorldView: View {
     @State private var command = ""
     @State private var history: [String] = []
     @State private var soundsOn = UserDefaults.standard.object(forKey: "kade.world.sounds") as? Bool ?? true
+    @AppStorage("kade.world.ambience") private var ambienceOn = true
+    @AppStorage("kade.world.live") private var liveOn = true
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var latestReply = ""
+    @State private var hud: WorldHUD?
+    @State private var choices: [WorldAction] = []
+    @State private var actions: [WorldAction] = []
+    @State private var exits: [WorldExit] = []
+    @State private var people: [WorldPerson] = []
+    @State private var creationStep: String?
+    @State private var mode = "play"
+    @State private var logExpanded = false
+    @State private var isVisible = false
+    @AccessibilityFocusState private var focusedChoice: String?
     /// Build 195: the sound manifest — district (ward-bed) ambience urls and
     /// the district she currently stands in.
     @State private var districtSounds: [String: String] = [:]
@@ -38,10 +52,6 @@ struct WorldView: View {
 
     private let quickCommands: [(label: String, cmd: String, hint: String)] = [
         ("Look", "look", "Describe where you are"),
-        ("North", "n", "Go north"),
-        ("South", "s", "Go south"),
-        ("East", "e", "Go east"),
-        ("West", "w", "Go west"),
         ("Inventory", "inventory", "What you are carrying"),
         ("Who", "who", "Who is here with you"),
         // Build 195 — the Reverie verbs, one tap each (Aug 10 city).
@@ -53,26 +63,30 @@ struct WorldView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
+            ScrollViewReader { _ in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(log) { line in
-                            Text(line.text)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(color(for: line.role))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(line.id)
+                        if !latestReply.isEmpty {
+                            Text("Latest reply").font(.headline).accessibilityAddTraits(.isHeader)
+                            Text(latestReply).textSelection(.enabled)
+                            Button("Read latest reply") { announce(latestReply) }
+                                .buttonStyle(.bordered)
+                        }
+                        worldControls
+                        DisclosureGroup("World log, \(log.count) entries", isExpanded: $logExpanded) {
+                            ForEach(log) { line in
+                                Text(line.text)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(color(for: line.role))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(line.id)
+                            }
                         }
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
                 }
-                .accessibilityLabel("World log")
-                .onChange(of: log) { _, newValue in
-                    if let last = newValue.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
+                .accessibilityLabel("Reverie")
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -82,6 +96,7 @@ struct WorldView: View {
                             Task { await send(item.cmd) }
                         }
                         .buttonStyle(.bordered)
+                        .disabled(service.isSending)
                         .accessibilityHint(item.hint)
                     }
                     Button(soundsOn ? "Sounds on" : "Sounds off") {
@@ -130,14 +145,134 @@ struct WorldView: View {
         .navigationTitle("The World")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            isVisible = true
             if log.isEmpty {
                 append("The gate knows you. Type look, or press the Look button.", .world)
                 await send("look")
+                startLiveIfNeeded()
                 await loadWorldSounds()
-            }
+            } else { startLiveIfNeeded() }
+        }
+        .onChange(of: liveOn) { _, enabled in if enabled { startLiveIfNeeded() } else { service.stopListening() } }
+        .onChange(of: ambienceOn) { _, _ in Task { await refreshAmbience(); await refreshRoomTone() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active && isVisible {
+                startLiveIfNeeded()
+                Task { if let result = await service.here() { updateControls(result) }; await refreshAmbience(); await refreshRoomTone() }
+            } else { service.stopListening(); WorldTones.shared.stop() }
         }
         .onDisappear {
+            isVisible = false
+            service.stopListening()
             WorldTones.shared.stop()
+        }
+    }
+
+    private var worldControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !choices.isEmpty {
+                Text("Choose").font(.headline).accessibilityAddTraits(.isHeader)
+                ForEach(choices) { action in
+                    Button(action.label) { Task { await send(action.cmd) } }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityFocused($focusedChoice, equals: action.id)
+                        .disabled(service.isSending)
+                }
+            }
+            if mode != "create" {
+                if let hud {
+                    DisclosureGroup("Your character: \(hud.name ?? "you"), \(hud.coin ?? 0) coin, feeling \(hud.mood ?? "okay")") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let clock = hud.clock { Text(clock) }
+                            ForEach(hud.meters ?? []) { meter in
+                                VStack(alignment: .leading) {
+                                    Text("\(meter.key.capitalized): \(meter.spokenValue)")
+                                    ProgressView(value: min(100, max(0, meter.value)), total: 100).accessibilityHidden(true)
+                                }
+                            }
+                            if let hint = hud.hint { Text(hint) }
+                            if let home = hud.home { Text("Home: \(home)") }
+                            if let partner = hud.partner { Text("Partner: \(partner)") }
+                        }
+                    }
+                }
+                if !exits.isEmpty {
+                    Text("Move").font(.headline).accessibilityAddTraits(.isHeader)
+                    ForEach(exits) { exit in
+                        Button(exit.spokenLabel) { Task { await send(exit.command) } }
+                            .buttonStyle(.bordered).disabled(service.isSending)
+                    }
+                }
+                if !actions.isEmpty {
+                    Text("Things you can do").font(.headline).accessibilityAddTraits(.isHeader)
+                    ForEach(actions) { action in
+                        Button(action.label) { perform(action) }
+                            .buttonStyle(.bordered)
+                            .accessibilityHint(action.hint ?? "")
+                            .disabled(service.isSending)
+                    }
+                }
+                if !people.isEmpty {
+                    Text("Here with you").font(.headline).accessibilityAddTraits(.isHeader)
+                    ForEach(people) { person in
+                        Menu {
+                            ForEach(person.cmds ?? []) { action in
+                                Button(action.label) { perform(action) }
+                            }
+                        } label: { Text(person.line ?? person.name) }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Actions with \(person.name)")
+                        .disabled(service.isSending)
+                    }
+                }
+            }
+            DisclosureGroup("World settings") {
+                Toggle("Hear the room live", isOn: $liveOn)
+                Text(service.liveStatus).font(.footnote)
+                Toggle("Background ambience", isOn: $ambienceOn)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func perform(_ action: WorldAction) {
+        if action.cmd == "cab" || action.cmd == "pawn" || action.cmd.hasPrefix("whisper ") || action.cmd.hasPrefix("teach ") {
+            command = action.cmd + " "
+            inputFocused = true
+            announce("\(action.label). Add the details in the command field, then press go.")
+        } else { Task { await send(action.cmd) } }
+    }
+
+    private func updateControls(_ result: WorldService.WorldResult) {
+        if mode == "create" && result.step == nil && result.mode == "create" { return }
+        if let h = result.hud { hud = h }
+        if let m = result.mode { mode = m }
+        actions = result.actions ?? actions
+        exits = result.exits ?? exits
+        people = result.people ?? people
+        choices = result.choices ?? []
+        if result.step != creationStep {
+            creationStep = result.step
+            if result.freeText == true && choices.isEmpty { inputFocused = true }
+            else if let first = choices.first { Task { await Task.yield(); focusedChoice = first.id } }
+        }
+    }
+
+    private func announce(_ text: String) {
+        guard isVisible, !text.isEmpty else { return }
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
+    private func startLiveIfNeeded() {
+        guard liveOn, isVisible, scenePhase == .active else { return }
+        service.startListening { events in
+            guard isVisible else { return }
+            for event in events { append(event.text, .meanwhile); playFeedback(event.sound ?? event.kind ?? "say") }
+            announce(events.map(\.text).joined(separator: " "))
+            if events.contains(where: { $0.kind == "enter" || $0.kind == "leave" }) {
+                Task { if let result = await service.here() { updateControls(result) } }
+            }
         }
     }
 
@@ -159,17 +294,20 @@ struct WorldView: View {
 
     private func sendTyped() async {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty else { return }
+        guard !cmd.isEmpty, !service.isSending else { return }
         command = ""
         await send(cmd)
         inputFocused = true
     }
 
     private func send(_ cmd: String) async {
+        guard !service.isSending else { return }
         append("> \(cmd)", .you)
         history.append(cmd)
+        if history.count > 60 { history.removeFirst(history.count - 60) }
         do {
             let result = try await service.send(command: cmd)
+            updateControls(result)
             var spoken: [String] = []
             for line in result.lines ?? [] {
                 let isMeanwhile = line.hasPrefix("MEANWHILE")
@@ -213,13 +351,15 @@ struct WorldView: View {
                 }
             }
             let announcement = spoken.joined(separator: " ")
+            latestReply = announcement
             if !announcement.isEmpty {
-                UIAccessibility.post(notification: .announcement, argument: announcement)
+                announce(announcement)
             }
         } catch {
             append(error.localizedDescription, .error)
             playFeedback("err")
-            UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
+            if command.isEmpty { command = cmd }
+            announce(error.localizedDescription)
         }
     }
 
@@ -230,6 +370,7 @@ struct WorldView: View {
     private func loadWorldSounds() async {
         guard let manifest = await service.fetchSoundManifest() else { return }
         for (kind, urlStr) in manifest.event ?? [:] {
+            if Task.isCancelled || !isVisible { return }
             if let local = await WorldService.cachedSoundFile(for: urlStr) {
                 WorldTones.shared.installEventSound(kind: kind, fileURL: local)
                 // Build 197: the same file, measured for its haptic shape.
@@ -245,7 +386,7 @@ struct WorldView: View {
     }
 
     private func refreshAmbience() async {
-        guard soundsOn, let d = currentDistrict, let urlStr = districtSounds[d] else {
+        guard soundsOn, ambienceOn, isVisible, let d = currentDistrict, let urlStr = districtSounds[d] else {
             WorldTones.shared.setAmbience(key: nil, fileURL: nil)
             return
         }
@@ -254,7 +395,7 @@ struct WorldView: View {
     }
 
     private func refreshRoomTone() async {
-        guard soundsOn, let r = currentRoomId, let urlStr = roomSounds[r] else {
+        guard soundsOn, ambienceOn, isVisible, let r = currentRoomId, let urlStr = roomSounds[r] else {
             WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
             return
         }
@@ -263,6 +404,7 @@ struct WorldView: View {
     }
 
     private func playFeedback(_ kind: String) {
+        guard isVisible, scenePhase == .active else { return }
         if soundsOn {
             WorldTones.shared.play(kind)
         }
