@@ -50,6 +50,7 @@ extension IntentRouter.Destination {
         case .accessRequests:  return "access-requests"
         case .feedbackReports: return "feedback"
         case .adminHub:        return "admin"
+        case .agentWork:       return "agent-work"
         // Part 112: broadcasts default to this route bridge-side, so a
         // What's New push's tap opens the history instead of the launch
         // default (the Part-83 failure that came back for digests).

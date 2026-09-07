@@ -182,7 +182,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if category == "KADE_ROUTE",
            let routeName = response.notification.request.content.userInfo["kadeRoute"] as? String,
            let dest = IntentRouter.Destination(routeName: routeName) {
-            Task { @MainActor in IntentRouter.shared.request(dest) }
+            let runId = response.notification.request.content.userInfo["kadeRunId"] as? String
+            Task { @MainActor in
+                IntentRouter.shared.pendingHarnessRunId = runId.flatMap {
+                    $0.range(of: "^r[a-z0-9]{8,40}$", options: .regularExpression) != nil ? $0 : nil
+                }
+                IntentRouter.shared.request(dest)
+            }
         }
         completionHandler()
     }

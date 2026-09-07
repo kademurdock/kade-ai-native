@@ -91,6 +91,7 @@ final class IntentRouter: ObservableObject {
         // that string can name so far.
         case feedbackReports
         case adminHub
+        case agentWork
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
@@ -102,6 +103,7 @@ final class IntentRouter: ObservableObject {
     /// to consume alongside the `.agentCall` destination -- same one-shot
     /// contract as `pending` itself.
     @Published var pendingAgentCall: AgentCallPayload?
+    @Published var pendingHarnessRunId: String?
 
     private init() {}
 

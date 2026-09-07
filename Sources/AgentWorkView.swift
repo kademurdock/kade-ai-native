@@ -34,16 +34,19 @@ private struct AgentWorkPage: Decodable {
     let tasks: [AgentWorkItem]
     let nextCursor: String?
 }
+private struct WorkOptions: Decodable { let codingJobs: Bool }
 
 /// Request receipts are read-only here; opening a saved chat never resends a turn.
 struct AgentWorkView: View {
     let apiClient: KadeAPIClient
+    var selectedRunId: String? = nil
     let onOpenConversation: (KadeConversation) -> Void
     @EnvironmentObject private var conversationsService: ConversationsService
     @State private var items: [AgentWorkItem] = []
     @State private var cursor: String?
     @State private var loading = false
     @State private var loaded = false
+    @State private var codingJobs = false
     @State private var status = "Loading your requests…"
     @State private var openingID: String?
     @State private var blocked = false
@@ -51,9 +54,13 @@ struct AgentWorkView: View {
     @AccessibilityFocusState private var focusedTask: String?
 
     var body: some View {
+      if let selectedRunId {
+        CodingWorkView(apiClient: apiClient, runId: selectedRunId)
+      } else {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Check work after a connection drops. Open the chat to read the reply or stop a running request.")
+                if codingJobs { NavigationLink("Coding jobs") { CodingWorkView(apiClient: apiClient) } }
                 Text(status)
                     .font(.subheadline)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -113,6 +120,7 @@ struct AgentWorkView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { if !loaded { await load() } }
         .onDisappear { loadTask?.cancel() }
+      }
     }
 
     private func refresh() {
@@ -132,6 +140,19 @@ struct AgentWorkView: View {
         }
         status = older ? "Loading older requests…" : "Checking your requests…"
         do {
+            if !loaded {
+                let optionsRequest = apiClient.request(path: "api/kade/work-options", authorized: true)
+                let (optionsData, optionsResponse) = try await apiClient.send(optionsRequest)
+                try Task.checkCancellation()
+                if optionsResponse.statusCode == 403 {
+                    blocked = true
+                    status = "Access was refused. Requests have stopped."
+                    return
+                }
+                if optionsResponse.statusCode == 200 {
+                    codingJobs = try JSONDecoder().decode(WorkOptions.self, from: optionsData).codingJobs
+                }
+            }
             let query = older ? cursor.map { [URLQueryItem(name: "before", value: $0)] } ?? [] : []
             let req = apiClient.request(path: "api/agents/chat/tasks", authorized: true, queryItems: query)
             let (data, http) = try await apiClient.send(req)

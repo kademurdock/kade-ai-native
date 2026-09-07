@@ -19,6 +19,7 @@ struct ContentView: View {
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var apiClient: KadeAPIClient
+    @State private var selectedHarnessRunId: String?
 
     // Session 14 (Kade asked for it by name): one tap from the home screen
     // straight into a Spotter call, no agent to pick and no conversation to
@@ -255,7 +256,7 @@ struct ContentView: View {
                 case .conversations:
                     ConversationListView()
                 case .agentWork:
-                    AgentWorkView(apiClient: apiClient) { conversation in
+                    AgentWorkView(apiClient: apiClient, selectedRunId: selectedHarnessRunId) { conversation in
                         go(.savedChat(conversation))
                     }
                 case .savedChat(let conversation):
@@ -608,7 +609,7 @@ struct ContentView: View {
             // you), not Tools. No Siri phrase (the provider sits at
             // Apple's 10-shortcut cap — see KadeAppIntents) and no Quick
             // Action (iOS shows 4; five are already declared).
-            Button { go(.agentWork) } label: {
+            Button { selectedHarnessRunId = nil; go(.agentWork) } label: {
                 Label("Agent work", systemImage: "checklist")
                     .frame(maxWidth: .infinity)
             }
@@ -987,6 +988,10 @@ struct ContentView: View {
             go(.feedbackReports)
         case .adminHub:
             go(.admin)
+        case .agentWork:
+            selectedHarnessRunId = router.pendingHarnessRunId
+            router.pendingHarnessRunId = nil
+            go(.agentWork)
         case .announcements:
             go(.announcements)
         }
