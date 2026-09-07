@@ -60,6 +60,7 @@ struct KadeTileLabelStyle: LabelStyle {
                 .font(.body.weight(.medium))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
 
@@ -106,9 +107,10 @@ struct KadeGridTileLabelStyle: LabelStyle {
             .accessibilityHidden(true)
 
             configuration.title
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity)
@@ -141,22 +143,40 @@ struct KadeCardButtonStyle: ButtonStyle {
         let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
         let pressed = configuration.isPressed
         return configuration.label
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 48)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
+                    .fill(Color(.secondarySystemGroupedBackground))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
-                        StylePrefs.highContrast ? Color.primary.opacity(0.55) : Color.primary.opacity(0.06),
+                        StylePrefs.highContrast ? Color.primary.opacity(0.65) : Color.primary.opacity(0.14),
                         lineWidth: StylePrefs.highContrast ? 1.5 : 1
                     )
             )
             .opacity(pressed ? 0.75 : 1.0)
             .scaleEffect((pressed && !reduce) ? 0.975 : 1.0)
             .animation(reduce ? nil : .spring(response: 0.28, dampingFraction: 0.7), value: pressed)
+    }
+}
+
+/// Eager layout keeps the same controls and reading order as text size changes.
+struct KadeToolRow<Content: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        layout { content }
     }
 }
 

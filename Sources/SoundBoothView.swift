@@ -548,7 +548,7 @@ struct SoundBoothView: View {
                     KadeHaptics.press()
                     Task { await renderTapped(preview: true) }
                 } label: {
-                    Text("Hear this voice first — 15 seconds, about a penny").frame(maxWidth: .infinity)
+                    Text("Hear this voice first — 15 seconds").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(KadeCardButtonStyle())
                 .disabled(isRendering || currentJobId != nil)

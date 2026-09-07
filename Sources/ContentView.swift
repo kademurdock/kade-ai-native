@@ -90,9 +90,10 @@ struct ContentView: View {
     /// alone, so a dictate, Settings, or Help push never grows a surprise
     /// list under it (her rule is about conversations, nothing else).
     private func go(_ destination: HomeRoute) {
-        if destination == .mainChat {
-            path = [.conversations, .mainChat]
-        } else {
+        switch destination {
+        case .mainChat, .savedChat:
+            path = [.conversations, destination]
+        default:
             path = [destination]
         }
     }
@@ -101,19 +102,13 @@ struct ContentView: View {
     private enum Focus: Hashable { case status, error, email }
     @AccessibilityFocusState private var a11yFocus: Focus?
 
-    private var buildString: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "Version \(v), build \(b)"
-    }
-
     private var statusText: String {
         switch auth.state {
-        case .loading:            return "\(buildString) · checking your session…"
-        case .signedOut:          return "\(buildString) · not signed in"
-        case .signingIn:          return "\(buildString) · signing in…"
-        case .signedIn(let u):    return "\(buildString) · signed in as \(u.displayName)"
-        case .failed:             return "\(buildString) · not signed in"
+        case .loading:            return "Checking your session…"
+        case .signedOut:          return "Not signed in"
+        case .signingIn:          return "Signing in…"
+        case .signedIn(let u):    return "Signed in as \(u.displayName)"
+        case .failed:             return "Not signed in"
         }
     }
 
@@ -164,7 +159,7 @@ struct ContentView: View {
                     // real gap there, just an unadvertised capability, now
                     // written down in Help.
                     if !isSignedIn {
-                        Text("Sign in to chat with your Kade-AI companions and call your Spotter. For games and everything else, use \"Open Kade-AI web\" below.")
+                        Text("Your companions, conversations, and shared moments. Sign in to get started.")
                             .font(.body)
                     }
 
@@ -193,7 +188,10 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                 }
                 .padding()
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Kade-AI")
             .navigationBarTitleDisplayMode(.inline)
             /* ⭐ PART 109 — the data-use gate sits on the ROOT stack, not on any
@@ -254,6 +252,12 @@ struct ContentView: View {
                     HelpView(apiClient: apiClient)
                 case .conversations:
                     ConversationListView()
+                case .agentWork:
+                    AgentWorkView(apiClient: apiClient) { conversation in
+                        go(.savedChat(conversation))
+                    }
+                case .savedChat(let conversation):
+                    ConversationDetailView(conversation: conversation)
                 case .describe:
                     DescribeView(apiClient: apiClient)
                 case .quickDictate:
@@ -368,8 +372,11 @@ struct ContentView: View {
     // MARK: - Sections
 
     private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Status").font(.headline)
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
+                .font(.title2)
+                .foregroundStyle(.indigo)
+                .accessibilityHidden(true)
             /* PART 91 — flagged for contrast by Apple's audit. `.secondary` is
              * about 4.4:1 on white, which just misses the 4.5:1 that text this
              * size needs; the system reads it as decorative and this line is
@@ -377,9 +384,13 @@ struct ContentView: View {
              * in. Primary at the same size and weight: same layout, same
              * spacing, one shade darker. */
             Text(statusText)
-                .font(.subheadline)
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityFocused($a11yFocus, equals: .status)
@@ -596,6 +607,14 @@ struct ContentView: View {
             // you), not Tools. No Siri phrase (the provider sits at
             // Apple's 10-shortcut cap — see KadeAppIntents) and no Quick
             // Action (iOS shows 4; five are already declared).
+            Button { go(.agentWork) } label: {
+                Label("Agent work", systemImage: "checklist")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .indigo))
+            .accessibilityHint("Check recent requests and find saved replies after a connection drops.")
+
             Button { go(.alerts) } label: {
                 Label("Alerts", systemImage: "bell")
                     .frame(maxWidth: .infinity)
@@ -691,27 +710,27 @@ struct ContentView: View {
             .accessibilityHint("Write something and have it performed. One actor with real acting on Kade's own machine, or a whole scene with several voices, music and sound effects.")
 
             VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("Transcribe", spoken: "Transcribe a voice memo", icon: "waveform", tint: .purple, hint: "Records what you say and turns it into text you can edit, tidy up and share.", destination: .transcribe)
                     toolTile("Describe", spoken: "Describe a photo, video, or document", icon: "plus.viewfinder", tint: .teal, hint: "Take or choose a photo or video, or pick a document, and get it described or read back to you.", destination: .describe)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("Matchmaker", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three companions who might be a good fit.", destination: .matchmaker)
                     toolTile("The Parlor", spoken: "The Parlor", icon: "suit.club.fill", tint: .mint, hint: "Every game on a menu — play your own cards with buttons, seat characters if you want company, and a house narrator calls the table.", destination: .parlor)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("Kade's Clubhouse", spoken: "Kade's Clubhouse", icon: "hifispeaker.2.fill", tint: .pink, hint: "Live family voice rooms with a shared jukebox anyone can drive, private Hotel rooms with passcodes, and companion guests you can invite in.", destination: .lounge)
                     toolTile("Debate Room", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 companions, and let them go back and forth. Also reaches the Conversation Hall.", destination: .debateRoom)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("Agent Builder", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own companions.", destination: .agentBuilder)
                     toolTile("Marketplace", spoken: "The Marketplace", icon: "storefront", tint: .orange, hint: "Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.", destination: .marketplace)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("Bookmarks", spoken: "Bookmarks", icon: "bookmark.fill", tint: .red, hint: "Your tagged conversations, gathered by bookmark \u{2014} tag any conversation from the conversation list.", destination: .bookmarks)
                     toolTile("Prompts", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", destination: .prompts)
                 }
-                HStack(alignment: .top, spacing: 12) {
+                KadeToolRow {
                     toolTile("My Creations", spoken: "My Creations", icon: "photo.stack", tint: .yellow, hint: "Every picture, video, and song you've made — play them, save them to Photos, or put them on the family Wall of Fame.", destination: .myCreations)
                     toolTile("Wall of Fame", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", destination: .wallOfFame)
                 }
@@ -1152,6 +1171,8 @@ enum HomeRoute: Identifiable, Hashable {
     case transcribe
     case help
     case conversations
+    case agentWork
+    case savedChat(KadeConversation)
     case describe
     case quickDictate
     case kadeKeysDictate
@@ -1188,6 +1209,8 @@ enum HomeRoute: Identifiable, Hashable {
         case .transcribe: return "transcribe"
         case .help: return "help"
         case .conversations: return "conversations"
+        case .agentWork: return "agentWork"
+        case .savedChat(let conversation): return "savedChat-\(conversation.conversationId)"
         case .describe: return "describe"
         case .quickDictate: return "quickDictate"
         case .kadeKeysDictate: return "kadeKeysDictate"

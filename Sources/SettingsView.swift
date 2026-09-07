@@ -395,11 +395,21 @@ struct SettingsView: View {
         Section {
             diagnosticsRow(searchStyle: false)
             dataUseRow
+            Text(appVersion)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
         } header: {
             sectionHeader("Support")
         } footer: {
             Text("If the app ever crashes, open it again and share diagnostics here -- the crash report plus a timeline of what the app was doing. Never your conversations.")
         }
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+        return "Kade-AI version \(version), build \(build)"
     }
 
     /* ⭐ PART 109 — the data-use disclosure, findable again after you agree.
