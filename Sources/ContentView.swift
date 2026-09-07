@@ -93,6 +93,8 @@ struct ContentView: View {
         switch destination {
         case .mainChat, .savedChat:
             path = [.conversations, destination]
+        case .feedbackReports:
+            path = [.admin, .feedbackReports]
         default:
             path = [destination]
         }
@@ -311,10 +313,9 @@ struct ContentView: View {
                 case .admin:
                     AdminView(apiClient: apiClient)
                 case .feedbackReports:
-                    // Part 83: the bug-report push's deep link -- the Admin
-                    // hub opened straight onto Feedback reports, so the tap
-                    // lands where the news is.
-                    AdminView(apiClient: apiClient, initialRoute: .feedback)
+                    // A real parent route makes Back reliable, including
+                    // another notification tapped while already in Admin.
+                    AdminFeedbackView(service: AdminService(client: apiClient))
                 }
             }
         }

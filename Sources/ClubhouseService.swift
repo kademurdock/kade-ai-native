@@ -1022,6 +1022,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         do {
             try await newRoom.localParticipant.setMicrophone(enabled: true, captureOptions: captureOpts())
         } catch {
+            guard roomGeneration == generation else { return }
             micMuted = true
             announce("Mic permission was refused — you can listen, but the room cannot hear you.")
         }
@@ -1191,8 +1192,11 @@ final class ClubhouseService: NSObject, ObservableObject {
                 }
             } catch {
                 guard self.room === room else { return }
-                self.micMuted = true
-                self.announce("The microphone could not restart. It is muted; try the mic button.")
+                // A failed disable is not proof the raw mic stopped. Leave
+                // instead of claiming mute or exposing the room to feedback.
+                self.announce("Audio setup failed. Leaving the room; please rejoin.")
+                self.leave()
+                return
             }
             guard self.room === room else { return }
             self.assertSpeakerIfBare()
