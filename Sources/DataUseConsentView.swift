@@ -89,7 +89,7 @@ struct DataUseConsentView: View {
     static let whoReceivesIt = """
         Your words and recordings go first to Kade-AI's own servers, and from \
         there they reach the companies that do the actual work: Z.AI, \
-        OpenRouter, Moonshot AI and DeepSeek write the replies. Deepgram turns \
+        OpenRouter, xAI, Moonshot AI and DeepSeek write the replies. Deepgram turns \
         your speech into text. Inworld and Fish Audio speak the replies out \
         loud. Google reads photos, video and documents you share, and indexes \
         your saved memories so they can be found again. Tavily searches the web \

@@ -297,6 +297,7 @@ struct AdminView: View {
         var id: String { rawValue }
     }
     @State private var route: Route?
+    @State private var consumedInitialRoute = false
 
     var body: some View {
         List {
@@ -361,8 +362,15 @@ struct AdminView: View {
             // drilled into one section. One-shot, and only if she hasn't
             // navigated on her own; the async hop keeps the presentation off
             // the first layout pass (the logbook lessons).
+            guard !consumedInitialRoute else { return }
+            // Consume before scheduling: Back makes this hub appear again.
+            // A nil route then means she returned, not a fresh notification.
+            consumedInitialRoute = true
             if let r = initialRoute, route == nil {
-                DispatchQueue.main.async { route = r }
+                DispatchQueue.main.async {
+                    guard route == nil else { return }
+                    route = r
+                }
             }
         }
         .navigationDestination(item: $route) { destination in

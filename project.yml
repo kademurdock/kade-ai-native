@@ -10,7 +10,8 @@ name: KadeAI
 packages:
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
-    exactVersion: 2.15.3
+    # Merged upstream fix: negotiate stereo Opus receive channels (PR 1068).
+    revision: dcc9b06b693000f5eacdce71c8385af1239ab138
 options:
   bundleIdPrefix: com.kademurdock
   deploymentTarget:

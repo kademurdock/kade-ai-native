@@ -81,7 +81,7 @@ struct ClubhouseView: View {
             } header: {
                 Text("Rooms")
             } footer: {
-                Text("Live family voice rooms with real stereo. Person to person on Kade's own room server — a companion only ever hears a room you invited them into.")
+                Text("Live family voice rooms with a shared jukebox. Person to person on Kade's own room server — a companion only ever hears a room you invited them into.")
             }
             Section {
                 TextField("Your group's passcode", text: $hotelCode)
@@ -347,14 +347,16 @@ struct ClubhouseView: View {
                 Text("Two host voices read the room out loud for everybody — Miss A works the front desk (comings, goings, taping notices) and Kade's calm narrator runs the booth (jukebox news). Real audio, no screen reader needed; volume is yours alone.")
             }
             Section {
-                Toggle("Headphones clarity mode", isOn: Binding(
+                Toggle("Headphones clarity and stereo", isOn: Binding(
                     get: { service.clearMic },
                     set: { service.setClearMic($0) }
                 ))
+                Text(service.musicOutputStatus)
+                    .font(.footnote)
             } header: {
                 Text("My mic")
             } footer: {
-                Text("Sends your mic raw — no echo cancel, no noise trims, full fidelity, and incoming music stops dipping while you talk. It also unlocks STEREO music on this phone: Apple's echo-cancel engine is mono-only (the same wall TeamTalk hits), so with this off, the jukebox arrives folded to one channel. Headphones only: on a speaker, the room will hear themselves echo off you.")
+                Text("With headphones connected, uses the phone microphone and a separate stereo music path. Bluetooth headset microphones are not used in this mode. Stereo depends on the song and output device. Disconnect headphones to restore speaker echo protection automatically.")
             }
             Section {
                 if service.botName == nil {

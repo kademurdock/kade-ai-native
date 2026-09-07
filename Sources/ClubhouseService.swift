@@ -118,6 +118,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     @Published var songDur: Double = 300
     @Published var hasSong = false
     @Published var clearMic: Bool
+    @Published private(set) var musicOutputStatus = "Speaker-friendly audio"
     @Published var paOn: Bool
     @Published var paVolume: Double
     @Published var recording = false
@@ -181,6 +182,13 @@ final class ClubhouseService: NSObject, ObservableObject {
     private var leaveAfterRec = false
     private var knockTask: Task<Void, Never>?
     private var routeObserver: NSObjectProtocol?
+    private var headphoneAudioActive = false
+    private var audioProfileUpdating = false
+    private var roomGeneration = 0
+    private var disconnectTask: Task<Void, Never>?
+    private var musicPlayers: [ObjectIdentifier: (track: RemoteAudioTrack, player: ClubhouseMusicRenderer)] = [:]
+    private var musicFallbacks = Set<ObjectIdentifier>()
+    private var musicPlaybackGeneration = 0
 
     init(client: KadeAPIClient) {
         let saved = UserDefaults.standard.object(forKey: "kadeClubMusicVol") as? Double
@@ -953,17 +961,23 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     func join(roomKey: String, label: String, code: String?) async {
-        guard phase != .joining else { return }
+        guard phase == .picker else { return }
+        roomGeneration += 1
+        let generation = roomGeneration
         phase = .joining
+        await disconnectTask?.value
+        guard roomGeneration == generation else { return }
         statusLine = "Getting your room key…"
         let mint: Mint
         do {
             mint = try await mintToken(roomKey: roomKey, code: code, lane: nil)
         } catch {
+            guard roomGeneration == generation else { return }
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Could not get a room key."
             phase = .picker
             return
         }
+        guard roomGeneration == generation else { return }
         myIdentity = mint.identity
         myName = mint.name
         joinedRoomKey = mint.room
@@ -978,7 +992,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         // minimum (the room's music/voice balance is HER slider's job, not
         // Apple's), and platform voice processing follows the clarity pref.
         AudioManager.shared.duckingLevel = .min
-        try? AudioManager.shared.setPlatformVoiceProcessingAllowed(!clearMic)
+        configureAudioProfile()
 
         var attempt = 0
         while true {
@@ -988,15 +1002,19 @@ final class ClubhouseService: NSObject, ObservableObject {
                 : "Waking the room up — still warming, try \(attempt) of 8…"
             do {
                 try await newRoom.connect(url: mint.url, token: mint.token)
+                guard roomGeneration == generation else { await newRoom.disconnect(); return }
                 break
             } catch {
+                guard roomGeneration == generation else { return }
                 if attempt >= 8 {
                     statusLine = "The room server never answered — it may need a look. Try once more in a minute."
                     phase = .picker
                     room = nil
+                    restoreAudioProfile()
                     return
                 }
                 try? await Task.sleep(nanoseconds: 3_500_000_000)
+                guard roomGeneration == generation else { return }
             }
         }
 
@@ -1004,8 +1022,10 @@ final class ClubhouseService: NSObject, ObservableObject {
         do {
             try await newRoom.localParticipant.setMicrophone(enabled: true, captureOptions: captureOpts())
         } catch {
+            micMuted = true
             announce("Mic permission was refused — you can listen, but the room cannot hear you.")
         }
+        guard roomGeneration == generation else { return }
 
         // HER CATCH (July 24 night: "the app just randomly went to ear piece
         // and got stuck" — clarity-mode toggles and headphone plug/unplug):
@@ -1018,7 +1038,7 @@ final class ClubhouseService: NSObject, ObservableObject {
             routeObserver = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.assertSpeakerIfBare() }
+                Task { @MainActor in self?.audioRouteChanged() }
             }
         }
 
@@ -1038,12 +1058,14 @@ final class ClubhouseService: NSObject, ObservableObject {
         rebuildRoster()
         rebuildUI()
         let others = roster.count - 1
-        announce("You are in \(label) with \(others) other\(others == 1 ? "" : "s"). Your mic is live.")
+        announce("You are in \(label) with \(others) other\(others == 1 ? "" : "s"). \(micMuted ? "Your mic is muted." : "Your mic is live.")")
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
+            guard self?.roomGeneration == generation else { return }
             self?.sendData(["t": "hello"])
         }
         await loadAgents()
+        guard roomGeneration == generation else { return }
         tick?.invalidate()
         tick = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.periodicTick() }
@@ -1082,14 +1104,20 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     func toggleMic() {
-        guard let room else { return }
-        micMuted.toggle()
-        let enabled = !micMuted
+        guard let room, !audioProfileUpdating else { return }
+        let enabled = micMuted
         let opts = captureOpts()
         Task {
-            try? await room.localParticipant.setMicrophone(enabled: enabled, captureOptions: opts)
+            do {
+                try await room.localParticipant.setMicrophone(enabled: enabled, captureOptions: opts)
+                guard self.room === room else { return }
+                micMuted = !enabled
+                announce(micMuted ? "Mic muted." : "Mic live.")
+            } catch {
+                guard self.room === room else { return }
+                announce("The microphone change failed. Try again.")
+            }
         }
-        announce(micMuted ? "Mic muted." : "Mic live.")
     }
 
     /// Her design point, verbatim: "we might not TECHnically need iphone
@@ -1098,7 +1126,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     /// speaker-friendly processing stays the default because one
     /// speakerphone without echo cancel wrecks the room for everybody.
     private func captureOpts() -> AudioCaptureOptions {
-        clearMic
+        headphoneAudioActive
             ? AudioCaptureOptions(echoCancellation: false, autoGainControl: false, noiseSuppression: false, highpassFilter: false)
             : AudioCaptureOptions()
     }
@@ -1106,21 +1134,94 @@ final class ClubhouseService: NSObject, ObservableObject {
     func setClearMic(_ on: Bool) {
         clearMic = on
         UserDefaults.standard.set(on, forKey: "kadeClubClearMic")
-        guard let room else { return }
-        try? AudioManager.shared.setPlatformVoiceProcessingAllowed(!on)
-        let opts = captureOpts()
-        let unmuted = !micMuted
-        Task {
-            try? await room.localParticipant.setMicrophone(enabled: false)
-            if unmuted {
-                try? await room.localParticipant.setMicrophone(enabled: true, captureOptions: opts)
-            }
-            // the audio-unit rebuild above is exactly the move that used to
-            // strand output on the earpiece — put the speaker preference back
-            AudioManager.shared.isSpeakerOutputPreferred = true
-            self.assertSpeakerIfBare()
-            self.announce(on ? "Mic is raw now — full clarity, headphones etiquette." : "Mic is speaker-friendly now.")
+        audioRouteChanged()
+    }
+
+    private var wantsHeadphoneAudio: Bool {
+        let headphones: [AVAudioSession.Port] = [.headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE]
+        return clearMic && AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+            headphones.contains($0.portType)
         }
+    }
+
+    private func configureAudioProfile() {
+        stopMusicPlayers()
+        let manager = AudioManager.shared
+        let session = AVAudioSession.sharedInstance()
+        headphoneAudioActive = wantsHeadphoneAudio
+        do {
+            manager.audioSession.isAutomaticConfigurationEnabled = !headphoneAudioActive
+            try manager.setPlatformVoiceProcessingAllowed(!headphoneAudioActive)
+            if headphoneAudioActive {
+                // HFP would select the headset mic and force Bluetooth mono.
+                // A2DP output plus the phone mic preserves the music channels.
+                try session.setCategory(.playAndRecord, mode: .default,
+                                        options: [.allowBluetoothA2DP, .mixWithOthers])
+                try session.setPreferredInput(session.availableInputs?.first { $0.portType == .builtInMic })
+                try session.setActive(true)
+                musicOutputStatus = "Headphones: waiting for stereo music; phone microphone"
+            } else {
+                try session.setPreferredInput(nil)
+                try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+                musicOutputStatus = clearMic ? "Headphones disconnected: echo protection is on" : "Speaker-friendly audio"
+            }
+        } catch {
+            headphoneAudioActive = false
+            manager.audioSession.isAutomaticConfigurationEnabled = true
+            try? manager.setPlatformVoiceProcessingAllowed(true)
+            musicOutputStatus = "Stereo setup failed; standard audio is active"
+        }
+        applyVolumes()
+    }
+
+    private func audioRouteChanged() {
+        guard phase == .inRoom, let room, !audioProfileUpdating else { return }
+        guard wantsHeadphoneAudio != headphoneAudioActive else { assertSpeakerIfBare(); return }
+        audioProfileUpdating = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.audioProfileUpdating = false }
+            do {
+                try await room.localParticipant.setMicrophone(enabled: false)
+                guard self.room === room else { return }
+                self.configureAudioProfile()
+                if !self.micMuted {
+                    try await room.localParticipant.setMicrophone(enabled: true, captureOptions: self.captureOpts())
+                }
+            } catch {
+                guard self.room === room else { return }
+                self.micMuted = true
+                self.announce("The microphone could not restart. It is muted; try the mic button.")
+            }
+            guard self.room === room else { return }
+            self.assertSpeakerIfBare()
+            self.announce(self.musicOutputStatus)
+            // A headphone unplug can arrive while the microphone restart is
+            // awaiting LiveKit. Reconcile once it has finished as well.
+            if self.headphoneAudioActive && !self.wantsHeadphoneAudio {
+                Task { @MainActor [weak self] in self?.audioRouteChanged() }
+            }
+        }
+    }
+
+    private func stopMusicPlayers() {
+        musicPlaybackGeneration += 1
+        for item in musicPlayers.values {
+            item.track.remove(audioRenderer: item.player)
+            item.player.stop()
+            item.track.volume = musicVolume
+        }
+        musicPlayers.removeAll()
+        musicFallbacks.removeAll()
+    }
+
+    private func restoreAudioProfile() {
+        stopMusicPlayers()
+        headphoneAudioActive = false
+        AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = true
+        try? AudioManager.shared.setPlatformVoiceProcessingAllowed(true)
+        try? AVAudioSession.sharedInstance().setPreferredInput(nil)
     }
 
     /// If the current route landed on the tiny ear speaker with no
@@ -1197,6 +1298,8 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     func leave() {
+        roomGeneration += 1
+        restoreAudioProfile()
         pa.stop()
         stopKnocking(quiet: true)
         if let obs = routeObserver {
@@ -1221,7 +1324,8 @@ final class ClubhouseService: NSObject, ObservableObject {
         uiTick?.invalidate()
         uiTick = nil
         if let room {
-            Task { await room.disconnect() }
+            room.remove(delegate: self)
+            disconnectTask = Task { await room.disconnect() }
         }
         room = nil
         bot = nil
@@ -1405,10 +1509,43 @@ final class ClubhouseService: NSObject, ObservableObject {
         for p in room.remoteParticipants.values {
             for pub in p.audioTracks {
                 if pub.name == "music", let track = pub.track as? RemoteAudioTrack {
-                    track.volume = musicVolume
+                    configureMusicTrack(track)
                 }
             }
         }
+    }
+
+    private func configureMusicTrack(_ track: RemoteAudioTrack) {
+        let id = ObjectIdentifier(track)
+        guard headphoneAudioActive, !musicFallbacks.contains(id) else {
+            track.volume = musicVolume
+            return
+        }
+        if let existing = musicPlayers[id] {
+            existing.player.setVolume(musicVolume)
+            return
+        }
+        let generation = musicPlaybackGeneration
+        let player = ClubhouseMusicRenderer(volume: musicVolume) { [weak self, weak track] stereo in
+            Task { @MainActor in
+                guard let self, let track, self.musicPlaybackGeneration == generation,
+                      self.musicPlayers[id] != nil else { return }
+                if stereo {
+                    self.musicOutputStatus = "Stereo music path active; phone microphone"
+                } else {
+                    if let entry = self.musicPlayers.removeValue(forKey: id) {
+                        track.remove(audioRenderer: entry.player)
+                        entry.player.stop()
+                    }
+                    self.musicFallbacks.insert(id)
+                    track.volume = self.musicVolume
+                    self.musicOutputStatus = "Standard music playback: source or output is not stereo"
+                }
+            }
+        }
+        musicPlayers[id] = (track, player)
+        track.volume = 0
+        track.add(audioRenderer: player)
     }
 
     // ── bot guest ──
@@ -1725,6 +1862,7 @@ extension ClubhouseService: RoomDelegate {
         let identity = participant.identity?.stringValue ?? ""
         let name = participant.name ?? identity
         Task { @MainActor in
+            guard self.room === room else { return }
             guard !self.isDj(identity) else { return }
             self.rebuildRoster()
             Earcons.shared.playRoomChime(join: true)   // Aug 4: chime + announcement
@@ -1736,6 +1874,7 @@ extension ClubhouseService: RoomDelegate {
         let identity = participant.identity?.stringValue ?? ""
         let name = participant.name ?? identity
         Task { @MainActor in
+            guard self.room === room else { return }
             if self.isDj(identity) {
                 self.rebuildRoster()
                 self.reconcile()
@@ -1765,6 +1904,7 @@ extension ClubhouseService: RoomDelegate {
     nonisolated func room(_ room: Room, didUpdateSpeakingParticipants participants: [Participant]) {
         let ids = Set(participants.compactMap { $0.identity?.stringValue })
         Task { @MainActor in
+            guard self.room === room else { return }
             self.speakingIds = ids
             self.rebuildRoster()
         }
@@ -1774,8 +1914,25 @@ extension ClubhouseService: RoomDelegate {
         let name = publication.name
         let track = publication.track
         Task { @MainActor in
+            guard self.room === room else { return }
             if name == "music", let audio = track as? RemoteAudioTrack {
-                audio.volume = self.musicVolume
+                self.configureMusicTrack(audio)
+            }
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
+        Task { @MainActor in
+            guard self.room === room else { return }
+            // Publication.track may already be nil when the callback arrives.
+            let live = Set(room.remoteParticipants.values.flatMap { $0.audioTracks }
+                .compactMap { $0.track as? RemoteAudioTrack }.map { ObjectIdentifier($0) })
+            for id in Array(self.musicPlayers.keys) where !live.contains(id) {
+                if let entry = self.musicPlayers.removeValue(forKey: id) {
+                    entry.track.remove(audioRenderer: entry.player)
+                    entry.player.stop()
+                }
+                self.musicFallbacks.remove(id)
             }
         }
     }
@@ -1783,13 +1940,14 @@ extension ClubhouseService: RoomDelegate {
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType: EncryptionType) {
         let identity = participant?.identity?.stringValue
         Task { @MainActor in
+            guard self.room === room else { return }
             self.handleData(data, from: identity, topic: topic)
         }
     }
 
     nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { @MainActor in
-            guard self.phase == .inRoom else { return }
+            guard self.room === room, self.phase == .inRoom else { return }
             self.announce("You left the room.")
             self.leave()
         }
