@@ -548,6 +548,7 @@ final class Earcons {
     /// fails. Same Sound-effects switch as every other earcon.
     private var waitingPlayer: AVAudioPlayer?
     private var waitingData: Data?
+    private var waitingVolume: Float = 0.4
 
     /// `fadeIn` (Part 109, her report: "bubbles stop playing the thinking
     /// sound after the first phrase... it needs to fade back in or whatever
@@ -557,7 +558,9 @@ final class Earcons {
     /// byte; a resume passes ~0.45s and the bubbles swell back under the
     /// silence instead of snapping on.
     func startWaitingLoop(fadeIn: TimeInterval = 0) {
-        guard FeedbackPrefs.shared.soundEffects, waitingPlayer == nil else { return }
+        guard FeedbackPrefs.shared.soundEffects else { return }
+        if let player = waitingPlayer, player.isPlaying { return }
+        waitingPlayer = nil
         // July 22 2026: Kade's bubbling Thinking loop (shipped pre-trimmed —
         // the raw master carries ~1.16s of MP3 encoder silence that made
         // every loop cycle hiccup, so the bundled WAV is the trimmed decode;
@@ -572,9 +575,13 @@ final class Earcons {
             let target: Float = 0.4
             player.volume = fadeIn > 0 ? 0.0 : target
             player.prepareToPlay()
-            player.play()
+            guard player.play() else {
+                KadeBreadcrumbs.drop("thinking loop: playback did not start")
+                return
+            }
             if fadeIn > 0 { player.setVolume(target, fadeDuration: fadeIn) }
             waitingPlayer = player
+            waitingVolume = target
             return
         }
         if waitingData == nil {
@@ -602,9 +609,13 @@ final class Earcons {
         let synthTarget: Float = 0.9
         player.volume = fadeIn > 0 ? 0.0 : synthTarget
         player.prepareToPlay()
-        player.play()
+        guard player.play() else {
+            KadeBreadcrumbs.drop("thinking loop: fallback playback did not start")
+            return
+        }
         if fadeIn > 0 { player.setVolume(synthTarget, fadeDuration: fadeIn) }
         waitingPlayer = player
+        waitingVolume = synthTarget
     }
 
     func stopWaitingLoop() {
@@ -644,7 +655,7 @@ final class Earcons {
     /// gone; the resume guards against a NEW loop instance.
     func duckWaitingLoop(resume: Bool) {
         guard let player = waitingPlayer else { return }
-        let restoreVolume = player.volume
+        let restoreVolume = waitingVolume
         player.setVolume(0.0, fadeDuration: 0.03)  // Aug 4: 0.12 -> 0.03, the louder 0.4 loop can't bleed under the reply bloop
         guard resume else { return }
         Task { @MainActor [weak self] in

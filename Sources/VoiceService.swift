@@ -309,6 +309,8 @@ final class VoiceService: NSObject, ObservableObject {
     /// which override the agent's builder default. Loaded once from
     /// `GET /api/kade/voice-prefs`; nil until first load.
     private var userVoicePrefs: [String: String]?
+    private var voiceSelectionRevision = 0
+    private var voiceChangeObserver: NSObjectProtocol?
 
     struct VoiceError: Error {
         let message: String
@@ -317,6 +319,21 @@ final class VoiceService: NSObject, ObservableObject {
     init(client: KadeAPIClient) {
         self.client = client
         super.init()
+        voiceChangeObserver = NotificationCenter.default.addObserver(
+            forName: AgentBuilderService.agentsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.invalidateVoiceSelections() }
+        }
+    }
+
+    deinit {
+        if let voiceChangeObserver { NotificationCenter.default.removeObserver(voiceChangeObserver) }
+    }
+
+    private func invalidateVoiceSelections() {
+        voiceSelectionRevision += 1
+        agentVoiceCache.removeAll()
+        userVoicePrefs = nil
     }
 
     /// Called on sign-out: stops anything in flight and clears per-account
@@ -327,8 +344,7 @@ final class VoiceService: NSObject, ObservableObject {
             _ = stopRecording()
         }
         voicesListCache = nil
-        agentVoiceCache.removeAll()
-        userVoicePrefs = nil
+        invalidateVoiceSelections()
         recordError = nil
     }
 
@@ -564,9 +580,10 @@ final class VoiceService: NSObject, ObservableObject {
     /// repeatedly while a previous line is still playing -- lines speak in
     /// order, one at a time, same as the web app's own read-aloud queue
     /// (`kadeRoomPage.js`'s `speakQ`/`pumpSpeech`).
-    func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil) {
+    func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil, refreshVoice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if refreshVoice { invalidateVoiceSelections() }
         supersedePausedClip()
         speakQueue.append((trimmed, agentId, agentName, nil, nil, key, nil))
         guard !isPumping, !pumpScheduled else { return }
@@ -1295,12 +1312,15 @@ final class VoiceService: NSObject, ObservableObject {
 
     private func loadUserVoicePrefsIfNeeded() async {
         if userVoicePrefs != nil { return }
+        let revision = voiceSelectionRevision
         struct PrefsResponse: Decodable { let prefs: [String: String]? }
         let req = client.request(path: "api/kade/voice-prefs", authorized: true)
         if let (data, http) = try? await client.send(req), http.statusCode == 200,
            let decoded = try? JSONDecoder().decode(PrefsResponse.self, from: data) {
+            guard revision == voiceSelectionRevision else { return }
             userVoicePrefs = decoded.prefs ?? [:]
         } else {
+            guard revision == voiceSelectionRevision else { return }
             userVoicePrefs = [:]   // don't hammer a failed load every reply
         }
     }
@@ -1324,6 +1344,7 @@ final class VoiceService: NSObject, ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["agentId": agentId, "voice": v])
         guard let (_, http) = try? await client.send(req), http.statusCode == 200 else { return }
+        voiceSelectionRevision += 1
         if userVoicePrefs == nil { userVoicePrefs = [:] }
         userVoicePrefs?[agentId] = normalized
         agentVoiceCache[agentId] = nil   // force a re-resolve with the new pick
@@ -1333,6 +1354,7 @@ final class VoiceService: NSObject, ObservableObject {
         if let agentId, let cached = agentVoiceCache[agentId] {
             return cached
         }
+        let revision = voiceSelectionRevision
         await loadUserVoicePrefsIfNeeded()
 
         var resolvedVoice: String?
@@ -1358,6 +1380,9 @@ final class VoiceService: NSObject, ObservableObject {
             resolvedVoice = Self.hashVoice(for: agentName ?? agentId ?? "assistant", voices: voices)
         }
 
+        guard revision == voiceSelectionRevision else {
+            return await resolveVoice(agentId: agentId, agentName: agentName)
+        }
         let result = (resolvedVoice, resolvedSpeed)
         if let agentId {
             agentVoiceCache[agentId] = result

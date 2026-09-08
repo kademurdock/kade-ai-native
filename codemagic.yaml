@@ -36,6 +36,7 @@ workflows:
         script: |
           set -e
           ./run-speech-tests.sh
+          python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
       - name: Generate Xcode project (XcodeGen)
         script: |

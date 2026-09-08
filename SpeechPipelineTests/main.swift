@@ -862,16 +862,20 @@ do {
 
 print("")
 // Thinking feedback follows work events, never synthesis gaps.
-for phase in [SpeechWaitPolicy.Phase.waiting, .reply, .finished] {
+for phase in [SpeechWaitPolicy.Phase.reply, .finished] {
     check("speech gap stays quiet for phase \(phase)", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
 }
-for phase in [SpeechWaitPolicy.Phase.thinking, .tool] {
+for phase in [SpeechWaitPolicy.Phase.waiting, .thinking, .tool] {
     check("real work resumes feedback for phase \(phase)", SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
     check("queued speech owns the gap for phase \(phase)", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: false, speechQueued: true))
     check("no thinking under a playing clip", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: true, paused: false, speechQueued: false))
     check("paused speech stays quiet", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: true, clipPlaying: false, paused: true, speechQueued: false))
     check("an ended turn stays quiet", !SpeechWaitPolicy.shouldResume(phase: phase, turnLive: false, clipPlaying: false, paused: false, speechQueued: false))
 }
+check("second send resumes initial waiting after the previous reply drains",
+      SpeechWaitPolicy.shouldResume(phase: .waiting, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
+check("second send never layers bubbles over the previous reply",
+      !SpeechWaitPolicy.shouldResume(phase: .waiting, turnLive: true, clipPlaying: true, paused: false, speechQueued: true))
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")

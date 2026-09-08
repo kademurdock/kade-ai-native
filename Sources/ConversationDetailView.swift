@@ -422,6 +422,7 @@ struct ConversationDetailView: View {
     /// never visibly drains (a hang, not a clean failure), stop ticking
     /// after 12s rather than forever.
     @State private var speechWaitWatchdog: Task<Void, Never>? = nil
+    @State private var speechWaitGeneration = 0
     @State private var spokenTurnLive = false
     @State private var spokenTurnStarted = false
     @State private var speechWorkPhase: SpeechWaitPolicy.Phase = .waiting
@@ -878,7 +879,9 @@ struct ConversationDetailView: View {
         // gentle non-speech sound (honouring the Sound effects switch),
         // COMPLEMENTING -- never replacing -- VoiceOver's own spoken cue.
         .onChange(of: sendState) { old, new in
-            if case .idle = old, case .sending = new {
+            if case .sending = new {
+                endSpeechWait()
+                let waitGeneration = speechWaitGeneration
                 Earcons.shared.play(.messageSent)
                 KadeHaptics.sentTick() // Aug 6 2026: felt twin of the send bloop
                 /* ⭐ BUILD 216 -- the bisect that survives this fix. Both calls
@@ -907,12 +910,12 @@ struct ConversationDetailView: View {
                 // fast reply never starts a loop after the fact.
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
+                    guard waitGeneration == speechWaitGeneration, !Task.isCancelled else { return }
                     if case .sending = sendState, !voiceService.isClipPlaying, !spokenTurnStarted { Earcons.shared.startWaitingLoop() }
                 }
-                // Part 109: this turn owns the soundstage until its speech is
-                // done. Armed only when read-aloud is on, because that is the
-                // only case where the loop gets torn down mid-turn.
-                spokenTurnLive = readAloudEnabled
+                // Waiting belongs to this send, including when an older clip
+                // temporarily owns the speaker or read-aloud is disabled.
+                spokenTurnLive = true
                 spokenTurnStarted = false
                 speechWorkPhase = .waiting
             }
@@ -990,17 +993,20 @@ struct ConversationDetailView: View {
                     // stop is still owned by the watchers below.
                     Earcons.shared.duckWaitingLoop(resume: true)
                     speechWaitWatchdog?.cancel()
+                    let waitGeneration = speechWaitGeneration
                     speechWaitWatchdog = Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 12_000_000_000)
-                        if !Task.isCancelled { endSpeechWait() }
+                        if !Task.isCancelled, waitGeneration == speechWaitGeneration { endSpeechWait() }
                     }
                 } else {
                     // No voice coming: fade out under the bloop instead of
                     // the old hard cut (same 120ms dip, no resume), then
                     // release the player.
                     Earcons.shared.duckWaitingLoop(resume: false)
+                    let waitGeneration = speechWaitGeneration
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 200_000_000)
+                        guard waitGeneration == speechWaitGeneration, !Task.isCancelled else { return }
                         Earcons.shared.stopWaitingLoop()
                     }
                 }
@@ -2960,6 +2966,7 @@ struct ConversationDetailView: View {
     }
 
     private func endSpeechWait() {
+        speechWaitGeneration += 1
         awaitingSpokenReply = false
         speechWaitWatchdog?.cancel()
         speechWaitWatchdog = nil
@@ -2974,15 +2981,14 @@ struct ConversationDetailView: View {
         // Raw `displayText`, not `readableText` -- same reasoning as the
         // auto-read-aloud call in `performSend` below: this is the actual
         // TTS request, which needs any "%%%" steering tag intact. Prefers
-        // the voice this SPECIFIC message actually used (`message.agentId`,
-        // decoded from the API's "model" field) over whichever agent is
-        // currently picked for the next message, so reading back an older
-        // reply never plays it in the wrong character's voice.
+        // the original speaker's identity (`message.agentId`) over the agent
+        // picked for the next send, but resolves that speaker's CURRENT voice.
         voiceService.enqueueSpeak(
             text: message.displayText,
             agentId: message.agentId ?? selectedAgentId,
             agentName: message.speakerLabel,
-            key: message.id
+            key: message.id,
+            refreshVoice: true
         )
     }
 
@@ -3889,7 +3895,7 @@ private struct MessageRow: View {
             // user's own messages stay clean on purpose.
             HStack(alignment: .top, spacing: 8) {
             if !message.isCreatedByUser {
-                KadeSpeakerMonogram(name: message.speakerLabel)
+                KadeSpeakerMonogram(name: message.speakerLabel, speaking: voicePlayback == .playing)
                     .padding(.top, 2)
             }
             VStack(alignment: message.isCreatedByUser ? .trailing : .leading, spacing: 4) {

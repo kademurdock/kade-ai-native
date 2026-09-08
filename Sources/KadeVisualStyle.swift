@@ -198,8 +198,14 @@ struct KadeHeroButtonStyle: ButtonStyle {
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(heroFill)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(heroFill)
+                    if !StylePrefs.highContrast {
+                        KadeOrbitDecoration()
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -377,6 +383,7 @@ struct KadeCallStateOrb: View {
 /// clean, iMessage-style).
 struct KadeSpeakerMonogram: View {
     let name: String
+    var speaking: Bool = false
 
     private var initialLetter: String {
         String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
@@ -399,7 +406,84 @@ struct KadeSpeakerMonogram: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 26, height: 26)
+        .overlay {
+            if speaking {
+                KadePlaybackHalo(tint: Color(hue: hue, saturation: 0.65, brightness: 0.75))
+            }
+        }
         .accessibilityHidden(true)
+    }
+}
+
+/// Decorative layers have no hit targets, layout footprint, or accessibility nodes.
+private struct KadeOrbitDecoration: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("kade.feedback.reduceMotion") private var reduceMotion = false
+
+    private var moving: Bool {
+        !systemReduceMotion && !reduceMotion && !voiceOver && scenePhase == .active
+            && !ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
+
+    var body: some View {
+        Group {
+            if moving {
+                TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
+                    orbits(at: context.date.timeIntervalSinceReferenceDate)
+                }
+            } else {
+                orbits(at: 0)
+            }
+        }
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+
+    private func orbits(at time: TimeInterval) -> some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width * 0.91, y: size.height * 0.5)
+            for i in 0..<3 {
+                let radius = size.height * (0.45 + Double(i) * 0.38)
+                let circle = CGRect(x: center.x - radius, y: center.y - radius,
+                                    width: radius * 2, height: radius * 2)
+                context.stroke(Path(ellipseIn: circle), with: .color(.white.opacity(0.14)), lineWidth: 1)
+                let angle = time * (0.16 + Double(i) * 0.025) + Double(i) * 2.1
+                let point = CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+                let dot = CGRect(x: point.x - 2.5, y: point.y - 2.5, width: 5, height: 5)
+                context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.4)))
+            }
+        }
+    }
+}
+
+private struct KadePlaybackHalo: View {
+    let tint: Color
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("kade.feedback.reduceMotion") private var reduceMotion = false
+
+    var body: some View {
+        Group {
+            if !systemReduceMotion && !reduceMotion && !voiceOver && scenePhase == .active
+                && !ProcessInfo.processInfo.isLowPowerModeEnabled {
+                TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
+                    ring(scale: 1.18 + 0.07 * sin(context.date.timeIntervalSinceReferenceDate * 3))
+                }
+            } else {
+                ring(scale: 1.2)
+            }
+        }
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+
+    private func ring(scale: Double) -> some View {
+        Circle()
+            .strokeBorder(tint, lineWidth: StylePrefs.highContrast ? 2 : 1.5)
+            .scaleEffect(scale)
     }
 }
 

@@ -5,6 +5,6 @@ enum SpeechWaitPolicy {
 
     static func shouldResume(phase: Phase, turnLive: Bool, clipPlaying: Bool, paused: Bool, speechQueued: Bool) -> Bool {
         guard turnLive, !clipPlaying, !paused, !speechQueued else { return false }
-        return phase == .thinking || phase == .tool
+        return phase == .waiting || phase == .thinking || phase == .tool
     }
 }
