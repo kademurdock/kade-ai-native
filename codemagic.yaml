@@ -118,6 +118,13 @@ workflows:
             cat "$CM_BUILD_DIR/archive-first-errors.txt"
             exit $STATUS
           fi
+      - name: Save signed upload recovery receipt
+        script: |
+          set -e
+          python3 scripts/test_release_receipt.py
+          IPA=$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          python3 scripts/release_receipt.py "$IPA" --source "$CM_COMMIT" --output "$CM_BUILD_DIR/signed-release.json"
       - name: Simulator screenshots — the App Store tour (blind-friendly loop)
         script: |
           set -e
@@ -171,6 +178,7 @@ workflows:
           # skip guard, so it is produced whether or not the tour runs.)
     artifacts:
       - build/ios/ipa/*.ipa
+      - signed-release.json
       - tour-*.png
       - asc-issuer.txt
       - archive-first-errors.txt
