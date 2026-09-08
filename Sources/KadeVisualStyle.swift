@@ -21,19 +21,6 @@ import SwiftUI
 //     for low vision. Styles re-evaluate when that pref flips because the
 //     app root already re-renders everything on its change.
 
-/// Reads the same UserDefaults keys the preference objects write, from
-/// nonisolated style structs that can't (and shouldn't) hold an
-/// @EnvironmentObject. Registered defaults make the reads safe on a fresh
-/// install.
-private enum StylePrefs {
-    static var highContrast: Bool {
-        UserDefaults.standard.bool(forKey: "kade.appearance.highContrast")
-    }
-    static var forceReduceMotion: Bool {
-        UserDefaults.standard.bool(forKey: "kade.feedback.reduceMotion")
-    }
-}
-
 // MARK: - Home tile label
 
 /// Lays a Label out as an iOS-Settings-style row: a white SF Symbol on a
@@ -41,6 +28,7 @@ private enum StylePrefs {
 /// chevron are hidden from VoiceOver; the title Text is the only accessible
 /// content, exactly like the stock label style it replaces.
 struct KadeTileLabelStyle: LabelStyle {
+    @KadeContrastPolicy private var highContrast: Bool
     var tint: Color
     @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 36
 
@@ -50,10 +38,10 @@ struct KadeTileLabelStyle: LabelStyle {
                 RoundedRectangle(cornerRadius: tileSide * 0.24, style: .continuous)
                     .fill(tileFill)
                 configuration.icon
-                    .font(.system(size: tileSide * 0.5, weight: .semibold))
+                    .font(.system(size: min(tileSide, 48) * 0.5, weight: .semibold))
                     .foregroundStyle(.white)
             }
-            .frame(width: tileSide, height: tileSide)
+            .frame(width: min(tileSide, 48), height: min(tileSide, 48))
             .accessibilityHidden(true)
 
             configuration.title
@@ -72,7 +60,7 @@ struct KadeTileLabelStyle: LabelStyle {
     }
 
     private var tileFill: some ShapeStyle {
-        if StylePrefs.highContrast {
+        if highContrast {
             // Solid, no gradient: maximum figure/ground separation.
             return AnyShapeStyle(tint)
         }
@@ -91,6 +79,7 @@ struct KadeTileLabelStyle: LabelStyle {
 /// gradient / high-contrast rules as `KadeTileLabelStyle` above; same
 /// ScaledMetric so Dynamic Type grows the icon block too.
 struct KadeGridTileLabelStyle: LabelStyle {
+    @KadeContrastPolicy private var highContrast: Bool
     var tint: Color
     @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 44
 
@@ -100,10 +89,10 @@ struct KadeGridTileLabelStyle: LabelStyle {
                 RoundedRectangle(cornerRadius: tileSide * 0.24, style: .continuous)
                     .fill(tileFill)
                 configuration.icon
-                    .font(.system(size: tileSide * 0.5, weight: .semibold))
+                    .font(.system(size: min(tileSide, 48) * 0.5, weight: .semibold))
                     .foregroundStyle(.white)
             }
-            .frame(width: tileSide, height: tileSide)
+            .frame(width: min(tileSide, 48), height: min(tileSide, 48))
             .accessibilityHidden(true)
 
             configuration.title
@@ -118,7 +107,7 @@ struct KadeGridTileLabelStyle: LabelStyle {
     }
 
     private var tileFill: some ShapeStyle {
-        if StylePrefs.highContrast {
+        if highContrast {
             return AnyShapeStyle(tint)
         }
         return AnyShapeStyle(
@@ -137,10 +126,11 @@ struct KadeGridTileLabelStyle: LabelStyle {
 /// change, not motion) but nothing scales or springs. Under high contrast
 /// the card gains a real border instead of relying on background contrast.
 struct KadeCardButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @KadeContrastPolicy private var highContrast: Bool
+    @KadeMotionPolicy private var motionAllowed: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
+        let reduce = !motionAllowed
         let pressed = configuration.isPressed
         return configuration.label
             .padding(.vertical, 14)
@@ -153,8 +143,8 @@ struct KadeCardButtonStyle: ButtonStyle {
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
-                        StylePrefs.highContrast ? Color.primary.opacity(0.65) : Color.primary.opacity(0.14),
-                        lineWidth: StylePrefs.highContrast ? 1.5 : 1
+                        highContrast ? Color.primary.opacity(0.65) : Color.primary.opacity(0.14),
+                        lineWidth: highContrast ? 1.5 : 1
                     )
             )
             .opacity(pressed ? 0.75 : 1.0)
@@ -173,7 +163,7 @@ struct KadeToolRow<Content: View>: View {
     }
 
     var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
+        let layout = dynamicTypeSize >= .xxxLarge
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout { content }
@@ -186,10 +176,11 @@ struct KadeToolRow<Content: View>: View {
 /// with white type. High contrast swaps the gradient for a solid accent fill
 /// plus border; reduced motion stills the press spring, same as the cards.
 struct KadeHeroButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @KadeContrastPolicy private var highContrast: Bool
+    @KadeMotionPolicy private var motionAllowed: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
+        let reduce = !motionAllowed
         let pressed = configuration.isPressed
         return configuration.label
             .font(.title3.weight(.semibold))
@@ -201,7 +192,7 @@ struct KadeHeroButtonStyle: ButtonStyle {
                 ZStack {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(heroFill)
-                    if !StylePrefs.highContrast {
+                    if !highContrast {
                         KadeOrbitDecoration()
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
@@ -210,8 +201,8 @@ struct KadeHeroButtonStyle: ButtonStyle {
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        StylePrefs.highContrast ? Color.white.opacity(0.85) : .clear,
-                        lineWidth: StylePrefs.highContrast ? 1.5 : 0
+                        highContrast ? Color.white.opacity(0.85) : .clear,
+                        lineWidth: highContrast ? 1.5 : 0
                     )
             )
             .opacity(pressed ? 0.85 : 1.0)
@@ -220,12 +211,15 @@ struct KadeHeroButtonStyle: ButtonStyle {
     }
 
     private var heroFill: some ShapeStyle {
-        if StylePrefs.highContrast {
-            return AnyShapeStyle(Color.accentColor)
+        if highContrast {
+            // AccentColor becomes light blue in dark appearance; with the
+            // hero's white text that is not a suitable filled-button color.
+            return AnyShapeStyle(Color(red: 29.0 / 255, green: 78.0 / 255, blue: 216.0 / 255))
         }
         return AnyShapeStyle(
             LinearGradient(
-                colors: [Color.indigo, Color.blue],
+                colors: [Color(red: 67.0 / 255, green: 56.0 / 255, blue: 202.0 / 255),
+                         Color(red: 29.0 / 255, green: 78.0 / 255, blue: 216.0 / 255)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
         )
@@ -242,40 +236,32 @@ struct KadeHeroButtonStyle: ButtonStyle {
 struct KadeWaveformBars: View {
     var active: Bool
     var tint: Color = .red
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @State private var animating = false
-
-    /// Resting scale for each bar -- staggered so the static (reduced-motion
-    /// or idle) state still looks like a waveform, not a flat line.
+    @KadeMotionPolicy private var motionAllowed: Bool
     private let rest: [CGFloat] = [0.45, 0.8, 0.6, 0.9, 0.5]
 
     var body: some View {
-        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion
-        HStack(spacing: 5) {
-            ForEach(0..<5, id: \.self) { i in
-                Capsule()
-                    .fill(tint)
-                    .frame(width: 4, height: 26)
-                    .scaleEffect(y: barScale(i, reduce: reduce), anchor: .center)
-                    .animation(
-                        (active && !reduce)
-                            ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true).delay(Double(i) * 0.09)
-                            : .default,
-                        value: animating
-                    )
+        Group {
+            if active && motionAllowed {
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+                    bars(at: context.date.timeIntervalSinceReferenceDate)
+                }
+            } else {
+                bars(at: nil)
             }
         }
         .frame(height: 30)
-        .onAppear { if active && !reduce { animating = true } }
-        .onChange(of: active) { _, now in
-            animating = now && !(systemReduceMotion || StylePrefs.forceReduceMotion)
-        }
         .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 
-    private func barScale(_ i: Int, reduce: Bool) -> CGFloat {
-        guard active, !reduce else { return rest[i] }
-        return animating ? 1.0 : rest[i]
+    private func bars(at time: TimeInterval?) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<5, id: \.self) { i in
+                let scale = time.map { 0.4 + 0.6 * (sin($0 * 6 + Double(i) * 1.2) + 1) / 2 } ?? Double(rest[i])
+                Capsule().fill(tint).frame(width: 4, height: 26)
+                    .scaleEffect(y: CGFloat(scale), anchor: .center)
+            }
+        }
     }
 }
 
@@ -294,11 +280,7 @@ struct KadeWaveformBars: View {
 /// nothing breathes or ripples.
 struct KadeCallStateOrb: View {
     let status: StreamingCallService.Status
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @State private var breathing = false
-    @State private var rippling = false
-
-    private var reduceMotion: Bool { systemReduceMotion || StylePrefs.forceReduceMotion }
+    @KadeMotionPolicy private var motionAllowed: Bool
 
     private var fill: Color {
         switch status {
@@ -329,48 +311,34 @@ struct KadeCallStateOrb: View {
     }
 
     var body: some View {
-        ZStack {
-            if statusKey == "speaking" && !reduceMotion {
-                ForEach(0..<2, id: \.self) { ring in
-                    Circle()
-                        .stroke(fill.opacity(0.35), lineWidth: 2)
-                        .scaleEffect(rippling ? 1.9 : 1.0)
-                        .opacity(rippling ? 0.0 : 0.8)
-                        .animation(
-                            .easeOut(duration: 1.6)
-                                .repeatForever(autoreverses: false)
-                                .delay(Double(ring) * 0.8),
-                            value: rippling
-                        )
+        Group {
+            if motionAllowed && statusKey != "other" {
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+                    orb(at: context.date.timeIntervalSinceReferenceDate)
                 }
+            } else {
+                orb(at: nil)
             }
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [fill.opacity(0.85), fill.opacity(0.4)],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: 70
-                    )
-                )
-                .scaleEffect(!reduceMotion && breathing ? 1.06 : 1.0)
-                .animation(
-                    reduceMotion
-                        ? nil
-                        : .easeInOut(duration: breathDuration).repeatForever(autoreverses: true),
-                    value: breathing
-                )
         }
         .frame(width: 132, height: 132)
         .accessibilityHidden(true)
-        // New identity per state: restarts the breath at that state's own
-        // rhythm and re-arms the ripples cleanly -- changing a
-        // repeatForever's duration mid-flight is undefined-feeling
-        // territory; a fresh subtree is deterministic.
-        .id(statusKey)
-        .onAppear {
-            breathing = true
-            rippling = true
+        .allowsHitTesting(false)
+    }
+
+    private func orb(at time: TimeInterval?) -> some View {
+        ZStack {
+            if statusKey == "speaking", let time {
+                ForEach(0..<2, id: \.self) { ring in
+                    let phase = (time / 1.6 + Double(ring) * 0.5).truncatingRemainder(dividingBy: 1)
+                    Circle().stroke(fill.opacity(0.35), lineWidth: 2)
+                        .scaleEffect(1 + phase * 0.9)
+                        .opacity(0.8 * (1 - phase))
+                }
+            }
+            Circle()
+                .fill(RadialGradient(colors: [fill.opacity(0.85), fill.opacity(0.4)],
+                    center: .center, startRadius: 8, endRadius: 70))
+                .scaleEffect(time.map { 1.0 + 0.03 * (1 + sin($0 * .pi / breathDuration)) } ?? 1.0)
         }
     }
 }
@@ -417,19 +385,12 @@ struct KadeSpeakerMonogram: View {
 
 /// Decorative layers have no hit targets, layout footprint, or accessibility nodes.
 private struct KadeOrbitDecoration: View {
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
-    @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("kade.feedback.reduceMotion") private var reduceMotion = false
+    @KadeMotionPolicy private var motionAllowed: Bool
 
-    private var moving: Bool {
-        !systemReduceMotion && !reduceMotion && !voiceOver && scenePhase == .active
-            && !ProcessInfo.processInfo.isLowPowerModeEnabled
-    }
 
     var body: some View {
         Group {
-            if moving {
+            if motionAllowed {
                 TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
                     orbits(at: context.date.timeIntervalSinceReferenceDate)
                 }
@@ -448,27 +409,24 @@ private struct KadeOrbitDecoration: View {
                 let radius = size.height * (0.45 + Double(i) * 0.38)
                 let circle = CGRect(x: center.x - radius, y: center.y - radius,
                                     width: radius * 2, height: radius * 2)
-                context.stroke(Path(ellipseIn: circle), with: .color(.white.opacity(0.14)), lineWidth: 1)
+                context.stroke(Path(ellipseIn: circle), with: .color(.white.opacity(0.08)), lineWidth: 1)
                 let angle = time * (0.16 + Double(i) * 0.025) + Double(i) * 2.1
                 let point = CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
                 let dot = CGRect(x: point.x - 2.5, y: point.y - 2.5, width: 5, height: 5)
-                context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.4)))
+                context.fill(Path(ellipseIn: dot), with: .color(.white.opacity(0.12)))
             }
         }
     }
 }
 
 private struct KadePlaybackHalo: View {
+    @KadeContrastPolicy private var highContrast: Bool
     let tint: Color
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
-    @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("kade.feedback.reduceMotion") private var reduceMotion = false
+    @KadeMotionPolicy private var motionAllowed: Bool
 
     var body: some View {
         Group {
-            if !systemReduceMotion && !reduceMotion && !voiceOver && scenePhase == .active
-                && !ProcessInfo.processInfo.isLowPowerModeEnabled {
+            if motionAllowed {
                 TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
                     ring(scale: 1.18 + 0.07 * sin(context.date.timeIntervalSinceReferenceDate * 3))
                 }
@@ -482,7 +440,7 @@ private struct KadePlaybackHalo: View {
 
     private func ring(scale: Double) -> some View {
         Circle()
-            .strokeBorder(tint, lineWidth: StylePrefs.highContrast ? 2 : 1.5)
+            .strokeBorder(tint, lineWidth: highContrast ? 2 : 1.5)
             .scaleEffect(scale)
     }
 }
@@ -503,20 +461,9 @@ private struct KadePlaybackHalo: View {
 /// clock directly: no @State, nothing to cancel, nothing to leak when the
 /// row disappears.
 struct KadeThinkingBubbles: View {
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    /// Build 205 (Aug 15 2026) — measured off her watchdog kill, not guessed.
-    /// The animated branch is a `TimelineView(.animation, 1/30)`, i.e. THIRTY
-    /// view-graph rebuilds a second, and it lives inside the transcript's
-    /// LazyVStack for the entire generation window (it only steps aside once
-    /// deep thoughts start streaming — an `instant`-routed turn keeps it on
-    /// screen start to finish, which is exactly what her fatal turn was).
-    /// The whole view is `accessibilityHidden`, so under VoiceOver it is
-    /// main-thread cost that its user cannot perceive by any means. Her crash
-    /// window burned 10.05s of CPU across ~59 seconds — sustained churn, not
-    /// one pinned computation — so buying that back is worth a one-line gate.
-    /// Reuses the existing Reduce Motion branch rather than adding a second
-    /// resting state: same pixels, no new code path.
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+    @KadeMotionPolicy private var motionAllowed: Bool
+    // The shared policy also stops this timeline in the background and in
+    // Low Power Mode, preserving the original VoiceOver CPU safeguard.
 
     /// (left, size, delay, duration) -- hand-tuned on web so the drift
     /// feels organic rather than a marching row; keep the two lists in
@@ -532,7 +479,7 @@ struct KadeThinkingBubbles: View {
     ]
 
     var body: some View {
-        let reduce = systemReduceMotion || StylePrefs.forceReduceMotion || voiceOverOn
+        let reduce = !motionAllowed
         Group {
             if reduce {
                 bubbleRow(at: nil)
