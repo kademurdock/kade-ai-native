@@ -400,7 +400,7 @@ workflows:
 
 
   ios-simulator-acceptance:
-    name: Simulator startup diagnosis and store frames (no upload)
+    name: Store screenshots with completed test-seat onboarding (no upload)
     max_build_duration: 20
     instance_type: mac_mini_m2
     environment:
@@ -418,12 +418,11 @@ workflows:
           APP="$CM_BUILD_DIR/sim-derived/Build/Products/Debug-iphonesimulator/KadeAI.app"
           xcrun simctl install "$SIM" "$APP"
           xcrun simctl status_bar "$SIM" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
-          LAUNCH=$(xcrun simctl launch --stdout="$CM_BUILD_DIR/normal.stdout" --stderr="$CM_BUILD_DIR/normal.stderr" "$SIM" com.kademurdock.kadeai)
-          PID=$(printf '%s' "$LAUNCH" | awk '{print $NF}')
-          sleep 20
-          xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/normal-startup.png"
-          /usr/bin/sample "$PID" 2 -file "$CM_BUILD_DIR/normal-sample.txt" || true
-          xcrun simctl terminate "$SIM" com.kademurdock.kadeai || true
+          # Disposable test-seat fixture only: consent is per user, never global.
+          # No application source or Release behavior changes for this tour.
+          APP_DATA=$(xcrun simctl get_app_container "$SIM" com.kademurdock.kadeai data)
+          mkdir -p "$APP_DATA/Library/Preferences"
+          defaults write "$APP_DATA/Library/Preferences/com.kademurdock.kadeai.plist" "kadeDataUseConsent.v.$KADE_TEST_USER_ID" -int 1
           SIMCTL_CHILD_KADE_A11Y_AUDIT=1 SIMCTL_CHILD_KADE_TOUR=1 SIMCTL_CHILD_KADE_TOUR_EMAIL="$KADE_TOUR_EMAIL" SIMCTL_CHILD_KADE_TOUR_PASS="$KADE_TOUR_PASS" xcrun simctl launch --stdout="$CM_BUILD_DIR/tour.stdout" --stderr="$CM_BUILD_DIR/tour.stderr" "$SIM" com.kademurdock.kadeai
           for i in 1 2 3 4 5 6 7; do
             sleep 7
