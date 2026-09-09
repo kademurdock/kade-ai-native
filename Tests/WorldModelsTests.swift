@@ -5,6 +5,8 @@ import Foundation
         let decoder = JSONDecoder()
         let action = try decoder.decode(WorldAction.self, from: Data(#"{"label":"Look","cmd":"look"}"#.utf8))
         precondition(action.id == "look" && action.hint == nil && action.group == nil)
+        let person = try decoder.decode(WorldPerson.self, from: Data(#"{"id":"p","name":"Mira","kind":"player","appearance":{"build":"solid","hair":"locs","style":"denim"}}"#.utf8))
+        precondition(person.appearance?.hair == "locs")
         let exit = try decoder.decode(WorldExit.self, from: Data(#"{"dir":"n","label":"north","to":"Lantern Row","locked":true}"#.utf8))
         precondition(exit.command == "go n" && exit.spokenLabel == "North to Lantern Row, locked")
         let hud = try decoder.decode(WorldHUD.self, from: Data(#"{"name":"Ruby Tester","coin":20,"clock":"Morning","mode":"create"}"#.utf8))

@@ -44,17 +44,19 @@ struct CharacterPortraitView: View {
     }
     @ViewBuilder private func portrait(_ pose: CharacterPose) -> some View {
         if prepared {
+            let della = agentID == CharacterMotion.dellaID
+            let base = della ? "CharacterDellaPortrait" : "CharacterKianaPortrait"
+            let mouth = della ? "CharacterDellaFace" : "CharacterKianaMouth"
+            let eyes = della ? "CharacterDellaFace" : "CharacterKianaEyes"
+            let lips = della ? CGRect(x: 0.400, y: 0.462, width: 0.195, height: 0.115) : CGRect(x: 0.457, y: 0.376, width: 0.175, height: 0.122)
+            let left = della ? CGRect(x: 0.364, y: 0.295, width: 0.117, height: 0.082) : CGRect(x: 0.355, y: 0.265, width: 0.125, height: 0.09)
+            let right = della ? CGRect(x: 0.535, y: 0.295, width: 0.11, height: 0.082) : CGRect(x: 0.518, y: 0.219, width: 0.125, height: 0.08)
             ZStack(alignment: .topLeading) {
-                Image("CharacterKianaPortrait").resizable().scaledToFill()
-                patch("CharacterKianaMouth", from: CGRect(x: 0.764, y: 0.217, width: 0.097, height: 0.064),
-                    to: CGRect(x: 0.457, y: 0.376, width: 0.175, height: 0.122))
-                    .opacity(pose.mouth > 0.12 ? 1 : 0)
-                patch("CharacterKianaEyes", from: CGRect(x: 0.355, y: 0.265, width: 0.125, height: 0.09),
-                    to: CGRect(x: 0.355, y: 0.265, width: 0.125, height: 0.09))
-                    .opacity(pose.blink > 0.5 ? 1 : 0)
-                patch("CharacterKianaEyes", from: CGRect(x: 0.518, y: 0.219, width: 0.125, height: 0.08),
-                    to: CGRect(x: 0.518, y: 0.219, width: 0.125, height: 0.08))
-                    .opacity(pose.blink > 0.5 ? 1 : 0)
+                Image(base).resizable().scaledToFill()
+                patch(mouth, from: della ? lips : CGRect(x: 0.764, y: 0.217, width: 0.097, height: 0.064), to: lips)
+                    .opacity(CharacterMotion.blend(pose.mouth))
+                patch(eyes, from: left, to: left).opacity(CharacterMotion.blend(pose.blink))
+                patch(eyes, from: right, to: right).opacity(CharacterMotion.blend(pose.blink))
             }
         } else if let url {
             AsyncImage(url: url) { phase in

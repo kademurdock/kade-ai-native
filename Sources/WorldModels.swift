@@ -19,10 +19,17 @@ struct WorldExit: Decodable, Equatable, Identifiable {
     var spokenLabel: String { "\(label.capitalized) to \(to)\(locked == true ? ", locked" : "")" }
 }
 
+struct WorldAppearance: Codable, Equatable {
+    let build: String?
+    let hair: String?
+    let style: String?
+}
+
 struct WorldPerson: Codable, Equatable, Identifiable {
     let id: String
     let name: String
     let kind: String
+    let appearance: WorldAppearance?
     let line: String?
     let cmds: [WorldAction]?
 }
@@ -36,6 +43,8 @@ struct WorldHUD: Codable, Equatable {
         var spokenValue: String { "\(Int(value)) out of 100, \(word)" }
     }
     let name: String?
+    let characterId: String?
+    let appearance: WorldAppearance?
     let coin: Int?
     let clock: String?
     let ward: String?

@@ -12,9 +12,16 @@ struct CharacterPose {
 enum CharacterMotion {
     static let kianaID = "agent_6llV0eMu4fmIaj8f2x1Sb"
     static let kianaFile = "agent-agent_6llV0eMu4fmIaj8f2x1Sb-avatar-1788871984269.png"
+    static let dellaID = "agent_BSOLa3eNEZyjs-7abCjMt"
+    static let dellaFile = "agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png"
+    static func blend(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        let n = max(0, min(1, value))
+        return (n * n * (3 - 2 * n) * 16).rounded() / 16
+    }
     static func prepared(id: String?, path: String?) -> Bool {
-        guard id == kianaID, let path, let url = URL(string: path) else { return false }
-        return url.lastPathComponent == kianaFile
+        guard let path, let url = URL(string: path) else { return false }
+        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile)
     }
     static func pose(id: String, time: Double, level: Double, active: Bool) -> CharacterPose {
         guard active, time.isFinite, time >= 0 else { return .still }
