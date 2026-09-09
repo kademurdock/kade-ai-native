@@ -222,6 +222,16 @@ final class StreamingClipPlayer {
     /// on the first bytes instead of after the last.
     private static let primerSeconds: Double = 0.30
 
+    private var characterEnvelope = CharacterEnvelope()
+    private var characterEnd: Double = 0
+    private func characterTime() -> Double? {
+        guard let render = node.lastRenderTime, let time = node.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
+        return Double(time.sampleTime) / time.sampleRate
+    }
+    func characterLevel() -> Double {
+        guard node.isPlaying, !stopped, outstandingBuffers > 0, let time = characterTime() else { return 0 }
+        return characterEnvelope.level(at: time)
+    }
     var isPlaying: Bool { node.isPlaying }
 
     func setRate(_ rate: Float) {
@@ -234,6 +244,8 @@ final class StreamingClipPlayer {
     /// and still returns true — something was heard.
     func play(fetch: StreamingClipFetch, rate: Float, onPlaybackStarted: @MainActor () -> Void) async -> Bool {
         stopped = false
+        characterEnvelope.reset()
+        characterEnd = 0
         activeFetch = fetch
         defer { activeFetch = nil }
 
@@ -310,6 +322,9 @@ final class StreamingClipPlayer {
             if let channel = buffer.floatChannelData?[0] {
                 for i in 0 ..< samples.count { channel[i] = samples[i] }
             }
+            let start = max(characterEnd, characterTime() ?? 0)
+            characterEnvelope.append(samples: samples, sampleRate: fmt.sampleRate, start: start)
+            characterEnd = start + Double(samples.count) / fmt.sampleRate
             outstandingBuffers += 1
             node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.bufferPlayedBack() }
@@ -375,6 +390,7 @@ final class StreamingClipPlayer {
     /// run its cancel check — never a stranded await (the playAudio lesson).
     func stop() {
         stopped = true
+        characterEnvelope.reset()
         activeFetch?.cancel()
         if graphBuilt { node.stop() }
         outstandingBuffers = 0
