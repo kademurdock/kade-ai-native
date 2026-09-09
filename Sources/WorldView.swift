@@ -474,12 +474,20 @@ struct WorldView: View {
     }
 
     private func refreshRoomTone() async {
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let r = currentRoomId, let urlStr = roomSounds[r], urlStr != currentAmbience.flatMap({ eventSounds[$0] }) else {
+        let profile = currentAmbience
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let r = currentRoomId, let urlStr = roomSounds[r], urlStr != profile.flatMap({ eventSounds[$0] }) else {
+            WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
+            return
+        }
+        // The default trail/hide room binding is daytime woods. A night
+        // sensory profile replaces it; playing both would bring daylight birds
+        // back underneath the night recording.
+        if profile == "amb.woods.night", urlStr == eventSounds["amb.woods.day"] {
             WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
             return
         }
         let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["room:" + r])
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == r else { return }
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == r, currentAmbience == profile else { return }
         WorldTones.shared.setRoomTone(key: r, fileURL: local)
     }
 
