@@ -79,8 +79,13 @@ struct CallView: View {
                 // state as a breathing orb -- teal listening, amber
                 // thinking (twin of the typing sound), green + ripples
                 // speaking. See KadeCallStateOrb for the motion gates.
-                KadeCallStateOrb(status: callService.status)
-                    .padding(.bottom, 8)
+                if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
+                    CharacterPortraitView(agentID: agentId, name: agentName,
+                        playing: callService.status == .speaking,
+                        level: { callService.characterLevel }, listening: true)
+                } else {
+                    KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
+                }
                 Spacer(minLength: 0)
                 if wrappingUp {
                     wrapUpPanel

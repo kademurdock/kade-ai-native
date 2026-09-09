@@ -7,6 +7,7 @@ struct CharacterPortraitView: View {
     let name: String
     let playing: Bool
     let level: () -> Double
+    var listening = false
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -15,7 +16,7 @@ struct CharacterPortraitView: View {
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
-    private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && playing }
+    private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening) }
     private var url: URL? {
         guard let path, !path.isEmpty else { return nil }
         return URL(string: path.hasPrefix("/") ? "https://kademurdock.com" + path : path)
@@ -25,7 +26,7 @@ struct CharacterPortraitView: View {
             TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !active)) { timeline in
                 let pose = CharacterMotion.pose(id: agentID ?? "unknown",
                     time: timeline.date.timeIntervalSinceReferenceDate,
-                    level: active ? level() : 0, active: active)
+                    level: active && playing ? level() : 0, active: active)
                 ZStack {
                     RoundedRectangle(cornerRadius: 24).fill(Color.accentColor.opacity(0.08))
                     portrait(pose)
@@ -55,6 +56,10 @@ struct CharacterPortraitView: View {
                 Image(base).resizable().scaledToFill()
                 patch(mouth, from: della ? lips : CGRect(x: 0.764, y: 0.217, width: 0.097, height: 0.064), to: lips)
                     .opacity(CharacterMotion.blend(pose.mouth))
+                let browLeft = della ? CGRect(x: 0.35, y: 0.221, width: 0.132, height: 0.073) : CGRect(x: 0.357, y: 0.235, width: 0.13, height: 0.066)
+                let browRight = della ? CGRect(x: 0.53, y: 0.215, width: 0.13, height: 0.071) : CGRect(x: 0.505, y: 0.151, width: 0.143, height: 0.086)
+                patch(della ? "CharacterDellaExpression" : "CharacterKianaExpression", from: browLeft, to: browLeft).opacity(CharacterMotion.blend(pose.brow))
+                patch(della ? "CharacterDellaExpression" : "CharacterKianaExpression", from: browRight, to: browRight).opacity(CharacterMotion.blend(pose.brow))
                 patch(eyes, from: left, to: left).opacity(CharacterMotion.blend(pose.blink))
                 patch(eyes, from: right, to: right).opacity(CharacterMotion.blend(pose.blink))
             }

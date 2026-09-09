@@ -30,3 +30,12 @@ for id in ["kiana", "della", "lilly"] { for tick in 0..<1000 {
  check(abs(pose.tilt) <= 0.6 && abs(pose.lift) <= 0.7 && pose.mouth <= 1, "bounded motion")
 } }
 print("Character motion: \(count) checks passed")
+
+let meter = CharacterOutputMeter()
+check(meter.level(now: 1) == 0, "no invented call output")
+meter.observe(sumSquares: 0.16, count: 4, now: 2)
+check(abs(meter.level(now: 2.1) - 0.2) < 0.00001, "actual output amplitude")
+check(meter.level(now: 2.3) == 0, "stale output closes mouth")
+meter.reset(); check(meter.level(now: 2.1) == 0, "interruption clears output")
+check(CharacterMotion.pose(id: CharacterMotion.dellaID, time: 5, level: 1, active: false).brow == 0, "motion disabled stops expression")
+print("Call meter and expression: 5 additional checks passed")

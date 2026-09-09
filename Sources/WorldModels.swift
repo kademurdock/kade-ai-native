@@ -30,6 +30,7 @@ struct WorldPerson: Codable, Equatable, Identifiable {
     let name: String
     let kind: String
     let appearance: WorldAppearance?
+    let tag: String?
     let line: String?
     let cmds: [WorldAction]?
 }

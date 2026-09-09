@@ -6,6 +6,7 @@ struct CharacterPose {
     let blink: Double
     let tilt: Double
     let lift: Double
+    var brow: Double = 0
     static let still = CharacterPose(mouth: 0, blink: 0, tilt: 0, lift: 0)
 }
 
@@ -32,8 +33,10 @@ enum CharacterMotion {
         let blinkPhase = t.truncatingRemainder(dividingBy: 4.7)
         let blink = blinkPhase > 4.5 ? sin((blinkPhase - 4.5) / 0.2 * .pi) : 0
         let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
+        let tempo = id == dellaID ? 0.8 : 1.0
         return CharacterPose(mouth: mouth, blink: blink,
-            tilt: sin(t * 0.7) * 0.6, lift: sin(t * 1.1) * 0.7)
+            tilt: sin(t * 0.7 * tempo) * 0.6, lift: sin(t * 1.1 * tempo) * (0.3 + mouth * 0.4),
+            brow: mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)))
     }
 }
 
@@ -65,5 +68,27 @@ struct CharacterEnvelope {
         while lo < hi { let mid = (lo + hi) / 2; if windows[mid].end <= time { lo = mid + 1 } else { hi = mid } }
         guard lo < windows.count, windows[lo].start <= time else { return 0 }
         return windows[lo].level
+    }
+}
+
+/// Output-only meter. No audio is stored, transmitted, or sent to the main actor.
+final class CharacterOutputMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0.0
+    private var sampledAt = -Double.infinity
+    func observe(sumSquares: Double, count: Int, now: Double) {
+        guard sumSquares.isFinite, sumSquares >= 0, count > 0, now.isFinite else { return }
+        lock.lock(); defer { lock.unlock() }
+        value = min(1, sqrt(sumSquares / Double(count)))
+        sampledAt = now
+    }
+    func level(now: Double) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        guard now.isFinite, now >= sampledAt, now - sampledAt < 0.18 else { return 0 }
+        return value
+    }
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        value = 0; sampledAt = -Double.infinity
     }
 }

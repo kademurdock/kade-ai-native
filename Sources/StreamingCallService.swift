@@ -190,6 +190,10 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    private let portraitMeter = CharacterOutputMeter()
+    private var portraitTapInstalled = false
+    var characterLevel: Double { portraitMeter.level(now: ProcessInfo.processInfo.systemUptime) }
+
     /// Session 26 (Kade: "the thinking sound is no longer working on app,
     /// or it never did"): it never did. The bridge deliberately stays
     /// silent while generating on non-phone lanes because "the client
@@ -818,6 +822,18 @@ final class StreamingCallService: NSObject, ObservableObject {
 
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        if !portraitTapInstalled {
+            let meter = portraitMeter
+            playerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+                guard let samples = buffer.floatChannelData?[0] else { return }
+                let count = min(Int(buffer.frameLength), 4096)
+                var sum = 0.0
+                for i in 0..<count { let v = Double(samples[i]); if v.isFinite { sum += v * v } }
+                meter.observe(sumSquares: sum, count: count, now: ProcessInfo.processInfo.systemUptime)
+            }
+            portraitTapInstalled = true
+        }
+
         audioEngine.attach(thinkingNode)
         audioEngine.connect(thinkingNode, to: audioEngine.mainMixerNode, format: playerFormat)
         audioEngine.attach(earconNode)
@@ -1490,6 +1506,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// scheduled buffer, same net effect as the web client's
     /// `flushPlayback()` stopping every live `AudioBufferSourceNode`.
     private func flushPlayback() {
+        portraitMeter.reset()
         guard engineRunning else { return }
         playerNode.stop()
         playerNode.play()
@@ -1497,6 +1514,8 @@ final class StreamingCallService: NSObject, ObservableObject {
     }
 
     private func teardownAudio() {
+        portraitMeter.reset()
+        if portraitTapInstalled { playerNode.removeTap(onBus: 0); portraitTapInstalled = false }
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
