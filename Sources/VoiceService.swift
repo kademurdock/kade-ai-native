@@ -65,6 +65,16 @@ final class VoiceService: NSObject, ObservableObject {
     private var onSilenceAutoStop: (@MainActor () -> Void)?
     private var recordingURL: URL?
 
+    @Published private(set) var nowPlayingAgentID: String?
+    func characterLevel() -> Double {
+        guard isClipPlaying, !isPaused else { return 0 }
+        if streamedClipActive { return streamingPlayer.characterLevel() }
+        guard let player = currentPlayer, player.isPlaying else { return 0 }
+        player.isMeteringEnabled = true
+        player.updateMeters()
+        return pow(10, Double(player.averagePower(forChannel: 0)) / 20)
+    }
+
     private var currentPlayer: AVAudioPlayer?
     private var playbackContinuation: CheckedContinuation<Void, Never>?
     /// Session 35 part 3 (the Debate Room's voices): items may carry an
@@ -694,6 +704,7 @@ final class VoiceService: NSObject, ObservableObject {
         isClipPlaying = false
         isPaused = false
         nowPlayingKey = nil
+        nowPlayingAgentID = nil
         isPumping = false
         streamedTurnKey = nil
     }
@@ -920,7 +931,7 @@ final class VoiceService: NSObject, ObservableObject {
                     // `?? streamedTurnKey` covers the pieces that were prefetched
                     // BEFORE the reload handed us an id — they are already out of
                     // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                    await playAudio(data, key: current.item.key ?? streamedTurnKey)
+                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId)
                     playedAnything = true
                 } else {
                     // Session 23's boop lives on below, at the END of the pump and
@@ -965,6 +976,7 @@ final class VoiceService: NSObject, ObservableObject {
                         self.isClipPlaying = true
                         self.isPaused = false
                         self.nowPlayingKey = current.item.key ?? self.streamedTurnKey
+                        self.nowPlayingAgentID = current.item.agentId
                     })
                     streamedClipActive = false
                     isClipPlaying = false
@@ -995,7 +1007,7 @@ final class VoiceService: NSObject, ObservableObject {
                         return
                     }
                     if let data {
-                        await playAudio(data, key: current.item.key ?? streamedTurnKey)
+                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId)
                         playedAnything = true
                     } else {
                         failedPieces += 1
@@ -1005,6 +1017,7 @@ final class VoiceService: NSObject, ObservableObject {
             }
             current.item.completion?.resume()
             nowPlayingKey = nil
+            nowPlayingAgentID = nil
             isPaused = false
             // Sentences that streamed in during playback join the pipe now.
             topUp()
@@ -1177,7 +1190,7 @@ final class VoiceService: NSObject, ObservableObject {
         try? session.setActive(true)
     }
 
-    private func playAudio(_ data: Data, key: String? = nil) async {
+    private func playAudio(_ data: Data, key: String? = nil, agentID: String? = nil) async {
         prepareOutputSession()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             do {
@@ -1207,6 +1220,7 @@ final class VoiceService: NSObject, ObservableObject {
                     isClipPlaying = true
                     isPaused = false
                     nowPlayingKey = key
+                    nowPlayingAgentID = agentID
                 }
             } catch {
                 continuation.resume()

@@ -1646,6 +1646,11 @@ struct ConversationDetailView: View {
         // the tail chunk only. Short streams keep the single-Text path
         // inside chunkLongText (below threshold it returns [text]).
         VStack(alignment: .leading, spacing: 4) {
+            if voiceService.isClipPlaying {
+                CharacterPortraitView(agentID: voiceService.nowPlayingAgentID,
+                    name: agentDisplayLabel, playing: !voiceService.isPaused,
+                    level: { voiceService.characterLevel() })
+            }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(MessageRow.chunkLongText(liveReply).enumerated()), id: \.offset) { piece in
                     Text(piece.element)
@@ -3697,6 +3702,7 @@ private struct MessageRow: View {
     /// button can change"): the phase THIS message is in. While it is the
     /// one speaking, the row's "Play as voice message" action reads
     /// "Pause voice message" (or "Resume..."), driven by `onPauseResume`.
+    @EnvironmentObject private var characterVoice: VoiceService
     let voicePlayback: VoicePlaybackPhase
     let onReadAloud: () -> Void
     let onPauseResume: () -> Void
@@ -3902,6 +3908,11 @@ private struct MessageRow: View {
                 Text(message.speakerLabel)
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
+                if voicePlayback != .idle {
+                    CharacterPortraitView(agentID: message.agentId ?? characterVoice.nowPlayingAgentID,
+                        name: message.speakerLabel, playing: voicePlayback == .playing && characterVoice.isClipPlaying,
+                        level: { characterVoice.characterLevel() })
+                }
                 messageBodyView
                     // Session 25 (Kade approved the audit list, "All four"):
                     // the transcript used to be bare aligned text -- no

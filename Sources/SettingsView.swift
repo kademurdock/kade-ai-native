@@ -300,6 +300,8 @@ struct SettingsView: View {
             simpleTranscriptRow(searchStyle: false)
             simpleComposerRow(searchStyle: false)
             reduceMotionRow(searchStyle: false)
+            Toggle("Animated voice portraits", isOn: $voicePortraits)
+                .accessibilityHint("Shows the speaking agent while voice messages play. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
@@ -891,6 +893,7 @@ struct SettingsView: View {
         .accessibilityHint("Makes the message box a single line that scrolls instead of growing to five lines. Turn this on if sending still freezes the app -- it tells us whether the message box is the cause. You can still type and send messages of any length.")
     }
 
+    @AppStorage("kadeVoicePortraits") private var voicePortraits = true
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {
             Text(searchStyle ? searchLabel(.reduceMotion, "Reduce motion") : "Reduce motion")

@@ -18,6 +18,8 @@ private final class KadePowerState: ObservableObject {
 
 @propertyWrapper
 struct KadeMotionPolicy: DynamicProperty {
+    var permitsVoiceOver = false
+    init(permitsVoiceOver: Bool = false) { self.permitsVoiceOver = permitsVoiceOver }
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
@@ -25,7 +27,7 @@ struct KadeMotionPolicy: DynamicProperty {
     @StateObject private var power = KadePowerState()
 
     var wrappedValue: Bool {
-        !systemReduceMotion && !reduceMotion && !voiceOver &&
+        !systemReduceMotion && !reduceMotion && (permitsVoiceOver || !voiceOver) &&
             scenePhase == .active && !power.lowPower
     }
 }

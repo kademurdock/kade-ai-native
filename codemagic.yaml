@@ -36,6 +36,7 @@ workflows:
         script: |
           set -e
           ./run-speech-tests.sh
+          bash ./run-character-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
       - name: Generate Xcode project (XcodeGen)
@@ -229,7 +230,8 @@ workflows:
       - name: Speech pipeline tests (the real gate for splitter changes)
         script: |
           set -e
-          ./run-speech-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
+          ./run-speech-tests.sh
+          bash ./run-character-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
           bash ./run-world-tests.sh
       - name: Generate Xcode project (XcodeGen)
         script: |
