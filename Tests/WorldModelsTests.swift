@@ -24,6 +24,18 @@ import Foundation
         precondition(WorldSoundIdentity.cacheIdentity(a) != WorldSoundIdentity.cacheIdentity(other))
         precondition(WorldSoundIdentity.cacheIdentity(a, revision: "installed-1") == WorldSoundIdentity.cacheIdentity(b, revision: "installed-1"))
         precondition(WorldSoundIdentity.cacheIdentity(a, revision: "installed-1") != WorldSoundIdentity.cacheIdentity(a, revision: "installed-2"))
-        print("World models: 11 checks passed. This checks decoding and cache identity, not VoiceOver playback.")
+        let reply = try decoder.decode(WorldAction.self, from: Data(#"{"label":"Reply to Pat","cmd":"reply ","compose":true}"#.utf8))
+        precondition(reply.compose == true)
+        let picture = try decoder.decode(WorldPictureRoom.self, from: Data(#"{"roomId":"reedbank_creek","name":"Reedbank Creek","desc":"Water over stones","outdoor":true,"sensory":{"nature":true,"water":"river"},"peopleDetail":[{"id":"npc:test","name":"Pat","kind":"citizen"}]}"#.utf8))
+        precondition(picture.sensory?.water == "river" && picture.furniture == nil)
+        let snapshot = WorldPictureSnapshot(room: picture, hud: hud)
+        let encoded = try JSONEncoder().encode(snapshot)
+        let roundtrip = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        precondition((roundtrip["room"] as? [String: Any])?["roomId"] as? String == "reedbank_creek")
+        let oldRoom = try decoder.decode(WorldPictureRoom.self, from: Data(#"{"name":"Room","desc":"Old room"}"#.utf8))
+        precondition(oldRoom.sensory == nil && oldRoom.home == nil && oldRoom.peopleDetail == nil)
+        let night = try decoder.decode(WorldHUD.self, from: Data(#"{"name":"Alex","dark":true,"weather":"snow"}"#.utf8))
+        precondition(night.dark == true && night.weather == "snow")
+        print("World models: 16 checks passed. This checks decoding and cache identity, not VoiceOver playback or WebKit rendering.")
     }
 }

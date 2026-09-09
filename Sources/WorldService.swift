@@ -41,6 +41,17 @@ final class WorldService: ObservableObject {
         let exits: [String]
         let items: [String]
         let people: [String]
+        let outdoor: Bool?
+        let furniture: [String]?
+        let sensory: WorldPictureRoom.Senses?
+        let home: WorldPictureRoom.Home?
+        let weather: String?
+        let peopleDetail: [WorldPerson]?
+        var picture: WorldPictureRoom {
+            WorldPictureRoom(roomId: roomId, name: name, desc: desc, outdoor: outdoor,
+                furniture: furniture, sensory: sensory, home: home, weather: weather,
+                peopleDetail: peopleDetail)
+        }
     }
 
     struct WorldResult: Decodable {

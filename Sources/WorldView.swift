@@ -18,6 +18,13 @@ struct WorldView: View {
     @AppStorage("kade.world.live") private var liveOn = true
     @Environment(\.scenePhase) private var scenePhase
     @State private var latestReply = ""
+    @State private var picture: WorldPictureSnapshot?
+    @State private var pictureDescription = ""
+    @State private var pictureVisible = false
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @AppStorage("kade.world.picture") private var pictureOn = true
+    @AppStorage("kade.world.motion") private var pictureMotion = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hud: WorldHUD?
     @State private var choices: [WorldAction] = []
     @State private var actions: [WorldAction] = []
@@ -67,6 +74,17 @@ struct WorldView: View {
             ScrollViewReader { _ in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
+                        if pictureOn, let picture, mode == "play" {
+                            WorldPictureView(snapshot: picture,
+                                motion: pictureMotion && !reduceMotion && !lowPowerMode && pictureVisible && scenePhase == .active && isVisible,
+                                description: $pictureDescription)
+                                .frame(height: 300)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .accessibilityHidden(true)
+                                .allowsHitTesting(false)
+                                .onAppear { pictureVisible = true }
+                                .onDisappear { pictureVisible = false }
+                        }
                         if !latestReply.isEmpty {
                             Text("Latest reply").font(.headline).accessibilityAddTraits(.isHeader)
                             Text(latestReply).textSelection(.enabled)
@@ -156,6 +174,9 @@ struct WorldView: View {
         }
         .onChange(of: liveOn) { _, enabled in if enabled { startLiveIfNeeded() } else { service.stopListening() } }
         .onChange(of: ambienceOn) { _, _ in Task { await refreshAmbience(); await refreshRoomTone() } }
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active && isVisible {
                 startLiveIfNeeded()
@@ -174,7 +195,7 @@ struct WorldView: View {
             if !choices.isEmpty {
                 Text("Choose").font(.headline).accessibilityAddTraits(.isHeader)
                 ForEach(choices) { action in
-                    Button(action.label) { Task { await send(action.cmd) } }
+                    Button(action.label) { perform(action) }
                         .buttonStyle(.bordered)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityFocused($focusedChoice, equals: action.id)
@@ -232,14 +253,27 @@ struct WorldView: View {
                 Toggle("Hear the room live", isOn: $liveOn)
                 Text(service.liveStatus).font(.footnote)
                 Toggle("Background ambience", isOn: $ambienceOn)
+                Toggle("Room picture", isOn: $pictureOn)
+                Toggle("World motion", isOn: $pictureMotion)
+                    .disabled(reduceMotion)
+                if reduceMotion { Text("World motion follows your Reduce Motion setting.").font(.footnote) }
+                if pictureOn && !pictureDescription.isEmpty {
+                    Button("Describe the picture") { announce(pictureDescription) }
+                    Text(pictureDescription).font(.footnote)
+                }
             }
         }
         .padding(.vertical, 8)
     }
 
     private func perform(_ action: WorldAction) {
-        if action.cmd == "cab" || action.cmd == "pawn" || action.cmd.hasPrefix("whisper ") || action.cmd.hasPrefix("teach ") {
-            command = action.cmd + " "
+        if action.compose == true || action.cmd == "cab" || action.cmd == "pawn" || action.cmd.hasPrefix("whisper ") || action.cmd.hasPrefix("teach ") {
+            guard command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                inputFocused = true
+                announce("Your command field has a draft. Send or clear it first.")
+                return
+            }
+            command = action.cmd.hasSuffix(" ") ? action.cmd : action.cmd + " "
             inputFocused = true
             announce("\(action.label). Add the details in the command field, then press go.")
         } else { Task { await send(action.cmd) } }
@@ -248,6 +282,12 @@ struct WorldView: View {
     private func updateControls(_ result: WorldService.WorldResult) {
         if mode == "create" && result.step == nil && result.mode == "create" { return }
         if let h = result.hud { hud = h }
+        if let room = result.room { picture = WorldPictureSnapshot(room: room.picture, hud: result.hud ?? hud) }
+        else if picture != nil {
+            if let h = result.hud { picture?.hud = h }
+            if let occupants = result.people { picture?.room.peopleDetail = occupants }
+        }
+        if let m = result.mode, m != "play" { picture = nil; pictureDescription = "" }
         if let m = result.mode { mode = m }
         actions = result.actions ?? actions
         exits = result.exits ?? exits

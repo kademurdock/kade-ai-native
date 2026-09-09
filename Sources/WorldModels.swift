@@ -1,10 +1,11 @@
 import Foundation
 
-struct WorldAction: Decodable, Equatable, Identifiable {
+struct WorldAction: Codable, Equatable, Identifiable {
     let label: String
     let cmd: String
     let group: String?
     let hint: String?
+    let compose: Bool?
     var id: String { cmd }
 }
 
@@ -18,7 +19,7 @@ struct WorldExit: Decodable, Equatable, Identifiable {
     var spokenLabel: String { "\(label.capitalized) to \(to)\(locked == true ? ", locked" : "")" }
 }
 
-struct WorldPerson: Decodable, Equatable, Identifiable {
+struct WorldPerson: Codable, Equatable, Identifiable {
     let id: String
     let name: String
     let kind: String
@@ -26,8 +27,8 @@ struct WorldPerson: Decodable, Equatable, Identifiable {
     let cmds: [WorldAction]?
 }
 
-struct WorldHUD: Decodable, Equatable {
-    struct Meter: Decodable, Equatable, Identifiable {
+struct WorldHUD: Codable, Equatable {
+    struct Meter: Codable, Equatable, Identifiable {
         let key: String
         let value: Double
         let word: String
@@ -38,6 +39,8 @@ struct WorldHUD: Decodable, Equatable {
     let coin: Int?
     let clock: String?
     let ward: String?
+    let dark: Bool?
+    let weather: String?
     let mood: String?
     let hint: String?
     let home: String?
@@ -70,4 +73,23 @@ enum WorldSoundIdentity {
         let identity = parts.string ?? url.absoluteString
         return identity + (revision.map { "#revision=" + $0 } ?? "")
     }
+}
+
+struct WorldPictureRoom: Codable, Equatable {
+    struct Senses: Codable, Equatable { let nature: Bool?; let water: String? }
+    struct Home: Codable, Equatable { let mine: Bool? }
+    let roomId: String?
+    let name: String
+    let desc: String
+    let outdoor: Bool?
+    let furniture: [String]?
+    let sensory: Senses?
+    let home: Home?
+    let weather: String?
+    var peopleDetail: [WorldPerson]?
+}
+
+struct WorldPictureSnapshot: Encodable, Equatable {
+    var room: WorldPictureRoom
+    var hud: WorldHUD?
 }
