@@ -397,3 +397,46 @@ workflows:
     artifacts:
       - a11y-issues.txt
       - a11y.log
+
+
+  ios-simulator-acceptance:
+    name: Simulator startup diagnosis and store frames (no upload)
+    max_build_duration: 20
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Compile current source and inspect normal and quiet simulator startup
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);v=[x for rows in d['devices'].values() for x in rows if 'Pro Max' in x['name']];print(v[0]['udid'])")
+          xcrun simctl boot "$SIM" || true
+          xcrun simctl bootstatus "$SIM" -b
+          xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug -destination "id=$SIM" -derivedDataPath "$CM_BUILD_DIR/sim-derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build > "$CM_BUILD_DIR/simulator-build.log" 2>&1
+          APP="$CM_BUILD_DIR/sim-derived/Build/Products/Debug-iphonesimulator/KadeAI.app"
+          xcrun simctl install "$SIM" "$APP"
+          xcrun simctl status_bar "$SIM" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+          LAUNCH=$(xcrun simctl launch --stdout="$CM_BUILD_DIR/normal.stdout" --stderr="$CM_BUILD_DIR/normal.stderr" "$SIM" com.kademurdock.kadeai)
+          PID=$(printf '%s' "$LAUNCH" | awk '{print $NF}')
+          sleep 20
+          xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/normal-startup.png"
+          /usr/bin/sample "$PID" 2 -file "$CM_BUILD_DIR/normal-sample.txt" || true
+          xcrun simctl terminate "$SIM" com.kademurdock.kadeai || true
+          SIMCTL_CHILD_KADE_A11Y_AUDIT=1 SIMCTL_CHILD_KADE_TOUR=1 SIMCTL_CHILD_KADE_TOUR_EMAIL="$KADE_TOUR_EMAIL" SIMCTL_CHILD_KADE_TOUR_PASS="$KADE_TOUR_PASS" xcrun simctl launch --stdout="$CM_BUILD_DIR/tour.stdout" --stderr="$CM_BUILD_DIR/tour.stderr" "$SIM" com.kademurdock.kadeai
+          for i in 1 2 3 4 5 6 7; do
+            sleep 7
+            xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/tour-$i.png"
+          done
+          xcrun simctl spawn "$SIM" log show --last 3m --style compact --predicate 'process == "KadeAI"' > "$CM_BUILD_DIR/simulator-runtime.log" 2>&1 || true
+    artifacts:
+      - normal-startup.png
+      - tour-*.png
+      - normal-sample.txt
+      - normal.stdout
+      - normal.stderr
+      - tour.stdout
+      - tour.stderr
+      - simulator-runtime.log
+      - simulator-build.log
