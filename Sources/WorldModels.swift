@@ -71,6 +71,34 @@ struct WorldStreamUpdate: Decodable {
     let end: String?
 }
 
+/// Stream events can arrive during a command's network round trip, including
+/// inside WorldService.send's defer. Preserve them behind the requested reply.
+struct WorldSpeechBuffer {
+    private(set) var replying = false
+    private var pending: [String] = []
+
+    mutating func beginReply() -> Bool {
+        guard !replying else { return false }
+        replying = true
+        return true
+    }
+
+    mutating func receiveLive(_ text: String) -> String? {
+        guard replying else { return text }
+        pending.append(text)
+        return nil
+    }
+
+    mutating func finishReply(_ text: String) -> String {
+        let result = ([text] + pending).filter { !$0.isEmpty }.joined(separator: " ")
+        pending.removeAll()
+        replying = false
+        return result
+    }
+
+    mutating func clearLive() { pending.removeAll() }
+}
+
 enum WorldSoundIdentity {
     static func cacheIdentity(_ url: URL, revision: String? = nil) -> String {
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
@@ -86,7 +114,7 @@ enum WorldSoundIdentity {
 }
 
 struct WorldPictureRoom: Codable, Equatable {
-    struct Senses: Codable, Equatable { let nature: Bool?; let water: String? }
+    struct Senses: Codable, Equatable { let nature: Bool?; let water: String?; let ambience: String? }
     struct Home: Codable, Equatable { let mine: Bool? }
     struct Washhouse: Codable, Equatable { let benchStage: Int? }
     let roomId: String?

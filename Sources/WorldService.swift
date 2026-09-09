@@ -110,8 +110,12 @@ final class WorldService: ObservableObject {
         let ext = remote.pathExtension.isEmpty ? "snd" : remote.pathExtension
         let local = dir.appendingPathComponent("\(digest).\(ext)")
         if FileManager.default.fileExists(atPath: local.path) { return local }
-        guard let out = try? await URLSession.shared.download(from: remote),
+        var request = URLRequest(url: remote, timeoutInterval: 15)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        guard let out = try? await URLSession.shared.download(for: request),
               (out.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        // A concurrent foreground/manifest fetch may already have installed it.
+        if FileManager.default.fileExists(atPath: local.path) { return local }
         try? FileManager.default.removeItem(at: local)
         do { try FileManager.default.moveItem(at: out.0, to: local) } catch { return nil }
         return local
@@ -256,10 +260,19 @@ final class WorldTones {
          * audio code. */
         NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.engineReset() }
+        ) { [weak self] note in
+            guard let self else { return }
+            self.engineReset()
+            let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue
+            let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber)?.uintValue ?? 0
+            if type == AVAudioSession.InterruptionType.ended.rawValue,
+               AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume) {
+                self.resumeLoops()
+            }
+        }
         NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.engineReset() }
+        ) { [weak self] _ in self?.engineReset(); self?.resumeLoops() }
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in self?.engineReset() }
@@ -316,39 +329,67 @@ final class WorldTones {
         filePlayers[kind] = p
     }
 
+    private func preparePlayback() {
+        let session = AVAudioSession.sharedInstance()
+        // Leave active call/Clubhouse routing alone. A fresh app's default
+        // solo-ambient session otherwise mutes the world with the silent switch.
+        if session.category == .ambient || session.category == .soloAmbient {
+            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        }
+        try? session.setActive(true)
+    }
+
+    private func resumeLoops() {
+        guard ambiencePlayer != nil || roomTonePlayer != nil else { return }
+        preparePlayback()
+        if let ambiencePlayer, !ambiencePlayer.isPlaying { ambiencePlayer.play() }
+        if let roomTonePlayer, !roomTonePlayer.isPlaying { roomTonePlayer.play() }
+    }
+
     /// The ward bed — one low looping ambience for the district she stands
     /// in (16.1's first layer). Same key = leave it playing; nil = quiet.
     func setAmbience(key: String?, fileURL: URL?) {
-        guard ambienceKey != key else { return }
-        ambienceKey = key
+        if let key, ambienceKey == key, ambiencePlayer?.url == fileURL, let ambiencePlayer {
+            if !ambiencePlayer.isPlaying { preparePlayback(); ambiencePlayer.play() }
+            return
+        }
+        ambienceKey = nil
         ambiencePlayer?.stop()
         ambiencePlayer = nil
-        guard let fileURL, let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
+        guard let key, let fileURL, let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
         p.numberOfLoops = -1
         p.volume = 0.22
         p.prepareToPlay()
-        p.play()
+        preparePlayback()
+        guard p.play() else { return }
+        ambienceKey = key
         ambiencePlayer = p
     }
 
     /// The room tone — layer two, under the ward bed. Same contract as
     /// setAmbience: same key = leave it alone, nil = silence.
     func setRoomTone(key: String?, fileURL: URL?) {
-        guard roomToneKey != key else { return }
-        roomToneKey = key
+        if let key, roomToneKey == key, roomTonePlayer?.url == fileURL, let roomTonePlayer {
+            if !roomTonePlayer.isPlaying { preparePlayback(); roomTonePlayer.play() }
+            return
+        }
+        roomToneKey = nil
         roomTonePlayer?.stop()
         roomTonePlayer = nil
-        guard let fileURL, let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
+        guard let key, let fileURL, let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
         p.numberOfLoops = -1
         // Quieter than the ward bed (0.22) on purpose: the room sits INSIDE
         // the ward, so it must never drown the neighbourhood out.
         p.volume = 0.16
         p.prepareToPlay()
-        p.play()
+        preparePlayback()
+        guard p.play() else { return }
+        roomToneKey = key
         roomTonePlayer = p
     }
 
     func play(_ kind: String) {
+        preparePlayback()
         // Real file first: independent player, immune to engine state.
         if let file = filePlayers[kind] {
             file.currentTime = 0
@@ -374,6 +415,7 @@ final class WorldTones {
     }
 
     func stop() {
+        for file in filePlayers.values { file.stop() }
         ambiencePlayer?.stop()
         ambiencePlayer = nil
         ambienceKey = nil

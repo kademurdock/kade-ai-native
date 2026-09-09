@@ -34,10 +34,14 @@ struct WorldView: View {
     @State private var mode = "play"
     @State private var logExpanded = false
     @State private var isVisible = false
+    @State private var speechBuffer = WorldSpeechBuffer()
+    private var replying: Bool { speechBuffer.replying }
     @AccessibilityFocusState private var focusedChoice: String?
     /// Build 195: the sound manifest — district (ward-bed) ambience urls and
     /// the district she currently stands in.
     @State private var districtSounds: [String: String] = [:]
+    @State private var eventSounds: [String: String] = [:]
+    @State private var currentAmbience: String?
     /// Build 197 — layer two: room-scoped tones, keyed by the roomId the
     /// engine now sends. The manifest has always had this scope; nothing
     /// could reach it until the room started saying its own name.
@@ -46,6 +50,9 @@ struct WorldView: View {
     @State private var currentRoomId: String?
     @State private var currentDistrict: String?
     @FocusState private var inputFocused: Bool
+    // Disabling the focused button makes VoiceOver announce its changed state
+    // over the reply. Commands still serialize through the replying guard.
+    private var controlsDisabled: Bool { replying && !UIAccessibility.isVoiceOverRunning }
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: WorldService(client: apiClient))
@@ -115,7 +122,7 @@ struct WorldView: View {
                             Task { await send(item.cmd) }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(service.isSending)
+                        .disabled(controlsDisabled)
                         .accessibilityHint(item.hint)
                     }
                     Button(soundsOn ? "Sounds on" : "Sounds off") {
@@ -155,7 +162,7 @@ struct WorldView: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
                 }
-                .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty || service.isSending)
+                .disabled(!UIAccessibility.isVoiceOverRunning && (command.trimmingCharacters(in: .whitespaces).isEmpty || replying))
                 .accessibilityLabel("Do it")
             }
             .padding(.horizontal)
@@ -170,7 +177,11 @@ struct WorldView: View {
                 await send("look")
                 startLiveIfNeeded()
                 await loadWorldSounds()
-            } else { startLiveIfNeeded() }
+            } else {
+                startLiveIfNeeded()
+                if let result = await service.here() { updateControls(result) }
+                await loadWorldSounds()
+            }
         }
         .onChange(of: liveOn) { _, enabled in if enabled { startLiveIfNeeded() } else { service.stopListening() } }
         .onChange(of: ambienceOn) { _, _ in Task { await refreshAmbience(); await refreshRoomTone() } }
@@ -185,9 +196,11 @@ struct WorldView: View {
         }
         .onDisappear {
             isVisible = false
+            speechBuffer.clearLive()
             service.stopListening()
             WorldTones.shared.stop()
         }
+        .speechAnnouncementsQueued()
     }
 
     private var worldControls: some View {
@@ -199,7 +212,7 @@ struct WorldView: View {
                         .buttonStyle(.bordered)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityFocused($focusedChoice, equals: action.id)
-                        .disabled(service.isSending)
+                        .disabled(controlsDisabled)
                 }
             }
             if mode != "create" {
@@ -223,16 +236,7 @@ struct WorldView: View {
                     Text("Move").font(.headline).accessibilityAddTraits(.isHeader)
                     ForEach(exits) { exit in
                         Button(exit.spokenLabel) { Task { await send(exit.command) } }
-                            .buttonStyle(.bordered).disabled(service.isSending)
-                    }
-                }
-                if !actions.isEmpty {
-                    Text("Things you can do").font(.headline).accessibilityAddTraits(.isHeader)
-                    ForEach(actions) { action in
-                        Button(action.label) { perform(action) }
-                            .buttonStyle(.bordered)
-                            .accessibilityHint(action.hint ?? "")
-                            .disabled(service.isSending)
+                            .buttonStyle(.bordered).disabled(controlsDisabled)
                     }
                 }
                 if !people.isEmpty {
@@ -245,7 +249,16 @@ struct WorldView: View {
                         } label: { Text(person.line ?? person.name) }
                         .buttonStyle(.bordered)
                         .accessibilityHint("Actions with \(person.name)")
-                        .disabled(service.isSending)
+                        .disabled(controlsDisabled)
+                    }
+                }
+                if !actions.isEmpty {
+                    Text("Things you can do").font(.headline).accessibilityAddTraits(.isHeader)
+                    ForEach(actions) { action in
+                        Button(action.label) { perform(action) }
+                            .buttonStyle(.bordered)
+                            .accessibilityHint(action.hint ?? "")
+                            .disabled(controlsDisabled)
                     }
                 }
             }
@@ -267,6 +280,7 @@ struct WorldView: View {
     }
 
     private func perform(_ action: WorldAction) {
+        guard !replying else { return }
         if action.compose == true || action.cmd == "cab" || action.cmd == "pawn" || action.cmd.hasPrefix("whisper ") || action.cmd.hasPrefix("teach ") {
             guard command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 inputFocused = true
@@ -282,7 +296,12 @@ struct WorldView: View {
     private func updateControls(_ result: WorldService.WorldResult) {
         if mode == "create" && result.step == nil && result.mode == "create" { return }
         if let h = result.hud { hud = h }
-        if let room = result.room { picture = WorldPictureSnapshot(room: room.picture, hud: result.hud ?? hud) }
+        if let room = result.room {
+            picture = WorldPictureSnapshot(room: room.picture, hud: result.hud ?? hud)
+            currentRoomId = room.roomId
+            currentDistrict = room.district
+            currentAmbience = room.sensory?.ambience
+        }
         else if picture != nil {
             if let h = result.hud { picture?.hud = h }
             if let occupants = result.people { picture?.room.peopleDetail = occupants }
@@ -295,14 +314,18 @@ struct WorldView: View {
         choices = result.choices ?? []
         if result.step != creationStep {
             creationStep = result.step
-            if result.freeText == true && choices.isEmpty { inputFocused = true }
-            else if let first = choices.first { Task { await Task.yield(); focusedChoice = first.id } }
+            // VoiceOver must finish the reply without a forced focus announcement.
+            if !UIAccessibility.isVoiceOverRunning {
+                if result.freeText == true && choices.isEmpty { inputFocused = true }
+                else if let first = choices.first { Task { await Task.yield(); focusedChoice = first.id } }
+            }
         }
     }
 
     private func announce(_ text: String) {
         guard isVisible, scenePhase == .active, !text.isEmpty else { return }
-        UIAccessibility.post(notification: .announcement, argument: text)
+        UIAccessibility.post(notification: .announcement, argument: NSAttributedString(
+            string: text, attributes: [.accessibilitySpeechQueueAnnouncement: NSNumber(value: true)]))
     }
 
     private func startLiveIfNeeded() {
@@ -310,9 +333,17 @@ struct WorldView: View {
         service.startListening { events in
             guard isVisible else { return }
             for event in events { append(event.text, .meanwhile); playFeedback(event.sound ?? event.kind ?? "say") }
-            announce(events.map(\.text).joined(separator: " "))
+            let text = events.map(\.text).joined(separator: " ")
+            // WorldService may flush its stream immediately before send returns.
+            // The requested reply goes first; live speech queues behind it.
+            if let ready = speechBuffer.receiveLive(text) { announce(ready) }
             if events.contains(where: { $0.kind == "enter" || $0.kind == "leave" }) {
-                Task { if let result = await service.here() { updateControls(result) } }
+                Task {
+                    let roomId = currentRoomId
+                    if let result = await service.here(), !replying, currentRoomId == roomId {
+                        updateControls(result)
+                    }
+                }
             }
         }
     }
@@ -335,14 +366,18 @@ struct WorldView: View {
 
     private func sendTyped() async {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty, !service.isSending else { return }
+        guard !cmd.isEmpty, !replying else { return }
         command = ""
         await send(cmd)
-        inputFocused = true
+        if !UIAccessibility.isVoiceOverRunning { inputFocused = true }
     }
 
     private func send(_ cmd: String) async {
-        guard !service.isSending else { return }
+        guard speechBuffer.beginReply() else { return }
+        var replySpeech = ""
+        defer {
+            announce(speechBuffer.finishReply(replySpeech))
+        }
         append("> \(cmd)", .you)
         history.append(cmd)
         if history.count > 60 { history.removeFirst(history.count - 60) }
@@ -360,7 +395,9 @@ struct WorldView: View {
                 )
             }
             if let room = result.room {
-                let exits = room.exits.isEmpty ? "none" : room.exits.joined(separator: ", ")
+                let routes = result.exits ?? self.exits
+                let destinations = routes.isEmpty ? room.exits : routes.map(\.spokenLabel)
+                let exits = destinations.isEmpty ? "none" : destinations.joined(separator: "; ")
                 append("\(room.name). \(room.desc)", .world)
                 var extras = "Exits: \(exits)."
                 if !room.items.isEmpty {
@@ -372,15 +409,7 @@ struct WorldView: View {
                 append(extras, .world)
                 spoken.append("\(room.name). \(room.desc) \(extras)")
             }
-            let d = result.district ?? result.room?.district
-            if let d, d != currentDistrict {
-                currentDistrict = d
-                await refreshAmbience()
-            }
-            if let r = result.room?.roomId, r != currentRoomId {
-                currentRoomId = r
-                await refreshRoomTone()
-            }
+            if let d = result.district { currentDistrict = d }
             let kinds = result.kinds ?? []
             if result.ok != true && kinds.isEmpty {
                 playFeedback("err")
@@ -393,14 +422,14 @@ struct WorldView: View {
             }
             let announcement = spoken.joined(separator: " ")
             latestReply = announcement
-            if !announcement.isEmpty {
-                announce(announcement)
-            }
+            replySpeech = announcement
+            // Downloads never hold up the command's spoken reply.
+            Task { await refreshAmbience(); await refreshRoomTone() }
         } catch {
             append(error.localizedDescription, .error)
             playFeedback("err")
             if command.isEmpty { command = cmd }
-            announce(error.localizedDescription)
+            replySpeech = error.localizedDescription
         }
     }
 
@@ -411,6 +440,12 @@ struct WorldView: View {
     private func loadWorldSounds() async {
         guard let manifest = await service.fetchSoundManifest() else { return }
         soundVersions = manifest.versions ?? [:]
+        eventSounds = manifest.event ?? [:]
+        districtSounds = manifest.district ?? [:]
+        roomSounds = manifest.room ?? [:]
+        // Start the place before prewarming the 80+ incidental event sounds.
+        await refreshAmbience()
+        await refreshRoomTone()
         for (kind, urlStr) in manifest.event ?? [:] {
             if Task.isCancelled || !isVisible { return }
             if let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["event:" + kind]) {
@@ -421,24 +456,25 @@ struct WorldView: View {
                 await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
             }
         }
-        districtSounds = manifest.district ?? [:]
-        roomSounds = manifest.room ?? [:]
-        await refreshAmbience()
-        await refreshRoomTone()
     }
 
     private func refreshAmbience() async {
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let d = currentDistrict, let urlStr = districtSounds[d] else {
+        let profile = currentAmbience
+        let d = currentDistrict
+        let specific = profile.flatMap { eventSounds[$0] }
+        let urlStr = specific ?? d.flatMap { districtSounds[$0] }
+        let key = specific != nil ? "event:" + (profile ?? "") : "district:" + (d ?? "")
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let urlStr else {
             WorldTones.shared.setAmbience(key: nil, fileURL: nil)
             return
         }
-        let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["district:" + d])
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentDistrict == d else { return }
-        WorldTones.shared.setAmbience(key: d, fileURL: local)
+        let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions[key])
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentDistrict == d, currentAmbience == profile else { return }
+        WorldTones.shared.setAmbience(key: key, fileURL: local)
     }
 
     private func refreshRoomTone() async {
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let r = currentRoomId, let urlStr = roomSounds[r] else {
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let r = currentRoomId, let urlStr = roomSounds[r], urlStr != currentAmbience.flatMap({ eventSounds[$0] }) else {
             WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
             return
         }
