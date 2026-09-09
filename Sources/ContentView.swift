@@ -916,6 +916,7 @@ struct ContentView: View {
     }
 
 #if DEBUG
+    @State private var screenshotTourStarted = false
     /// SCREENSHOT TOUR (July 31 2026, the App Store sprint). Debug-only by
     /// construction — the Release archive never contains this code. CI's
     /// simulator step launches with SIMCTL_CHILD_KADE_TOUR=1 plus the test
@@ -924,11 +925,18 @@ struct ContentView: View {
     /// on a real device, never with real accounts.
     private func startScreenshotTourIfAsked() {
         let env = ProcessInfo.processInfo.environment
-        guard env["KADE_TOUR"] == "1",
+        guard !screenshotTourStarted, env["KADE_TOUR"] == "1",
               let tourEmail = env["KADE_TOUR_EMAIL"],
               let tourPass = env["KADE_TOUR_PASS"] else { return }
+        screenshotTourStarted = true
         Task {
             await auth.signIn(email: tourEmail, password: tourPass)
+            guard case .signedIn(let user) = auth.state else { return }
+            // Explicit simulator fixture only; never present in Release.
+            if env["KADE_TOUR_COMPLETE_ONBOARDING"] == "1" {
+                DataUseConsent.record(for: user.id)
+                consentBump &+= 1
+            }
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             let stops: [HomeRoute?] = [nil, .conversations, .debateRoom, .prompts, .settings]
             for stop in stops {
