@@ -48,14 +48,14 @@ struct WorldPictureView: UIViewRepresentable {
         var active = true
         private var lastPayload: String?
         private var revision = 0
-        private var description: Binding<String>
+        private var descriptionBinding: Binding<String>
 
-        init(description: Binding<String>) { self.description = description }
+        init(description: Binding<String>) { self.descriptionBinding = description }
 
         func report(_ text: String) {
             Task { @MainActor [weak self] in
                 guard let self, active else { return }
-                description.wrappedValue = text
+                descriptionBinding.wrappedValue = text
             }
         }
 
