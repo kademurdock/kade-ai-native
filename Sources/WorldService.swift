@@ -46,10 +46,11 @@ final class WorldService: ObservableObject {
         let sensory: WorldPictureRoom.Senses?
         let home: WorldPictureRoom.Home?
         let weather: String?
+        let washhouse: WorldPictureRoom.Washhouse?
         let peopleDetail: [WorldPerson]?
         var picture: WorldPictureRoom {
             WorldPictureRoom(roomId: roomId, name: name, desc: desc, outdoor: outdoor,
-                furniture: furniture, sensory: sensory, home: home, weather: weather,
+                furniture: furniture, sensory: sensory, home: home, weather: weather, washhouse: washhouse,
                 peopleDetail: peopleDetail)
         }
     }

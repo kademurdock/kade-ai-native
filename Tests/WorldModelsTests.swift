@@ -38,6 +38,12 @@ import Foundation
         precondition(oldRoom.sensory == nil && oldRoom.home == nil && oldRoom.peopleDetail == nil)
         let night = try decoder.decode(WorldHUD.self, from: Data(#"{"name":"Alex","dark":true,"weather":"snow"}"#.utf8))
         precondition(night.dark == true && night.weather == "snow")
-        print("World models: 16 checks passed. This checks decoding and cache identity, not VoiceOver playback or WebKit rendering.")
+        precondition(oldRoom.washhouse == nil)
+        let laundry = try decoder.decode(WorldPictureRoom.self, from: Data(#"{"roomId":"gully_laundry","name":"Washhouse","desc":"A shared room","washhouse":{"benchStage":3}}"#.utf8))
+        precondition(laundry.washhouse?.benchStage == 3)
+        let laundrySnapshot = try JSONEncoder().encode(WorldPictureSnapshot(room: laundry, hud: nil))
+        let laundryRoundtrip = try JSONSerialization.jsonObject(with: laundrySnapshot) as! [String: Any]
+        precondition((((laundryRoundtrip["room"] as? [String: Any])?["washhouse"] as? [String: Any])?["benchStage"] as? Int) == 3)
+        print("World models: 19 checks passed. This checks decoding and cache identity, not VoiceOver playback or WebKit rendering.")
     }
 }

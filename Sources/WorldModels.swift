@@ -88,6 +88,7 @@ enum WorldSoundIdentity {
 struct WorldPictureRoom: Codable, Equatable {
     struct Senses: Codable, Equatable { let nature: Bool?; let water: String? }
     struct Home: Codable, Equatable { let mine: Bool? }
+    struct Washhouse: Codable, Equatable { let benchStage: Int? }
     let roomId: String?
     let name: String
     let desc: String
@@ -96,6 +97,7 @@ struct WorldPictureRoom: Codable, Equatable {
     let sensory: Senses?
     let home: Home?
     let weather: String?
+    let washhouse: Washhouse?
     var peopleDetail: [WorldPerson]?
 }
 
