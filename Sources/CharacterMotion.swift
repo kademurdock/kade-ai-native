@@ -29,14 +29,17 @@ enum CharacterMotion {
         // Stable per-character phase; no synchronized marching portraits.
         let seed = id.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
         let phase = Double(seed % 1000) / 1000
-        let t = time + phase * 4.7
-        let blinkPhase = t.truncatingRemainder(dividingBy: 4.7)
-        let blink = blinkPhase > 4.5 ? sin((blinkPhase - 4.5) / 0.2 * .pi) : 0
+        let period = 4.3 + phase * 0.8
+        let t = time + phase * period
+        let blinkPhase = t.truncatingRemainder(dividingBy: period)
+        let secondBlink = floor(t / period).truncatingRemainder(dividingBy: 3) == 1 && blinkPhase > period - 0.52 && blinkPhase < period - 0.36
+        let blink = secondBlink ? sin((blinkPhase - period + 0.52) / 0.16 * .pi) : (blinkPhase > period - 0.2 ? sin((blinkPhase - period + 0.2) / 0.2 * .pi) : 0)
         let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
         let tempo = id == dellaID ? 0.8 : 1.0
         return CharacterPose(mouth: mouth, blink: blink,
-            tilt: sin(t * 0.7 * tempo) * 0.6, lift: sin(t * 1.1 * tempo) * (0.3 + mouth * 0.4),
-            brow: mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)))
+            tilt: sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32,
+            lift: sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4),
+            brow: mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth))
     }
 }
 
