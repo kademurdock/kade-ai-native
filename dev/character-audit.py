@@ -1,6 +1,7 @@
 import json, os, pathlib, subprocess, time, signal
 
-out = pathlib.Path('character-audit')
+out = pathlib.Path('character-audit').resolve()
+out.mkdir(exist_ok=True)
 def run(*args):
     return subprocess.check_output(['xcrun', 'simctl', *args], text=True).strip()
 runtimes=json.loads(run('list','runtimes','--json'))['runtimes']
