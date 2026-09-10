@@ -16,7 +16,8 @@ try:
     run('install',sim,str(app))
     env=dict(os.environ,SIMCTL_CHILD_KADE_A11Y_AUDIT='1',SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1')
     video=subprocess.Popen(['xcrun','simctl','io',sim,'recordVideo','--codec=h264',str(out/'playback.mp4')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    subprocess.run(['xcrun','simctl','launch',sim,'com.kademurdock.kadeai'],env=env,check=True)
+    launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
+    pid=launch.strip().split()[-1];print(launch,flush=True)
     documents=pathlib.Path(run('get_app_container',sim,'com.kademurdock.kadeai','data'))/'Documents'
     deadline=time.monotonic()+90; seen=set(); result=None
     while time.monotonic()<deadline:
@@ -27,10 +28,15 @@ try:
                 seen.add(label)
                 safe=''.join(c if c.isalnum() or c=='-' else '_' for c in label)[:90]
                 run('io',sim,'screenshot',str(out/(str(len(seen))+'-'+safe+'.png')))
+                (documents/'character-captured.txt').write_text(label)
         report=documents/'character-audit.json'
         if report.exists(): result=json.loads(report.read_text()); break
         time.sleep(0.2)
-    if result is None: result={'passed':False,'error':'No completed native runtime receipt within ninety seconds','phases':list(seen)}
+    if result is None:
+        subprocess.run(['/usr/bin/sample',pid,'2','-file',str(out/'stalled-sample.txt')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+        checkpoint=documents/'character-checkpoint.txt'
+        result={'passed':False,'error':'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
+    subprocess.run(['xcrun','simctl','spawn',sim,'log','show','--last','3m','--style','compact','--predicate','process == "KadeAI"'],stdout=(out/'runtime.log').open('w'),stderr=subprocess.STDOUT,timeout=15)
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
     assert result.get('passed'),result.get('error')

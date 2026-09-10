@@ -2,6 +2,14 @@
 import SwiftUI
 import AVFoundation
 
+enum CharacterAuditCheckpoint {
+    static func mark(_ label: String) {
+        guard ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" else { return }
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("character-checkpoint.txt")
+        try? label.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
 /// Offline CI fixtures around the production view, player and call adapter.
 /// No sign-in, provider, microphone, or real user data participates.
 struct CharacterPortraitAuditView: View {
@@ -67,12 +75,17 @@ struct CharacterPortraitAuditView: View {
         UserDefaults.standard.set(true, forKey: "kadeVoicePortraits")
         ready = true
         do {
-            step("expression-gallery"); await wait(4)
+            step("expression-gallery")
+            for _ in 0..<100 {
+                if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == "expression-gallery" { break }
+                await wait(0.2)
+            }
             gallery = false
             let wav = Self.wav(seconds: 3)
             for (id, label, direction, expected) in [(CharacterMotion.kianaID, "Kiana", "%%%amused%%%", CharacterExpression.amused),
                 (CharacterMotion.dellaID, "Della", "%%%concerned%%%", CharacterExpression.concerned)] {
                 agentID = id; name = label
+                CharacterAuditCheckpoint.mark(label + " starting voice")
                 let playback = Task { await voice.auditPlay(wav, agentID: id, direction: direction) }
                 await wait(0.5)
                 try check(voice.nowPlayingAgentID == id && voice.isClipPlaying, label + " owns real buffered playback")
