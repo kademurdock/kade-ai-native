@@ -7,10 +7,12 @@ runtimes=json.loads(run('list','runtimes','--json'))['runtimes']
 runtime=next(r['identifier'] for r in reversed(runtimes) if r.get('isAvailable') and '.iOS-' in r['identifier'])
 devices=json.loads(run('list','devicetypes','--json'))['devicetypes']
 device=next(d['identifier'] for d in reversed(devices) if 'iPhone' in d['name'] and 'Pro Max' in d['name'])
-sim=run('create','Character playback acceptance',device,runtime)
+prepared=out/'simulator.json'
+sim=json.loads(prepared.read_text())['sim'] if prepared.exists() else run('create','Character playback acceptance',device,runtime)
 video=None
 try:
-    run('boot',sim); run('bootstatus',sim,'-b')
+    if not prepared.exists():run('boot',sim)
+    run('bootstatus',sim,'-b')
     # Simulator.app owns the host-facing audio surface; simctl alone can render
     # screenshots while that surface is absent on a headless build worker.
     subprocess.run(['open','-a','Simulator','--args','-CurrentDeviceUDID',sim],check=True)

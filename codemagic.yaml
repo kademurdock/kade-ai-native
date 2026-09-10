@@ -14,7 +14,8 @@ workflows:
       vars:
         BUNDLE_ID: "com.kademurdock.kadeai"
         APP_STORE_APPLE_ID: 6791024001
-      xcode: latest
+      # Repeatable toolchain; 26.6's simulator stalls inside AudioQueue on this VM.
+      xcode: "26.4"
     scripts:
       # PART 92.12 — THE SPEECH TESTS ARE A PUBLISH GATE NOW, NOT A GOOD HABIT.
       #

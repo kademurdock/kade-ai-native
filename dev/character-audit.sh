@@ -18,6 +18,7 @@ SwitchAudioSource -t input -s 'BlackHole 2ch' >> character-audit/audio-setup.txt
 SwitchAudioSource -t system -s 'BlackHole 2ch' >> character-audit/audio-setup.txt 2>&1
 system_profiler SPAudioDataType > character-audit/audio-after.txt
 python3 dev/audio-preflight.py
+python3 dev/ios-audio-preflight.py
 xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/character-simulator \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
