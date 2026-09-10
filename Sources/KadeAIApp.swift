@@ -50,7 +50,14 @@ struct KadeAIApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                #if DEBUG && targetEnvironment(simulator)
+                if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" { CharacterPortraitAuditView() }
+                else { ContentView() }
+                #else
+                ContentView()
+                #endif
+            }
                 .environmentObject(client)
                 .environmentObject(auth)
                 .environmentObject(conversationsService)
@@ -69,6 +76,9 @@ struct KadeAIApp: App {
                 // light mode on someone who has their phone set to dark.
                 .preferredColorScheme(appearance.highContrast ? .dark : nil)
                 .task {
+                    #if DEBUG && targetEnvironment(simulator)
+                    if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" { return }
+                    #endif
                     // Hand the delegate its PushService reference before
                     // anything can race a device token in (didFinishLaunching
                     // already ran by the time this .task body starts, but a

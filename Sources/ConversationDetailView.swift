@@ -1649,7 +1649,7 @@ struct ConversationDetailView: View {
             if voiceService.isClipPlaying {
                 CharacterPortraitView(agentID: voiceService.nowPlayingAgentID,
                     name: agentDisplayLabel, playing: !voiceService.isPaused,
-                    level: { voiceService.characterLevel() })
+                    level: { voiceService.characterLevel() }, presentation: { voiceService.characterPresentation() })
             }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(MessageRow.chunkLongText(liveReply).enumerated()), id: \.offset) { piece in
@@ -3911,7 +3911,7 @@ private struct MessageRow: View {
                 if voicePlayback != .idle {
                     CharacterPortraitView(agentID: message.agentId ?? characterVoice.nowPlayingAgentID,
                         name: message.speakerLabel, playing: voicePlayback == .playing && characterVoice.isClipPlaying,
-                        level: { characterVoice.characterLevel() })
+                        level: { characterVoice.characterLevel() }, presentation: { characterVoice.characterPresentation() })
                 }
                 messageBodyView
                     // Session 25 (Kade approved the audit list, "All four"):

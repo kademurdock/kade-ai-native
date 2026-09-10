@@ -4,7 +4,7 @@
 workflows:
   ios-native-testflight:
     name: Kade-AI Native iOS -> TestFlight
-    max_build_duration: 20
+    max_build_duration: 25
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: KadeAI_ASC_Key
@@ -44,6 +44,9 @@ workflows:
           set -e
           brew install xcodegen || brew link --overwrite xcodegen
           xcodegen generate
+      - name: Character playback and portrait simulator acceptance
+        script: |
+          bash dev/character-audit.sh
       - name: Set up code signing (reusable certificate)
         script: |
           set -e
@@ -176,6 +179,7 @@ workflows:
       - asc-issuer.txt
       - archive-first-errors.txt
       - build-ipa.log
+      - character-audit/**
     publishing:
       app_store_connect:
         auth: integration

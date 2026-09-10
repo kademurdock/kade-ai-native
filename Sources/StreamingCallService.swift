@@ -192,7 +192,23 @@ final class StreamingCallService: NSObject, ObservableObject {
     private let playerNode = AVAudioPlayerNode()
     private let portraitMeter = CharacterOutputMeter()
     private var portraitTapInstalled = false
-    var characterLevel: Double { portraitMeter.level(now: ProcessInfo.processInfo.systemUptime) }
+    private var pendingCharacterAudio: CharacterAudioIdentity?
+    private var characterTimeline = CharacterPlaybackTimeline()
+    private var characterPlayerTime: Double? {
+        guard engineRunning, playerNode.isPlaying, let render = playerNode.lastRenderTime,
+              let time = playerNode.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
+        return Double(time.sampleTime) / time.sampleRate
+    }
+    var characterPresentation: CharacterPresentation {
+        if !liveOn, let time = characterPlayerTime,
+           let value = characterTimeline.presentation(at: time, expectedID: callAgentId) { return value }
+        return CharacterPresentation(activity: status == .thinking ? .thinking : .listening)
+    }
+    var characterLevel: Double {
+        guard !liveOn, let time = characterPlayerTime,
+              characterTimeline.presentation(at: time, expectedID: callAgentId) != nil else { return 0 }
+        return portraitMeter.level(now: ProcessInfo.processInfo.systemUptime)
+    }
 
     /// Session 26 (Kade: "the thinking sound is no longer working on app,
     /// or it never did"): it never did. The bridge deliberately stays
@@ -544,6 +560,8 @@ final class StreamingCallService: NSObject, ObservableObject {
     }
 
     private func handleBinary(_ data: Data) {
+        let character = pendingCharacterAudio
+        pendingCharacterAudio = nil
         // "LIVE" magic = 0x4C 0x49 0x56 0x45 -- matches `LIVE_AUDIO_MAGIC`
         // in video-live.js exactly. Anything else is a WAV clip (starts
         // "RIFF"); the web client checks the same 4 bytes the same way.
@@ -557,14 +575,15 @@ final class StreamingCallService: NSObject, ObservableObject {
         if data.count > 4, data.prefix(4).elementsEqual(liveMagic) {
             enqueueLivePCM(data)
         } else {
-            enqueueWav(data)
+            enqueueWav(data, character: character)
         }
         updateAudioDiagnostic()
     }
 
     private func handleControl(_ text: String) {
-        guard let data = text.data(using: .utf8),
-              let msg = try? JSONDecoder().decode(CallServerMessage.self, from: data) else { return }
+        guard let data = text.data(using: .utf8) else { return }
+        if (try? JSONDecoder().decode(CallControlHeader.self, from: data).type) == "character-audio" { pendingCharacterAudio = nil }
+        guard let msg = try? JSONDecoder().decode(CallServerMessage.self, from: data) else { return }
         switch msg.type {
         case "ready":
             status = .listening
@@ -597,6 +616,11 @@ final class StreamingCallService: NSObject, ObservableObject {
             case "speaking": status = .speaking
             case "thinking": status = .thinking
             default: status = .listening
+            }
+        case "character-audio":
+            if msg.version == 1 {
+                pendingCharacterAudio = CharacterAudioIdentity(speakerID: msg.speakerId, speech: msg.speech,
+                    expression: msg.expression, moment: msg.moment)
             }
         case "caption":
             if msg.role == "user" { userCaption = msg.text ?? "" } else { agentCaption = msg.text ?? "" }
@@ -822,17 +846,7 @@ final class StreamingCallService: NSObject, ObservableObject {
 
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
-        if !portraitTapInstalled {
-            let meter = portraitMeter
-            playerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
-                guard let samples = buffer.floatChannelData?[0] else { return }
-                let count = min(Int(buffer.frameLength), 4096)
-                var sum = 0.0
-                for i in 0..<count { let v = Double(samples[i]); if v.isFinite { sum += v * v } }
-                meter.observe(sumSquares: sum, count: count, now: ProcessInfo.processInfo.systemUptime)
-            }
-            portraitTapInstalled = true
-        }
+        installPortraitMeter()
 
         audioEngine.attach(thinkingNode)
         audioEngine.connect(thinkingNode, to: audioEngine.mainMixerNode, format: playerFormat)
@@ -1329,7 +1343,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// can't be tested on-device before shipping. Mirrors the temp-file
     /// pattern `VoiceService`/`MessageSendingService` already use elsewhere
     /// in this app for audio.
-    private func enqueueWav(_ data: Data) {
+    private func enqueueWav(_ data: Data, character: CharacterAudioIdentity?) {
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kade-call-clip-\(UUID().uuidString).wav")
         do {
@@ -1340,7 +1354,7 @@ final class StreamingCallService: NSObject, ObservableObject {
                 pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)
             ) else { return }
             try file.read(into: raw)
-            schedule(raw, from: file.processingFormat)
+            schedule(raw, from: file.processingFormat, character: character)
         } catch {
             // One bad clip must never kill the call -- same fail-soft
             // philosophy as every other audio path in this app. Counted,
@@ -1402,7 +1416,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// time) queues gaplessly behind whatever's already scheduled as long
     /// as the node is playing -- no manual playhead-tracking needed here,
     /// unlike the web client's Web Audio workaround.
-    private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat) {
+    private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, character: CharacterAudioIdentity? = nil) {
         guard engineRunning else { return }
         // The engine can be stopped out from under us by an interruption
         // (another app taking the session, a real phone call) without this
@@ -1415,6 +1429,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             rebuildRenderPathAndStart()
             playerNode.play()
             nextPlayheadSample = nil   // the restart reset the node's timeline
+            characterTimeline.reset()
         }
         // Session 21: a RUNNING ENGINE is not the same as a PLAYING NODE. A
         // prior `stop()` (barge-in / flush / a clear before the Spotter
@@ -1431,7 +1446,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         // conversion at all, and skipping the converter removes one more
         // place a silent failure could hide.
         if sourceFormat == playerFormat {
-            scheduleOnTimeline(buffer)
+            scheduleOnTimeline(buffer, character: character)
             return
         }
         guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else {
@@ -1454,7 +1469,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             clipFailures += 1
             return
         }
-        scheduleOnTimeline(outBuffer)
+        scheduleOnTimeline(outBuffer, character: character)
     }
 
     /// Schedules a `playerFormat` buffer pinned to a running sample-time
@@ -1473,7 +1488,7 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// clips ride the same one timeline as LIVE PCM here, matching the web
     /// client, which shares one playhead across both lanes so they can
     /// never overlap.
-    private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer) {
+    private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer, character: CharacterAudioIdentity?) {
         let confirmPlayed: () -> Void = { [weak self] in
             Task { @MainActor in
                 self?.clipsPlayed += 1
@@ -1495,6 +1510,8 @@ final class StreamingCallService: NSObject, ObservableObject {
         // when the symptom is total silence; if Live stutter returns, that
         // is a far better problem than no sound at all, and a real device is
         // needed to tune it anyway.
+        characterTimeline.append(identity: character,
+            duration: Double(buffer.frameLength) / buffer.format.sampleRate, now: characterPlayerTime ?? 0)
         playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
         clipsScheduled += 1
         nextPlayheadSample = nil
@@ -1507,14 +1524,55 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// `flushPlayback()` stopping every live `AudioBufferSourceNode`.
     private func flushPlayback() {
         portraitMeter.reset()
+        characterTimeline.reset()
+        pendingCharacterAudio = nil
         guard engineRunning else { return }
         playerNode.stop()
         playerNode.play()
         nextPlayheadSample = nil   // stop() cleared the queue and reset the timeline
     }
 
+    private func installPortraitMeter() {
+        if !portraitTapInstalled {
+            let meter = portraitMeter
+            playerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+                guard let samples = buffer.floatChannelData?[0] else { return }
+                let count = min(Int(buffer.frameLength), 4096)
+                var sum = 0.0
+                for i in 0..<count { let v = Double(samples[i]); if v.isFinite { sum += v * v } }
+                meter.observe(sumSquares: sum, count: count, now: ProcessInfo.processInfo.systemUptime)
+            }
+            portraitTapInstalled = true
+        }
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    func auditStart(agentID: String) throws {
+        callAgentId = agentID
+        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try AVAudioSession.sharedInstance().setActive(true)
+        audioEngine.attach(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        installPortraitMeter()
+        try audioEngine.start()
+        engineRunning = true
+        playerNode.play()
+        status = .listening
+    }
+    func auditReceive(metadata: String, wav: Data) { handleControl(metadata); handleBinary(wav) }
+    func auditControl(_ json: String) { handleControl(json) }
+    func auditFinish() {
+        guard engineRunning || portraitTapInstalled else { return }
+        flushPlayback()
+        if portraitTapInstalled { playerNode.removeTap(onBus: 0); portraitTapInstalled = false }
+        playerNode.stop(); audioEngine.stop(); engineRunning = false
+    }
+    #endif
+
     private func teardownAudio() {
         portraitMeter.reset()
+        characterTimeline.reset()
+        pendingCharacterAudio = nil
         if portraitTapInstalled { playerNode.removeTap(onBus: 0); portraitTapInstalled = false }
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
@@ -1683,7 +1741,14 @@ private final class MicConverterBox {
 /// every field beyond `type` is optional since each message type only
 /// populates a subset, mirroring how the web client just reads `any` off
 /// the parsed JSON and switches on `m.type`.
+private struct CallControlHeader: Decodable { let type: String }
+
 private struct CallServerMessage: Decodable {
+    let version: Int?
+    let speakerId: String?
+    let speech: Bool?
+    let expression: String?
+    let moment: String?
     let type: String
     let state: String?
     let role: String?

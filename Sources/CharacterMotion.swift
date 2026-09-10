@@ -24,7 +24,7 @@ enum CharacterMotion {
         guard let path, let url = URL(string: path) else { return false }
         return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile)
     }
-    static func pose(id: String, time: Double, level: Double, active: Bool) -> CharacterPose {
+    static func pose(id: String, time: Double, level: Double, active: Bool, presentation: CharacterPresentation = .idle) -> CharacterPose {
         guard active, time.isFinite, time >= 0 else { return .still }
         // Stable per-character phase; no synchronized marching portraits.
         let seed = id.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
@@ -36,10 +36,19 @@ enum CharacterMotion {
         let blink = secondBlink ? sin((blinkPhase - period + 0.52) / 0.16 * .pi) : (blinkPhase > period - 0.2 ? sin((blinkPhase - period + 0.2) / 0.2 * .pi) : 0)
         let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
         let tempo = id == dellaID ? 0.8 : 1.0
-        return CharacterPose(mouth: mouth, blink: blink,
-            tilt: sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32,
-            lift: sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4),
-            brow: mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth))
+        var tilt = sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32
+        var lift = sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4)
+        if presentation.activity == .listening {
+            let nod = t.truncatingRemainder(dividingBy: 7.3)
+            lift += nod > 6.4 ? sin((nod - 6.4) / 0.9 * .pi) * 0.75 : 0
+            tilt *= 1.3
+        } else if presentation.activity == .thinking { tilt += 0.5 * tempo }
+        let gesture = sin(min(max(0, presentation.elapsed), 1) * .pi)
+        if presentation.expression == .amused { lift += gesture * 0.75 }
+        if presentation.expression == .skeptical { tilt += gesture * 0.8 }
+        if presentation.expression == .concerned { tilt -= gesture * 0.5 }
+        return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
+            brow: presentation.expression == .neutral ? mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth) : 0)
     }
 }
 
