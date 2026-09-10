@@ -93,7 +93,13 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let updatedAt: String?
     let takes: [SoundBoothTake]?
 
-    var engineLabel: String { engine == "seed" ? "Seed Audio" : "Scenema" }
+    var engineLabel: String {
+        switch engine {
+        case "seed": return "Seed Audio"
+        case "lyria": return "Lyria"
+        default: return "Scenema"
+        }
+    }
     var isWorking: Bool { state == "queued" || state == "running" }
     var stateWord: String {
         switch state {
@@ -241,9 +247,11 @@ struct SoundBoothSuggestion: Decodable {
 }
 
 struct SoundBoothHealth: Decodable {
-    struct Engine: Decodable { let configured: Bool; let queued: Bool?; let usdPerMin: Double? }
+    /* Lyria is priced per SONG, not per minute, so its card carries a
+     * different number and the phone has to read whichever one is there. */
+    struct Engine: Decodable { let configured: Bool; let queued: Bool?; let usdPerMin: Double?; let usdPerSong: Double?; let model: String? }
     struct Mood: Decodable, Identifiable, Hashable { let key: String; let label: String; var id: String { key } }
-    struct Limits: Decodable { let scenemaChars: Int?; let seedChars: Int?; let scriptsPerDay: Int? }
+    struct Limits: Decodable { let scenemaChars: Int?; let seedChars: Int?; let lyriaChars: Int?; let scriptsPerDay: Int? }
     let engines: [String: Engine]
     let scriptDesk: Bool
     let moods: [Mood]
@@ -312,7 +320,10 @@ final class SoundBoothService: ObservableObject {
         if let s = scene, !s.isEmpty { body["scene"] = s }
         if let s = shot, !s.isEmpty { body["shot"] = s }
         if !clipURLs.isEmpty {
-            if engine == "seed" { body["audio_urls"] = clipURLs } else { body["reference_voice_url"] = clipURLs[0] }
+            /* Lyria clones nothing and has no reference clip, so a clip left
+             * over from another engine must never ride along with a song. */
+            if engine == "lyria" { /* no clips */ }
+            else if engine == "seed" { body["audio_urls"] = clipURLs } else { body["reference_voice_url"] = clipURLs[0] }
         }
         // The script desk calls a model; 90 s server-side is normal, and the
         // 60-second URLSession default is exactly the trap build 169 fell in.
@@ -423,3 +434,4 @@ final class SoundBoothService: ObservableObject {
         return String(cleaned.prefix(60))
     }
 }
+
