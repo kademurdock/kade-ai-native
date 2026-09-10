@@ -51,7 +51,7 @@ struct CharacterPortraitAuditView: View {
         VStack(spacing: 0) {
             CharacterPortraitView(agentID: id, name: name, playing: true, level: { 0 },
                 presentation: { CharacterPresentation(activity: .speaking, expression: expression) })
-                .scaleEffect(0.68).frame(width: 120, height: 117)
+                .scaleEffect(0.58).frame(width: 112, height: 100)
             Text(name + " · " + expression.rawValue).font(.caption)
         }
     }

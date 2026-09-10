@@ -11,6 +11,10 @@ sim=run('create','Character playback acceptance',device,runtime)
 video=None
 try:
     run('boot',sim); run('bootstatus',sim,'-b')
+    # Simulator.app owns the host-facing audio surface; simctl alone can render
+    # screenshots while that surface is absent on a headless build worker.
+    subprocess.run(['open','-a','Simulator','--args','-CurrentDeviceUDID',sim],check=True)
+    time.sleep(2)
     run('ui',sim,'appearance','light')
     app=pathlib.Path('build/character-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app').resolve()
     run('install',sim,str(app))
