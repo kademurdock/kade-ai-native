@@ -195,7 +195,20 @@ final class StreamingCallService: NSObject, ObservableObject {
     private var pendingCharacterAudio: CharacterAudioIdentity?
     private var characterTimeline = CharacterPlaybackTimeline()
     private var characterPlayerTime: Double? {
+        // Sep 10 2026 -- `playerTime(forNodeTime:)` does NOT return nil for a
+        // degenerate node time. It raises an ObjC exception Swift cannot catch
+        // ("required condition is false: nodeTime == nil ||
+        // nodeTime.sampleTimeValid || nodeTime.hostTimeValid") and the process
+        // dies on the spot. `lastRenderTime` is non-nil but carries neither a
+        // valid sample time nor a valid host time in the window between play()
+        // and the first render -- guaranteed under offline manual rendering,
+        // and reachable on a real device in that same window. Checking `render`
+        // for nil is not enough; the validity flags have to be checked BEFORE
+        // asking the node for a player time. This is the one funnel all three
+        // of characterPresentation, characterLevel and scheduleOnTimeline go
+        // through, so the guard belongs here and nowhere else.
         guard engineRunning, playerNode.isPlaying, let render = playerNode.lastRenderTime,
+              render.isSampleTimeValid || render.isHostTimeValid,
               let time = playerNode.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
         return Double(time.sampleTime) / time.sampleRate
     }
