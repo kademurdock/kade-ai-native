@@ -1549,11 +1549,27 @@ final class StreamingCallService: NSObject, ObservableObject {
     #if DEBUG && targetEnvironment(simulator)
     func auditStart(agentID: String) throws {
         callAgentId = agentID
-        audioEngine.attach(playerNode)
-        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        // Sep 10 2026 -- the cause of the six-build stall on 214 through 219.
+        // `mainMixerNode` is created lazily, and per Apple's contract the FIRST
+        // access implicitly connects it to `outputNode`, which instantiates the
+        // real AURemoteIO hardware unit. A headless CI worker has no audio
+        // device behind that unit, so CoreAudio's HAL never answers the RPC and
+        // the process aborts outright: "Initialize: RPC timeout. Apparently
+        // deadlocked. Aborting now." The receipt is never written, and the
+        // harness times out at ninety seconds having seen only the gallery.
+        //
+        // Manual rendering has to be enabled BEFORE any node access that could
+        // realize the output chain. Once it is on, `outputNode` IS the offline
+        // renderer, and attaching and connecting into `mainMixerNode` never
+        // reaches the hardware unit. Do not reorder these two blocks again.
+        try audioEngine.enableManualRenderingMode(.offline, format: playerFormat, maximumFrameCount: 1024)
+        guard audioEngine.isInManualRenderingMode else {
+            throw NSError(domain: "CharacterAudit", code: 3, userInfo: [NSLocalizedDescriptionKey: "Offline engine refused manual rendering mode; refusing to touch audio hardware"])
+        }
         // Exercise the production decoder, scheduler, source clock and tap,
         // without the hosted simulator's unavailable audio hardware.
-        try audioEngine.enableManualRenderingMode(.offline, format: playerFormat, maximumFrameCount: 1024)
+        audioEngine.attach(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
         installPortraitMeter()
         try audioEngine.start()
         engineRunning = true
@@ -1773,3 +1789,4 @@ private struct CallServerMessage: Decodable {
     /// never reached the bridge cannot leave the label lying to VoiceOver.
     let armed: Bool?
 }
+

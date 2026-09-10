@@ -26,7 +26,7 @@ try:
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)
     documents=pathlib.Path(run('get_app_container',sim,'com.kademurdock.kadeai','data'))/'Documents'
-    deadline=time.monotonic()+90; seen=set(); result=None
+    deadline=time.monotonic()+90; seen=set(); result=None; died=None
     while time.monotonic()<deadline:
         phase=documents/'character-phase.txt'
         if phase.exists():
@@ -38,11 +38,20 @@ try:
                 (documents/'character-captured.txt').write_text(label)
         report=documents/'character-audit.json'
         if report.exists(): result=json.loads(report.read_text()); break
+        # Sep 10 2026: a CoreAudio HAL deadlock aborts the process outright, and
+        # sitting out the rest of the ninety seconds only buys a longer video
+        # and a vaguer error. Notice the death, name it, stop.
+        try: os.kill(int(pid),0)
+        except PermissionError: pass
+        except (ProcessLookupError,ValueError,OSError):
+            died='The app terminated before writing its receipt - read runtime.log (a CoreAudio HAL deadlock aborts here)'
+            break
         time.sleep(0.2)
     if result is None:
-        subprocess.run(['/usr/bin/sample',pid,'2','-file',str(out/'stalled-sample.txt')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+        if died is None:
+            subprocess.run(['/usr/bin/sample',pid,'2','-file',str(out/'stalled-sample.txt')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
         checkpoint=documents/'character-checkpoint.txt'
-        result={'passed':False,'error':'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
+        result={'passed':False,'error':died or 'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
     subprocess.run(['xcrun','simctl','spawn',sim,'log','show','--last','3m','--style','compact','--predicate','process == "KadeAI"'],stdout=(out/'runtime.log').open('w'),stderr=subprocess.STDOUT,timeout=15)
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
@@ -54,3 +63,4 @@ finally:
         except subprocess.TimeoutExpired: video.terminate()
     subprocess.run(['xcrun','simctl','terminate',sim,'com.kademurdock.kadeai'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     subprocess.run(['xcrun','simctl','shutdown',sim],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
