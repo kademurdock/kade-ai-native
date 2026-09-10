@@ -49,10 +49,22 @@ try:
         time.sleep(0.2)
     if result is None:
         if died is None:
-            subprocess.run(['/usr/bin/sample',pid,'2','-file',str(out/'stalled-sample.txt')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+            # Same rule: a stall sample is evidence, not a verdict.
+            try:
+                subprocess.run(['/usr/bin/sample',pid,'2','-file',str(out/'stalled-sample.txt')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+            except Exception:
+                pass
         checkpoint=documents/'character-checkpoint.txt'
         result={'passed':False,'error':died or 'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
-    subprocess.run(['xcrun','simctl','spawn',sim,'log','show','--last','3m','--style','compact','--predicate','process == "KadeAI"'],stdout=(out/'runtime.log').open('w'),stderr=subprocess.STDOUT,timeout=15)
+    # Sep 10 2026: this is DIAGNOSTICS, gathered after the verdict is already
+    # decided, and it must never be the thing that fails a passing run. On a
+    # loaded worker `log show` can outrun its timeout, and an uncaught
+    # TimeoutExpired here failed a build whose eighteen checks had ALL passed
+    # and whose ten stage screenshots were already on disk. Best-effort only.
+    try:
+        subprocess.run(['xcrun','simctl','spawn',sim,'log','show','--last','3m','--style','compact','--predicate','process == "KadeAI"'],stdout=(out/'runtime.log').open('w'),stderr=subprocess.STDOUT,timeout=90)
+    except Exception as error:
+        (out/'runtime.log').write_text('log show did not finish: %r\n' % (error,))
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
     assert result.get('passed'),result.get('error')
@@ -63,4 +75,5 @@ finally:
         except subprocess.TimeoutExpired: video.terminate()
     subprocess.run(['xcrun','simctl','terminate',sim,'com.kademurdock.kadeai'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     subprocess.run(['xcrun','simctl','shutdown',sim],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
 
