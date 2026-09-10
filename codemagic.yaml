@@ -45,7 +45,7 @@ workflows:
           set -e
           brew install xcodegen || brew link --overwrite xcodegen
           xcodegen generate
-      - name: Character playback and portrait simulator acceptance
+      - name: Offline call engine and portrait simulator checks
         script: |
           bash dev/character-audit.sh
       - name: Set up code signing (reusable certificate)

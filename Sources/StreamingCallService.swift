@@ -1549,15 +1549,24 @@ final class StreamingCallService: NSObject, ObservableObject {
     #if DEBUG && targetEnvironment(simulator)
     func auditStart(agentID: String) throws {
         callAgentId = agentID
-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try AVAudioSession.sharedInstance().setActive(true)
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
+        // Exercise the production decoder, scheduler, source clock and tap,
+        // without the hosted simulator's unavailable audio hardware.
+        try audioEngine.enableManualRenderingMode(.offline, format: playerFormat, maximumFrameCount: 1024)
         installPortraitMeter()
         try audioEngine.start()
         engineRunning = true
         playerNode.play()
         status = .listening
+    }
+    func auditSpeaker(_ agentID: String) { flushPlayback(); callAgentId = agentID }
+    func auditRender(frames: AVAudioFrameCount) throws {
+        let buffer = AVAudioPCMBuffer(pcmFormat: audioEngine.manualRenderingFormat, frameCapacity: frames)!
+        let result = try audioEngine.renderOffline(frames, to: buffer)
+        guard result == .success, buffer.frameLength == frames else {
+            throw NSError(domain: "CharacterAudit", code: 2, userInfo: [NSLocalizedDescriptionKey: "Offline engine did not render the requested frames: \(result.rawValue)"])
+        }
     }
     func auditReceive(metadata: String, wav: Data) { handleControl(metadata); handleBinary(wav) }
     func auditControl(_ json: String) { handleControl(json) }

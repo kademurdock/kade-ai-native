@@ -10,7 +10,7 @@ enum CharacterAuditCheckpoint {
     }
 }
 
-/// Offline CI fixtures around the production view, player and call adapter.
+/// Offline CI fixtures around the production view and call adapter.
 /// No sign-in, provider, microphone, or real user data participates.
 struct CharacterPortraitAuditView: View {
     @EnvironmentObject private var agents: AgentsService
@@ -43,7 +43,7 @@ struct CharacterPortraitAuditView: View {
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
                     presentation: { callMode ? call.characterPresentation : voice.characterPresentation() })
                 Text(name).font(.title)
-                Text("Existing audio player. Local synthetic test tones.")
+                Text("Offline audio engine. Local synthetic test tones.")
             }
         }.padding(8).task { await run() }
     }
@@ -57,6 +57,12 @@ struct CharacterPortraitAuditView: View {
     }
     private var output: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     private func wait(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+    private func advance(_ seconds: Double) async throws {
+        for _ in 0..<Int((seconds * 50).rounded()) {
+            try call.auditRender(frames: 480)
+            await wait(0.02)
+        }
+    }
     private func step(_ label: String) {
         phase = label
         try? label.write(to: output.appendingPathComponent("character-phase.txt"), atomically: true, encoding: .utf8)
@@ -82,53 +88,48 @@ struct CharacterPortraitAuditView: View {
             }
             gallery = false
             let wav = Self.wav(seconds: 3)
-            for (id, label, direction, expected) in [(CharacterMotion.kianaID, "Kiana", "%%%amused%%%", CharacterExpression.amused),
-                (CharacterMotion.dellaID, "Della", "%%%concerned%%%", CharacterExpression.concerned)] {
-                agentID = id; name = label
-                CharacterAuditCheckpoint.mark(label + " starting voice")
-                let playback = Task { await voice.auditPlay(wav, agentID: id, direction: direction) }
-                await wait(0.5)
-                try check(voice.nowPlayingAgentID == id && voice.isClipPlaying, label + " owns real buffered playback")
-                try check(voice.characterPresentation().expression == expected, label + " uses the playing clip's authored direction")
-                try check(voice.characterLevel() > 0.01, label + " mouth receives actual AVAudioPlayer samples")
-                step(label.lowercased() + "-voice-playing"); await wait(0.6)
-                voice.pauseSpeaking(); await wait(0.2)
-                try check(voice.characterLevel() == 0 && voice.characterPresentation().activity == .idle, label + " pauses the portrait with audio")
-                step(label.lowercased() + "-voice-paused"); await wait(0.6)
-                voice.resumeSpeaking(); await wait(0.2)
-                try check(voice.characterLevel() > 0.01, label + " resumes the same recording")
-                voice.stopSpeaking(); await playback.value
-                try check(voice.characterLevel() == 0 && voice.nowPlayingAgentID == nil, label + " interruption clears identity")
-            }
-            callMode = true; name = "Della"; agentID = CharacterMotion.dellaID
+            callMode = true
+            CharacterAuditCheckpoint.mark("Starting offline call engine")
             try call.auditStart(agentID: agentID)
+            for (id, label, other) in [(CharacterMotion.kianaID, "Kiana", CharacterMotion.dellaID),
+                (CharacterMotion.dellaID, "Della", CharacterMotion.kianaID)] {
+            agentID = id; name = label; call.auditSpeaker(id)
+            CharacterAuditCheckpoint.mark(label + " rendering offline call")
             call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
             call.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
-            await wait(0.5)
-            try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, "actual call output outlives early server listening")
-            try check(call.characterPresentation.expression == .surprised, "call reaction belongs to the audible clip")
-            step("della-call-speaking"); await wait(0.8)
-            call.auditControl("{\"type\":\"clear\"}"); await wait(0.2)
-            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, "call barge-in clears mouth and expression")
+            try await advance(0.5)
+            try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, label + " rendered call output outlives early server listening")
+            try check(call.characterPresentation.expression == .surprised, label + " reaction belongs to the rendered clip")
+            step(label.lowercased() + "-call-speaking"); try await advance(0.8)
+            call.auditControl("{\"type\":\"clear\"}"); try await advance(0.2)
+            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " barge-in clears mouth and expression")
+            step(label.lowercased() + "-call-interrupted"); try await advance(0.4)
             let shortWav = Self.wav(seconds: 1.4)
             call.auditReceive(metadata: packet(agentID, expression: "concerned"), wav: shortWav)
             call.auditReceive(metadata: packet(agentID, expression: "amused"), wav: shortWav)
-            await wait(0.4)
-            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .concerned, "first queued reaction resumes correctly after interruption")
-            step("della-call-queued-first"); await wait(1.2)
-            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .amused, "second queued reaction waits for its own audio")
-            step("della-call-queued-second"); await wait(1.4)
-            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, "completed call queue returns to listening")
-            call.auditReceive(metadata: packet(CharacterMotion.kianaID, expression: "amused"), wav: wav)
-            await wait(0.3)
-            try check(call.characterLevel == 0, "another speaker cannot animate Della")
+            try await advance(0.4)
+            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .concerned, label + " first queued reaction resumes correctly after interruption")
+            step(label.lowercased() + "-call-queued-first"); try await advance(1.2)
+            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .amused, label + " second queued reaction waits for its own audio")
+            step(label.lowercased() + "-call-queued-second"); try await advance(1.4)
+            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " completed call queue returns to listening")
+            call.auditReceive(metadata: packet(other, expression: "amused"), wav: wav)
+            try await advance(0.3)
+            try check(call.characterLevel == 0, "another speaker cannot animate " + label)
             call.auditControl("{\"type\":\"clear\"}")
             call.auditReceive(metadata: packet(agentID, expression: "warm", speech: false), wav: wav)
-            await wait(0.3)
-            try check(call.characterLevel == 0, "real output for a sound effect keeps the mouth closed")
+            try await advance(0.3)
+            try check(call.characterLevel == 0, label + " sound effect output keeps the mouth closed")
+            call.auditControl("{\"type\":\"clear\"}")
+            call.auditReceive(metadata: "{\"type\":\"character-audio\",\"version\":99}", wav: wav)
+            try await advance(0.3)
+            try check(call.characterLevel == 0, label + " unsupported metadata cannot animate speech")
+            }
             call.auditFinish()
             step("passed")
-            let result: [String: Any] = ["passed": true, "checks": checks]
+            let result: [String: Any] = ["passed": true, "checks": checks,
+                "mode": "offline-AVAudioEngine", "physicalAudioVerified": false,
+                "unverified": ["AVAudioPlayer real-time voice-message playback", "Physical speaker and Bluetooth", "Microphone and live network call", "Physical VoiceOver"]]
             try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted).write(to: output.appendingPathComponent("character-audit.json"))
         } catch {
             voice.stopSpeaking(); call.auditFinish()
