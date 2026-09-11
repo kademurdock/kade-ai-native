@@ -295,8 +295,8 @@ struct LibrarianPane: View {
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard let r = try? await service.librarianStatus(book: bookId) else { continue }
             note = r
-            if r?.state == "done" { announce("The librarian has a note."); return }
-            if r?.state == "failed" { status = "The last try failed: \(r?.error ?? "")"; return }
+            if r.state == "done" { announce("The librarian has a note."); return }
+            if r.state == "failed" { status = "The last try failed: \(r.error ?? "")"; return }
         }
     }
 }
