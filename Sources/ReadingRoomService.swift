@@ -69,6 +69,8 @@ struct RRItem: Codable, Identifiable, Hashable {
     var listen: String?
     var skippedCount: Int?
     var progress: RRProgress?
+    var path: String?
+    var described: Bool?
 
     var isAudio: Bool { kind == "audio" }
     var categoryName: String { RRCategory.name(category, isAudio: isAudio) }
@@ -117,6 +119,8 @@ struct RRTrack: Codable, Identifiable, Hashable {
     let bytes: Int?
     let mime: String?
     let url: String
+    var description: RRDescription?
+    var recaps: [RRRecap]?
     var id: Int { s }
 }
 struct RRSkipped: Codable, Identifiable, Hashable {
@@ -166,6 +170,7 @@ struct RRBook: Codable {
     let mine: Bool
     let defaultVoice: String?
     var progress: RRProgress?
+    var librarian: RRLibrarian?
     var isAudio: Bool { kind == "audio" }
     var partCount: Int { isAudio ? tracks.count : chapters.count }
     func partTitle(_ s: Int) -> String {
@@ -401,8 +406,17 @@ final class ReadingRoomPlayer: ObservableObject {
     private var producer: Task<Void, Never>?
     private var activeFetch: StreamingClipFetch?
     private var queuedFrames: Int = 0
-    // file engine
-    private var avPlayer: AVPlayer?
+    // file engine — `avPlayer` is read by the VideoPane's VideoPlayer
+    private(set) var avPlayer: AVPlayer?
+    /// The library's eyes on the phone: when on, the player pauses at each
+    /// described scene, speaks it, and carries on (extended audio description).
+    @Published var describedMode = false
+    var scenes: [RRScene] = []
+    private var spokenScenes: Set<Int> = []
+    private var describing = false
+    /// Collection playback: item ids still to play after this one.
+    var queue: [String] = []
+    var onQueueNext: ((String) -> Void)?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var remoteWired = false
@@ -759,6 +773,8 @@ final class ReadingRoomPlayer: ObservableObject {
     private func loadTrack(_ index: Int, at seconds: Double, play: Bool) {
         guard let book, book.tracks.indices.contains(index), let url = URL(string: book.tracks[index].url) else { return }
         s = index; c = 0
+        spokenScenes.removeAll()
+        scenes = book.tracks[index].description?.scenes ?? []
         if let o = timeObserver { avPlayer?.removeTimeObserver(o); timeObserver = nil }
         if let e = endObserver { NotificationCenter.default.removeObserver(e); endObserver = nil }
         let item = AVPlayerItem(url: url)
@@ -768,21 +784,27 @@ final class ReadingRoomPlayer: ObservableObject {
         fileDuration = book.tracks[index].seconds ?? 0
         filePosition = seconds
         nowText = book.tracks[index].title
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { [weak self] t in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 10), queue: .main) { [weak self] t in
             Task { @MainActor in
                 guard let self else { return }
                 self.filePosition = t.seconds.isFinite ? t.seconds : 0
                 if let d = self.avPlayer?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.fileDuration = d }
                 if Int(self.filePosition) % 10 == 0 { self.scheduleSave() }
                 self.updateNowPlayingTime()
+                self.checkDescribedScene()
             }
         }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let book = self.book else { return }
+                if self.describing { return }
                 if self.s + 1 < book.tracks.count {
                     self.loadTrack(self.s + 1, at: 0, play: true)
                     self.announcement = self.positionSpoken
+                } else if !self.queue.isEmpty {
+                    let next = self.queue.removeFirst()
+                    self.announcement = "Next in the collection."
+                    self.onQueueNext?(next)
                 } else {
                     self.isPlaying = false
                     self.announcement = "The end. \(book.title) is finished."
@@ -795,6 +817,37 @@ final class ReadingRoomPlayer: ObservableObject {
         if play { self.play() }
         scheduleSave()
         updateNowPlaying()
+    }
+
+    func seekFile(to seconds: Double) {
+        guard let p = avPlayer else { return }
+        p.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 1000))
+        filePosition = max(0, seconds)
+        spokenScenes = Set(scenes.indices.filter { scenes[$0].t < seconds - 1 })
+        scheduleSave()
+    }
+
+    /// Speak one line through the platform voice; waits until it has been said.
+    func speak(_ text: String) async {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        if let data = try? await service.speech(t, voice: voice) { await SkippedClipPlayer.shared.play(data) }
+    }
+
+    private func checkDescribedScene() {
+        guard describedMode, !describing, isAudio, isPlaying, !scenes.isEmpty else { return }
+        let t = filePosition
+        for (i, sc) in scenes.enumerated() where !spokenScenes.contains(i) && t >= sc.t && t < sc.t + 1.5 {
+            spokenScenes.insert(i)
+            describing = true
+            avPlayer?.pause()
+            Task { @MainActor in
+                await self.speak(sc.text)
+                self.describing = false
+                if self.isPlaying { self.avPlayer?.play() }
+            }
+            break
+        }
     }
 
     private func seekFile(by delta: Double) {

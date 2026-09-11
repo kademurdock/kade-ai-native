@@ -24,6 +24,10 @@ struct ReadingRoomView: View {
     let incomingName: String?
 
     @State private var openBook: RRBook?
+    @State private var openCollectionRow: RRCollectionRow?
+    @State private var autoplayNext = false
+    @State private var showCollectionPicker = false
+    @State private var myCollections: [RRCollectionRow] = []
     @State private var opening = false
     @State private var status: String?
     @State private var category = ""
@@ -50,11 +54,25 @@ struct ReadingRoomView: View {
         Group {
             if let book = openBook {
                 playerScreen(book)
+            } else if let row = openCollectionRow {
+                CollectionScreen(service: service, row: row, play: { item, rest in
+                    player.queue = rest.map { $0.book.id }
+                    autoplayNext = true
+                    Task { await open(item.book, track: item.track) }
+                }, back: { openCollectionRow = nil })
             } else {
                 shelfScreen
             }
         }
-        .navigationTitle(openBook == nil ? "The Reading Room" : (openBook?.title ?? ""))
+        .onAppear {
+            player.onQueueNext = { id in
+                Task { @MainActor in
+                    autoplayNext = true
+                    if let b = try? await service.openBook(id) { player.open(b); openBook = b; player.play() }
+                }
+            }
+        }
+        .navigationTitle(openBook == nil ? (openCollectionRow?.title ?? "The Reading Room") : (openBook?.title ?? ""))
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await service.loadShelf()
@@ -109,6 +127,9 @@ struct ReadingRoomView: View {
                 }
                 .accessibilityHint("An audiobook, described-movie audio, a cassette side, old radio or commercials. Name it, then add one or more audio files; big files go straight to storage.")
             } header: { Text("Donate") }
+
+            ArchiveSection(service: service, open: { item in Task { await open(item) } })
+            CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
 
             shelfSection("Your shelf", items: service.shelf?.mine ?? [], place: "mine", empty: "Nothing on your shelf yet. Donate a book or a recording above, or share a file from another app to Kade-AI.")
             shelfSection("Checked out", items: service.shelf?.borrowed ?? [], place: "borrowed", empty: "Nothing checked out yet.")
@@ -175,14 +196,17 @@ struct ReadingRoomView: View {
         return bits.joined(separator: " · ")
     }
 
-    private func open(_ item: RRItem) async {
+    private func open(_ item: RRItem, track: Int? = nil) async {
         guard !opening else { return }
         opening = true
         defer { opening = false }
         do {
-            let book = try await service.openBook(item.id)
+            var book = try await service.openBook(item.id)
+            if let track { book.progress = RRProgress(s: track, c: 0, pos: 0, voice: book.progress?.voice, speed: book.progress?.speed, finished: false, where_: nil) }
             player.open(book)
             openBook = book
+            openCollectionRow = nil
+            if autoplayNext { autoplayNext = false; player.play() }
             let resume = (book.progress?.s ?? 0) > 0 || (book.progress?.c ?? 0) > 0 || (book.progress?.pos ?? 0) > 5
             announce((resume ? "Resuming " : "Opened ") + book.title + ". " + player.positionSpoken + ". Press Play.")
             focus = .play
@@ -271,6 +295,19 @@ struct ReadingRoomView: View {
 
                 transport
                     .padding(.top, 4)
+
+                if book.isAudio {
+                    VideoPane(player: player, service: service, book: book, announce: { announce($0) })
+                }
+                HStack {
+                    Button { Task { await pickCollection() } } label: { Label("Add to a collection", systemImage: "text.badge.plus") }
+                        .buttonStyle(.bordered)
+                }
+                .confirmationDialog("Add \(book.title) to which collection?", isPresented: $showCollectionPicker, titleVisibility: .visible) {
+                    ForEach(myCollections) { c in Button(c.title) { Task { await addTo(c, book: book) } } }
+                    Button("Cancel", role: .cancel) {}
+                }
+                LibrarianPane(service: service, bookId: book.id, announce: { announce($0) }, speak: { text in await player.speak(text) }, note: book.librarian)
 
                 Text(player.nowText.isEmpty ? (book.isAudio ? player.partTitle : "Press Play.") : player.nowText)
                     .font(.body)
@@ -415,6 +452,21 @@ struct ReadingRoomView: View {
     }
 
     // MARK: - actions
+
+    private func pickCollection() async {
+        do {
+            let c = try await service.collections()
+            myCollections = c.mine
+            if myCollections.isEmpty {
+                let made = try await service.newCollection("My collection")
+                myCollections = [made]
+            }
+            showCollectionPicker = true
+        } catch { announce(error.localizedDescription) }
+    }
+    private func addTo(_ c: RRCollectionRow, book: RRBook) async {
+        do { try await service.addToCollection(c.id, book: book.id, track: player.s); announce("Added to \(c.title).") } catch { announce(error.localizedDescription) }
+    }
 
     private func closeBook() {
         player.close()
