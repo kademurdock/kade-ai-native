@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+import AVFoundation
 
 /// THE READING ROOM — the screens (Part 181, Sep 11 2026). See
 /// ReadingRoomService.swift for what the room is and why it is shaped so.
