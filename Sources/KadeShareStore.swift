@@ -95,6 +95,29 @@ enum KadeShareStore {
         return true
     }
 
+    /// Part 181 — a FILE hand-off without reading it into memory. A described
+    /// movie's audio can be hundreds of megabytes and a share extension is
+    /// killed past ~120 MB of memory, so the item is COPIED into the inbox.
+    /// Same marker, same staleness rule as write(data:).
+    @discardableResult
+    static func writeFile(from source: URL, displayName: String, note: String?, kind: String) -> Bool {
+        guard let inbox else { return false }
+        let ext = (displayName as NSString).pathExtension
+        let stored = "share-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(6))"
+            + (ext.isEmpty ? "" : ".\(ext)")
+        let target = inbox.appendingPathComponent(stored)
+        do {
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.copyItem(at: source, to: target)
+        } catch {
+            return false
+        }
+        let pending = Pending(fileName: stored, displayName: displayName, note: note?.trimmingCharacters(in: .whitespacesAndNewlines), at: Date(), kind: kind)
+        guard let blob = try? JSONEncoder().encode(pending) else { return false }
+        UserDefaults(suiteName: appGroupId)?.set(blob, forKey: pendingKey)
+        return true
+    }
+
     // MARK: - App side
 
     /// Reads and CLEARS the waiting share. Returns the on-disk URL of the file
