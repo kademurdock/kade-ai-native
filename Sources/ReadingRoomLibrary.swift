@@ -535,14 +535,14 @@ struct SubmissionsSection: View {
                 ForEach(waiting) { sb in row(sb, review: true) }
             } header: { Text("Waiting for the librarian") }
         }
-    }
         }
-    .task { if let l = incomingLink, url.isEmpty { url = l }; await reload() }
-    .alert(decisionApprove ? "Approve it?" : "Decline it?", isPresented: Binding(get: { deciding != nil }, set: { if !$0 { deciding = nil } })) {
-        TextField(decisionApprove ? "A word for them (optional)" : "Tell them why (optional)", text: $decisionNote)
-        Button(decisionApprove ? "Approve" : "Decline") { Task { await decide() } }
-        Button("Cancel", role: .cancel) { deciding = nil }
-    } message: { Text(deciding.map { ($0.title?.isEmpty == false ? $0.title! : ($0.url ?? "a file")) + " from " + ($0.userName ?? "someone") } ?? "") }
+        .task { if let l = incomingLink, url.isEmpty { url = l }; await reload() }
+        .alert(decisionApprove ? "Approve it?" : "Decline it?", isPresented: Binding(get: { deciding != nil }, set: { if !$0 { deciding = nil } })) {
+            TextField(decisionApprove ? "A word for them (optional)" : "Tell them why (optional)", text: $decisionNote)
+            Button(decisionApprove ? "Approve" : "Decline") { Task { await decide() } }
+            Button("Cancel", role: .cancel) { deciding = nil }
+        } message: { Text(deciding.map { ($0.title?.isEmpty == false ? $0.title! : ($0.url ?? "a file")) + " from " + ($0.userName ?? "someone") } ?? "") }
+    }
 
     private func row(_ sb: RRSubmission, review: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
