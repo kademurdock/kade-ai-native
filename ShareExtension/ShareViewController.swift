@@ -71,8 +71,8 @@ class ShareViewController: SLComposeServiceViewController {
             )
         }
         if ok {
-            let library = loadedKind == "book" || loadedKind == "recording"
-            finish(saying: library ? "Saved. Open Kade-AI to put it in the Reading Room." : "Saved. Open Kade-AI to send it.", success: true)
+            let library = loadedKind == "book" || loadedKind == "recording" || loadedKind == "link"
+            finish(saying: library ? (loadedKind == "link" ? "Saved. Open Kade-AI to submit it for the library." : "Saved. Open Kade-AI to put it in the Library.") : "Saved. Open Kade-AI to send it.", success: true)
         } else {
             finish(saying: "Couldn't hand that to Kade-AI. Open the app once and try again.", success: false)
         }
@@ -92,7 +92,9 @@ class ShareViewController: SLComposeServiceViewController {
         // share carries several, the first is taken and the rest are ignored
         // rather than silently concatenated into something she did not ask for.
         let provider = providers[0]
-        let types: [UTType] = [.image, .movie, .audio, .pdf, .plainText, .data]
+        // Part 181: a LINK (a YouTube page, an archive.org item) is a library
+        // submission; it is checked first so a shared web page is not read as text.
+        let types: [UTType] = [.url, .image, .movie, .audio, .pdf, .plainText, .data]
         guard let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) else {
             loadFailed = "Kade-AI can't take that kind of file yet."
             return
@@ -106,6 +108,14 @@ class ShareViewController: SLComposeServiceViewController {
             }
             var data: Data?
             var name = "shared"
+            if type == .url, let url = value as? URL, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                DispatchQueue.main.async {
+                    self.loadedData = Data(url.absoluteString.utf8)
+                    self.loadedName = "link.txt"
+                    self.loadedKind = "link"
+                }
+                return
+            }
             if let url = value as? URL {
                 name = url.lastPathComponent
                 let ext = url.pathExtension.lowercased()

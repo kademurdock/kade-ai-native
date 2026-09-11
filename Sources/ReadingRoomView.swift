@@ -25,6 +25,7 @@ struct ReadingRoomView: View {
 
     @State private var openBook: RRBook?
     @State private var openCollectionRow: RRCollectionRow?
+    @State private var incomingLink: String?
     @State private var autoplayNext = false
     @State private var showCollectionPicker = false
     @State private var myCollections: [RRCollectionRow] = []
@@ -72,7 +73,7 @@ struct ReadingRoomView: View {
                 }
             }
         }
-        .navigationTitle(openBook == nil ? (openCollectionRow?.title ?? "The Reading Room") : (openBook?.title ?? ""))
+        .navigationTitle(openBook == nil ? (openCollectionRow?.title ?? "The Library") : (openBook?.title ?? ""))
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await service.loadShelf()
@@ -130,6 +131,7 @@ struct ReadingRoomView: View {
 
             ArchiveSection(service: service, open: { item in Task { await open(item) } })
             CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
+            SubmissionsSection(service: service, announce: { announce($0) }, incomingLink: incomingLink, open: { id in Task { if let b = try? await service.openBook(id) { player.open(b); openBook = b } } })
 
             shelfSection("Your shelf", items: service.shelf?.mine ?? [], place: "mine", empty: "Nothing on your shelf yet. Donate a book or a recording above, or share a file from another app to Kade-AI.")
             shelfSection("Checked out", items: service.shelf?.borrowed ?? [], place: "borrowed", empty: "Nothing checked out yet.")
@@ -219,6 +221,12 @@ struct ReadingRoomView: View {
 
     private func routeIncoming(_ url: URL) {
         let ext = url.pathExtension.lowercased()
+        if url.lastPathComponent == "link.txt", let text = try? String(contentsOf: url, encoding: .utf8) {
+            incomingLink = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            announce("Paste is ready: submit \(incomingLink ?? "the link") for the library below.")
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
         let audio = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif", "mp4"]
         if audio.contains(ext) {
             donateFile = url
@@ -433,7 +441,9 @@ struct ReadingRoomView: View {
                 if book.isAudio {
                     Button("Add recordings") { uploadingItem = RRItem(id: book.id, kind: "audio", category: book.category, description: nil, tracks: book.tracks.count, seconds: nil, state: nil, title: book.title, author: book.author, publisher: nil, copyrightYear: nil, synopsis: nil, source: nil, ownerName: book.ownerName, owner: nil, shared: book.shared, grownUpsOnly: book.grownUpsOnly, sections: nil, chunks: nil, listen: book.listen, skippedCount: nil, progress: nil); showTrackPicker = true }
                 }
-                Button("Withdraw it from the Reading Room", role: .destructive) { Task { await withdraw() } }
+                Button("Submit this for the library") { Task { await submitItem(book) } }
+                    .accessibilityHint("Asks the librarian to add it to the family library.")
+                Button("Withdraw it from the Library", role: .destructive) { Task { await withdraw() } }
                     .accessibilityHint("Removes it for everyone. Cannot be undone.")
             } else {
                 Button("Return it to the library") { Task { await returnIt() } }
@@ -466,6 +476,10 @@ struct ReadingRoomView: View {
     }
     private func addTo(_ c: RRCollectionRow, book: RRBook) async {
         do { try await service.addToCollection(c.id, book: book.id, track: player.s); announce("Added to \(c.title).") } catch { announce(error.localizedDescription) }
+    }
+
+    private func submitItem(_ book: RRBook) async {
+        do { _ = try await service.submit(url: nil, book: book.id, title: book.title, note: ""); announce("Submitted for the library. You will be told when it is approved.") } catch { announce(error.localizedDescription) }
     }
 
     private func closeBook() {

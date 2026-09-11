@@ -33,6 +33,8 @@ struct RRDescription: Codable, Hashable { let state: String?; let summary: Strin
 struct RRRecap: Codable, Hashable { let from: Double; let to: Double; let summary: String?; let scenes: [RRScene]? }
 struct RRSource: Codable, Hashable { let title: String?; let url: String? }
 struct RRLibrarian: Codable, Hashable { let note: String?; let confidence: String?; let identified: String?; let sources: [RRSource]?; let state: String?; let error: String? }
+struct RRSubmission: Codable, Identifiable, Hashable { let id: String; let userName: String?; let url: String?; let title: String?; let note: String?; let book: String?; let status: String; let decisionNote: String?; let fetchedAt: String?; let createdAt: String? }
+struct RRSubmissions: Codable { let submissions: [RRSubmission]; let librarian: Bool? }
 
 extension ReadingRoomService {
     private struct Err: Decodable { let error: String? }
@@ -84,6 +86,21 @@ extension ReadingRoomService {
     struct LibWrap: Decodable { let librarian: RRLibrarian? }
     func librarianStart(book: String, again: Bool) async throws -> RRLibrarian? { try await postJSON("api/kade/reading-room/book/\(book)/librarian" + (again ? "?again=1" : ""), [:], as: LibWrap.self).librarian }
     func librarianStatus(book: String) async throws -> RRLibrarian? { try await get("api/kade/reading-room/book/\(book)/librarian", as: LibWrap.self).librarian }
+
+    struct SubWrap: Decodable { let submission: RRSubmission }
+    func submit(url: String?, book: String?, title: String, note: String) async throws -> RRSubmission {
+        var b: [String: Any] = ["title": title, "note": note]
+        if let url { b["url"] = url }
+        if let book { b["book"] = book }
+        return try await postJSON("api/kade/reading-room/submissions", b, as: SubWrap.self).submission
+    }
+    func submissions(all: Bool, status: String? = nil) async throws -> RRSubmissions {
+        var items = [URLQueryItem(name: "all", value: all ? "1" : "0")]
+        if let status { items.append(URLQueryItem(name: "status", value: status)) }
+        return try await get("api/kade/reading-room/submissions", items, as: RRSubmissions.self)
+    }
+    func decide(_ id: String, approved: Bool, note: String) async throws { _ = try await postJSON("api/kade/reading-room/submissions/\(id)/decide", ["status": approved ? "approved" : "rejected", "note": note], as: SubWrap.self) }
+    func withdrawSubmission(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/submissions/\(id)", method: "DELETE", authorized: true)) }
 
     /// One line of speech from the platform's voice, as WAV bytes (the same
     /// `tts/manual` lane the app's read-aloud uses).
@@ -476,4 +493,91 @@ struct CollectionScreen: View {
         .task { await load() }
     }
     private func load() async { do { detail = try await service.collection(row.id) } catch { status = error.localizedDescription } }
+}
+
+
+// MARK: - Submissions ("for library consideration")
+
+struct SubmissionsSection: View {
+    let service: ReadingRoomService
+    let announce: (String) -> Void
+    var incomingLink: String? = nil
+    let open: (String) -> Void
+    @State private var url = ""
+    @State private var title = ""
+    @State private var note = ""
+    @State private var mine: [RRSubmission] = []
+    @State private var waiting: [RRSubmission] = []
+    @State private var librarian = false
+    @State private var deciding: RRSubmission?
+    @State private var decisionNote = ""
+    @State private var decisionApprove = true
+
+    var body: some View {
+        Group {
+        Section {
+            Text("Found a YouTube video, an archive.org recording, or anything the family should have? Paste the link. The librarian looks at every submission and you are told when it is approved or declined. To submit a file, donate it first, then use \"Submit this for the library\" on its page.").font(.footnote).foregroundStyle(.secondary)
+            TextField("Link", text: $url).textFieldStyle(.roundedBorder).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField("What is it (optional)", text: $title).textFieldStyle(.roundedBorder)
+            TextField("Why it belongs (optional)", text: $note, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1 ... 3)
+            Button("Submit for consideration") { Task { await submit() } }.disabled(url.trimmingCharacters(in: .whitespaces).isEmpty)
+        } header: { Text("Submit something for the library") }
+
+        Section {
+            if mine.isEmpty { Text("Nothing submitted yet.").foregroundStyle(.secondary) }
+            ForEach(mine) { sb in row(sb, review: false) }
+        } header: { Text("Your submissions") }
+
+        if librarian {
+            Section {
+                Text("You are the librarian. Approve a link and it is fetched into the collection from TubeVault's Cloud tab; approve a file and it goes into the library at once. The person who submitted it is told either way.").font(.footnote).foregroundStyle(.secondary)
+                if waiting.isEmpty { Text("Nothing waiting.").foregroundStyle(.secondary) }
+                ForEach(waiting) { sb in row(sb, review: true) }
+            } header: { Text("Waiting for the librarian") }
+        }
+    }
+        }
+    .task { if let l = incomingLink, url.isEmpty { url = l }; await reload() }
+    .alert(decisionApprove ? "Approve it?" : "Decline it?", isPresented: Binding(get: { deciding != nil }, set: { if !$0 { deciding = nil } })) {
+        TextField(decisionApprove ? "A word for them (optional)" : "Tell them why (optional)", text: $decisionNote)
+        Button(decisionApprove ? "Approve" : "Decline") { Task { await decide() } }
+        Button("Cancel", role: .cancel) { deciding = nil }
+    } message: { Text(deciding.map { ($0.title?.isEmpty == false ? $0.title! : ($0.url ?? "a file")) + " from " + ($0.userName ?? "someone") } ?? "") }
+
+    private func row(_ sb: RRSubmission, review: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text((sb.title?.isEmpty == false ? sb.title! : (sb.url ?? "A file"))).font(.headline)
+            Text([review ? "from \(sb.userName ?? "someone")" : nil, sb.status == "pending" ? "waiting" : sb.status, sb.note, (sb.decisionNote?.isEmpty == false) ? "librarian: \(sb.decisionNote!)" : nil, sb.fetchedAt != nil ? "fetched" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+            HStack {
+                if let u = sb.url, let link = URL(string: u) { Link("Open the link", destination: link).font(.footnote) }
+                if let b = sb.book { Button("Open the file") { open(b) }.font(.footnote) }
+                if review, sb.status == "pending" {
+                    Button("Approve") { decisionApprove = true; decisionNote = ""; deciding = sb }.font(.footnote)
+                    Button("Decline") { decisionApprove = false; decisionNote = ""; deciding = sb }.font(.footnote).foregroundStyle(.red)
+                } else if !review, sb.status == "pending" {
+                    Button("Withdraw") { Task { try? await service.withdrawSubmission(sb.id); await reload(); announce("Withdrawn.") } }.font(.footnote)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+    private func submit() async {
+        do {
+            _ = try await service.submit(url: url.trimmingCharacters(in: .whitespaces), book: nil, title: title, note: note)
+            url = ""; title = ""; note = ""
+            announce("Submitted. The librarian will look at it and you will be told.")
+            await reload()
+        } catch { announce(error.localizedDescription) }
+    }
+    private func decide() async {
+        guard let sb = deciding else { return }
+        do { try await service.decide(sb.id, approved: decisionApprove, note: decisionNote); announce(decisionApprove ? "Approved." : "Declined."); deciding = nil; await reload() } catch { announce(error.localizedDescription) }
+    }
+    func reload() async {
+        do {
+            let m = try await service.submissions(all: false)
+            mine = m.submissions; librarian = m.librarian ?? false
+            if librarian { waiting = try await service.submissions(all: true, status: "pending").submissions }
+        } catch { announce(error.localizedDescription) }
+    }
 }

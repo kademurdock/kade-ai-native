@@ -726,13 +726,13 @@ struct ContentView: View {
              * movies, cassettes and old radio. Books get in from the share
              * sheet (a DAISY zip shared to Kade-AI lands here, not in a chat). */
             Button { go(.readingRoom) } label: {
-                Label("The Reading Room", systemImage: "books.vertical")
+                Label("The Library", systemImage: "books.vertical")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeCardButtonStyle())
             .labelStyle(KadeTileLabelStyle(tint: .brown))
-            .accessibilityLabel("The Reading Room")
-            .accessibilityHint("Books read aloud by a voice you pick, with bookmarks and chapters, plus the family library of donated audiobooks, described movies, cassettes and old radio. Share a Bookshare zip to Kade-AI and it lands here.")
+            .accessibilityLabel("The Library")
+            .accessibilityHint("The family library: books read aloud by a voice you pick, the archive of television, commercials, tapes and radio, described videos, playlists, and a place to submit finds. Share a link or a Bookshare zip to Kade-AI and it lands here.")
 
             VStack(spacing: 12) {
                 KadeToolRow {
@@ -1197,7 +1197,7 @@ struct LibraryFileHandoff: Identifiable, Hashable {
     static let bookExts: Set<String> = ["zip", "epub", "txt", "docx", "html", "htm", "xhtml"]
     static let audioExts: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif"]
     static func isLibraryKind(_ kind: String, name: String) -> Bool {
-        if kind == "book" || kind == "recording" { return true }
+        if kind == "book" || kind == "recording" || kind == "link" { return true }
         let ext = (name as NSString).pathExtension.lowercased()
         return bookExts.contains(ext) || audioExts.contains(ext)
     }
