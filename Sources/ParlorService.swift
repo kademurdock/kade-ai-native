@@ -75,6 +75,20 @@ final class ParlorService: ObservableObject {
         var id: String { gameId }
     }
 
+    /// Part 179 (Sep 11 2026): one row of the lobby — a family party table
+    /// with a free seat. The code is here because the code is how you sit.
+    struct LobbyTable: Decodable, Identifiable {
+        var gameId: String
+        var gameKey: String
+        var name: String
+        var host: String
+        var seatsOpen: Int
+        var code: String
+        var mine: Bool?
+        var seated: Bool?
+        var id: String { gameId }
+    }
+
     struct TalkReply: Decodable {
         var name: String
         var line: String
@@ -109,6 +123,17 @@ final class ParlorService: ObservableObject {
         return (try? decoder.decode(Wrapper.self, from: data))?.active ?? []
     }
 
+    /// Part 179: every family party table with a free seat, newest first,
+    /// unless its host kept it off the lobby. Fail-soft: an empty list and an
+    /// empty sentence, never a guessed lobby.
+    func lobby() async -> (tables: [LobbyTable], spoken: String) {
+        struct Wrapper: Decodable { let tables: [LobbyTable]?; let spoken: String? }
+        let req = client.request(path: "api/kade/parlor/lobby", authorized: true)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+              let w = try? decoder.decode(Wrapper.self, from: data) else { return ([], "") }
+        return (w.tables ?? [], w.spoken ?? "")
+    }
+
     struct NewTableRequest {
         var game: String
         var opponents: Int?
@@ -120,11 +145,16 @@ final class ParlorService: ObservableObject {
         var clean: Bool?
         /// Phase 2: open seats friends can claim with the join code (0 = solo).
         var partyOpenSeats: Int = 0
+        /// Part 179: keep a party table off the lobby; friends then need the code.
+        var keepOffLobby: Bool = false
     }
 
     func newTable(_ r: NewTableRequest) async throws -> Table {
         var body: [String: Any] = ["game": r.game]
-        if r.partyOpenSeats > 0 { body["party_open_seats"] = r.partyOpenSeats }
+        if r.partyOpenSeats > 0 {
+            body["party_open_seats"] = r.partyOpenSeats
+            if r.keepOffLobby { body["private"] = true }
+        }
         if !r.agentSeats.isEmpty { body["agent_seats"] = r.agentSeats }
         else if let o = r.opponents { body["opponents"] = o }
         if let v = r.rounds { body["rounds"] = v }
