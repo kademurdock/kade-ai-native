@@ -388,14 +388,19 @@ final class ReadingRoomPlayer: ObservableObject {
     @Published private(set) var filePosition: Double = 0
     @Published private(set) var fileDuration: Double = 0
 
-    // text engine
+    // text engine — STREAMED. The proxy speaks a chunk in ~half its play
+    // time, so waiting for the whole WAV meant ~14 s before the first word
+    // (measured on the fork smoke). The bytes are pulled through the same
+    // StreamingClipFetch the speech lane uses and scheduled on the node in
+    // ~0.4 s buffers as they land; the next chunk's fetch starts the moment
+    // this one has fully arrived, with the queue capped at ~60 s ahead.
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private var graphRate: Double = 0
-    private var cache: [String: AVAudioPCMBuffer] = [:]
-    private var inflight: Set<String> = []
-    private var scheduled: [(s: Int, c: Int)] = []
     private var playToken = 0
+    private var producer: Task<Void, Never>?
+    private var activeFetch: StreamingClipFetch?
+    private var queuedFrames: Int = 0
     // file engine
     private var avPlayer: AVPlayer?
     private var timeObserver: Any?
@@ -430,7 +435,6 @@ final class ReadingRoomPlayer: ObservableObject {
             loadTrack(s, at: p?.pos ?? 0, play: false)
         } else {
             Task { await refreshText() }
-            prefetch()
         }
         updateNowPlaying()
     }
@@ -443,8 +447,8 @@ final class ReadingRoomPlayer: ObservableObject {
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
         timeObserver = nil; endObserver = nil
         avPlayer = nil
+        stopNode()
         if engine.isRunning { engine.stop() }
-        cache.removeAll()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         // Back to the app's usual session shape (VoiceService.prepareOutputSession).
         let session = AVAudioSession.sharedInstance()
@@ -475,10 +479,9 @@ final class ReadingRoomPlayer: ObservableObject {
         isPlaying = true
         playToken += 1
         let token = playToken
-        if graphRate != 0 { node.stop() }
-        scheduled.removeAll()
+        stopNode()
         updateNowPlaying()
-        Task { await pump(token: token) }
+        producer = Task { [weak self] in await self?.runProducer(token: token) }
     }
 
     func pause() {
@@ -488,8 +491,7 @@ final class ReadingRoomPlayer: ObservableObject {
             avPlayer?.pause()
         } else {
             playToken += 1
-            if graphRate != 0 { node.stop() }
-            scheduled.removeAll()
+            stopNode()
         }
         saveNow()
         updateNowPlaying()
@@ -551,7 +553,6 @@ final class ReadingRoomPlayer: ObservableObject {
 
     func changeVoice(_ v: String) {
         voice = v
-        cache.removeAll()
         let was = isPlaying
         if was { pause() }
         saveNow()
@@ -560,7 +561,7 @@ final class ReadingRoomPlayer: ObservableObject {
     func changeSpeed(_ sp: Double) {
         speed = sp
         if isAudio { if isPlaying { avPlayer?.rate = Float(sp) } }
-        else { cache.removeAll(); let was = isPlaying; if was { pause(); play() } }
+        else { let was = isPlaying; if was { pause(); play() } }
         saveNow()
     }
 
@@ -576,99 +577,148 @@ final class ReadingRoomPlayer: ObservableObject {
 
     private func seek(s ns: Int, c nc: Int) {
         let was = isPlaying
-        if was { playToken += 1; if graphRate != 0 { node.stop() }; scheduled.removeAll(); isPlaying = false }
+        if was { playToken += 1; stopNode(); isPlaying = false }
         s = ns; c = nc
         Task { await refreshText() }
         scheduleSave()
         updateNowPlaying()
-        if was { play() } else { prefetch() }
+        if was { play() }
     }
 
-    private func key(_ s: Int, _ c: Int) -> String { "\(s)/\(c)" }
-
-    private func fetchBuffer(s: Int, c: Int) async throws -> AVAudioPCMBuffer? {
-        guard let book else { return nil }
-        let k = key(s, c)
-        if let b = cache[k] { return b }
-        if inflight.contains(k) {
-            // wait for the other fetch
-            for _ in 0 ..< 600 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if let b = cache[k] { return b }
-                if !inflight.contains(k) { break }
-            }
-        }
-        inflight.insert(k)
-        defer { inflight.remove(k) }
-        let data = try await service.chunkAudio(bookId: book.id, s: s, c: c, voice: voice, speed: speed)
-        guard !data.isEmpty, let buf = Self.decodeWav(data) else { return nil }
-        cache[k] = buf
-        if cache.count > 10 {
-            let keep = Set(scheduled.map { key($0.s, $0.c) } + [k, key(s, c)])
-            if let victim = cache.keys.first(where: { !keep.contains($0) }) { cache.removeValue(forKey: victim) }
-        }
-        return buf
+    /// Stops everything scheduled and cancels the stream. Position is kept.
+    private func stopNode() {
+        producer?.cancel()
+        producer = nil
+        activeFetch?.cancel()
+        activeFetch = nil
+        if graphRate != 0 { node.stop() }
+        queuedFrames = 0
     }
 
-    private func prefetch() {
-        guard book != nil, !isAudio else { return }
-        var p: (s: Int, c: Int)? = (s, c)
-        var n = 0
-        while let q = p, n < 2 {
-            let k = key(q.s, q.c)
-            if cache[k] == nil, !inflight.contains(k) {
-                let qs = q.s, qc = q.c
-                Task { _ = try? await fetchBuffer(s: qs, c: qc) }
-            }
-            p = next(s: q.s, c: q.c)
-            n += 1
-        }
-    }
+    private var queuedSeconds: Double { graphRate > 0 ? Double(queuedFrames) / graphRate : 0 }
 
-    /// Keep the node fed: the chunk at the cursor, then the next, while
-    /// fetching one more ahead. Completion callbacks advance the cursor.
-    private func pump(token: Int) async {
+    /// One chunk after another, each streamed and scheduled as it arrives.
+    private func runProducer(token: Int) async {
         guard let book, !book.isAudio else { return }
         var cursor: (s: Int, c: Int)? = (s, c)
-        var first = true
         while let q = cursor, token == playToken, isPlaying {
-            let buf: AVAudioPCMBuffer?
-            do { buf = try await fetchBuffer(s: q.s, c: q.c) } catch {
+            while queuedSeconds > 60, token == playToken, isPlaying {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard token == playToken, isPlaying else { return }
+            let n = next(s: q.s, c: q.c)
+            do {
+                let played = try await streamChunk(q, token: token, isLast: n == nil)
+                guard token == playToken else { return }
+                if !played, n == nil { bookFinished() ; return }
+            } catch {
+                guard token == playToken else { return }
                 announcement = "\(error.localizedDescription) Press Play to try again."
                 isPlaying = false
+                stopNode()
                 updateNowPlaying()
                 return
             }
-            guard token == playToken, isPlaying else { return }
-            guard let buf else { cursor = next(s: q.s, c: q.c); continue } // unspeakable chunk: skip
-            buildGraph(for: buf.format)
-            if !engine.isRunning { try? engine.start() }
-            let pos = q
-            node.scheduleBuffer(buf, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                Task { @MainActor in self?.chunkFinished(pos, token: token) }
+            cursor = n
+        }
+    }
+
+    /// Streams one chunk into the node. Returns true when any audio was
+    /// scheduled. The last buffer of the chunk carries the completion that
+    /// moves the cursor to the next position (or ends the book).
+    private func streamChunk(_ q: (s: Int, c: Int), token: Int, isLast: Bool) async throws -> Bool {
+        guard let book else { return false }
+        let bookId = book.id
+        let voice = self.voice, speed = self.speed
+        let fetch = StreamingClipFetch(client: service.client) { [weak self] in
+            guard let self else { return nil }
+            var items = [URLQueryItem(name: "voice", value: voice), URLQueryItem(name: "speed", value: String(format: "%.2f", speed))]
+            _ = self
+            return self.service.client.request(path: "api/kade/reading-room/book/\(bookId)/audio/\(q.s)/\(q.c)", authorized: true, queryItems: items, timeout: 120)
+        }
+        activeFetch = fetch
+        defer { if activeFetch === fetch { activeFetch = nil } }
+        var header = Data()
+        var format: StreamingWavFormat?
+        var pcm = Data()
+        var acc = PcmSampleAccumulator()
+        var any = false
+        var leftover: [Float] = []
+        while let piece = await fetch.next() {
+            guard token == playToken else { fetch.cancel(); return any }
+            if format == nil {
+                header.append(piece)
+                guard let parsed = StreamingWavParser.parseHeader(header) else { continue }
+                format = parsed.format
+                if parsed.pcmStart < header.count { pcm = header.subdata(in: parsed.pcmStart ..< header.count) }
+                header = Data()
+            } else {
+                pcm.append(piece)
             }
-            scheduled.append(pos)
-            if first { node.play(); first = false }
-            // fetch one further ahead while this one and the next are queued
-            if let ahead = next(s: q.s, c: q.c), let ahead2 = next(s: ahead.s, c: ahead.c) {
-                let a = ahead2
-                Task { _ = try? await fetchBuffer(s: a.s, c: a.c) }
-            }
-            // wait until fewer than two are queued before scheduling more
-            while scheduled.count >= 2, token == playToken, isPlaying {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-            }
-            cursor = next(s: q.s, c: q.c)
-            if cursor == nil {
-                // nothing more to schedule; the last completion ends the book
-                return
+            guard let fmt = format else { continue }
+            let threshold = Int(fmt.sampleRate) * fmt.numChannels * 2 * 2 / 5 // ~0.4 s
+            if pcm.count >= threshold {
+                leftover += mono(acc.append(pcm), channels: fmt.numChannels)
+                pcm.removeAll(keepingCapacity: true)
+                if schedule(samples: leftover, rate: fmt.sampleRate, final: false, token: token, at: q) { any = true }
+                leftover.removeAll()
             }
         }
+        guard token == playToken else { return any }
+        if let s = fetch.lastStatus, s == 204 { return false }
+        if let s = fetch.lastStatus, !(200 ..< 300).contains(s) { throw RRError(message: "The voice did not answer (HTTP \(s)).") }
+        guard let fmt = format else {
+            if fetch.deliveredBytes == 0 { throw RRError(message: fetch.failureNote == "empty stream" ? "The voice sent nothing for that part." : fetch.failureNote) }
+            return false
+        }
+        if !pcm.isEmpty { leftover += mono(acc.append(pcm), channels: fmt.numChannels) }
+        // the marker buffer: whatever is left, or 10 ms of silence
+        if leftover.isEmpty { leftover = [Float](repeating: 0, count: Int(fmt.sampleRate / 100)) }
+        if schedule(samples: leftover, rate: fmt.sampleRate, final: true, token: token, at: q) { any = true }
+        return any
+    }
+
+    private func mono(_ samples: [Float], channels: Int) -> [Float] {
+        guard channels > 1 else { return samples }
+        var out = [Float](); out.reserveCapacity(samples.count / channels)
+        var i = 0
+        while i + channels <= samples.count {
+            var sum: Float = 0
+            for ch in 0 ..< channels { sum += samples[i + ch] }
+            out.append(sum / Float(channels))
+            i += channels
+        }
+        return out
+    }
+
+    /// Schedules one buffer. The `final` buffer's completion advances the
+    /// cursor from `at` to the next position.
+    @discardableResult
+    private func schedule(samples: [Float], rate: Double, final: Bool, token: Int, at q: (s: Int, c: Int)) -> Bool {
+        guard !samples.isEmpty, token == playToken,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+              let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return false }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            buf.floatChannelData?[0].update(from: src.baseAddress!, count: samples.count)
+        }
+        buildGraph(for: format)
+        if !engine.isRunning { try? engine.start() }
+        let n = samples.count
+        queuedFrames += n
+        node.scheduleBuffer(buf, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.queuedFrames = max(0, self.queuedFrames - n)
+                if final { self.chunkFinished(q, token: token) }
+            }
+        }
+        if !node.isPlaying { node.play() }
+        return true
     }
 
     private func chunkFinished(_ pos: (s: Int, c: Int), token: Int) {
         guard token == playToken, isPlaying else { return }
-        scheduled.removeAll(where: { $0.s == pos.s && $0.c == pos.c })
         if let n = next(s: pos.s, c: pos.c) {
             let changed = n.s != s
             s = n.s; c = n.c
@@ -677,11 +727,16 @@ final class ReadingRoomPlayer: ObservableObject {
             updateNowPlaying()
             if changed { announcement = positionSpoken }
         } else {
-            isPlaying = false
-            announcement = "The end. \(book?.title ?? "") is finished."
-            if let book { Task { await service.saveProgress(bookId: book.id, s: s, c: c, pos: 0, voice: voice, speed: speed, finished: true) } }
-            updateNowPlaying()
+            bookFinished()
         }
+    }
+
+    private func bookFinished() {
+        isPlaying = false
+        stopNode()
+        announcement = "The end. \(book?.title ?? "") is finished."
+        if let book { Task { await service.saveProgress(bookId: book.id, s: s, c: c, pos: 0, voice: voice, speed: speed, finished: true) } }
+        updateNowPlaying()
     }
 
     private func buildGraph(for format: AVAudioFormat) {
@@ -689,44 +744,6 @@ final class ReadingRoomPlayer: ObservableObject {
         if graphRate != 0 { engine.disconnectNodeOutput(node) } else { engine.attach(node) }
         engine.connect(node, to: engine.mainMixerNode, format: format)
         graphRate = format.sampleRate
-    }
-
-    /// WAV bytes → one float PCM buffer. 16-bit mono is what the proxy sends;
-    /// stereo and 8-bit are folded rather than refused.
-    nonisolated static func decodeWav(_ data: Data) -> AVAudioPCMBuffer? {
-        guard let (fmt, pcmStart) = StreamingWavParser.parseHeader(data), pcmStart < data.count else { return nil }
-        let pcm = data.subdata(in: pcmStart ..< data.count)
-        let channels = max(1, fmt.numChannels)
-        let bytesPer = max(1, fmt.bitsPerSample / 8)
-        let frames = pcm.count / (bytesPer * channels)
-        guard frames > 0, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: fmt.sampleRate, channels: 1, interleaved: false),
-              let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)) else { return nil }
-        buf.frameLength = AVAudioFrameCount(frames)
-        guard let out = buf.floatChannelData?[0] else { return nil }
-        pcm.withUnsafeBytes { raw in
-            let p = raw.bindMemory(to: UInt8.self)
-            for f in 0 ..< frames {
-                var sum: Float = 0
-                for ch in 0 ..< channels {
-                    let i = (f * channels + ch) * bytesPer
-                    let v: Float
-                    if bytesPer == 2 {
-                        let lo = UInt16(p[i]), hi = UInt16(p[i + 1])
-                        v = Float(Int16(bitPattern: lo | (hi << 8))) / 32768
-                    } else if bytesPer == 1 {
-                        v = (Float(p[i]) - 128) / 128
-                    } else {
-                        let b0 = UInt32(p[i + bytesPer - 3]), b1 = UInt32(p[i + bytesPer - 2]), b2 = UInt32(p[i + bytesPer - 1])
-                        var x = Int32(bitPattern: (b0 << 8) | (b1 << 16) | (b2 << 24))
-                        x >>= 8
-                        v = Float(x) / 8388608
-                    }
-                    sum += v
-                }
-                out[f] = sum / Float(channels)
-            }
-        }
-        return buf
     }
 
     private func refreshText() async {
