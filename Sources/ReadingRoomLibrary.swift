@@ -102,6 +102,18 @@ extension ReadingRoomService {
     func decide(_ id: String, approved: Bool, note: String) async throws { _ = try await postJSON("api/kade/reading-room/submissions/\(id)/decide", ["status": approved ? "approved" : "rejected", "note": note], as: SubWrap.self) }
     func withdrawSubmission(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/submissions/\(id)", method: "DELETE", authorized: true)) }
 
+    struct ItemWrap: Decodable { let item: RRItem }
+    func editItem(_ id: String, fields: [String: Any]) async throws -> RRItem { try await postJSON("api/kade/reading-room/book/\(id)/edit", fields, as: ItemWrap.self).item }
+    struct Moved: Decodable { let moved: Int?; let to: String? }
+    func moveFolder(from: String, to: String) async throws -> Moved { try await postJSON("api/kade/reading-room/archive/move-folder", ["from": from, "to": to], as: Moved.self) }
+    struct Changed: Decodable { let changed: Int? }
+    func batch(ids: [String], action: String, to: String? = nil, value: Any? = nil) async throws -> Int {
+        var b: [String: Any] = ["ids": ids, "action": action]
+        if let to { b["to"] = to }
+        if let value { b["value"] = value }
+        return try await postJSON("api/kade/reading-room/archive/batch", b, as: Changed.self).changed ?? 0
+    }
+
     /// One line of speech from the platform's voice, as WAV bytes (the same
     /// `tts/manual` lane the app's read-aloud uses).
     func speech(_ text: String, voice: String?) async throws -> Data {
@@ -323,6 +335,13 @@ struct LibrarianPane: View {
 struct ArchiveSection: View {
     let service: ReadingRoomService
     let open: (RRItem) -> Void
+    var me: String = ""
+    var librarian: Bool = false
+    @State private var moving: RRItem?
+    @State private var moveTo = ""
+    @State private var folderMoveTo = ""
+    @State private var showFolderMove = false
+    private func canManage(_ item: RRItem) -> Bool { librarian || (!me.isEmpty && item.owner == me) }
     @State private var page: RRArchivePage?
     @State private var path = ""
     @State private var pageNo = 0
@@ -361,7 +380,19 @@ struct ArchiveSection: View {
                     .accessibilityLabel("Folder \(f.name), \(f.count) item\(f.count == 1 ? "" : "s")")
                     .accessibilityHint("Opens the folder.")
                 }
-                ForEach(p.items) { item in itemRow(item) }
+                ForEach(p.items) { item in
+                    itemRow(item)
+                        .contextMenu {
+                            if canManage(item) {
+                                Button("Move to another folder") { moving = item; moveTo = item.path ?? path }
+                                Button("Delete from the library", role: .destructive) { Task { await deleteItem(item) } }
+                            }
+                        }
+                        .accessibilityAction(named: canManage(item) ? "Move to another folder" : "Open") { if canManage(item) { moving = item; moveTo = item.path ?? path } else { open(item) } }
+                }
+                if !path.isEmpty, librarian || p.items.contains(where: canManage) {
+                    Button("Move or rename this folder") { folderMoveTo = path; showFolderMove = true }
+                }
                 if p.total > p.limit {
                     HStack {
                         Button("Previous page") { Task { await load(path, max(0, pageNo - 1)) } }.disabled(pageNo == 0)
@@ -374,6 +405,22 @@ struct ArchiveSection: View {
             } else { Text(status.isEmpty ? "Loading…" : status).foregroundStyle(.secondary) }
         } header: { Text("The archive") }
         .task { if page == nil { await load("", 0) } }
+        .alert("Move \(moving?.title ?? "") to", isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } })) {
+            TextField("Folder, like Video/Commercials", text: $moveTo)
+            Button("Move") { Task { if let m = moving { _ = try? await service.batch(ids: [m.id], action: "move", to: moveTo); moving = nil; await load(path, pageNo) } } }
+            Button("Cancel", role: .cancel) { moving = nil }
+        }
+        .alert("Move or rename the folder", isPresented: $showFolderMove) {
+            TextField("New name or place", text: $folderMoveTo)
+            Button("Move") { Task { if let r = try? await service.moveFolder(from: path, to: folderMoveTo) { UIAccessibility.post(notification: .announcement, argument: "Moved \(r.moved ?? 0) items."); await load(r.to ?? folderMoveTo, 0) } } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func deleteItem(_ item: RRItem) async {
+        _ = try? await service.batch(ids: [item.id], action: "delete")
+        UIAccessibility.post(notification: .announcement, argument: "Deleted \(item.title).")
+        await load(path, pageNo)
     }
 
     private func itemRow(_ item: RRItem) -> some View {
@@ -579,5 +626,51 @@ struct SubmissionsSection: View {
             mine = m.submissions; librarian = m.librarian ?? false
             if librarian { waiting = try await service.submissions(all: true, status: "pending").submissions }
         } catch { announce(error.localizedDescription) }
+    }
+}
+
+
+// MARK: - Edit an item (yours, or anyone's for the librarian)
+
+struct EditItemSheet: View {
+    let book: RRBook
+    let onSave: ([String: Any]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var author = ""
+    @State private var year = ""
+    @State private var category = "other"
+    @State private var path = ""
+    @State private var desc = ""
+    private let shelves: [(String, String)] = [("audiobook", "Audiobook"), ("movie", "Movie"), ("tv", "TV"), ("commercials", "Commercials"), ("psa", "PSA"), ("vhs", "VHS / home video"), ("cassette", "Cassette"), ("radio", "Radio"), ("music", "Music"), ("other", "Other")]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("What it is") {
+                    TextField("Title", text: $title)
+                    TextField("Who made it", text: $author)
+                    TextField("Year", text: $year)
+                    if book.kind != "text" {
+                        Picker("Shelf", selection: $category) { ForEach(shelves, id: \.0) { Text($0.1).tag($0.0) } }
+                    }
+                    TextField("About it", text: $desc, axis: .vertical).lineLimit(2 ... 5)
+                }
+                Section {
+                    TextField("Folder, like Video/Commercials", text: $path).textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: { Text("Folder in the archive") } footer: { Text("Blank means it is not in the archive browser, only on shelves.") }
+                Section {
+                    Button("Save changes") {
+                        var f: [String: Any] = ["title": title, "author": author, "year": year, "description": desc, "path": path]
+                        if book.kind != "text" { f["category"] = category }
+                        onSave(f); dismiss()
+                    }
+                }
+            }
+            .navigationTitle("Edit this item")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .onAppear { title = book.title; author = book.author ?? ""; year = book.copyrightYear ?? ""; category = book.category; desc = book.description ?? ""; path = book.path ?? "" }
+        }
     }
 }

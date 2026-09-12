@@ -102,6 +102,9 @@ struct RRShelf: Codable {
     var library: [RRItem]
     var categories: [String]?
     var defaultVoice: String?
+    var me: String?
+    var librarian: Bool?
+    var archiveOwned: Int?
 }
 
 struct RRChapter: Codable, Identifiable, Hashable {
@@ -171,6 +174,8 @@ struct RRBook: Codable {
     let defaultVoice: String?
     var progress: RRProgress?
     var librarian: RRLibrarian?
+    var path: String?
+    var copyrightYear: String?
     var isAudio: Bool { kind == "audio" }
     var partCount: Int { isAudio ? tracks.count : chapters.count }
     func partTitle(_ s: Int) -> String {

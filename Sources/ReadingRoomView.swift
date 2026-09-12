@@ -26,6 +26,7 @@ struct ReadingRoomView: View {
     @State private var openBook: RRBook?
     @State private var openCollectionRow: RRCollectionRow?
     @State private var incomingLink: String?
+    @State private var showEdit = false
     @State private var autoplayNext = false
     @State private var showCollectionPicker = false
     @State private var myCollections: [RRCollectionRow] = []
@@ -89,6 +90,15 @@ struct ReadingRoomView: View {
         .fileImporter(isPresented: $showTrackPicker, allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { Task { await uploadTracks(urls) } }
         }
+        .sheet(isPresented: $showEdit) {
+            if let b = openBook {
+                EditItemSheet(book: b) { fields in
+                    Task {
+                        do { let it = try await service.editItem(b.id, fields: fields); announce("Saved."); if var ob = openBook { ob = RRBook(id: ob.id, kind: ob.kind, category: it.category, title: it.title, author: it.author, description: it.description, ownerName: ob.ownerName, shared: it.shared, grownUpsOnly: it.grownUpsOnly, listen: ob.listen, jacket: ob.jacket, chapters: ob.chapters, tracks: ob.tracks, skipped: ob.skipped, bookmarks: ob.bookmarks, mine: ob.mine, defaultVoice: ob.defaultVoice, progress: ob.progress, librarian: ob.librarian, path: it.path, copyrightYear: it.copyrightYear); openBook = ob } } catch { announce(error.localizedDescription) }
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showDonateSheet) {
             DonateRecordingSheet(fileName: donateName) { title, author, year, cat, desc, grownUps in
                 Task { await startRecording(title: title, author: author, year: year, category: cat, description: desc, grownUpsOnly: grownUps) }
@@ -129,12 +139,11 @@ struct ReadingRoomView: View {
                 .accessibilityHint("An audiobook, described-movie audio, a cassette side, old radio or commercials. Name it, then add one or more audio files; big files go straight to storage.")
             } header: { Text("Donate") }
 
-            ArchiveSection(service: service, open: { item in Task { await open(item) } })
+            ArchiveSection(service: service, open: { item in Task { await open(item) } }, me: service.shelf?.me ?? "", librarian: service.shelf?.librarian ?? false)
             CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
             SubmissionsSection(service: service, announce: { announce($0) }, incomingLink: incomingLink, open: { id in Task { if let b = try? await service.openBook(id) { player.open(b); openBook = b } } })
 
-            shelfSection("Your shelf", items: service.shelf?.mine ?? [], place: "mine", empty: "Nothing on your shelf yet. Donate a book or a recording above, or share a file from another app to Kade-AI.")
-            shelfSection("Checked out", items: service.shelf?.borrowed ?? [], place: "borrowed", empty: "Nothing checked out yet.")
+            shelfFolders
 
             Section {
                 let lib = service.shelf?.library ?? []
@@ -154,6 +163,36 @@ struct ReadingRoomView: View {
         }
         .refreshable { await service.loadShelf() }
         .overlay { if service.isLoading && service.shelf == nil { ProgressView("Loading the shelf…") } }
+    }
+
+    /// The personal shelf as folders — Books, Recordings, Video, Archive clips —
+    /// with what you donated and what you opened side by side. Removing a
+    /// checked-out item only touches your shelf.
+    private func shelfFolder(_ b: RRItem) -> String { b.kind == "text" ? "Books" : ((b.path ?? "").isEmpty ? (b.kind == "video" ? "Video" : "Recordings") : "Archive clips") }
+    @ViewBuilder
+    private var shelfFolders: some View {
+        let mine = (service.shelf?.mine ?? []).map { ($0, "mine") }
+        let borrowed = (service.shelf?.borrowed ?? []).map { ($0, "borrowed") }
+        let all = mine + borrowed
+        if all.isEmpty {
+            Section { Text("Nothing on your shelf yet. Donate a book or a recording above, open anything in the library, or share a file from another app to Kade-AI.").foregroundStyle(.secondary) } header: { Text("Your shelf") }
+        } else {
+            ForEach(["Books", "Recordings", "Video", "Archive clips"], id: \.self) { folder in
+                let items = all.filter { shelfFolder($0.0) == folder }
+                if !items.isEmpty {
+                    Section {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, pair in
+                            row(pair.0, place: pair.1)
+                                .swipeActions(edge: .trailing) {
+                                    if pair.1 == "borrowed" {
+                                        Button("Remove from my shelf") { Task { try? await service.returnBook(bookId: pair.0.id); await service.loadShelf(); announce("Removed from your shelf. It stays in the library.") } }.tint(.orange)
+                                    }
+                                }
+                        }
+                    } header: { Text("Your shelf — \(folder) (\(items.count))") }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -316,6 +355,9 @@ struct ReadingRoomView: View {
                     Button("Cancel", role: .cancel) {}
                 }
                 LibrarianPane(service: service, bookId: book.id, announce: { announce($0) }, speak: { text in await player.speak(text) }, note: book.librarian)
+                if book.mine || (service.shelf?.librarian ?? false) {
+                    Button { showEdit = true } label: { Label("Edit this item", systemImage: "pencil") }.buttonStyle(.bordered)
+                }
 
                 Text(player.nowText.isEmpty ? (book.isAudio ? player.partTitle : "Press Play.") : player.nowText)
                     .font(.body)
@@ -434,8 +476,8 @@ struct ReadingRoomView: View {
     }
 
     private func ownerBlock(_ book: RRBook) -> some View {
-        DisclosureGroup(book.mine ? "This is your donation" : "Checked out") {
-            if book.mine {
+        DisclosureGroup(book.mine || (service.shelf?.librarian ?? false) ? "Where it sits" : "Checked out") {
+            if book.mine || (service.shelf?.librarian ?? false) {
                 Button(book.shared ? "Take it out of the library" : "Put it in the library for everyone") { Task { await toggleShared() } }
                 Button(book.grownUpsOnly ? "Grown-ups only is on — allow the kids" : "Grown-ups only is off — hide it from the kids") { Task { await toggleGrownUps() } }
                 if book.isAudio {
