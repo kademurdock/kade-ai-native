@@ -48,7 +48,7 @@ struct RRProgress: Codable, Hashable {
 
 struct RRItem: Codable, Identifiable, Hashable {
     let id: String
-    var kind: String            // "text" | "audio"
+    var kind: String            // "text" | "audio" | "video"
     var category: String        // book | audiobook | movie | cassette | radio | commercials | music | other
     var description: String?
     var tracks: Int?
@@ -72,7 +72,12 @@ struct RRItem: Codable, Identifiable, Hashable {
     var path: String?
     var described: Bool?
 
-    var isAudio: Bool { kind == "audio" }
+    /// Sep 12 2026, her word: "videos are showing up as books, doesn't seem
+    /// like there's a way to play them or get AI descriptions". The archive
+    /// push files a movie as kind "video"; this used to say only "audio" is a
+    /// recording, so every video fell through to the book reader. Anything
+    /// that is not text is a recording with tracks (audio or video).
+    var isAudio: Bool { kind != "text" }
     var categoryName: String { RRCategory.name(category, isAudio: isAudio) }
     /// What VoiceOver says for the row.
     func spokenRow(where place: String) -> String {
@@ -178,7 +183,7 @@ struct RRBook: Codable {
     var librarian: RRLibrarian?
     var path: String?
     var copyrightYear: String?
-    var isAudio: Bool { kind == "audio" }
+    var isAudio: Bool { kind != "text" }   // audio or video: tracks, not chapters
     var partCount: Int { isAudio ? tracks.count : chapters.count }
     func partTitle(_ s: Int) -> String {
         if isAudio { return tracks.indices.contains(s) ? tracks[s].title : "" }
