@@ -39,3 +39,47 @@ check(meter.level(now: 2.3) == 0, "stale output closes mouth")
 meter.reset(); check(meter.level(now: 2.1) == 0, "interruption clears output")
 check(CharacterMotion.pose(id: CharacterMotion.dellaID, time: 5, level: 1, active: false).brow == 0, "motion disabled stops expression")
 print("Call meter and expression: 5 additional checks passed")
+
+struct CueFixture: Decodable { let input: String; let expression: CharacterExpression; let moment: CharacterExpression? }
+let fixturePath = ProcessInfo.processInfo.environment["CHARACTER_CUE_FIXTURES"] ?? "CharacterMotionTests/cues.json"
+let fixtures = try JSONDecoder().decode([CueFixture].self, from: Data(contentsOf: URL(fileURLWithPath: fixturePath)))
+let beforeReactions = count
+for row in fixtures {
+    let cue = CharacterCue.fromSpeech(row.input)
+    check(cue.expression == row.expression && cue.moment == row.moment, "authored cue: \(row.input)")
+}
+let laugh = CharacterCue.fromSpeech("%%%warm%%% %%%laugh%%% Hello.")
+check(laugh.expression(at: 0.2) == .amused, "leading laugh follows actual clip start")
+check(laugh.expression(at: 1) == .warm, "one-shot returns to authored direction")
+check(laugh.expression(at: .nan) == .warm, "invalid moment clock is quiet")
+let kiana = CharacterAudioIdentity(speakerID: CharacterMotion.kianaID, speech: true, expression: "warm", moment: nil)!
+let della = CharacterAudioIdentity(speakerID: CharacterMotion.dellaID, speech: true, expression: "concerned", moment: nil)!
+check(CharacterAudioIdentity(speakerID: "", speech: true, expression: "warm", moment: nil) == nil, "empty identity rejected")
+check(CharacterAudioIdentity(speakerID: "kiana", speech: true, expression: "evil", moment: nil) == nil, "unknown expression rejected")
+var call = CharacterPlaybackTimeline()
+call.append(identity: kiana, duration: 2, now: 5)
+call.append(identity: della, duration: 1, now: 5.1)
+check(call.presentation(at: 4.9, expectedID: CharacterMotion.kianaID) == nil, "queued audio is not playing")
+check(call.presentation(at: 6.9, expectedID: CharacterMotion.kianaID)?.expression == .warm, "local tail remains speaking independently of server state")
+check(call.presentation(at: 6, expectedID: CharacterMotion.dellaID) == nil, "wrong speaker never borrows Kiana face")
+check(call.presentation(at: 7.2, expectedID: CharacterMotion.dellaID)?.expression == .concerned, "next queued identity owns its own interval")
+check(call.presentation(at: 7.2, expectedID: CharacterMotion.kianaID) == nil, "handoff closes previous mouth")
+check(call.presentation(at: 8, expectedID: CharacterMotion.dellaID) == nil, "finished clip has no stale reaction")
+call.append(identity: nil, duration: 1, now: 8)
+call.append(identity: kiana, duration: 1, now: 8)
+check(call.presentation(at: 8.5, expectedID: CharacterMotion.kianaID) == nil, "game effects and unsupported old metadata stay still")
+check(call.presentation(at: 9.5, expectedID: CharacterMotion.kianaID) != nil, "speech after effect resumes at its actual queue position")
+call.reset()
+check(call.presentation(at: 9.5, expectedID: CharacterMotion.kianaID) == nil, "barge-in empties reaction queue")
+call.append(identity: kiana, duration: .nan, now: 0)
+call.append(identity: kiana, duration: 1, now: 0)
+check(call.presentation(at: 0.5, expectedID: CharacterMotion.kianaID) == nil, "invalid queue timing cannot animate a later clip early")
+call.reset()
+for _ in 0..<129 { call.append(identity: kiana, duration: 1, now: 0) }
+check(call.clips.isEmpty, "overflow falls back quietly without retaining a transcript")
+for expression in CharacterExpression.allCases {
+    let presentation = CharacterPresentation(activity: .speaking, expression: expression, elapsed: 0.5)
+    let off = CharacterMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 1, active: false, presentation: presentation)
+    check(off.mouth == 0 && off.brow == 0 && off.lift == 0 && off.tilt == 0, "disabled reaction stays completely still")
+}
+print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")

@@ -228,6 +228,7 @@ final class StreamingClipPlayer {
         guard let render = node.lastRenderTime, let time = node.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
         return Double(time.sampleTime) / time.sampleRate
     }
+    var characterElapsed: Double { characterTime() ?? 0 }
     func characterLevel() -> Double {
         guard node.isPlaying, !stopped, outstandingBuffers > 0, let time = characterTime() else { return 0 }
         return characterEnvelope.level(at: time)

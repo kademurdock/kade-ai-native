@@ -22,6 +22,10 @@ import Social
 class ShareViewController: SLComposeServiceViewController {
 
     private var loadedData: Data?
+    /// Part 181: a book or a recording stays ON DISK and is copied into the
+    /// App Group — never read into memory (a movie's audio would kill the
+    /// extension). `loadedData` remains the path for images and text.
+    private var loadedFileURL: URL?
     private var loadedName: String?
     private var loadedKind: String = "file"
     private var loadFailed: String?
@@ -48,19 +52,27 @@ class ShareViewController: SLComposeServiceViewController {
             finish(saying: problem, success: false)
             return
         }
-        guard let data = loadedData, let name = loadedName else {
+        guard let name = loadedName, loadedData != nil || loadedFileURL != nil else {
             finish(saying: "That did not finish loading. Try sharing it again.", success: false)
             return
         }
         let note = contentText?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ok = KadeShareStore.write(
-            data: data,
-            displayName: name,
-            note: (note?.isEmpty ?? true) ? nil : note,
-            kind: loadedKind
-        )
+        let ok: Bool
+        if let fileURL = loadedFileURL {
+            let scoped = fileURL.startAccessingSecurityScopedResource()
+            ok = KadeShareStore.writeFile(from: fileURL, displayName: name, note: (note?.isEmpty ?? true) ? nil : note, kind: loadedKind)
+            if scoped { fileURL.stopAccessingSecurityScopedResource() }
+        } else {
+            ok = KadeShareStore.write(
+                data: loadedData ?? Data(),
+                displayName: name,
+                note: (note?.isEmpty ?? true) ? nil : note,
+                kind: loadedKind
+            )
+        }
         if ok {
-            finish(saying: "Saved. Open Kade-AI to send it.", success: true)
+            let library = loadedKind == "book" || loadedKind == "recording" || loadedKind == "link"
+            finish(saying: library ? (loadedKind == "link" ? "Saved. Open Kade-AI to submit it for the library." : "Saved. Open Kade-AI to put it in the Library.") : "Saved. Open Kade-AI to send it.", success: true)
         } else {
             finish(saying: "Couldn't hand that to Kade-AI. Open the app once and try again.", success: false)
         }
@@ -80,7 +92,9 @@ class ShareViewController: SLComposeServiceViewController {
         // share carries several, the first is taken and the rest are ignored
         // rather than silently concatenated into something she did not ask for.
         let provider = providers[0]
-        let types: [UTType] = [.image, .movie, .audio, .pdf, .plainText, .data]
+        // Part 181: a LINK (a YouTube page, an archive.org item) is a library
+        // submission; it is checked first so a shared web page is not read as text.
+        let types: [UTType] = [.url, .image, .movie, .audio, .pdf, .plainText, .data]
         guard let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) else {
             loadFailed = "Kade-AI can't take that kind of file yet."
             return
@@ -94,8 +108,29 @@ class ShareViewController: SLComposeServiceViewController {
             }
             var data: Data?
             var name = "shared"
+            if type == .url, let url = value as? URL, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                DispatchQueue.main.async {
+                    self.loadedData = Data(url.absoluteString.utf8)
+                    self.loadedName = "link.txt"
+                    self.loadedKind = "link"
+                }
+                return
+            }
             if let url = value as? URL {
                 name = url.lastPathComponent
+                let ext = url.pathExtension.lowercased()
+                let bookExts: Set<String> = ["zip", "epub", "txt", "docx", "html", "htm", "xhtml"]
+                let audioExts: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif"]
+                if bookExts.contains(ext) || audioExts.contains(ext) || type == .audio {
+                    /* Part 181: Reading Room material is copied, not loaded.
+                     * No size cap here beyond what the App Group can hold. */
+                    DispatchQueue.main.async {
+                        self.loadedFileURL = url
+                        self.loadedName = name
+                        self.loadedKind = audioExts.contains(ext) || type == .audio ? "recording" : "book"
+                    }
+                    return
+                }
                 let scoped = url.startAccessingSecurityScopedResource()
                 data = try? Data(contentsOf: url)
                 if scoped { url.stopAccessingSecurityScopedResource() }

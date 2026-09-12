@@ -45,6 +45,9 @@ struct ContentView: View {
     /// `navigationDestination(item:)` modifiers keyed to the same type is the
     /// build-121 regression that stopped conversation rows opening.
     @State private var pendingShare: SharedFileHandoff?
+    /// Part 181: a BOOK or RECORDING from the share sheet goes to the Reading
+    /// Room, not to a chat. Its own handoff type for the same build-121 reason.
+    @State private var pendingLibraryShare: LibraryFileHandoff?
     @State private var showingWeb = false
     // Kade tapped "Open Kade-AI web" (build 106/107) and hit what she
     // described as an "error image" -- unconfirmed whether that was
@@ -307,6 +310,8 @@ struct ContentView: View {
                     AnnouncementsView(apiClient: apiClient)
                 case .soundBooth:
                     SoundBoothView(apiClient: apiClient)
+                case .readingRoom:
+                    ReadingRoomView(apiClient: apiClient)
                 case .myCreations:
                     MyCreationsView(apiClient: apiClient)
                 case .wallOfFame:
@@ -566,6 +571,9 @@ struct ContentView: View {
             .navigationDestination(item: $spotterTranscript) { handoff in
                 ConversationDetailView(conversation: handoff.conversation)
             }
+            .navigationDestination(item: $pendingLibraryShare) { handoff in
+                ReadingRoomView(apiClient: apiClient, incomingFile: handoff.url, incomingName: handoff.displayName)
+            }
 
             // Deliberately a `route` push rather than the `NavigationLink`
             // this used to be, and the reason is load-bearing rather than
@@ -710,6 +718,21 @@ struct ContentView: View {
             .labelStyle(KadeTileLabelStyle(tint: .blue))
             .accessibilityLabel("The Sound Booth")
             .accessibilityHint("Write something and have it performed. One actor with real acting on Kade's own machine, or a whole scene with several voices, music and sound effects.")
+
+            /* Part 181 (Sep 11 2026) — THE READING ROOM. Her ask: Bookshare
+             * books read by the voices, chunk by chunk, with rewind, forward,
+             * bookmarks and chapters; the watermark skipped; a private shelf,
+             * a public library ("donated by Amber") with audiobooks, described
+             * movies, cassettes and old radio. Books get in from the share
+             * sheet (a DAISY zip shared to Kade-AI lands here, not in a chat). */
+            Button { go(.readingRoom) } label: {
+                Label("The Library", systemImage: "books.vertical")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeTileLabelStyle(tint: .brown))
+            .accessibilityLabel("The Library")
+            .accessibilityHint("The family library: books read aloud by a voice you pick, the archive of television, commercials, tapes and radio, described videos, playlists, and a place to submit finds. Share a link or a Bookshare zip to Kade-AI and it lands here.")
 
             VStack(spacing: 12) {
                 KadeToolRow {
@@ -994,6 +1017,8 @@ struct ContentView: View {
             go(.agentWork)
         case .announcements:
             go(.announcements)
+        case .readingRoom:
+            go(.readingRoom)
         }
     }
 
@@ -1038,8 +1063,19 @@ struct ContentView: View {
      * survives in the container until she signs in, and the 30-minute window
      * in KadeShareStore is what stops it surprising her days later). */
     private func consumePendingShare() {
-        guard isSignedIn, pendingShare == nil else { return }
+        guard isSignedIn, pendingShare == nil, pendingLibraryShare == nil else { return }
         guard let taken = KadeShareStore.take() else { return }
+        /* Part 181: a book file or a recording is for the Reading Room. The
+         * extension already recognises these kinds; anything else keeps the
+         * Part 120 path into a chat with her main agent. */
+        if LibraryFileHandoff.isLibraryKind(taken.pending.kind, name: taken.pending.displayName) {
+            pendingLibraryShare = LibraryFileHandoff(url: taken.url, displayName: taken.pending.displayName)
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "Opening the Reading Room to donate \(taken.pending.displayName)."
+            )
+            return
+        }
         pendingShare = SharedFileHandoff(
             url: taken.url,
             displayName: taken.pending.displayName,
@@ -1151,6 +1187,22 @@ struct SharedFileHandoff: Identifiable, Hashable {
     var id: String { url.absoluteString }
 }
 
+/// Part 181 — a shared file bound for the Reading Room (a book to be read by
+/// a voice, or a recording to donate). Declared in exactly one
+/// `navigationDestination(item:)`, like its two siblings above.
+struct LibraryFileHandoff: Identifiable, Hashable {
+    let url: URL
+    let displayName: String
+    var id: String { url.absoluteString }
+    static let bookExts: Set<String> = ["zip", "epub", "txt", "docx", "html", "htm", "xhtml"]
+    static let audioExts: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif"]
+    static func isLibraryKind(_ kind: String, name: String) -> Bool {
+        if kind == "book" || kind == "recording" || kind == "link" { return true }
+        let ext = (name as NSString).pathExtension.lowercased()
+        return bookExts.contains(ext) || audioExts.contains(ext)
+    }
+}
+
 /// The home screen's own programmatic destinations. Its own dedicated type,
 /// declared in exactly one `navigationDestination(item:)` at the root of the
 /// home stack.
@@ -1198,6 +1250,10 @@ enum HomeRoute: Identifiable, Hashable {
     /// sections, so the equivalent first-class placement is a full-width
     /// button at the TOP of Tools rather than a tile in the grid.
     case soundBooth
+    /// Part 181 (Sep 11 2026) — the Reading Room: books read by a voice,
+    /// and the family media library. A full-width card under the Sound
+    /// Booth, the same "first-class tool" placement.
+    case readingRoom
     case myCreations
     case wallOfFame
     case admin
@@ -1232,6 +1288,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .settings: return "settings"
         case .alerts: return "alerts"
         case .soundBooth: return "soundBooth"
+        case .readingRoom: return "readingRoom"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"

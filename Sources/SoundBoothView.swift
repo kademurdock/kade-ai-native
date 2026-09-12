@@ -240,7 +240,7 @@ struct SoundBoothView: View {
                  * Her ask: "people will not know the difference." Each card
                  * says what it is, where it runs, what it costs, what it is
                  * for and not for — as one spoken element, then a button. */
-                ForEach(["scenema", "seed"], id: \.self) { key in
+                ForEach(["scenema", "seed", "lyria"], id: \.self) { key in
                     if let g = guide.engines[key] {
                         Button {
                             KadeHaptics.press()
@@ -275,7 +275,7 @@ struct SoundBoothView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(guide.chooser.answer).font(.footnote)
                         ForEach(guide.chooser.rules, id: \.self) { r in
-                            Text("\(r.pick == "seed" ? "Seed Audio" : "Scenema") when \(r.when).")
+                            Text("\(Self.engineName(r.pick)) when \(r.when).")
                                 .font(.footnote)
                         }
                     }
@@ -299,6 +299,7 @@ struct SoundBoothView: View {
                 Picker("Engine", selection: $engine) {
                     Text("Scenema").tag("scenema")
                     Text("Seed Audio").tag("seed")
+                    Text("Lyria").tag("lyria")
                 }
                 .pickerStyle(.segmented)
             }
@@ -328,7 +329,19 @@ struct SoundBoothView: View {
     private static let easyKeys: [String: [String]] = [
         "scenema": ["voice_description", "gender", "reference_voice_url"],
         "seed": ["voice", "audio_urls"],
+        /* Lyria has three knobs and they all belong on the easy side: there is
+         * nothing advanced about it, because the brief IS the control. */
+        "lyria": ["instrumental", "lyrics", "keep_lyrics"],
     ]
+
+    /// One place the three engines are named, so a fourth never needs hunting.
+    static func engineName(_ key: String) -> String {
+        switch key {
+        case "seed": return "Seed Audio"
+        case "lyria": return "Lyria"
+        default: return "Scenema"
+        }
+    }
 
     private var writingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -676,9 +689,10 @@ struct SoundBoothView: View {
             guide = h.guide
             let scenemaOK = h.engines["scenema"]?.configured ?? false
             let seedOK = h.engines["seed"]?.configured ?? false
+            let lyriaOK = h.engines["lyria"]?.configured ?? false
             /* The first thing the screen says is the one-line answer to the
              * question she said people would have. */
-            let fallback = "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up")."
+            let fallback = "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up"), Lyria \(lyriaOK ? "is available" : "is not set up")."
             statusLine = "Ready. " + (h.guide?.chooser.answer ?? fallback)
         } catch {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
@@ -837,7 +851,7 @@ struct SoundBoothView: View {
                 mood: mood.isEmpty ? nil : mood,
                 scene: st["scene"] as? String,
                 shot: st["shot"] as? String,
-                clipURLs: clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
+                clipURLs: engine == "lyria" ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             )
             script = r.script
             readback = r.readback ?? ""
@@ -911,6 +925,13 @@ struct SoundBoothView: View {
             .replacingOccurrences(of: "\\[[^\\]]*\\]", with: " ", options: .regularExpression)
         let words = stripped.split(whereSeparator: { $0.isWhitespace }).count
         let secs = max(1, Int((Double(words) / 2.6).rounded()))
+        /* Lyria is the one per-SONG price in the booth: the brief's length says
+         * nothing at all about how long the record comes out, so this must not
+         * quote a duration for it the way it does for the speech engines. */
+        if engine == "lyria" {
+            let perSong = health?.engines["lyria"]?.usdPerSong ?? 0.08
+            return "About \(max(1, Int((perSong * 100).rounded()))) cents for the song, whatever length it comes out. Lyria is priced per song, not per minute. Usually back in under a minute."
+        }
         let cents = engine == "seed"
             ? max(1, Int((Double(secs) / 60.0 * 18.75).rounded()))
             : max(1, Int((Double(secs) / 60.0 * 2.0).rounded()) + 2)
@@ -1050,3 +1071,4 @@ private struct BoothPlayerSheet: View {
         }
     }
 }
+

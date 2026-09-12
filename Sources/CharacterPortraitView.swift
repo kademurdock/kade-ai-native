@@ -8,6 +8,7 @@ struct CharacterPortraitView: View {
     let playing: Bool
     let level: () -> Double
     var listening = false
+    var presentation: () -> CharacterPresentation = { .idle }
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -24,12 +25,13 @@ struct CharacterPortraitView: View {
     var body: some View {
         if enabled {
             TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !active)) { timeline in
+                let performance = active ? presentation() : .idle
                 let pose = CharacterMotion.pose(id: agentID ?? "unknown",
                     time: timeline.date.timeIntervalSinceReferenceDate,
-                    level: active && playing ? level() : 0, active: active)
+                    level: active && playing ? level() : 0, active: active, presentation: performance)
                 ZStack {
                     RoundedRectangle(cornerRadius: 24).fill(Color.accentColor.opacity(0.08))
-                    portrait(pose)
+                    portrait(pose, expression: performance.expression)
                         .frame(width: 160, height: 160)
                         .clipShape(RoundedRectangle(cornerRadius: 22))
                         .rotationEffect(.degrees(pose.tilt))
@@ -41,9 +43,10 @@ struct CharacterPortraitView: View {
             .allowsHitTesting(false)
             .onAppear { visible = true }
             .onDisappear { visible = false }
+            .task { await agents.loadIfNeeded() }
         }
     }
-    @ViewBuilder private func portrait(_ pose: CharacterPose) -> some View {
+    @ViewBuilder private func portrait(_ pose: CharacterPose, expression: CharacterExpression) -> some View {
         if prepared {
             let della = agentID == CharacterMotion.dellaID
             let base = della ? "CharacterDellaPortrait" : "CharacterKianaPortrait"
@@ -54,6 +57,11 @@ struct CharacterPortraitView: View {
             let right = della ? CGRect(x: 0.535, y: 0.295, width: 0.11, height: 0.082) : CGRect(x: 0.518, y: 0.219, width: 0.125, height: 0.08)
             ZStack(alignment: .topLeading) {
                 Image(base).resizable().scaledToFill()
+                ForEach(0..<6, id: \.self) { cell in
+                    reaction(della: della, cell: cell)
+                        .opacity(expression.cell == cell ? 1 : 0)
+                }
+                .animation(active ? .easeInOut(duration: 0.22) : nil, value: expression)
                 patch(mouth, from: della ? lips : CGRect(x: 0.764, y: 0.217, width: 0.097, height: 0.064), to: lips)
                     .opacity(CharacterMotion.blend(pose.mouth))
                 let browLeft = della ? CGRect(x: 0.35, y: 0.221, width: 0.132, height: 0.073) : CGRect(x: 0.357, y: 0.235, width: 0.13, height: 0.066)
@@ -69,6 +77,20 @@ struct CharacterPortraitView: View {
                 else { fallback }
             }
         } else { fallback }
+    }
+    private func reaction(della: Bool, cell: Int) -> some View {
+        let region = della ? CGRect(x: 0.30, y: 0.20, width: 0.40, height: 0.39)
+            : CGRect(x: 0.305, y: 0.13, width: 0.42, height: 0.40)
+        return Image(della ? "CharacterDellaReactions" : "CharacterKianaReactions").resizable()
+            .frame(width: 480, height: 320)
+            .offset(x: -Double(cell % 3) * 160, y: -Double(cell / 3) * 160)
+            .frame(width: 160, height: 160, alignment: .topLeading).clipped()
+            .mask(alignment: .topLeading) {
+                Ellipse().fill(RadialGradient(stops: [.init(color: .black, location: 0.68), .init(color: .clear, location: 1)],
+                    center: .center, startRadius: 0, endRadius: region.width * 80))
+                    .frame(width: region.width * 160, height: region.height * 160)
+                    .offset(x: region.minX * 160, y: region.minY * 160)
+            }
     }
     private var fallback: some View {
         ZStack {

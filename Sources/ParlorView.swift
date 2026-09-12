@@ -59,6 +59,10 @@ struct ParlorView: View {
     // Phase 2 (party tables)
     @State private var joinCode = ""
     @State private var optOpenSeats = 0
+    // Part 179 (the lobby)
+    @State private var lobby: [ParlorService.LobbyTable] = []
+    @State private var lobbySpoken = ""
+    @State private var optKeepOffLobby = false
     @State private var historyCursor = 0
     @State private var pollTask: Task<Void, Never>?
 
@@ -100,51 +104,34 @@ struct ParlorView: View {
     // MARK: - Menu
 
     private var menuScreen: some View {
+        // Part 179 (Sep 11 2026), read off the code rather than a report: a
+        // VoiceOver user flicking from the top used to hear a code box and an
+        // empty standings screen before a single game, and nobody could see
+        // that anyone else had a table open. Now: what this is, the games,
+        // the lobby, your own tables, the code box, then standings.
         List {
-            Section {
-                Text("Every game on a menu. Pick one, set the table your way, and play your own cards — characters are optional company, never the referee.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Section("Join a friend's table") {
-                TextField("The 4-character code from your host", text: $joinCode)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                Button("Take a seat") { Task { await joinParty() } }
-                    .accessibilityHint("Joins the table that code belongs to.")
-            }
-            if !openTables.isEmpty {
-                Section("Your open tables") {
-                    ForEach(openTables) { t in
-                        Button {
-                            Task { await resume(t.gameId) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Resume \(t.name)")
-                                Text("Table \(t.gameId) — \(t.turns) turns in")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .accessibilityLabel("Resume \(t.name), table \(t.gameId), \(t.turns) turns in")
-                        .accessibilityHint("Puts you right back at this table.")
-                    }
-                }
-            }
-            Section("The Game Room") {
-                // July 24 2026, her call: "the game room seems redundant with
-                // the parlor... combining them." The standings screen now
-                // lives HERE — the home tile is gone.
+            // Sep 12 2026, her word: "Reverie is still in the admin corner, not in
+            // the Parlor" (Part 180 put it first on the web Parlor; the phone
+            // lagged). First thing on the menu, for everyone — the engine
+            // itself gates children's seats and the wizard verbs by role.
+            Section("Step into the city") {
                 NavigationLink {
-                    GameRoomView(apiClient: apiClient)
+                    WorldView(apiClient: apiClient)
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Family standings and records")
-                        Text("Bragging rights, highlights, and the latest results — straight from the referee.")
+                        Text("Reverie")
+                        Text("The living city beyond the Threshold Gate. Walk it, talk to the residents, listen to the Band.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .accessibilityLabel("Reverie")
+                .accessibilityHint("Opens the city. The games are next.")
+            }
+            Section {
+                Text("The Parlor is the family game room: twenty-two games you play with real buttons, the house deals and referees, characters can sit in for company, and party tables let your people play their own hands from their own phones.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Section("Deal something new") {
                 if loadFailed {
@@ -166,6 +153,75 @@ struct ParlorView: View {
                     }
                 }
             }
+            Section {
+                if lobby.isEmpty {
+                    Text("Nobody has a table open right now. Deal a game with open seats for friends and it shows up here for the whole family.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(lobby) { t in
+                        Button {
+                            Task { await join(code: t.code) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(t.mine == true ? "Your \(t.name) table" : "Sit at \(t.host)'s \(t.name) table")
+                                Text("\(t.seatsOpen) seat\(t.seatsOpen == 1 ? "" : "s") open — code \(t.code)\(t.mine == true ? " — this one is yours" : "")")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityLabel(t.mine == true ? "Your \(t.name) table, \(t.seatsOpen) seats open" : "\(t.host)'s \(t.name) table, \(t.seatsOpen) seat\(t.seatsOpen == 1 ? "" : "s") open")
+                        .accessibilityHint(t.mine == true ? "Goes back to your table." : "Takes a seat at this table.")
+                    }
+                }
+                Button("Check the lobby again") { Task { await refreshLobby(announce: true) } }
+            } header: {
+                Text("Open tables right now")
+            }
+            if !openTables.isEmpty {
+                Section("Your open tables") {
+                    ForEach(openTables) { t in
+                        Button {
+                            Task { await resume(t.gameId) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Resume \(t.name)")
+                                Text("Table \(t.gameId) — \(t.turns) turns in")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityLabel("Resume \(t.name), table \(t.gameId), \(t.turns) turns in")
+                        .accessibilityHint("Puts you right back at this table.")
+                    }
+                }
+            }
+            Section {
+                TextField("The code from your host", text: $joinCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Take a seat") { Task { await joinParty() } }
+                    .accessibilityHint("Joins the table that code belongs to.")
+            } header: {
+                Text("Join with a code")
+            } footer: {
+                Text("A host can keep a table off the lobby — then you sit down with the 4-character code they read you.")
+            }
+            Section("The Game Room") {
+                // July 24 2026, her call: "the game room seems redundant with
+                // the parlor... combining them." The standings screen now
+                // lives HERE — the home tile is gone.
+                NavigationLink {
+                    GameRoomView(apiClient: apiClient)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Family standings and records")
+                        Text("Bragging rights, highlights, and the latest results — straight from the referee.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
@@ -180,7 +236,20 @@ struct ParlorView: View {
                 loadFailed = true
             }
         }
+        await refreshLobby(announce: false)
         statusLine = "Pick a game from the menu."
+    }
+
+    /// Part 179: the lobby rides with the menu and can be re-read on demand.
+    private func refreshLobby(announce: Bool) async {
+        let (tables, spoken) = await service.lobby()
+        lobby = tables
+        lobbySpoken = spoken
+        if announce {
+            let line = spoken.isEmpty ? (tables.isEmpty ? "Nobody has a table open right now." : "\(tables.count) tables open.") : spoken
+            narrator.say(line)
+            UIAccessibility.post(notification: .announcement, argument: line)
+        }
     }
 
     // MARK: - Setup
@@ -194,6 +263,8 @@ struct ParlorView: View {
         optCategory = ""
         if let b = g.options?.bet, b.count == 3 { optBet = b[2] }
         optClean = false
+        optOpenSeats = 0
+        optKeepOffLobby = false
         phase = .setup
         UIAccessibility.post(notification: .screenChanged, argument: "Set the table — \(g.name).")
     }
@@ -223,7 +294,11 @@ struct ParlorView: View {
                                 Text("\(n) friend\(n == 1 ? "" : "s")").tag(n)
                             }
                         }
-                        .accessibilityHint("Friends join with a 4 character code and play their own hands.")
+                        .accessibilityHint("Friends join from the lobby, or with a 4 character code, and play their own hands.")
+                        if optOpenSeats > 0 {
+                            Toggle("Keep it off the lobby", isOn: $optKeepOffLobby)
+                                .accessibilityHint("Friends will need the code read to them instead of finding the table in the lobby.")
+                        }
                     }
                     if seats.isEmpty, let opp = o.opponents, opp.count == 3 {
                         Picker("House players", selection: $optOpponents) {
@@ -367,7 +442,10 @@ struct ParlorView: View {
             : narratorPick
         narrator.mode = narratorMode
         var reqBody = ParlorService.NewTableRequest(game: g.key)
-        if g.seatAware { reqBody.partyOpenSeats = optOpenSeats }
+        if g.seatAware {
+            reqBody.partyOpenSeats = optOpenSeats
+            reqBody.keepOffLobby = optOpenSeats > 0 && optKeepOffLobby
+        }
         if g.seatAware && !seats.isEmpty { reqBody.agentSeats = seats }
         else if g.options?.opponents != nil { reqBody.opponents = optOpponents }
         if g.options?.rounds != nil { reqBody.rounds = optRounds }
@@ -489,6 +567,11 @@ struct ParlorView: View {
         let code = joinCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !code.isEmpty else { return }
         joinCode = ""
+        await join(code: code)
+    }
+
+    /// Part 179: one door for the code box and the lobby rows.
+    private func join(code: String) async {
         do {
             let t = try await service.join(code: code)
             chosen = games.first { $0.key == t.gameKey }

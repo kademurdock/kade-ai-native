@@ -1649,7 +1649,7 @@ struct ConversationDetailView: View {
             if voiceService.isClipPlaying {
                 CharacterPortraitView(agentID: voiceService.nowPlayingAgentID,
                     name: agentDisplayLabel, playing: !voiceService.isPaused,
-                    level: { voiceService.characterLevel() })
+                    level: { voiceService.characterLevel() }, presentation: { voiceService.characterPresentation() })
             }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(MessageRow.chunkLongText(liveReply).enumerated()), id: \.offset) { piece in
@@ -2339,6 +2339,9 @@ struct ConversationDetailView: View {
         .confirmationDialog("Attach to your next message", isPresented: $showingAttachMenu) {
             Button("Choose a photo") { showingAttachPhotos = true }
             Button("Choose a file") { showingAttachImporter = true }
+            // Sep 12 2026 (Amber A's report): a copied photo or file goes
+            // straight in, no picker.
+            Button("Paste a photo or file") { Task { await pasteAttachmentFromClipboard() } }
             Button("Cancel", role: .cancel) {}
         }
         .photosPicker(isPresented: $showingAttachPhotos, selection: $attachPhotoItem, matching: .images)
@@ -2417,6 +2420,24 @@ struct ConversationDetailView: View {
             ext = "jpg"
         }
         await uploadAttachment(data: data, mimeType: mimeType, fileName: "photo.\(ext)")
+    }
+
+    /// Sep 12 2026 (Amber A's report: "paste files or photos directly here
+    /// in chat … instead of only uploading via button"). Same reader the
+    /// Describe screen uses (`ClipboardMedia`), same upload lane as the
+    /// pickers. Copied words are left alone on purpose — they belong in the
+    /// message box, which already pastes them.
+    private func pasteAttachmentFromClipboard() async {
+        let kinds: [UTType] = [.image, .pdf, .movie, .data]
+        guard let item = await ClipboardMedia.load(kinds: kinds) else {
+            attachmentFailed("Nothing to paste yet. Copy a photo or a file first, then choose Paste again. Copied words go straight into the message box.")
+            return
+        }
+        if Int64(item.data.count) > ChatAttachment.maxUploadBytes {
+            attachmentFailed("That is larger than 30 megabytes. Try a smaller photo or file.")
+            return
+        }
+        await uploadAttachment(data: item.data, mimeType: item.mimeType, fileName: item.fileName)
     }
 
     private func importAttachmentFile(_ url: URL) async {
@@ -3911,7 +3932,7 @@ private struct MessageRow: View {
                 if voicePlayback != .idle {
                     CharacterPortraitView(agentID: message.agentId ?? characterVoice.nowPlayingAgentID,
                         name: message.speakerLabel, playing: voicePlayback == .playing && characterVoice.isClipPlaying,
-                        level: { characterVoice.characterLevel() })
+                        level: { characterVoice.characterLevel() }, presentation: { characterVoice.characterPresentation() })
                 }
                 messageBodyView
                     // Session 25 (Kade approved the audit list, "All four"):

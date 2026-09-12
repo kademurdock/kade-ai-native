@@ -118,6 +118,17 @@ final class AgentsService: ObservableObject {
         if let changeObserver { NotificationCenter.default.removeObserver(changeObserver) }
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    func seedCharacterAudit() {
+        let rows: [[String: Any]] = [
+            ["id": CharacterMotion.kianaID, "name": "Kiana", "avatar": ["filepath": "/images/" + CharacterMotion.kianaFile]],
+            ["id": CharacterMotion.dellaID, "name": "Della", "avatar": ["filepath": "/images/" + CharacterMotion.dellaFile]]]
+        if let data = try? JSONSerialization.data(withJSONObject: rows), let decoded = try? decoder.decode([KadeAgent].self, from: data) {
+            agents = decoded; hasLoadedOnce = true
+        }
+    }
+    #endif
+
     /// Drop the cached list and fetch again. Keeps the old rows on screen
     /// until the new ones land, so a picker that happens to be open never
     /// blinks empty.

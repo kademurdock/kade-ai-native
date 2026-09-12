@@ -4,7 +4,7 @@
 workflows:
   ios-native-testflight:
     name: Kade-AI Native iOS -> TestFlight
-    max_build_duration: 20
+    max_build_duration: 25
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: KadeAI_ASC_Key
@@ -14,7 +14,8 @@ workflows:
       vars:
         BUNDLE_ID: "com.kademurdock.kadeai"
         APP_STORE_APPLE_ID: 6791024001
-      xcode: latest
+      # Repeatable toolchain; 26.6's simulator stalls inside AudioQueue on this VM.
+      xcode: "26.4"
     scripts:
       # PART 92.12 — THE SPEECH TESTS ARE A PUBLISH GATE NOW, NOT A GOOD HABIT.
       #
@@ -44,6 +45,9 @@ workflows:
           set -e
           brew install xcodegen || brew link --overwrite xcodegen
           xcodegen generate
+      - name: Offline call engine and portrait simulator checks
+        script: |
+          bash dev/character-audit.sh
       - name: Set up code signing (reusable certificate)
         script: |
           set -e
@@ -176,6 +180,7 @@ workflows:
       - asc-issuer.txt
       - archive-first-errors.txt
       - build-ipa.log
+      - character-audit/**
     publishing:
       app_store_connect:
         auth: integration
@@ -397,3 +402,42 @@ workflows:
     artifacts:
       - a11y-issues.txt
       - a11y.log
+
+
+  # Sep 10 2026 — the cheap gate. Builds 214-219 each spent ~7 minutes of Mac
+  # time to learn one thing: whether the offline call engine survives a
+  # headless simulator. This workflow answers exactly that and stops. No
+  # signing files are fetched, no .ipa is produced and nothing is published,
+  # so a red run costs minutes instead of a TestFlight slot, and a green run
+  # is the go-ahead to spend the real build on ios-native-testflight.
+  #
+  # KADE_CHARACTER_AUDIT is pinned here on purpose: dev/character-audit.sh
+  # exits 0 silently when it is unset, so a trigger that forgot to pass it
+  # would go green having tested NOTHING. Never move it back to the trigger.
+  ios-character-audit-verify:
+    name: Character audit verify (no signing, no upload)
+    max_build_duration: 20
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        BUNDLE_ID: "com.kademurdock.kadeai"
+        KADE_CHARACTER_AUDIT: "1"
+      xcode: "26.4"
+    scripts:
+      - name: Character motion tests
+        script: |
+          set -e
+          bash ./run-character-tests.sh
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+      - name: Offline call engine and portrait simulator checks
+        script: |
+          bash dev/character-audit.sh
+    artifacts:
+      - character-audit/result.json
+      - character-audit/runtime.log
+      - character-audit/compile.log
+      - character-audit/*.png
