@@ -110,6 +110,24 @@ struct ParlorView: View {
         // that anyone else had a table open. Now: what this is, the games,
         // the lobby, your own tables, the code box, then standings.
         List {
+            // Sep 12 2026, her word: "Reverie is still in the admin corner, not in
+            // the Parlor" (Part 180 put it first on the web Parlor; the phone
+            // lagged). First thing on the menu, for everyone — the engine
+            // itself gates children's seats and the wizard verbs by role.
+            Section("Step into the city") {
+                NavigationLink {
+                    WorldView(apiClient: apiClient)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reverie")
+                        Text("The living city beyond the Threshold Gate. Walk it, talk to the residents, listen to the Band.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("Reverie")
+                .accessibilityHint("Opens the city. The games are next.")
+            }
             Section {
                 Text("The Parlor is the family game room: twenty-two games you play with real buttons, the house deals and referees, characters can sit in for company, and party tables let your people play their own hands from their own phones.")
                     .font(.footnote)
