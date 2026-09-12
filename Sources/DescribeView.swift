@@ -117,6 +117,9 @@ struct DescribeView: View {
             Button("Take a photo") { showingCamera = true }
             Button("Choose a photo or video") { showingPhotosPicker = true }
             Button("Choose a file") { showingFileImporter = true }
+            // Sep 12 2026 (Amber A's report): what is on the clipboard,
+            // without a trip through the picker.
+            Button("Paste from the clipboard") { Task { await pasteFromClipboard() } }
             Button("Cancel", role: .cancel) {}
         }
         .fullScreenCover(isPresented: $showingCamera) {
@@ -187,7 +190,7 @@ struct DescribeView: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(isBusy)
-        .accessibilityHint("Take a photo, choose a photo or video from your library, or pick a file from Files.")
+        .accessibilityHint("Take a photo, choose a photo or video from your library, pick a file from Files, or paste what is on your clipboard.")
     }
 
     private func resultSection(_ outcome: DescribeService.Outcome) -> some View {
@@ -379,6 +382,25 @@ struct DescribeView: View {
         await upload(data: data, mimeType: mimeType ?? "application/octet-stream", fileName: name)
     }
 
+    /// Sep 12 2026 (Amber A's report: "paste files or photos directly …
+    /// in the Describe tool, instead of only uploading via button"). Reads
+    /// whatever was copied — a photo, a screenshot, a video, a PDF, a text
+    /// file — off the system clipboard and sends it down the SAME upload
+    /// path the pickers use. iOS shows its own one-tap "Allow Paste" prompt
+    /// the first time; a blank clipboard is an alert, never a silent no-op.
+    private func pasteFromClipboard() async {
+        let kinds: [UTType] = [.image, .movie, .pdf, .plainText, .text, .data]
+        guard let item = await ClipboardMedia.load(kinds: kinds) else {
+            errorMessage = "Nothing to paste yet. Copy a photo, video, PDF, or document first, then choose Paste again."
+            return
+        }
+        if Int64(item.data.count) > DescribeService.maxUploadBytes {
+            errorMessage = "That is larger than 30 megabytes. Try a smaller photo or file."
+            return
+        }
+        await upload(data: item.data, mimeType: item.mimeType, fileName: item.fileName)
+    }
+
     private func upload(data: Data, mimeType: String, fileName: String) async {
         outcome = nil
         savedReminderKeys.removeAll()
@@ -490,5 +512,70 @@ private struct CameraCapturePicker: UIViewControllerRepresentable {
             picker.dismiss(animated: true)
             parent.onCancel()
         }
+    }
+}
+
+// MARK: - Clipboard media (shared with the chat composer's attach menu)
+
+/// Sep 12 2026: one reader for "what did she just copy?". Walks the
+/// pasteboard's item providers for the first type that conforms to one of
+/// the wanted kinds (in the caller's order of preference), loads its bytes,
+/// and names the file by its real extension so the server and the status
+/// line can tell a PDF from a screenshot. Any image that is not
+/// jpeg/png/webp/gif (an HEIC photo copied from Photos) is re-encoded to
+/// JPEG, the same fail-soft rule the chat's photo picker already applies.
+/// Falls back to `UIPasteboard.image` for the plain screenshot case.
+enum ClipboardMedia {
+    struct Item {
+        let data: Data
+        let mimeType: String
+        let fileName: String
+    }
+
+    static func load(kinds: [UTType]) async -> Item? {
+        let pasteboard = UIPasteboard.general
+        // Copied WORDS only count when the caller asked for text outright
+        // (the Describe screen does; the chat composer does not, because
+        // words belong in the message box, not in an attachment).
+        let wantsText = kinds.contains { $0.conforms(to: .text) }
+        for provider in pasteboard.itemProviders {
+            let registered = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+            for kind in kinds {
+                guard let type = registered.first(where: { $0.conforms(to: kind) && (wantsText || !$0.conforms(to: .text)) }) else { continue }
+                guard let data = await loadData(from: provider, type: type), !data.isEmpty else { continue }
+                return finish(data: data, type: type, suggestedName: provider.suggestedName)
+            }
+        }
+        if kinds.contains(where: { .image.conforms(to: $0) || $0 == .image }),
+           let image = pasteboard.image,
+           let jpeg = image.jpegData(compressionQuality: 0.85) {
+            return Item(data: jpeg, mimeType: "image/jpeg", fileName: "pasted.jpg")
+        }
+        return nil
+    }
+
+    private static func loadData(from provider: NSItemProvider, type: UTType) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private static func finish(data: Data, type: UTType, suggestedName: String?) -> Item {
+        var data = data
+        var type = type
+        let visionSafe: [UTType] = [.jpeg, .png, .webP, .gif]
+        if type.conforms(to: .image), !visionSafe.contains(where: { type.conforms(to: $0) }),
+           let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.85) {
+            data = jpeg
+            type = .jpeg
+        }
+        let ext = type.preferredFilenameExtension ?? (type.conforms(to: .image) ? "jpg" : "bin")
+        let mime = type.preferredMIMEType ?? (type.conforms(to: .image) ? "image/jpeg" : "application/octet-stream")
+        var base = (suggestedName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty { base = "pasted" }
+        if !base.lowercased().hasSuffix("." + ext) { base += "." + ext }
+        return Item(data: data, mimeType: mime, fileName: base)
     }
 }
