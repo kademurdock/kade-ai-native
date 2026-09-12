@@ -358,10 +358,10 @@ struct ArchiveSection: View {
                 Button("Search") { Task { await doSearch() } }
             }
             ForEach(results) { item in itemRow(item) }
-        } header: { Text("Find something") }
+        } header: { Text("Find something in the library") }
 
         Section {
-            Text("The family's television, commercials, tapes and radio, browsed the way the collection is filed.").font(.footnote).foregroundStyle(.secondary)
+            Text("The whole library, browsed shelf by shelf the way it is filed: Books by subject, Video by channel and decade, commercials, tapes and radio.").font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 4) {
                 Button("Archive") { Task { await load("", 0) } }.font(.subheadline)
                 ForEach(Array(path.split(separator: "/").enumerated()), id: \.offset) { i, seg in
@@ -570,7 +570,7 @@ struct SubmissionsSection: View {
             TextField("What is it (optional)", text: $title).textFieldStyle(.roundedBorder)
             TextField("Why it belongs (optional)", text: $note, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1 ... 3)
             Button("Submit for consideration") { Task { await submit() } }.disabled(url.trimmingCharacters(in: .whitespaces).isEmpty)
-        } header: { Text("Submit something for the library") }
+        } header: { Text("Submit a link for the librarian") }
 
         Section {
             if mine.isEmpty { Text("Nothing submitted yet.").foregroundStyle(.secondary) }

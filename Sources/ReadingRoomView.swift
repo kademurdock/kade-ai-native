@@ -130,26 +130,16 @@ struct ReadingRoomView: View {
                     ProgressView(value: p).accessibilityLabel("Uploading, \(Int(p * 100)) percent")
                 }
             }
-            Section {
-                Button { showBookPicker = true } label: {
-                    Label("Donate a book", systemImage: "book.closed")
-                }
-                .accessibilityHint("Pick Bookshare's DAISY zip, an EPUB, a text file or a Word file from Files. It lands on your shelf; the Bookshare notice is skipped and the book opens with its jacket.")
-                Toggle("Grown-ups only for the next book", isOn: $grownUpsForBook)
-                Button { donateFile = nil; donateName = ""; showDonateSheet = true } label: {
-                    Label("Donate a recording", systemImage: "waveform")
-                }
-                .accessibilityHint("An audiobook, described-movie audio, a cassette side, old radio or commercials. Name it, then add one or more audio files; big files go straight to storage.")
-            } header: { Text("Donate") }
-
+            /* Her word (Sep 12 2026): "confusing that there are multiple donation button
+             * options at the top and near the bottom, and why does it say the library is
+             * empty?" One order now: the library itself first (search, the shelves,
+             * loose donations), then your shelf, collections, and ONE "Add to the
+             * library" section at the end that holds every way in. */
             ArchiveSection(service: service, open: { item in Task { await open(item) } }, me: service.shelf?.me ?? "", librarian: service.shelf?.librarian ?? false)
-            CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
-            SubmissionsSection(service: service, announce: { announce($0) }, incomingLink: incomingLink, open: { id in Task { if let b = try? await service.openBook(id) { player.open(b); openBook = b } } })
-
-            shelfFolders
 
             Section {
                 let lib = service.shelf?.library ?? []
+                let filed = service.shelf?.libraryFiled ?? 0
                 let cats = Array(Set(lib.map { $0.isAudio ? $0.category : "book" })).sorted()
                 if cats.count > 1 {
                     Picker("Show", selection: $category) {
@@ -159,10 +149,29 @@ struct ReadingRoomView: View {
                 }
                 let shown = lib.filter { category.isEmpty || ($0.isAudio ? $0.category : "book") == category }
                 if shown.isEmpty {
-                    Text(lib.isEmpty ? "The library is empty. Put something from your shelf in it and everyone can check it out." : "Nothing on that shelf.").foregroundStyle(.secondary)
+                    Text(!lib.isEmpty ? "Nothing on that shelf." : (filed > 0 ? "Everything shared so far, \(filed) items, is filed on the shelves above — Books, Video and the rest. Loose donations would be listed here." : "Nothing loose in the library yet. Donate something below and everyone can check it out.")).foregroundStyle(.secondary)
                 }
                 ForEach(shown) { item in row(item, place: "library") }
-            } header: { Text("The library") }
+            } header: { Text("Loose donations (not filed on a shelf)") }
+
+            shelfFolders
+
+            CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
+
+            Section {
+                Text("Everything you add is yours to manage. Books and recordings go on your own shelf first; the librarian puts them in the family library.").font(.footnote).foregroundStyle(.secondary)
+                Button { showBookPicker = true } label: {
+                    Label("Donate a book", systemImage: "book.closed")
+                }
+                .accessibilityHint("Pick Bookshare's DAISY zip, an EPUB, a text file or a Word file from Files. It lands on your shelf; the Bookshare notice is skipped and the book opens with its jacket.")
+                Toggle("Grown-ups only for the next book", isOn: $grownUpsForBook)
+                Button { donateFile = nil; donateName = ""; showDonateSheet = true } label: {
+                    Label("Donate a recording", systemImage: "waveform")
+                }
+                .accessibilityHint("An audiobook, described-movie audio, a cassette side, old radio or commercials. Name it, then add one or more audio files; big files go straight to storage.")
+            } header: { Text("Add to the library") }
+
+            SubmissionsSection(service: service, announce: { announce($0) }, incomingLink: incomingLink, open: { id in Task { if let b = try? await service.openBook(id) { player.open(b); openBook = b } } })
         }
         .refreshable { await service.loadShelf() }
         .overlay { if service.isLoading && service.shelf == nil { ProgressView("Loading the shelf…") } }
@@ -178,7 +187,7 @@ struct ReadingRoomView: View {
         let borrowed = (service.shelf?.borrowed ?? []).map { ($0, "borrowed") }
         let all = mine + borrowed
         if all.isEmpty {
-            Section { Text("Nothing on your shelf yet. Donate a book or a recording above, open anything in the library, or share a file from another app to Kade-AI.").foregroundStyle(.secondary) } header: { Text("Your shelf") }
+            Section { Text("Nothing on your shelf yet. Open anything in the library, donate a book or a recording below, or share a file from another app to Kade-AI.").foregroundStyle(.secondary) } header: { Text("Your shelf") }
         } else {
             ForEach(["Books", "Recordings", "Video", "Archive clips"], id: \.self) { folder in
                 let items = all.filter { shelfFolder($0.0) == folder }

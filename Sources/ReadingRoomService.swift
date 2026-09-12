@@ -105,6 +105,8 @@ struct RRShelf: Codable {
     var me: String?
     var librarian: Bool?
     var archiveOwned: Int?
+    var libraryCount: Int?
+    var libraryFiled: Int?
 }
 
 struct RRChapter: Codable, Identifiable, Hashable {
