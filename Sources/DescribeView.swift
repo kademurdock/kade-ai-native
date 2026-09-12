@@ -546,7 +546,7 @@ enum ClipboardMedia {
                 return finish(data: data, type: type, suggestedName: provider.suggestedName)
             }
         }
-        if kinds.contains(where: { .image.conforms(to: $0) || $0 == .image }),
+        if kinds.contains(where: { UTType.image.conforms(to: $0) }),
            let image = pasteboard.image,
            let jpeg = image.jpegData(compressionQuality: 0.85) {
             return Item(data: jpeg, mimeType: "image/jpeg", fileName: "pasted.jpg")
