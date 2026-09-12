@@ -33,7 +33,7 @@ struct RRDescription: Codable, Hashable { let state: String?; let summary: Strin
 struct RRRecap: Codable, Hashable { let from: Double; let to: Double; let summary: String?; let scenes: [RRScene]? }
 struct RRSource: Codable, Hashable { let title: String?; let url: String? }
 struct RRLibrarian: Codable, Hashable { let note: String?; let confidence: String?; let identified: String?; let sources: [RRSource]?; let state: String?; let error: String? }
-struct RRSubmission: Codable, Identifiable, Hashable { let id: String; let userName: String?; let url: String?; let title: String?; let note: String?; let book: String?; let status: String; let decisionNote: String?; let fetchedAt: String?; let createdAt: String? }
+struct RRSubmission: Codable, Identifiable, Hashable { let id: String; let type: String?; let userName: String?; let url: String?; let title: String?; let note: String?; let book: String?; let suggestedPath: String?; let suggestedCategory: String?; let status: String; let decisionNote: String?; let fetchedAt: String?; let createdAt: String? }
 struct RRSubmissions: Codable { let submissions: [RRSubmission]; let librarian: Bool? }
 
 extension ReadingRoomService {
@@ -100,6 +100,8 @@ extension ReadingRoomService {
         return try await get("api/kade/reading-room/submissions", items, as: RRSubmissions.self)
     }
     func decide(_ id: String, approved: Bool, note: String) async throws { _ = try await postJSON("api/kade/reading-room/submissions/\(id)/decide", ["status": approved ? "approved" : "rejected", "note": note], as: SubWrap.self) }
+    struct Applied: Decodable { let applied: Bool? }
+    func reportShelf(book: String, path: String, note: String) async throws -> Bool { try await postJSON("api/kade/reading-room/book/\(book)/report", ["path": path, "note": note], as: Applied.self).applied ?? false }
     func withdrawSubmission(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/submissions/\(id)", method: "DELETE", authorized: true)) }
 
     struct ItemWrap: Decodable { let item: RRItem }
@@ -593,14 +595,14 @@ struct SubmissionsSection: View {
 
     private func row(_ sb: RRSubmission, review: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text((sb.title?.isEmpty == false ? sb.title! : (sb.url ?? "A file"))).font(.headline)
+            Text((sb.type == "report" ? "Wrong shelf: " : "") + (sb.title?.isEmpty == false ? sb.title! : (sb.url ?? "A file")) + ((sb.suggestedPath?.isEmpty == false) ? " → \(sb.suggestedPath!)" : "")).font(.headline)
             Text([review ? "from \(sb.userName ?? "someone")" : nil, sb.status == "pending" ? "waiting" : sb.status, sb.note, (sb.decisionNote?.isEmpty == false) ? "librarian: \(sb.decisionNote!)" : nil, sb.fetchedAt != nil ? "fetched" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
             HStack {
                 if let u = sb.url, let link = URL(string: u) { Link("Open the link", destination: link).font(.footnote) }
                 if let b = sb.book { Button("Open the file") { open(b) }.font(.footnote) }
                 if review, sb.status == "pending" {
-                    Button("Approve") { decisionApprove = true; decisionNote = ""; deciding = sb }.font(.footnote)
-                    Button("Decline") { decisionApprove = false; decisionNote = ""; deciding = sb }.font(.footnote).foregroundStyle(.red)
+                    Button(sb.type == "report" ? "Move it there" : "Approve") { decisionApprove = true; decisionNote = ""; deciding = sb }.font(.footnote)
+                    Button(sb.type == "report" ? "Leave it" : "Decline") { decisionApprove = false; decisionNote = ""; deciding = sb }.font(.footnote).foregroundStyle(.red)
                 } else if !review, sb.status == "pending" {
                     Button("Withdraw") { Task { try? await service.withdrawSubmission(sb.id); await reload(); announce("Withdrawn.") } }.font(.footnote)
                 }

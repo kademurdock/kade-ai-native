@@ -27,6 +27,9 @@ struct ReadingRoomView: View {
     @State private var openCollectionRow: RRCollectionRow?
     @State private var incomingLink: String?
     @State private var showEdit = false
+    @State private var showReport = false
+    @State private var reportPath = ""
+    @State private var reportNote = ""
     @State private var autoplayNext = false
     @State private var showCollectionPicker = false
     @State private var myCollections: [RRCollectionRow] = []
@@ -349,6 +352,15 @@ struct ReadingRoomView: View {
                 HStack {
                     Button { Task { await pickCollection() } } label: { Label("Add to a collection", systemImage: "text.badge.plus") }
                         .buttonStyle(.bordered)
+                    Button { reportPath = book.path ?? ""; reportNote = ""; showReport = true } label: { Label("Suggest a different shelf", systemImage: "arrowshape.turn.up.right") }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Tells the librarian this is on the wrong shelf and where it belongs.")
+                }
+                .alert("Where does it belong?", isPresented: $showReport) {
+                    TextField("Folder, like Books/Fiction — Romance", text: $reportPath)
+                    TextField("Note (optional)", text: $reportNote)
+                    Button("Send") { Task { do { let applied = try await service.reportShelf(book: book.id, path: reportPath, note: reportNote); announce(applied ? "Moved." : "Sent to the librarian. You will be told when it is moved.") } catch { announce(error.localizedDescription) } } }
+                    Button("Cancel", role: .cancel) {}
                 }
                 .confirmationDialog("Add \(book.title) to which collection?", isPresented: $showCollectionPicker, titleVisibility: .visible) {
                     ForEach(myCollections) { c in Button(c.title) { Task { await addTo(c, book: book) } } }
@@ -478,13 +490,11 @@ struct ReadingRoomView: View {
     private func ownerBlock(_ book: RRBook) -> some View {
         DisclosureGroup(book.mine || (service.shelf?.librarian ?? false) ? "Where it sits" : "Checked out") {
             if book.mine || (service.shelf?.librarian ?? false) {
-                Button(book.shared ? "Take it out of the library" : "Put it in the library for everyone") { Task { await toggleShared() } }
+                Button(book.shared ? "Take it out of the library" : ((service.shelf?.librarian ?? false) ? "Put it in the library for everyone" : "Submit this for the library")) { Task { await toggleShared() } }
                 Button(book.grownUpsOnly ? "Grown-ups only is on — allow the kids" : "Grown-ups only is off — hide it from the kids") { Task { await toggleGrownUps() } }
                 if book.isAudio {
                     Button("Add recordings") { uploadingItem = RRItem(id: book.id, kind: "audio", category: book.category, description: nil, tracks: book.tracks.count, seconds: nil, state: nil, title: book.title, author: book.author, publisher: nil, copyrightYear: nil, synopsis: nil, source: nil, ownerName: book.ownerName, owner: nil, shared: book.shared, grownUpsOnly: book.grownUpsOnly, sections: nil, chunks: nil, listen: book.listen, skippedCount: nil, progress: nil); showTrackPicker = true }
                 }
-                Button("Submit this for the library") { Task { await submitItem(book) } }
-                    .accessibilityHint("Asks the librarian to add it to the family library.")
                 Button("Withdraw it from the Library", role: .destructive) { Task { await withdraw() } }
                     .accessibilityHint("Removes it for everyone. Cannot be undone.")
             } else {
@@ -552,16 +562,16 @@ struct ReadingRoomView: View {
         guard let book = openBook else { return }
         do {
             let r = try await service.setShared(bookId: book.id, shared: !book.shared)
-            openBook?.shared = r.shared
-            announce(r.shared ? "It is in the library now. Everyone will see it as donated by \(book.ownerName ?? "you")." : "Back on your private shelf.")
+            openBook?.shared = r.book.shared
+            announce(r.pending == true ? "Submitted for the library. The librarian will look at it and you will be told." : (r.book.shared ? "It is in the library now. Everyone will see it as donated by \(book.ownerName ?? "you")." : "Back on your private shelf."))
         } catch { announce(error.localizedDescription) }
     }
     private func toggleGrownUps() async {
         guard let book = openBook else { return }
         do {
             let r = try await service.setShared(bookId: book.id, grownUpsOnly: !book.grownUpsOnly)
-            openBook?.grownUpsOnly = r.grownUpsOnly
-            announce(r.grownUpsOnly ? "Hidden from the kids." : "The kids can see it.")
+            openBook?.grownUpsOnly = r.book.grownUpsOnly
+            announce(r.book.grownUpsOnly ? "Hidden from the kids." : "The kids can see it.")
         } catch { announce(error.localizedDescription) }
     }
     private func withdraw() async {

@@ -272,12 +272,12 @@ final class ReadingRoomService: ObservableObject {
         req.httpBody = nil
         _ = try await client.send(req)
     }
-    func setShared(bookId: String, shared: Bool? = nil, grownUpsOnly: Bool? = nil) async throws -> RRItem {
-        struct R: Decodable { let book: RRItem }
+    struct ShareResult: Decodable { let book: RRItem; let pending: Bool? }
+    func setShared(bookId: String, shared: Bool? = nil, grownUpsOnly: Bool? = nil) async throws -> ShareResult {
         var body: [String: Any] = [:]
         if let shared { body["shared"] = shared }
         if let grownUpsOnly { body["grownUpsOnly"] = grownUpsOnly }
-        return try await json(post("api/kade/reading-room/book/\(bookId)/share", body), as: R.self).book
+        return try await json(post("api/kade/reading-room/book/\(bookId)/share", body), as: ShareResult.self)
     }
     func returnBook(bookId: String) async throws {
         _ = try await client.send(post("api/kade/reading-room/book/\(bookId)/return", [:]))
