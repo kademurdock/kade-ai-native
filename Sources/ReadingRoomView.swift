@@ -456,16 +456,36 @@ struct ReadingRoomView: View {
         .accessibilityHint("Jumps to that \(book.isAudio ? "part" : "chapter").")
     }
 
-    @State private var voiceGroups: [ReadingRoomService.VoiceGroup] = []
+    @State private var showVoicePicker = false
+    /// Sep 12 2026, her word: "the voice picker doesn't have a way for you to
+    /// preview which voice you're picking to read your audiobook. If it's a
+    /// DAISY it just shows a list of names." The plain wheel of names is gone;
+    /// the button opens the same VoicePickerView every character uses, where
+    /// flicking the wheel plays a preview of the voice you land on. Done
+    /// hands the pick to the player, which restarts the current piece in it.
     private var voiceAndSpeed: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Voice", selection: Binding(get: { player.voice }, set: { player.changeVoice($0) })) {
-                if !voiceGroups.contains(where: { $0.voices.contains(player.voice) }) { Text(player.voice).tag(player.voice) }
-                ForEach(voiceGroups) { g in
-                    Section(g.name) { ForEach(g.voices, id: \.self) { Text($0).tag($0) } }
+            Button {
+                let was = player.isPlaying
+                if was { player.pause() }
+                showVoicePicker = true
+            } label: {
+                HStack {
+                    Text("Voice")
+                    Spacer()
+                    Text(player.voice.isEmpty ? "The library's voice" : player.voice)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
                 }
+                .contentShape(Rectangle())
             }
-            .task { if voiceGroups.isEmpty { voiceGroups = await service.loadVoices() } }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Voice: \(player.voice.isEmpty ? "the library's voice" : player.voice)")
+            .accessibilityHint("Opens the voice picker. Flick through the wheel to hear a preview of each voice, then press Done.")
+            .sheet(isPresented: $showVoicePicker) {
+                VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }))
+            }
             Picker("Speed", selection: Binding(get: { player.speed }, set: { player.changeSpeed($0) })) {
                 ForEach(speeds, id: \.0) { Text($0.1).tag($0.0) }
             }
