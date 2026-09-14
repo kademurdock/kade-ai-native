@@ -4,7 +4,7 @@
 workflows:
   ios-native-testflight:
     name: Kade-AI Native iOS -> TestFlight
-    max_build_duration: 7
+    max_build_duration: 25
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: KadeAI_ASC_Key
@@ -220,7 +220,7 @@ workflows:
   # day (KADE_COMPILE_DAILY_CAP, default 6) so a loop cannot eat the month.
   ios-compile-check:
     name: Kade-AI Native — compile check only (no signing, no publish)
-    max_build_duration: 4
+    max_build_duration: 25
     instance_type: mac_mini_m2
     environment:
       xcode: latest
