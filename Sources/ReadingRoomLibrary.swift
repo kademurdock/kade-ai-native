@@ -53,8 +53,8 @@ extension ReadingRoomService {
     }
     struct OK: Decodable { let ok: Bool? }
 
-    func archive(path: String, page: Int) async throws -> RRArchivePage {
-        try await get("api/kade/reading-room/archive", [URLQueryItem(name: "path", value: path), URLQueryItem(name: "page", value: String(page))], as: RRArchivePage.self)
+    func archive(path: String, page: Int, scope: String = "public") async throws -> RRArchivePage {
+        try await get("api/kade/reading-room/archive", [URLQueryItem(name: "path", value: path), URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "scope", value: scope)], as: RRArchivePage.self)
     }
     func search(_ q: String) async throws -> [RRItem] {
         try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q)], as: RRSearch.self).items
@@ -347,6 +347,7 @@ struct ArchiveSection: View {
     @State private var page: RRArchivePage?
     @State private var path = ""
     @State private var pageNo = 0
+    @State private var scope = "public"
     @State private var status = ""
     @State private var query = ""
     @State private var results: [RRItem] = []
@@ -361,9 +362,10 @@ struct ArchiveSection: View {
         } header: { Text("Find something in the library") }
 
         Section {
-            Text("The whole library, browsed shelf by shelf the way it is filed: Books by subject, Video by channel and decade, commercials, tapes and radio.").font(.footnote).foregroundStyle(.secondary)
+            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in Task { await load("", 0) } }
+            Text("Books, Audio, and Videos. Your uploads stay yours to manage; only shared items appear in the public library.").font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 4) {
-                Button("Archive") { Task { await load("", 0) } }.font(.subheadline)
+                Button("All media") { Task { await load("", 0) } }.font(.subheadline)
                 ForEach(Array(path.split(separator: "/").enumerated()), id: \.offset) { i, seg in
                     Text("›").accessibilityHidden(true)
                     Button(String(seg)) { Task { await load(path.split(separator: "/").prefix(i + 1).joined(separator: "/"), 0) } }.font(.subheadline)
@@ -445,7 +447,7 @@ struct ArchiveSection: View {
         return bits.joined(separator: " · ")
     }
     private func load(_ p: String, _ n: Int) async {
-        do { let pg = try await service.archive(path: p, page: n); page = pg; path = pg.path; pageNo = pg.page
+        do { let pg = try await service.archive(path: p, page: n, scope: scope); page = pg; path = pg.path; pageNo = pg.page
             UIAccessibility.post(notification: .announcement, argument: (pg.path.isEmpty ? "The archive" : pg.path.components(separatedBy: "/").last ?? pg.path) + ": \(pg.folders.count) folder\(pg.folders.count == 1 ? "" : "s"), \(pg.total) clip\(pg.total == 1 ? "" : "s").")
         } catch { status = error.localizedDescription }
     }

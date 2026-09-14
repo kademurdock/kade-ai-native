@@ -36,6 +36,7 @@ struct ReadingRoomView: View {
     @State private var opening = false
     @State private var status: String?
     @State private var category = ""
+    @State private var keepUploadsPrivate = false
     @State private var showBookPicker = false
     @State private var showTrackPicker = false
     @State private var showDonateSheet = false
@@ -90,7 +91,7 @@ struct ReadingRoomView: View {
         .fileImporter(isPresented: $showBookPicker, allowedContentTypes: bookTypes, allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let u = urls.first { Task { await uploadBook(u) } }
         }
-        .fileImporter(isPresented: $showTrackPicker, allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $showTrackPicker, allowedContentTypes: [.audio, .movie, .mp3, .mpeg4Audio, .wav, .aiff], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { Task { await uploadTracks(urls) } }
         }
         .sheet(isPresented: $showEdit) {
@@ -120,6 +121,8 @@ struct ReadingRoomView: View {
 
     private var shelfScreen: some View {
         List {
+            Image("LibraryAlcove").resizable().scaledToFill().frame(height: 130).clipped()
+                .accessibilityHidden(true).listRowInsets(EdgeInsets())
             if let status {
                 Section {
                     Text(status).foregroundStyle(.secondary).accessibilityFocused($focus, equals: .status)
@@ -159,14 +162,15 @@ struct ReadingRoomView: View {
             CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
 
             Section {
-                Text("Everything you add is yours to manage. Books and recordings go on your own shelf first; the librarian puts them in the family library.").font(.footnote).foregroundStyle(.secondary)
+                Text("Your uploads are yours to manage. Private items stay on your shelf until you submit them. The librarian’s uploads are shared by default.").font(.footnote).foregroundStyle(.secondary)
+                if service.shelf?.librarian == true { Toggle("Keep my new uploads private", isOn: $keepUploadsPrivate) }
                 Button { showBookPicker = true } label: {
-                    Label("Donate a book", systemImage: "book.closed")
+                    Label("Add a book or DAISY audiobook", systemImage: "book.closed")
                 }
-                .accessibilityHint("Pick Bookshare's DAISY zip, an EPUB, a text file or a Word file from Files. It lands on your shelf; the Bookshare notice is skipped and the book opens with its jacket.")
+                .accessibilityHint("Pick A DAISY text or audio zip, an EPUB, a text file or a Word file from Files. It lands on your shelf; the Bookshare notice is skipped and the book opens with its jacket.")
                 Toggle("Grown-ups only for the next book", isOn: $grownUpsForBook)
                 Button { donateFile = nil; donateName = ""; showDonateSheet = true } label: {
-                    Label("Donate a recording", systemImage: "waveform")
+                    Label("Add audio or video", systemImage: "waveform")
                 }
                 .accessibilityHint("An audiobook, described-movie audio, a cassette side, old radio or commercials. Name it, then add one or more audio files; big files go straight to storage.")
             } header: { Text("Add to the library") }
@@ -180,7 +184,7 @@ struct ReadingRoomView: View {
     /// The personal shelf as folders — Books, Recordings, Video, Archive clips —
     /// with what you donated and what you opened side by side. Removing a
     /// checked-out item only touches your shelf.
-    private func shelfFolder(_ b: RRItem) -> String { b.kind == "text" ? "Books" : ((b.path ?? "").isEmpty ? (b.kind == "video" ? "Video" : "Recordings") : "Archive clips") }
+    private func shelfFolder(_ b: RRItem) -> String { b.kind == "text" ? "Books" : (b.kind == "video" ? "Videos" : "Audio") }
     @ViewBuilder
     private var shelfFolders: some View {
         let mine = (service.shelf?.mine ?? []).map { ($0, "mine") }
@@ -189,7 +193,7 @@ struct ReadingRoomView: View {
         if all.isEmpty {
             Section { Text("Nothing on your shelf yet. Open anything in the library, donate a book or a recording below, or share a file from another app to Kade-AI.").foregroundStyle(.secondary) } header: { Text("Your shelf") }
         } else {
-            ForEach(["Books", "Recordings", "Video", "Archive clips"], id: \.self) { folder in
+            ForEach(["Books", "Audio", "Videos"], id: \.self) { folder in
                 let items = all.filter { shelfFolder($0.0) == folder }
                 if !items.isEmpty {
                     Section {
@@ -278,7 +282,7 @@ struct ReadingRoomView: View {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        let audio = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif", "mp4"]
+        let audio = ["mp3", "m4a", "m4b", "aac", "wav", "ogg", "oga", "opus", "flac", "aiff", "aif", "mp4", "m4v", "mov", "webm"]
         if audio.contains(ext) {
             donateFile = url
             donateName = incomingName ?? url.lastPathComponent
@@ -291,7 +295,7 @@ struct ReadingRoomView: View {
     private func uploadBook(_ url: URL) async {
         announce("Reading \(url.lastPathComponent)… a few seconds.")
         do {
-            let r = try await service.uploadBook(fileURL: url, grownUpsOnly: grownUpsForBook)
+            let r = try await service.uploadBook(fileURL: url, grownUpsOnly: grownUpsForBook, keepPrivate: keepUploadsPrivate)
             let skipped = r.skipped?.count ?? 0
             announce("Added \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). \(r.book.sections ?? 0) sections, about \(r.book.listen ?? "") of listening." + (skipped > 0 ? " \(skipped) front-matter parts skipped." : ""))
             await service.loadShelf()
@@ -303,7 +307,7 @@ struct ReadingRoomView: View {
 
     private func startRecording(title: String, author: String, year: String, category: String, description: String, grownUpsOnly: Bool) async {
         do {
-            let item = try await service.newRecording(title: title, author: author, year: year, category: category, description: description, grownUpsOnly: grownUpsOnly)
+            let item = try await service.newRecording(title: title, author: author, year: year, category: category, description: description, grownUpsOnly: grownUpsOnly, keepPrivate: keepUploadsPrivate)
             uploadingItem = item
             await service.loadShelf()
             if let f = donateFile {
@@ -673,7 +677,7 @@ struct DonateRecordingSheet: View {
     @State private var title = ""
     @State private var author = ""
     @State private var year = ""
-    @State private var category = "audiobook"
+    @State private var category = "other"
     @State private var desc = ""
     @State private var grownUps = false
 
@@ -685,7 +689,7 @@ struct DonateRecordingSheet: View {
                     TextField("Title", text: $title)
                     TextField("Who made it (optional)", text: $author)
                     TextField("Year (optional)", text: $year).keyboardType(.numberPad)
-                    Picker("Shelf", selection: $category) {
+                    Picker("Type of recording", selection: $category) {
                         ForEach(RRCategory.audio, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     TextField("About it (optional)", text: $desc, axis: .vertical).lineLimit(2 ... 5)

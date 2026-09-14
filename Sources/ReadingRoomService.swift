@@ -131,6 +131,8 @@ struct RRTrack: Codable, Identifiable, Hashable {
     let url: String
     var description: RRDescription?
     var recaps: [RRRecap]?
+    var clipBegin: Double?
+    var clipEnd: Double?
     var id: Int { s }
 }
 struct RRSkipped: Codable, Identifiable, Hashable {
@@ -305,15 +307,15 @@ final class ReadingRoomService: ObservableObject {
 
     /// A book file (DAISY zip, EPUB, txt, docx, html) through the fork, which
     /// parses it. Read as Data: text-only DAISY zips are a few megabytes.
-    func uploadBook(fileURL: URL, grownUpsOnly: Bool) async throws -> UploadedBook {
+    func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false) async throws -> UploadedBook {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
         let data = try Data(contentsOf: fileURL)
-        guard data.count <= 80 * 1024 * 1024 else { throw RRError(message: "That file is over 80 MB. Bookshare's text-only DAISY zip is the one to share — it is usually under 5 MB.") }
+        guard data.count <= 256 * 1024 * 1024 else { throw RRError(message: "That book ZIP is over the 256 MB import limit. Individual audio or video files can be added through Add audio or video.") }
         var req = client.multipartRequest(
             path: "api/kade/reading-room/upload",
             authorized: true,
-            fields: [("grownUpsOnly", grownUpsOnly ? "1" : "0")],
+            fields: [("grownUpsOnly", grownUpsOnly ? "1" : "0"), ("private", keepPrivate ? "1" : "0")],
             fileField: "book",
             fileData: data,
             fileName: fileURL.lastPathComponent,
@@ -324,9 +326,9 @@ final class ReadingRoomService: ObservableObject {
     }
 
     /// Start a recording donation; returns the item to add parts to.
-    func newRecording(title: String, author: String, year: String, category: String, description: String, grownUpsOnly: Bool) async throws -> RRItem {
+    func newRecording(title: String, author: String, year: String, category: String, description: String, grownUpsOnly: Bool, keepPrivate: Bool = false) async throws -> RRItem {
         struct R: Decodable { let item: RRItem }
-        return try await json(post("api/kade/reading-room/media/new", ["title": title, "author": author, "year": year, "category": category, "description": description, "grownUpsOnly": grownUpsOnly]), as: R.self).item
+        return try await json(post("api/kade/reading-room/media/new", ["title": title, "author": author, "year": year, "category": category, "description": description, "grownUpsOnly": grownUpsOnly, "private": keepPrivate]), as: R.self).item
     }
 
     /// One part, straight to Backblaze: ask the fork for a signed PUT, send
@@ -790,6 +792,8 @@ final class ReadingRoomPlayer: ObservableObject {
         if let o = timeObserver { avPlayer?.removeTimeObserver(o); timeObserver = nil }
         if let e = endObserver { NotificationCenter.default.removeObserver(e); endObserver = nil }
         let item = AVPlayerItem(url: url)
+        let clipStart = book.tracks[index].clipBegin ?? 0
+        if let end = book.tracks[index].clipEnd { item.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 1000) }
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         avPlayer = player
@@ -799,8 +803,8 @@ final class ReadingRoomPlayer: ObservableObject {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 10), queue: .main) { [weak self] t in
             Task { @MainActor in
                 guard let self else { return }
-                self.filePosition = t.seconds.isFinite ? t.seconds : 0
-                if let d = self.avPlayer?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.fileDuration = d }
+                self.filePosition = t.seconds.isFinite ? max(0, t.seconds - clipStart) : 0
+                if book.tracks[index].clipEnd == nil, let d = self.avPlayer?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.fileDuration = max(0, d - clipStart) }
                 if Int(self.filePosition) % 10 == 0 { self.scheduleSave() }
                 self.updateNowPlayingTime()
                 self.checkDescribedScene()
@@ -825,7 +829,7 @@ final class ReadingRoomPlayer: ObservableObject {
                 }
             }
         }
-        if seconds > 0 { player.seek(to: CMTime(seconds: seconds, preferredTimescale: 1000)) }
+        if seconds + clipStart > 0 { player.seek(to: CMTime(seconds: seconds + clipStart, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero) }
         if play { self.play() }
         scheduleSave()
         updateNowPlaying()
@@ -833,7 +837,8 @@ final class ReadingRoomPlayer: ObservableObject {
 
     func seekFile(to seconds: Double) {
         guard let p = avPlayer else { return }
-        p.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 1000))
+        let start = book?.tracks[s].clipBegin ?? 0
+        p.seek(to: CMTime(seconds: max(0, seconds) + start, preferredTimescale: 1000))
         filePosition = max(0, seconds)
         spokenScenes = Set(scenes.indices.filter { scenes[$0].t < seconds - 1 })
         scheduleSave()
@@ -865,7 +870,7 @@ final class ReadingRoomPlayer: ObservableObject {
     private func seekFile(by delta: Double) {
         guard let p = avPlayer else { return }
         let target = max(0, min(fileDuration > 0 ? fileDuration - 0.5 : .greatestFiniteMagnitude, filePosition + delta))
-        p.seek(to: CMTime(seconds: target, preferredTimescale: 1000))
+        p.seek(to: CMTime(seconds: target + (book?.tracks[s].clipBegin ?? 0), preferredTimescale: 1000))
         filePosition = target
         scheduleSave()
     }

@@ -47,7 +47,14 @@ struct CharacterPortraitView: View {
         }
     }
     @ViewBuilder private func portrait(_ pose: CharacterPose, expression: CharacterExpression) -> some View {
-        if prepared {
+        if prepared && agentID == CharacterMotion.lillyID {
+            ZStack(alignment: .topLeading) {
+                Image("CharacterLillyPortrait").resizable().scaledToFill()
+                patch("CharacterLillyFace", from: CGRect(x: 0.443, y: 0.454, width: 0.173, height: 0.102), to: CGRect(x: 0.443, y: 0.454, width: 0.173, height: 0.085)).opacity(CharacterMotion.blend(pose.mouth))
+                patch("CharacterLillyFace", from: CGRect(x: 0.383, y: 0.331, width: 0.145, height: 0.066), to: CGRect(x: 0.391, y: 0.314, width: 0.134, height: 0.074)).opacity(CharacterMotion.blend(pose.blink))
+                patch("CharacterLillyFace", from: CGRect(x: 0.58, y: 0.367, width: 0.1, height: 0.05), to: CGRect(x: 0.592, y: 0.342, width: 0.092, height: 0.069)).opacity(CharacterMotion.blend(pose.blink))
+            }
+        } else if prepared {
             let della = agentID == CharacterMotion.dellaID
             let base = della ? "CharacterDellaPortrait" : "CharacterKianaPortrait"
             let mouth = della ? "CharacterDellaFace" : "CharacterKianaMouth"
