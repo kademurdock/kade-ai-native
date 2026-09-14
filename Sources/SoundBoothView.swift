@@ -738,13 +738,13 @@ struct SoundBoothView: View {
 
             HStack(spacing: 12) {
                 Button("Open in the booth") { openInBooth(p) }
-                    .accessibilityHint("Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
+                    .accessibilityHint(p.engine == "lyria" ? "Loads this music direction, lyrics and song settings so you can edit them and make another take." : "Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
                 Spacer()
                 Button(role: .destructive) {
                     Task { await remove(p) }
                 } label: { Text("Remove") }
                 .accessibilityLabel("Remove \(p.title)")
-                .accessibilityHint("Takes the script out of the library. The recording itself stays in My Creations.")
+                .accessibilityHint("Removes this project from the Sound Booth library. The recording itself stays in My Creations.")
             }
             .font(.footnote)
         }
