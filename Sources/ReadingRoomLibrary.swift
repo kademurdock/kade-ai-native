@@ -56,8 +56,8 @@ extension ReadingRoomService {
     func archive(path: String, page: Int, scope: String = "public") async throws -> RRArchivePage {
         try await get("api/kade/reading-room/archive", [URLQueryItem(name: "path", value: path), URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "scope", value: scope)], as: RRArchivePage.self)
     }
-    func search(_ q: String) async throws -> [RRItem] {
-        try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q)], as: RRSearch.self).items
+    func search(_ q: String, scope: String = "public") async throws -> [RRItem] {
+        try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q), URLQueryItem(name: "scope", value: scope)], as: RRSearch.self).items
     }
     struct Colls: Decodable { let mine: [RRCollectionRow]; let shared: [RRCollectionRow] }
     func collections() async throws -> Colls { try await get("api/kade/reading-room/collections", as: Colls.self) }
@@ -362,7 +362,7 @@ struct ArchiveSection: View {
         } header: { Text("Find something in the library") }
 
         Section {
-            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in Task { await load("", 0) } }
+            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in results = []; Task { await load("", 0) } }
             Text("Books, Audio, and Videos. Your uploads stay yours to manage; only shared items appear in the public library.").font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 4) {
                 Button("All media") { Task { await load("", 0) } }.font(.subheadline)
@@ -454,7 +454,7 @@ struct ArchiveSection: View {
     private func doSearch() async {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
-        do { results = try await service.search(q); UIAccessibility.post(notification: .announcement, argument: "\(results.count) result\(results.count == 1 ? "" : "s") for \(q).") } catch { status = error.localizedDescription }
+        do { results = try await service.search(q, scope: scope); UIAccessibility.post(notification: .announcement, argument: "\(results.count) result\(results.count == 1 ? "" : "s") for \(q).") } catch { status = error.localizedDescription }
     }
 }
 
