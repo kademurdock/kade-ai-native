@@ -63,6 +63,22 @@ struct SoundBoothView: View {
     /// uses the first.
     @State private var clips: [(url: String, name: String)] = []
 
+    private struct WorkspaceDraft {
+        var mode = "easy"
+        var text = ""
+        var script = ""
+        var readback = ""
+        var voiceLabel = ""
+        var mood = ""
+        var inputMode = "words"
+        var values: [String: String] = [:]
+        var clips: [(url: String, name: String)] = []
+        var projectId: String? = nil
+        var newVoice = false
+    }
+    @State private var drafts: [String: WorkspaceDraft] = [:]
+    @State private var showEngineDetails = false
+
     // Live state
     @State private var health: SoundBoothHealth?
     @State private var guide: SoundBoothGuide?
@@ -113,10 +129,12 @@ struct SoundBoothView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 statusBlock
-                starterSection
                 engineSection
-                modeSection
-                writingSection
+                starterSection
+                if engine != "lyria" {
+                    modeSection
+                    writingSection
+                }
                 scriptSection
                 librarySection
             }
@@ -129,7 +147,7 @@ struct SoundBoothView: View {
             case .voicePicker:
                 VoicePickerView(
                     apiClient: apiClient,
-                    selection: $voiceLabel,
+                    selection: Binding(get: { voiceLabel }, set: { voiceLabel = $0; applyVoiceLabel($0) }),
                     defaultLabel: "No particular voice"
                 )
             case .player(let url, let title):
@@ -156,15 +174,16 @@ struct SoundBoothView: View {
         ) { result in
             Task { await handleImport(result) }
         }
-        .onChange(of: voiceLabel) { _, label in applyVoiceLabel(label) }
         /* An armed confirm is dropped the moment the script changes, so a
          * second tap can never spend on something she has since edited. Same
          * for a switched engine: the price is different, so the quote is. */
+        .onChange(of: text) { _, _ in invalidateQuote() }
+        .onChange(of: mood) { _, _ in invalidateQuote() }
         .onChange(of: script) { _, _ in invalidateQuote() }
         .onChange(of: values) { _, _ in invalidateQuote() }
         .onChange(of: clips.map { $0.url }) { _, _ in invalidateQuote() }
         .onChange(of: inputMode) { _, _ in
-            if let m = currentInput { announce("\(m.boxLabel). \(m.boxHint)") }
+            if engine != "lyria", let m = currentInput { announce("\(m.boxLabel). \(m.boxHint)") }
         }
         .onChange(of: engine) { _, e in
             invalidateQuote()
@@ -182,25 +201,55 @@ struct SoundBoothView: View {
         quoteVersion += 1
     }
 
+    private var workspaceBusy: Bool { isWriting || isRendering || isImporting || currentJobId != nil }
+    private var editorTitle: String { engine == "lyria" ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
+    private var generateLabel: String { engine == "lyria" ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script" }
+    private var editorHint: String {
+        if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
+        if engine == "seed" { return "Describe the setting, sounds and each voice. Include exact dialogue and identify reference voices as @Audio1, @Audio2 or @Audio3." }
+        return "Write the words to perform. Square brackets give actor directions, such as [Whispers.]. Double parentheses describe sounds, such as ((thunder))."
+    }
+
+    private func selectEngine(_ next: String) {
+        guard next != engine else { return }
+        guard !workspaceBusy else { announce("Finish the current operation or stop the render before switching workspaces."); return }
+        drafts[engine] = WorkspaceDraft(mode: mode, text: text, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, projectId: currentProjectId, newVoice: newVoice)
+        let draft = drafts[next] ?? WorkspaceDraft()
+        engine = next; mode = draft.mode; text = draft.text; script = draft.script
+        readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
+        inputMode = draft.inputMode; values = draft.values; clips = draft.clips
+        currentProjectId = draft.projectId; newVoice = draft.newVoice
+        starterId = ""; showHowTo = false; showEngineDetails = false
+        invalidateQuote()
+    }
+
     private var starterSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Start something").font(.headline)
-            Picker("A starting script", selection: $starterId) {
+            Picker(engine == "lyria" ? "A music starting point" : engine == "seed" ? "A scene starting point" : "A performance starting point", selection: $starterId) {
                 Text("Choose a starting point").tag("")
-                ForEach(guide?.starters ?? []) { item in Text(item.title).tag(item.id) }
+                ForEach((guide?.starters ?? []).filter { $0.engine == engine }) { item in Text(item.title).tag(item.id) }
             }
             Button("Start a new project from this") {
                 guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
                 currentProjectId = nil; values = [:]; clips = []; newVoice = false
-                engine = starter.engine; script = starter.script; text = ""; readback = ""
+                script = starter.script; text = ""; readback = ""; mood = ""
+                if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
                 invalidateQuote()
-                announce("Starting \(starter.title). The script is ready to edit. Nothing has been generated.")
-            }.disabled(starterId.isEmpty || isRendering || currentJobId != nil)
+                announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
+            }.disabled(starterId.isEmpty || workspaceBusy)
             Text("Free to load. These replace the current editor; finish or save your work first. Audio generates only after you confirm its price.").font(.caption)
+            Button("New blank project") {
+                currentProjectId = nil; script = ""; text = ""; readback = ""; mood = ""
+                voiceLabel = ""; values = [:]; clips = []; newVoice = false
+                invalidateQuote(); announce("New blank project. Other engine drafts are kept.")
+            }.disabled(workspaceBusy)
+            if engine == "scenema" {
             Button("Try a different designed voice next time") {
                 newVoice = true; values.removeValue(forKey: "seed"); invalidateQuote()
                 announce("The next preview or render will try a new voice. Imported clips still supply their own voice identity.")
-            }.disabled(engine != "scenema" || currentJobId != nil || isRendering)
+            }.disabled(workspaceBusy)
+            }
         }
     }
 
@@ -244,7 +293,7 @@ struct SoundBoothView: View {
                     if let g = guide.engines[key] {
                         Button {
                             KadeHaptics.press()
-                            engine = key
+                            selectEngine(key)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
@@ -254,10 +303,7 @@ struct SoundBoothView: View {
                                         Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
                                     }
                                 }
-                                Text(g.where).font(.caption)
-                                Text(g.cost).font(.caption)
-                                Text("Best for: \(g.bestFor.joined(separator: "; ")).").font(.caption)
-                                Text("Not for: \(g.notFor.joined(separator: "; ")).").font(.caption).foregroundStyle(.secondary)
+
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12)
@@ -265,12 +311,22 @@ struct SoundBoothView: View {
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(engine == key ? Color.accentColor : Color.clear, lineWidth: 2))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(g.spoken)
+                        .disabled(workspaceBusy)
+                        .accessibilityLabel("\(g.name). \(g.tagline)")
                         .accessibilityValue(engine == key ? "Selected" : "")
                         .accessibilityHint(engine == key ? "This is the engine you are using." : "Double tap to use this engine.")
                     }
                 }
 
+                if let selected = currentEngine {
+                    DisclosureGroup("About \(selected.name)", isExpanded: $showEngineDetails) {
+                        Text(selected.where).font(.footnote)
+                        Text(selected.cost).font(.footnote)
+                        Text("Best for: \(selected.bestFor.joined(separator: "; ")).").font(.footnote)
+                        Text("Not for: \(selected.notFor.joined(separator: "; ")).").font(.footnote)
+                    }
+                }
+                Text("Each engine keeps its own draft while this screen is open.").font(.caption)
                 DisclosureGroup(isExpanded: $showChooser) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(guide.chooser.answer).font(.footnote)
@@ -293,10 +349,10 @@ struct SoundBoothView: View {
                         if isSuggesting { ProgressView().accessibilityHidden(true) }
                     }
                 }
-                .disabled(isSuggesting)
+                .disabled(isSuggesting || workspaceBusy)
                 .accessibilityHint("Reads what is in the box and says which engine fits, and why. Free.")
             } else {
-                Picker("Engine", selection: $engine) {
+                Picker("Engine", selection: Binding(get: { engine }, set: { selectEngine($0) })) {
                     Text("Scenema").tag("scenema")
                     Text("Seed Audio").tag("seed")
                     Text("Lyria").tag("lyria")
@@ -345,7 +401,7 @@ struct SoundBoothView: View {
 
     private var writingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What should it say?").font(.headline).accessibilityAddTraits(.isHeader)
+            Text(engine == "seed" ? "Build your scene" : "Prepare the performance").font(.headline).accessibilityAddTraits(.isHeader)
 
             /* ⭐ THE FIX FOR THE REAL CONFUSION (Part 121.1, her question).
              * The two buttons were never the problem: ONE BOX MEANT TWO
@@ -444,11 +500,20 @@ struct SoundBoothView: View {
         case "text":
             VStack(alignment: .leading, spacing: 4) {
                 Text(st.label).font(.subheadline)
-                TextField(st.hint, text: binding(st.key), axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...3)
-                    .accessibilityLabel(st.label)
-                    .accessibilityHint(st.hint)
+                if st.key == "lyrics" {
+                    TextEditor(text: binding(st.key))
+                        .frame(minHeight: 150)
+                        .padding(6)
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
+                        .accessibilityLabel(st.label)
+                        .accessibilityHint(st.hint)
+                } else {
+                    TextField(st.hint, text: binding(st.key), axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...3)
+                        .accessibilityLabel(st.label)
+                        .accessibilityHint(st.hint)
+                }
                 Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
         case "choice":
@@ -465,7 +530,7 @@ struct SoundBoothView: View {
         case "toggle":
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(st.label, isOn: Binding(
-                    get: { values[st.key] == "1" },
+                    get: { values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false },
                     set: { values[st.key] = $0 ? "1" : "" }
                 ))
                 .accessibilityHint(st.hint)
@@ -539,15 +604,28 @@ struct SoundBoothView: View {
 
     private var scriptSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("The script").font(.headline).accessibilityAddTraits(.isHeader)
+            Text(editorTitle).font(.headline).accessibilityAddTraits(.isHeader)
+            Text(editorHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            if engine == "lyria", let g = currentEngine {
+                DisclosureGroup("How to direct the music", isExpanded: $showHowTo) {
+                    ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in Text(tip).font(.footnote) }
+                }
+            }
 
             TextEditor(text: $script)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(.body, design: engine == "lyria" ? .default : .monospaced))
                 .frame(minHeight: 160)
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
-                .accessibilityLabel("The script")
-                .accessibilityHint("This is what gets performed. You can edit it here before rendering.")
+                .accessibilityLabel(editorTitle)
+                .accessibilityHint(editorHint)
+
+            if engine == "lyria", let g = currentEngine {
+                Text("Song options").font(.headline).accessibilityAddTraits(.isHeader)
+                ForEach(g.settings.filter { values["instrumental"] != "1" || ($0.key != "lyrics" && $0.key != "keep_lyrics") }) { setting in
+                    settingRow(setting)
+                }
+            }
 
             if !readback.isEmpty {
                 Text(readback)
@@ -572,7 +650,7 @@ struct SoundBoothView: View {
                 KadeHaptics.press()
                 Task { await renderTapped(preview: false) }
             } label: {
-                Text(confirmArmed ? "Render — confirm" : "Render").frame(maxWidth: .infinity)
+                Text(confirmArmed ? "\(generateLabel) — confirm" : generateLabel).frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeHeroButtonStyle())
             .disabled(isRendering || script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -784,8 +862,8 @@ struct SoundBoothView: View {
         }
     }
 
-    /// Everything the guide's settings hold, typed for the wire. Toggles go
-    /// only when on; numbers only when they parse and sit in range; empty
+    /// Everything the guide's settings hold, typed for the wire. Toggles keep
+    /// explicit off values; numbers only when they parse and sit in range; empty
     /// strings are dropped. The guide's own min/max are the rails, so a value
     /// the engine cannot take never leaves the phone.
     private func collectedSettings() -> [String: Any] {
@@ -795,7 +873,9 @@ struct SoundBoothView: View {
             let raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             switch st.kind {
             case "toggle":
-                if raw == "1" { out[st.key] = st.key == "audio_quality" ? "high" : true }
+                let enabled = values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false
+                if st.key == "audio_quality" { out[st.key] = enabled ? "high" : "low" }
+                else { out[st.key] = enabled }
             case "number":
                 guard let n = Double(raw) else { continue }
                 if let lo = st.min, n < lo { continue }
@@ -807,6 +887,10 @@ struct SoundBoothView: View {
                 if !raw.isEmpty { out[st.key] = raw }
             }
         }
+        if engine == "lyria" {
+            if out["instrumental"] as? Bool == true { out.removeValue(forKey: "lyrics"); out.removeValue(forKey: "keep_lyrics") }
+            return out
+        }
         if out["gender"] == nil { out["gender"] = "female" }
         if !clips.isEmpty {
             if engine == "seed" { out["audio_urls"] = clips.prefix(3).map { $0.url } }
@@ -816,13 +900,21 @@ struct SoundBoothView: View {
     }
 
     private func suggestEngine() async {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspaceBusy else { return }
+        let sourceEngine = engine
+        let sourceVersion = quoteVersion
+        let t = (engine == "lyria" ? script : text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count >= 3 else { announce("Type something in the box first, then I can suggest."); return }
         isSuggesting = true
         defer { isSuggesting = false }
         do {
             let r = try await service.suggest(text: t)
-            engine = r.engine
+            guard engine == sourceEngine, quoteVersion == sourceVersion, !workspaceBusy else { return }
+            let hasDraft = drafts[r.engine] != nil || r.engine == engine
+            selectEngine(r.engine)
+            if !hasDraft {
+                if engine == "lyria" { script = t } else { text = t; inputMode = "brief" }
+            }
             // The engine change announces its own card; the reason follows.
             try? await Task.sleep(nanoseconds: 900_000_000)
             announce(r.reason + (r.sure ? "" : " Change it if that is not what you meant."))
@@ -832,6 +924,7 @@ struct SoundBoothView: View {
     }
 
     private func makeScript(kind: String) async {
+        guard engine != "lyria", !workspaceBusy else { return }
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.count >= 3 else {
             announce(kind == "write" ? "Say what you want made first." : "Type the words you want performed first.")
@@ -876,7 +969,7 @@ struct SoundBoothView: View {
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard preview || !s.isEmpty else { announce("Write a script first."); return }
+        guard preview || !s.isEmpty else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
         body["engine"] = engine; body["mode"] = mode
         body["sourceText"] = text; body["readback"] = readback
@@ -894,10 +987,10 @@ struct SoundBoothView: View {
                 let version = quoteVersion
                 body["estimateOnly"] = true
                 let quote = try await service.render(body: body)
-                guard quoteVersion == version else { announce("The script or settings changed. Press again for an updated price."); return }
+                guard quoteVersion == version else { announce("The draft or settings changed. Press again for an updated price."); return }
                 estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
-                let clipLine = clips.isEmpty ? " No reference clip attached." : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
-                announce((quote.estimate?.spoken ?? "Estimate unavailable.") + clipLine + " Press " + (preview ? "Hear this voice first" : "Render") + " again to confirm.")
+                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
+                announce((quote.estimate?.spoken ?? "Estimate unavailable.") + clipLine + " Press " + (preview ? "Hear this voice first" : generateLabel) + " again to confirm.")
                 return
             }
             confirmArmed = false
@@ -1015,8 +1108,9 @@ struct SoundBoothView: View {
     }
 
     private func openInBooth(_ p: SoundBoothProject) {
+        guard !workspaceBusy else { announce("Finish the current operation first."); return }
+        selectEngine(p.engine)
         currentProjectId = p.id
-        engine = p.engine
         mode = p.mode == "advanced" ? "advanced" : "easy"
         text = p.sourceText ?? ""
         script = p.screenplay ?? p.script
@@ -1033,7 +1127,7 @@ struct SoundBoothView: View {
         if p.engine == "seed", case .array(let references) = p.options?["audio_urls"] {
             clips = references.compactMap { if case .string(let url) = $0 { return (url: url, name: "Saved reference") }; return nil }
         } else if case .string(let url) = p.options?["reference_voice_url"] { clips = [(url: url, name: "Saved reference")] }
-        announce("Opened \(p.title). Voice settings and reference clips restored. Change what you like and render again.")
+        announce("Opened \(p.title). Its draft and settings are restored. Change what you like and generate another take.")
         focusStatus = true
     }
 
