@@ -68,15 +68,15 @@ final class CreationsService: ObservableObject {
     private struct AssetsResponse: Decodable { let assets: [KadeAssetItem] }
 
     func fetchMine() async throws -> [KadeAssetItem] {
-        try await fetch(path: "api/kade/my-assets?includeArchived=1", fallback: "Couldn't load your creations.")
+        try await fetch(path: "api/kade/my-assets", fallback: "Couldn't load your creations.", queryItems: [URLQueryItem(name: "includeArchived", value: "1")])
     }
 
     func fetchWall() async throws -> [KadeAssetItem] {
         try await fetch(path: "api/kade/wall", fallback: "Couldn't load the Wall of Fame.")
     }
 
-    private func fetch(path: String, fallback: String) async throws -> [KadeAssetItem] {
-        let req = client.request(path: path, method: "GET", authorized: true)
+    private func fetch(path: String, fallback: String, queryItems: [URLQueryItem]? = nil) async throws -> [KadeAssetItem] {
+        let req = client.request(path: path, method: "GET", authorized: true, queryItems: queryItems)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else { throw CreationsError(message: fallback) }
         return try JSONDecoder().decode(AssetsResponse.self, from: data).assets

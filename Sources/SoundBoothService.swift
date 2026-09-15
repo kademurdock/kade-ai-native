@@ -408,7 +408,7 @@ final class SoundBoothService: ObservableObject {
     /// would not do it: the asset URLs are signed and short-lived, and the
     /// share sheet needs a real file on disk to offer "Save to Files".
     func download(take: SoundBoothTake, title: String, master: Bool = false) async throws -> URL {
-        let req = client.request(path: "api/kade/asset-download/\(take.id)\(master ? "?master=1" : "")", method: "GET", authorized: true, timeout: 120)
+        let req = client.request(path: "api/kade/asset-download/\(take.id)", method: "GET", authorized: true, queryItems: master ? [URLQueryItem(name: "master", value: "1")] : nil, timeout: 120)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200, !data.isEmpty else {
             throw BoothError(message: "Couldn't fetch that recording. Try again.")
