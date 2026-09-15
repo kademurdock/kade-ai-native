@@ -24,6 +24,7 @@ struct KadeAssetItem: Decodable, Identifiable, Equatable {
     let backupUrl: String?
     let description: String?
     var shared: Bool
+    var archived: Bool?
     let prompt: String?
     let model: String?
     let createdAt: String?
@@ -36,7 +37,7 @@ struct KadeAssetItem: Decodable, Identifiable, Equatable {
     var kindLabel: String {
         switch kind {
         case "video": return "Video"
-        case "audio": return "Song"
+        case "audio": return "Audio"
         case "document": return "Document"
         default: return "Picture"
         }
@@ -67,7 +68,7 @@ final class CreationsService: ObservableObject {
     private struct AssetsResponse: Decodable { let assets: [KadeAssetItem] }
 
     func fetchMine() async throws -> [KadeAssetItem] {
-        try await fetch(path: "api/kade/my-assets", fallback: "Couldn't load your creations.")
+        try await fetch(path: "api/kade/my-assets?includeArchived=1", fallback: "Couldn't load your creations.")
     }
 
     func fetchWall() async throws -> [KadeAssetItem] {
@@ -79,6 +80,14 @@ final class CreationsService: ObservableObject {
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else { throw CreationsError(message: fallback) }
         return try JSONDecoder().decode(AssetsResponse.self, from: data).assets
+    }
+
+    func setArchived(id: String, archived: Bool) async throws {
+        var req = client.request(path: "api/kade/my-assets/\(id)/archive", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["archived": archived])
+        let (_, http) = try await client.send(req)
+        guard http.statusCode == 200 else { throw CreationsError(message: "Couldn't update your library. Try again.") }
     }
 
     func setShared(id: String, shared: Bool) async throws {
@@ -263,6 +272,17 @@ struct MyCreationsView: View {
     @State private var loadError: String?
     @State private var activeSheet: CreationSheet?
     @State private var savingId: String?
+    @State private var searchText = ""
+    @State private var kindFilter = "all"
+    @State private var showArchived = false
+    @State private var archivingId: String?
+    private var visibleAssets: [KadeAssetItem] {
+        assets.filter { asset in
+            (showArchived || asset.archived != true) &&
+            (kindFilter == "all" || asset.kind == kindFilter) &&
+            (searchText.isEmpty || (asset.bestText + " " + (asset.model ?? "")).localizedCaseInsensitiveContains(searchText))
+        }
+    }
 
     private enum Focus: Hashable { case status }
     @AccessibilityFocusState private var a11yFocus: Focus?
@@ -297,7 +317,22 @@ struct MyCreationsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("Loading your creations")
             } else {
-                List(assets) { asset in
+                List {
+                    Section("Organize your library") {
+                        Toggle("Show archived creations", isOn: $showArchived)
+                        Picker("Kind", selection: $kindFilter) {
+                            Text("All kinds").tag("all")
+                            Text("Audio").tag("audio")
+                            Text("Pictures").tag("image")
+                            Text("Videos").tag("video")
+                            Text("Documents").tag("document")
+                        }
+                        Text("\(visibleAssets.count) creations shown. Archive hides an item from this library; it keeps the file and its current sharing setting.")
+                            .font(.footnote)
+                        if let loadError { Text(loadError).foregroundStyle(.red) }
+                    }
+                    ForEach(visibleAssets) { asset in
+
                     CreationRow(
                         asset: asset,
                         showOwner: false,
@@ -306,6 +341,25 @@ struct MyCreationsView: View {
                         isSaving: savingId == asset.id,
                         onToggleShare: { Task { await toggleShare(asset) } }
                     )
+                    Button(asset.archived == true ? "Restore to library" : "Archive") {
+                        Task {
+                            archivingId = asset.id
+                            defer { archivingId = nil }
+                            do {
+                                let archived = asset.archived != true
+                                try await service.setArchived(id: asset.id, archived: archived)
+                                if let index = assets.firstIndex(where: { $0.id == asset.id }) { assets[index].archived = archived }
+                                loadError = nil
+                                UIAccessibility.post(notification: .announcement, argument: archived ? "Archived. Use Show archived creations to restore it." : "Restored to library.")
+                            } catch {
+                                loadError = error.localizedDescription
+                                UIAccessibility.post(notification: .announcement, argument: error.localizedDescription)
+                            }
+                        }
+                    }
+                    .disabled(archivingId != nil)
+                    .accessibilityLabel("\(asset.archived == true ? "Restore" : "Archive") \(asset.bestText)")
+                    }
                 }
                 .listStyle(.plain)
                 .refreshable {
@@ -314,6 +368,7 @@ struct MyCreationsView: View {
                 }
             }
         }
+        .searchable(text: $searchText, prompt: "Search your creations")
         .navigationTitle("My Creations")
         .navigationBarTitleDisplayMode(.inline)
         .task {

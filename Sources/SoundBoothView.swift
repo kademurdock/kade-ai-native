@@ -17,7 +17,7 @@ import UniformTypeIdentifiers
 // files."
 //
 // SHAPE, top to bottom:
-//   1. ENGINE — Scenema (her own GPU, one actor performing, queued, ~2c/min)
+//   1. ENGINE — AuK HQ (her own GPU, one actor performing, queued, ~2c/min)
 //      or Seed Audio (fal, a whole scene with music and several voices,
 //      seconds, ~19c/min). The hint says which one leaves the estate.
 //   2. MODE — Easy / Advanced. Advanced reveals every engine field and lets
@@ -45,6 +45,10 @@ struct SoundBoothView: View {
     @Environment(\.dismiss) private var dismiss
 
     // What she is making
+    @State private var showFailedProjects = false
+    private var visibleProjects: [SoundBoothProject] {
+        projects.filter { showFailedProjects || !["failed", "cancelled"].contains($0.state) || !($0.takes ?? []).isEmpty || $0.hasRecoverableAudio == true }
+    }
     @State private var engine = "scenema"
     @State private var mode = "easy"
     @State private var text = ""
@@ -59,7 +63,7 @@ struct SoundBoothView: View {
     /// values are strings, numbers are their text, toggles are "1"/"". One
     /// dictionary, so a setting the guide adds tomorrow needs no new @State.
     @State private var values: [String: String] = [:]
-    /// Imported clips, in order. Seed uses up to three (@Audio1–3); Scenema
+    /// Imported clips, in order. Seed uses up to three (@Audio1–3); AuK HQ
     /// uses the first.
     @State private var clips: [(url: String, name: String)] = []
 
@@ -161,9 +165,9 @@ struct SoundBoothView: View {
          * iCloud Drive, Dropbox and anything else with a Files provider, so
          * "share from" and "import" are the same door here. */
         /* Part 121.3: the types each ENGINE can actually read, not a
-         * wildcard. Scenema's README says reference audio is WAV or MP3;
+         * wildcard. AuK HQ's README says reference audio is WAV or MP3;
          * M4A rides along because that is what a voice memo actually is.
-         * Seed also takes OGG. An .ogg offered to Scenema is refused with a
+         * Seed also takes OGG. An .ogg offered to AuK HQ is refused with a
          * sentence that says so, rather than rendering without the clone. */
         .fileImporter(
             isPresented: $showFileImporter,
@@ -203,7 +207,10 @@ struct SoundBoothView: View {
 
     private var workspaceBusy: Bool { isWriting || isRendering || isImporting || currentJobId != nil }
     private var editorTitle: String { engine == "lyria" ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
-    private var generateLabel: String { engine == "lyria" ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script" }
+    private var generateLabel: String {
+        if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
+        return engine == "lyria" ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
+    }
     private var editorHint: String {
         if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
         if engine == "seed" { return "Describe the setting, sounds and each voice. Include exact dialogue and identify reference voices as @Audio1, @Audio2 or @Audio3." }
@@ -353,7 +360,7 @@ struct SoundBoothView: View {
                 .accessibilityHint("Reads what is in the box and says which engine fits, and why. Free.")
             } else {
                 Picker("Engine", selection: Binding(get: { engine }, set: { selectEngine($0) })) {
-                    Text("Scenema").tag("scenema")
+                    Text("AuK HQ").tag("scenema")
                     Text("Seed Audio").tag("seed")
                     Text("Lyria").tag("lyria")
                 }
@@ -383,7 +390,7 @@ struct SoundBoothView: View {
 
     /// Which settings Easy shows. Everything else waits behind Advanced.
     private static let easyKeys: [String: [String]] = [
-        "scenema": ["voice_description", "gender", "reference_voice_url"],
+        "scenema": ["auk_task", "instruction", "voice_description", "reference_voice_url", "gen_seconds"],
         "seed": ["voice", "audio_urls"],
         /* Lyria has three knobs and they all belong on the easy side: there is
          * nothing advanced about it, because the brief IS the control. */
@@ -395,7 +402,7 @@ struct SoundBoothView: View {
         switch key {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
-        default: return "Scenema"
+        default: return "AuK HQ"
         }
     }
 
@@ -676,14 +683,16 @@ struct SoundBoothView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Library").font(.headline).accessibilityAddTraits(.isHeader)
 
-            if projects.isEmpty {
-                Text("Nothing here yet. What you make will be saved here, and the audio also lands in My Creations.")
+            Toggle("Show failed and stopped attempts", isOn: $showFailedProjects)
+                .accessibilityHint("Finished takes and recoverable parts stay visible. This does not delete anything.")
+            if visibleProjects.isEmpty {
+                Text("No projects match this view. Turn on Show failed and stopped attempts to include those without audio.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
                 // Plain VStack, never a lazy one — see the Part 87 note above.
                 VStack(spacing: 14) {
-                    ForEach(projects) { p in
+                    ForEach(visibleProjects) { p in
                         projectRow(p)
                     }
                 }
@@ -729,6 +738,14 @@ struct SoundBoothView: View {
                             }
                             .disabled(savingTakeId != nil)
                             .accessibilityLabel("Save or share \(take.label(number: takes.count - idx))")
+                            if take.masterUrl != nil {
+                                Button("WAV master") {
+                                    Task { await save(take: take, title: p.title, master: true) }
+                                }
+                                .disabled(savingTakeId != nil)
+                                .accessibilityLabel("Save WAV master for \(take.label(number: takes.count - idx))")
+                            }
+
                             .accessibilityHint("Downloads it and opens the share sheet — Save to Files keeps a copy on this phone, or send it to someone.")
                             Spacer()
                         }
@@ -770,7 +787,7 @@ struct SoundBoothView: View {
             let lyriaOK = h.engines["lyria"]?.configured ?? false
             /* The first thing the screen says is the one-line answer to the
              * question she said people would have. */
-            let fallback = "Scenema \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up"), Lyria \(lyriaOK ? "is available" : "is not set up")."
+            let fallback = "AuK HQ \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up"), Lyria \(lyriaOK ? "is available" : "is not set up")."
             statusLine = "Ready. " + (h.guide?.chooser.answer ?? fallback)
         } catch {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
@@ -800,7 +817,7 @@ struct SoundBoothView: View {
     private func applyVoiceLabel(_ label: String) {
         guard !label.isEmpty else { return }
         /* The wheel picks a LABEL ("husky low middle-aged woman, Black
-         * American · flurry"); Scenema wants a SENTENCE. The catalog's own
+         * American · flurry"); AuK HQ wants a SENTENCE. The catalog's own
          * describe line is exactly that sentence, which is why the ear
          * pipeline's output is worth carrying here rather than inventing a
          * second vocabulary. Fall back to the label with the middle dot
@@ -969,7 +986,7 @@ struct SoundBoothView: View {
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard preview || !s.isEmpty else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
+        guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
         body["engine"] = engine; body["mode"] = mode
         body["sourceText"] = text; body["readback"] = readback
@@ -989,7 +1006,7 @@ struct SoundBoothView: View {
                 let quote = try await service.render(body: body)
                 guard quoteVersion == version else { announce("The draft or settings changed. Press again for an updated price."); return }
                 estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
-                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : " Cloning \(clips.map { $0.name }.joined(separator: ", "))."
+                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : (st["auk_task"] as? String == "edit" ? " Editing " : " Cloning ") + "\(clips.map { $0.name }.joined(separator: ", "))."
                 announce((quote.estimate?.spoken ?? "Estimate unavailable.") + clipLine + " Press " + (preview ? "Hear this voice first" : generateLabel) + " again to confirm.")
                 return
             }
@@ -1024,6 +1041,9 @@ struct SoundBoothView: View {
         if engine == "lyria" {
             let perSong = health?.engines["lyria"]?.usdPerSong ?? 0.08
             return "About \(max(1, Int((perSong * 100).rounded()))) cents for the song, whatever length it comes out. Lyria is priced per song, not per minute. Usually back in under a minute."
+        }
+        if engine == "scenema" {
+            return "AuK HQ uses a sleeping GPU. Startup and processing are billed. A reliable cost and wait estimate is not available yet. Longer work runs in sections."
         }
         let cents = engine == "seed"
             ? max(1, Int((Double(secs) / 60.0 * 18.75).rounded()))
@@ -1091,12 +1111,12 @@ struct SoundBoothView: View {
         }
     }
 
-    private func save(take: SoundBoothTake, title: String) async {
+    private func save(take: SoundBoothTake, title: String, master: Bool = false) async {
         guard savingTakeId == nil else { return }
         savingTakeId = take.id
         defer { savingTakeId = nil }
         do {
-            let fileURL = try await service.download(take: take, title: title)
+            let fileURL = try await service.download(take: take, title: title, master: master)
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()
             activeSheet = .share(ShareItem(fileURL: fileURL))

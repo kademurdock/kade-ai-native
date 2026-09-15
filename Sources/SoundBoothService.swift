@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Sound Booth (Part 120, Sep 3 2026)
 //
 // Her ask, Part 119.10: "I'm hoping the next session can be building a native
-// playground on my platform where I can use Scenema." Then her interface, in
+// playground on my platform where I can use AuK HQ." Then her interface, in
 // her own words: "all the settings and import and all that, but you write the
 // stuff in the textbox right? And there's some button that will either
 // generate your text idea into a full scenema script based on its formatting,
@@ -33,6 +33,7 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     let id: String
     let url: String
     let backupUrl: String?
+    let masterUrl: String?
     let description: String?
     let seconds: Int?
     let costUSD: Double?
@@ -92,12 +93,13 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let costUSD: Double?
     let updatedAt: String?
     let takes: [SoundBoothTake]?
+    let hasRecoverableAudio: Bool?
 
     var engineLabel: String {
         switch engine {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
-        default: return "Scenema"
+        default: return "AuK HQ"
         }
     }
     var isWorking: Bool { state == "queued" || state == "running" }
@@ -332,7 +334,7 @@ final class SoundBoothService: ObservableObject {
 
     func render(body: [String: Any]) async throws -> SoundBoothRenderResult {
         // Seed Audio is SYNCHRONOUS and can legitimately take three minutes
-        // for a two-minute scene; Scenema returns as soon as it is queued.
+        // for a two-minute scene; AuK HQ returns as soon as it is queued.
         try await post("api/kade/sound-booth/render", body: body, timeout: 240, fallback: "That render could not start.")
     }
 
@@ -370,7 +372,7 @@ final class SoundBoothService: ObservableObject {
         var req = client.multipartRequest(
             path: "api/kade/sound-booth/reference",
             authorized: true,
-            // The server judges the format against the ENGINE — Scenema takes
+            // The server judges the format against the ENGINE — AuK HQ takes
             // WAV/MP3/M4A, Seed also takes OGG — so it has to know which.
             fields: [("engine", engine)],
             fileField: "clip",
@@ -399,8 +401,8 @@ final class SoundBoothService: ObservableObject {
     /// Files, sent in a message, or dropped into another app. A plain link
     /// would not do it: the asset URLs are signed and short-lived, and the
     /// share sheet needs a real file on disk to offer "Save to Files".
-    func download(take: SoundBoothTake, title: String) async throws -> URL {
-        let req = client.request(path: "api/kade/asset-download/\(take.id)", method: "GET", authorized: true, timeout: 120)
+    func download(take: SoundBoothTake, title: String, master: Bool = false) async throws -> URL {
+        let req = client.request(path: "api/kade/asset-download/\(take.id)\(master ? "?master=1" : "")", method: "GET", authorized: true, timeout: 120)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200, !data.isEmpty else {
             throw BoothError(message: "Couldn't fetch that recording. Try again.")
