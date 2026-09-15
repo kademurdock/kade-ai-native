@@ -223,6 +223,11 @@ struct SoundBoothGuide: Decodable {
             defaultBool = try? c.decodeIfPresent(Bool.self, forKey: .default)
         }
     }
+    struct Recipe: Decodable {
+        let label: String
+        let task: String
+        let text: String
+    }
     struct Engine: Decodable {
         let name: String
         let tagline: String
@@ -232,6 +237,7 @@ struct SoundBoothGuide: Decodable {
         let notFor: [String]
         let howToWrite: [String]
         let settings: [Setting]
+        let recipes: [Recipe]?
         /// The card, as one spoken paragraph.
         var spoken: String {
             "\(name). \(tagline) \(`where`) \(cost) Best for: \(bestFor.joined(separator: "; ")). Not for: \(notFor.joined(separator: "; "))."
