@@ -482,6 +482,7 @@ struct SoundBoothView: View {
                         ForEach(Array(recipes.enumerated()), id: \.offset) { _, recipe in
                             Button(recipe.label) {
                                 values["auk_task"] = recipe.task
+                                if recipe.task == "speech" { clips = [] }
                                 values[recipe.task == "speech" ? "voice_description" : "instruction"] = recipe.text
                                 invalidateQuote()
                                 announce("Example filled in. Edit it to suit your idea. No generation started.")
@@ -752,6 +753,7 @@ struct SoundBoothView: View {
                             }
                             .disabled(savingTakeId != nil)
                             .accessibilityLabel("Save or share \(take.label(number: takes.count - idx))")
+                            .accessibilityHint("Downloads it and opens the share sheet. Save to Files keeps a copy on this phone.")
                             if take.masterUrl != nil {
                                 Button("WAV master") {
                                     Task { await save(take: take, title: p.title, master: true) }
@@ -760,9 +762,13 @@ struct SoundBoothView: View {
                                 .accessibilityLabel("Save WAV master for \(take.label(number: takes.count - idx))")
                             }
 
-                            .accessibilityHint("Downloads it and opens the share sheet — Save to Files keeps a copy on this phone, or send it to someone.")
                             Spacer()
                         }
+                        HStack {
+                            Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
+                            Button("Edit this take") { prepareTake(take, title: p.title, editing: true) }
+                        }
+                        .disabled(workspaceBusy)
                     }
                 }
             }
@@ -1139,6 +1145,18 @@ struct SoundBoothView: View {
             KadeHaptics.error()
             announce((error as? LocalizedError)?.errorDescription ?? "Couldn't fetch that recording. Try again.")
         }
+    }
+
+    private func prepareTake(_ take: SoundBoothTake, title: String, editing: Bool) {
+        guard !workspaceBusy else { announce("Finish the current operation first."); return }
+        selectEngine("scenema")
+        currentProjectId = nil
+        values["auk_task"] = editing ? "edit" : "speech"
+        if editing { values["instruction"] = ""; values.removeValue(forKey: "gen_seconds") }
+        clips = [(url: take.masterUrl ?? take.url, name: title)]
+        invalidateQuote()
+        announce(editing ? "Take attached. Describe the edit you want. The original is kept." : "Voice reference attached. Write the words you want this voice to say.")
+        focusStatus = true
     }
 
     private func openInBooth(_ p: SoundBoothProject) {
