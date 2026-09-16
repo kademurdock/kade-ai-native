@@ -876,6 +876,12 @@ check("second send resumes initial waiting after the previous reply drains",
       SpeechWaitPolicy.shouldResume(phase: .waiting, turnLive: true, clipPlaying: false, paused: false, speechQueued: false))
 check("second send never layers bubbles over the previous reply",
       !SpeechWaitPolicy.shouldResume(phase: .waiting, turnLive: true, clipPlaying: true, paused: false, speechQueued: true))
+check("seek skips every frame before ten seconds", StreamingWavParser.framesToSkip(seconds: 10, rate: 24000, bufferStart: 230400, count: 9600) == 9600)
+check("seek starts exactly at the ten-second boundary", StreamingWavParser.framesToSkip(seconds: 10, rate: 24000, bufferStart: 240000, count: 9600) == 0)
+check("seek cuts within a buffer", StreamingWavParser.framesToSkip(seconds: 10, rate: 24000, bufferStart: 235200, count: 9600) == 4800)
+check("negative position starts at the beginning", StreamingWavParser.framesToSkip(seconds: -10, rate: 24000, bufferStart: 0, count: 9600) == 0)
+check("invalid position cannot overflow", StreamingWavParser.framesToSkip(seconds: .infinity, rate: 24000, bufferStart: 0, count: 9600) == 0)
+check("malformed audio cannot supply a seek duration", StreamingWavParser.pcmDuration(Data([1, 2, 3])) == nil)
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")

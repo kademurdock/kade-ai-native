@@ -23,6 +23,17 @@ struct StreamingWavFormat: Equatable {
 }
 
 enum StreamingWavParser {
+    static func pcmDuration(_ data: Data) -> Double? {
+        guard let parsed = parseHeader(data), parsed.format.bitsPerSample == 16 else { return nil }
+        return Double(data.count - parsed.pcmStart) / (parsed.format.sampleRate * Double(parsed.format.numChannels) * 2)
+    }
+
+    static func framesToSkip(seconds: Double, rate: Double, bufferStart: Int, count: Int) -> Int {
+        guard seconds.isFinite, rate.isFinite, rate > 0, count > 0 else { return 0 }
+        let remaining = (max(0, seconds) * rate).rounded(.down) - Double(bufferStart)
+        return Int(min(Double(count), max(0, remaining)))
+    }
+
     /// Parse the header of a (possibly streaming) WAV and find where PCM
     /// starts. Returns nil while the buffer is still too short to hold the
     /// whole header — the caller accumulates and retries — and throws

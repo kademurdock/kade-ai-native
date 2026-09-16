@@ -382,7 +382,7 @@ struct VoicePickerView: View {
                                     }
                                     .pickerStyle(.segmented)
                                     .accessibilityLabel("Delivery")
-                                    .accessibilityHint("How much this voice varies its delivery. Steady is consistent, Lively has the most emotional range. Default is the platform setting. Saved for this character on this phone; the next audition and every reply use it.")
+                                    .accessibilityHint(deliveryAgentId == ReadingRoomPlayer.deliveryPreference ? "How much the reading voice varies its delivery. Saved for library reading on this phone. Default is Steady. The next audition and book passage use it." : "How much this voice varies its delivery. Steady is consistent, Lively has the most emotional range. Default is the platform setting. Saved for this character on this phone; the next audition and every reply use it.")
                                     .onChange(of: delivery) { _, v in
                                         guard !seeding, let id = deliveryAgentId else { return }
                                         VoiceService.setDelivery(v.isEmpty ? nil : v, forAgent: id)

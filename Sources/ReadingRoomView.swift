@@ -24,6 +24,7 @@ struct ReadingRoomView: View {
     let incomingName: String?
 
     @State private var openBook: RRBook?
+    @AppStorage("kade.library.followAlong") private var followAlong = false
     @State private var openCollectionRow: RRCollectionRow?
     @State private var incomingLink: String?
     @State private var showEdit = false
@@ -356,9 +357,6 @@ struct ReadingRoomView: View {
                 }
                 .accessibilityElement(children: .combine)
 
-                transport
-                    .padding(.top, 4)
-
                 if book.isAudio {
                     VideoPane(player: player, service: service, book: book, announce: { announce($0) })
                 }
@@ -385,10 +383,11 @@ struct ReadingRoomView: View {
                 }
 
                 Text(player.nowText.isEmpty ? (book.isAudio ? player.partTitle : "Press Play.") : player.nowText)
-                    .font(.body)
+                    .font(followAlong ? .title2 : .body)
+                    .lineSpacing(followAlong ? 8 : 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .background(followAlong && player.isPlaying ? Color.yellow.opacity(0.22) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
                     .accessibilityLabel("Now: " + (player.nowText.isEmpty ? player.partTitle : player.nowText))
 
                 if book.isAudio {
@@ -397,6 +396,10 @@ struct ReadingRoomView: View {
                 }
 
                 chapterPicker(book)
+                if !book.isAudio {
+                    Toggle("Highlight the spoken passage", isOn: $followAlong)
+                        .accessibilityHint("Larger text and a highlighted passage while reading. Passage timing, not individual words. VoiceOver focus stays where you put it.")
+                }
 
                 if !book.isAudio { voiceAndSpeed }
                 else {
@@ -411,30 +414,68 @@ struct ReadingRoomView: View {
             }
             .padding()
         }
+        .safeAreaInset(edge: .bottom) {
+            transport.padding().background(.regularMaterial)
+        }
     }
 
     private var speeds: [(Double, String)] { [(0.8, "Slower"), (0.9, "A little slower"), (1.0, "Normal"), (1.15, "A little faster"), (1.3, "Faster"), (1.5, "Fastest")] }
 
+    @State private var scrubPosition: Double = 0
+    @State private var scrubbing = false
+
     private var transport: some View {
         VStack(spacing: 10) {
-            Button { player.togglePlay() } label: {
-                Label(player.isPlaying ? "Pause" : "Play", systemImage: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title2.bold())
-                    .frame(maxWidth: .infinity, minHeight: 60)
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityFocused($focus, equals: .play)
-            .accessibilityHint(player.isAudio ? "" : "Reads from where you are. Each piece is spoken fresh by the voice you picked.")
-            HStack(spacing: 10) {
-                bigButton("Back", icon: "gobackward.15", hint: player.isAudio ? "Back fifteen seconds." : "Back one piece, about half a minute.") { player.back() }
-                bigButton("Forward", icon: "goforward.15", hint: player.isAudio ? "Forward fifteen seconds." : "Forward one piece.") { player.forward() }
-                bigButton("Bookmark", icon: "bookmark.fill", hint: "Marks this spot so you can come back to it.") { Task { await addBookmark() } }
+            if player.isAudio, player.fileDuration > 0 {
+                Slider(value: Binding(get: { scrubbing ? scrubPosition : player.filePosition }, set: { scrubPosition = $0 }),
+                       in: 0...max(1, player.fileDuration), onEditingChanged: { editing in
+                    scrubbing = editing
+                    if !editing { player.seekFile(to: scrubPosition) }
+                })
+                .accessibilityLabel("Playback position")
+                .accessibilityValue("\(ReadingRoomPlayer.clock(player.filePosition)) of \(ReadingRoomPlayer.clock(player.fileDuration))")
+                .accessibilityAdjustableAction { direction in
+                    if direction == .increment { player.forward() }
+                    else if direction == .decrement { player.back() }
+                }
             }
             HStack(spacing: 10) {
                 bigButton(player.isAudio ? "Previous part" : "Previous chapter", icon: "backward.end.fill", hint: "") { player.previousPart() }
+                bigButton("Bookmark", icon: "bookmark.fill", hint: "Marks this spot so you can come back to it.") { Task { await addBookmark() } }
                 bigButton(player.isAudio ? "Next part" : "Next chapter", icon: "forward.end.fill", hint: "") { player.nextPart() }
             }
+            HStack(spacing: 12) {
+                seekButton(backward: true)
+                Button { player.togglePlay() } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title)
+                        Text(player.isPlaying ? "Pause" : "Play").font(.footnote.bold())
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .accessibilityFocused($focus, equals: .play)
+                seekButton(backward: false)
+            }
         }
+    }
+
+    private func seekButton(backward: Bool) -> some View {
+        let direction = backward ? "back" : "forward"
+        let sign: Double = backward ? -1 : 1
+        return bigButton(backward ? "Back 10 seconds" : "Forward 10 seconds", icon: backward ? "gobackward.10" : "goforward.10", hint: "Hold for larger jumps, or use VoiceOver Actions.") {
+            player.skip(seconds: sign * 10)
+        }
+        .contextMenu {
+            ForEach([10, 20, 30, 60, 120], id: \.self) { seconds in
+                Button("Skip \(direction) \(seconds) seconds") { player.skip(seconds: sign * Double(seconds)) }
+            }
+        }
+        .accessibilityAction(named: "Skip \(direction) 20 seconds") { player.skip(seconds: sign * 20) }
+        .accessibilityAction(named: "Skip \(direction) 30 seconds") { player.skip(seconds: sign * 30) }
+        .accessibilityAction(named: "Skip \(direction) one minute") { player.skip(seconds: sign * 60) }
+        .accessibilityAction(named: "Skip \(direction) two minutes") { player.skip(seconds: sign * 120) }
     }
 
     private func bigButton(_ title: String, icon: String, hint: String, action: @escaping () -> Void) -> some View {
@@ -488,7 +529,7 @@ struct ReadingRoomView: View {
             .accessibilityLabel("Voice: \(player.voice.isEmpty ? "the library's voice" : player.voice)")
             .accessibilityHint("Opens the voice picker. Flick through the wheel to hear a preview of each voice, then press Done.")
             .sheet(isPresented: $showVoicePicker) {
-                VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }))
+                VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }), deliveryAgentId: ReadingRoomPlayer.deliveryPreference)
             }
             Picker("Speed", selection: Binding(get: { player.speed }, set: { player.changeSpeed($0) })) {
                 ForEach(speeds, id: \.0) { Text($0.1).tag($0.0) }

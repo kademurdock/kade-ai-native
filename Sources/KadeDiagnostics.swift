@@ -273,7 +273,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     /// Backgrounded sessions are exempt (suspension is not a freeze).
     private func startFreezeRecorder() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kade.freezewatch", qos: .utility))
-        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             DispatchQueue.main.async { [weak self] in

@@ -255,6 +255,7 @@ final class ReadingRoomService: ObservableObject {
     /// doc comment lists what the first one cost to get right).
     func chunkAudio(bookId: String, s: Int, c: Int, voice: String, speed: Double, skipped: Bool = false) async throws -> Data {
         var items = [URLQueryItem(name: "voice", value: voice), URLQueryItem(name: "speed", value: String(format: "%.2f", speed))]
+        items.append(URLQueryItem(name: "delivery", value: VoiceService.delivery(forAgent: ReadingRoomPlayer.deliveryPreference) ?? "STABLE"))
         if skipped { items.append(URLQueryItem(name: "skipped", value: "1")) }
         let req = client.request(path: "api/kade/reading-room/book/\(bookId)/audio/\(s)/\(c)", authorized: true, queryItems: items, timeout: 90)
         let (data, http) = try await client.send(req)
@@ -394,6 +395,7 @@ final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate {
 
 @MainActor
 final class ReadingRoomPlayer: ObservableObject {
+    static let deliveryPreference = "library-reading"
     private let service: ReadingRoomService
     @Published private(set) var book: RRBook?
     @Published private(set) var s = 0
@@ -420,6 +422,86 @@ final class ReadingRoomPlayer: ObservableObject {
     private var producer: Task<Void, Never>?
     private var activeFetch: StreamingClipFetch?
     private var queuedFrames: Int = 0
+    private var textOffset: Double = 0
+    private var seekTask: Task<Void, Never>?
+    private var seekGeneration = 0
+    private var audioCache: [String: Data] = [:]
+    private var cacheOrder: [String] = []
+
+    private func cacheKey(_ ss: Int, _ cc: Int) -> String {
+        "\(book?.id ?? "")|\(ss)|\(cc)|\(voice)|\(speed)|\(VoiceService.delivery(forAgent: Self.deliveryPreference) ?? "STABLE")"
+    }
+    private func remember(_ data: Data, key: String) {
+        guard !data.isEmpty else { return }
+        audioCache[key] = data
+        cacheOrder.removeAll { $0 == key }; cacheOrder.append(key)
+        while cacheOrder.count > 12 { audioCache.removeValue(forKey: cacheOrder.removeFirst()) }
+    }
+    private func previous(s: Int, c: Int) -> (s: Int, c: Int)? {
+        if c > 0 { return (s, c - 1) }
+        if s > 0 { return (s - 1, max(0, (book?.chapters[s - 1].chunks ?? 1) - 1)) }
+        return nil
+    }
+    private func duration(_ data: Data) throws -> Double {
+        guard let seconds = StreamingWavParser.pcmDuration(data) else {
+            throw RRError(message: "That passage did not contain playable audio.")
+        }
+        return seconds
+    }
+    private func seekAudio(_ q: (s: Int, c: Int), bookId: String) async throws -> Data {
+        let key = cacheKey(q.s, q.c)
+        if let data = audioCache[key] { return data }
+        let data = try await service.chunkAudio(bookId: bookId, s: q.s, c: q.c, voice: voice, speed: speed)
+        try Task.checkCancellation()
+        remember(data, key: key)
+        return data
+    }
+
+    func skip(seconds: Double) {
+        guard let book, seconds.isFinite else { return }
+        if book.isAudio {
+            seekFile(by: seconds)
+            announcement = "\(seconds < 0 ? "Back" : "Forward") \(Int(abs(seconds))) seconds."
+            return
+        }
+        let resume = isPlaying
+        let original = (s: s, c: c, offset: textOffset)
+        pause()
+        seekTask?.cancel(); seekGeneration += 1
+        let generation = seekGeneration
+        seekTask = Task { [weak self] in
+            guard let self else { return }
+            var q = (s: original.s, c: original.c)
+            var offset = original.offset + seconds
+            do {
+                while offset < 0 {
+                    guard let prev = self.previous(s: q.s, c: q.c) else { offset = 0; break }
+                    q = prev
+                    let data = try await self.seekAudio(q, bookId: book.id)
+                    offset += try self.duration(data)
+                }
+                while true {
+                    let data = try await self.seekAudio(q, bookId: book.id)
+                    let length = try self.duration(data)
+                    if offset < length { break }
+                    guard let next = self.next(s: q.s, c: q.c) else { offset = max(0, length - 0.05); break }
+                    offset -= length; q = next
+                }
+                guard !Task.isCancelled, self.seekGeneration == generation, self.book?.id == book.id else { return }
+                self.s = q.s; self.c = q.c; self.textOffset = max(0, offset)
+                await self.refreshText()
+                self.scheduleSave()
+                self.announcement = "\(seconds < 0 ? "Back" : "Forward") \(Int(abs(seconds))) seconds."
+                self.seekTask = nil
+                if resume { self.play() }
+            } catch {
+                guard !Task.isCancelled, self.seekGeneration == generation else { return }
+                self.announcement = error.localizedDescription
+                self.seekTask = nil
+                if resume { self.play() }
+            }
+        }
+    }
     // file engine — `avPlayer` is read by the VideoPane's VideoPlayer
     private(set) var avPlayer: AVPlayer?
     /// The library's eyes on the phone: when on, the player pauses at each
@@ -451,12 +533,15 @@ final class ReadingRoomPlayer: ObservableObject {
     // MARK: open / close
 
     func open(_ book: RRBook) {
+        if self.book != nil { close() }
         self.book = book
+        audioCache.removeAll(); cacheOrder.removeAll()
         let p = book.progress
         s = min(max(0, p?.s ?? 0), max(0, book.partCount - 1))
         c = book.isAudio ? 0 : max(0, p?.c ?? 0)
         voice = (p?.voice?.isEmpty == false ? p?.voice : nil) ?? book.defaultVoice ?? "Kiana (Comedian)"
         speed = p?.speed ?? 1.0
+        textOffset = max(0, p?.pos ?? 0)
         prepareSession()
         wireRemote()
         if book.isAudio {
@@ -468,8 +553,11 @@ final class ReadingRoomPlayer: ObservableObject {
     }
 
     func close() {
+        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        let wasPlaying = isPlaying
         pause()
-        saveNow()
+        if !wasPlaying { saveNow() }
+        saveTask?.cancel(); saveTask = nil
         unwireRemote()
         if let o = timeObserver { avPlayer?.removeTimeObserver(o) }
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
@@ -482,6 +570,8 @@ final class ReadingRoomPlayer: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         book = nil
+        audioCache.removeAll(); cacheOrder.removeAll()
+        textOffset = 0
     }
 
     private func prepareSession() {
@@ -495,15 +585,15 @@ final class ReadingRoomPlayer: ObservableObject {
     func togglePlay() { isPlaying ? pause() : play() }
 
     func play() {
-        guard let book else { return }
+        guard let book, seekTask == nil else { return }
         prepareSession()
         if book.isAudio {
-            avPlayer?.rate = Float(speed)
-            avPlayer?.play()
+            avPlayer?.playImmediately(atRate: Float(speed))
             isPlaying = true
             updateNowPlaying()
             return
         }
+        guard !isPlaying else { return }
         isPlaying = true
         playToken += 1
         let token = playToken
@@ -525,27 +615,8 @@ final class ReadingRoomPlayer: ObservableObject {
         updateNowPlaying()
     }
 
-    func back() {
-        guard let book else { return }
-        if book.isAudio {
-            seekFile(by: -15)
-            announcement = "Back 15 seconds."
-            return
-        }
-        if c > 0 { seek(s: s, c: c - 1) }
-        else if s > 0 { seek(s: s - 1, c: max(0, (book.chapters[s - 1].chunks ?? 1) - 1)) }
-        else { announcement = "This is the beginning." }
-    }
-
-    func forward() {
-        guard let book else { return }
-        if book.isAudio {
-            seekFile(by: 15)
-            announcement = "Forward 15 seconds."
-            return
-        }
-        if let n = next(s: s, c: c) { seek(s: n.s, c: n.c) } else { announcement = "This is the end." }
-    }
+    func back() { skip(seconds: -10) }
+    func forward() { skip(seconds: 10) }
 
     func previousPart() {
         guard let book else { return }
@@ -570,16 +641,17 @@ final class ReadingRoomPlayer: ObservableObject {
 
     func goToBookmark(_ b: RRBookmark) {
         guard let book else { return }
-        if book.isAudio { loadTrack(b.s, at: b.pos ?? 0, play: isPlaying) } else { seek(s: b.s, c: b.c) }
+        if book.isAudio { loadTrack(b.s, at: b.pos ?? 0, play: isPlaying) } else { seek(s: b.s, c: b.c, offset: b.pos ?? 0) }
         announcement = "Bookmark: " + positionSpoken
     }
 
     func restart() { goToPart(0); if !isAudio { seek(s: 0, c: 0) } }
 
     /// Current spot, for a bookmark.
-    var here: (s: Int, c: Int, pos: Double) { (s, c, isAudio ? filePosition : 0) }
+    var here: (s: Int, c: Int, pos: Double) { (s, c, isAudio ? filePosition : textOffset) }
 
     func changeVoice(_ v: String) {
+        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
         voice = v
         let was = isPlaying
         if was { pause() }
@@ -587,6 +659,7 @@ final class ReadingRoomPlayer: ObservableObject {
         if was { play() }
     }
     func changeSpeed(_ sp: Double) {
+        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
         speed = sp
         if isAudio { if isPlaying { avPlayer?.rate = Float(sp) } }
         else { let was = isPlaying; if was { pause(); play() } }
@@ -603,7 +676,9 @@ final class ReadingRoomPlayer: ObservableObject {
         return nil
     }
 
-    private func seek(s ns: Int, c nc: Int) {
+    private func seek(s ns: Int, c nc: Int, offset: Double = 0) {
+        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        textOffset = max(0, offset)
         let was = isPlaying
         if was { playToken += 1; stopNode(); isPlaying = false }
         s = ns; c = nc
@@ -620,6 +695,7 @@ final class ReadingRoomPlayer: ObservableObject {
         activeFetch?.cancel()
         activeFetch = nil
         if graphRate != 0 { node.stop() }
+        if engine.isRunning { engine.pause() }
         queuedFrames = 0
     }
 
@@ -658,9 +734,25 @@ final class ReadingRoomPlayer: ObservableObject {
         guard let book else { return false }
         let bookId = book.id
         let voice = self.voice, speed = self.speed
+        let delivery = VoiceService.delivery(forAgent: Self.deliveryPreference) ?? "STABLE"
+        let key = cacheKey(q.s, q.c)
+        let startOffset = q.s == s && q.c == c ? textOffset : 0
+        if let cached = audioCache[key], let parsed = StreamingWavParser.parseHeader(cached) {
+            var acc = PcmSampleAccumulator()
+            let samples = mono(acc.append(cached.subdata(in: parsed.pcmStart..<cached.count)), channels: parsed.format.numChannels)
+            let start = StreamingWavParser.framesToSkip(seconds: startOffset, rate: parsed.format.sampleRate, bufferStart: 0, count: samples.count)
+            let step = max(1, Int(parsed.format.sampleRate * 0.4))
+            for i in stride(from: start, to: samples.count, by: step) {
+                let end = min(samples.count, i + step)
+                schedule(samples: Array(samples[i..<end]), rate: parsed.format.sampleRate, final: end == samples.count, token: token, at: q, offset: Double(end) / parsed.format.sampleRate)
+            }
+            return start < samples.count
+        }
+        var whole = Data()
+        var sampleOffset = 0
         let fetch = StreamingClipFetch(client: service.client) { [weak self] in
             guard let self else { return nil }
-            var items = [URLQueryItem(name: "voice", value: voice), URLQueryItem(name: "speed", value: String(format: "%.2f", speed))]
+            let items = [URLQueryItem(name: "voice", value: voice), URLQueryItem(name: "speed", value: String(format: "%.2f", speed)), URLQueryItem(name: "delivery", value: delivery)]
             _ = self
             return self.service.client.request(path: "api/kade/reading-room/book/\(bookId)/audio/\(q.s)/\(q.c)", authorized: true, queryItems: items, timeout: 120)
         }
@@ -674,6 +766,7 @@ final class ReadingRoomPlayer: ObservableObject {
         var leftover: [Float] = []
         while let piece = await fetch.next() {
             guard token == playToken else { fetch.cancel(); return any }
+            whole.append(piece)
             if format == nil {
                 header.append(piece)
                 guard let parsed = StreamingWavParser.parseHeader(header) else { continue }
@@ -688,7 +781,10 @@ final class ReadingRoomPlayer: ObservableObject {
             if pcm.count >= threshold {
                 leftover += mono(acc.append(pcm), channels: fmt.numChannels)
                 pcm.removeAll(keepingCapacity: true)
-                if schedule(samples: leftover, rate: fmt.sampleRate, final: false, token: token, at: q) { any = true }
+                let end = sampleOffset + leftover.count
+                let drop = StreamingWavParser.framesToSkip(seconds: startOffset, rate: fmt.sampleRate, bufferStart: sampleOffset, count: leftover.count)
+                if schedule(samples: Array(leftover.dropFirst(drop)), rate: fmt.sampleRate, final: false, token: token, at: q, offset: Double(end) / fmt.sampleRate) { any = true }
+                sampleOffset = end
                 leftover.removeAll()
             }
         }
@@ -702,7 +798,10 @@ final class ReadingRoomPlayer: ObservableObject {
         if !pcm.isEmpty { leftover += mono(acc.append(pcm), channels: fmt.numChannels) }
         // the marker buffer: whatever is left, or 10 ms of silence
         if leftover.isEmpty { leftover = [Float](repeating: 0, count: Int(fmt.sampleRate / 100)) }
-        if schedule(samples: leftover, rate: fmt.sampleRate, final: true, token: token, at: q) { any = true }
+        remember(whole, key: key)
+        let end = sampleOffset + leftover.count
+        let drop = StreamingWavParser.framesToSkip(seconds: startOffset, rate: fmt.sampleRate, bufferStart: sampleOffset, count: leftover.count)
+        if schedule(samples: Array(leftover.dropFirst(drop)), rate: fmt.sampleRate, final: true, token: token, at: q, offset: Double(end) / fmt.sampleRate) { any = true }
         return any
     }
 
@@ -722,7 +821,17 @@ final class ReadingRoomPlayer: ObservableObject {
     /// Schedules one buffer. The `final` buffer's completion advances the
     /// cursor from `at` to the next position.
     @discardableResult
-    private func schedule(samples: [Float], rate: Double, final: Bool, token: Int, at q: (s: Int, c: Int)) -> Bool {
+    private func schedule(samples: [Float], rate: Double, final: Bool, token: Int, at q: (s: Int, c: Int), offset: Double) -> Bool {
+        let step = max(1, Int(rate * 0.4))
+        if samples.count > step {
+            var scheduled = false
+            for i in stride(from: 0, to: samples.count, by: step) {
+                let end = min(samples.count, i + step)
+                let endOffset = offset - Double(samples.count - end) / rate
+                if schedule(samples: Array(samples[i..<end]), rate: rate, final: final && end == samples.count, token: token, at: q, offset: endOffset) { scheduled = true }
+            }
+            return scheduled
+        }
         guard !samples.isEmpty, token == playToken,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
               let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return false }
@@ -737,7 +846,11 @@ final class ReadingRoomPlayer: ObservableObject {
         node.scheduleBuffer(buf, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                guard token == self.playToken else { return }
                 self.queuedFrames = max(0, self.queuedFrames - n)
+                let changed = self.s != q.s || self.c != q.c
+                self.s = q.s; self.c = q.c; self.textOffset = offset
+                if changed { Task { await self.refreshText() } }
                 if final { self.chunkFinished(q, token: token) }
             }
         }
@@ -749,7 +862,7 @@ final class ReadingRoomPlayer: ObservableObject {
         guard token == playToken, isPlaying else { return }
         if let n = next(s: pos.s, c: pos.c) {
             let changed = n.s != s
-            s = n.s; c = n.c
+            s = n.s; c = n.c; textOffset = 0
             Task { await refreshText() }
             scheduleSave()
             updateNowPlaying()
@@ -777,7 +890,7 @@ final class ReadingRoomPlayer: ObservableObject {
     private func refreshText() async {
         guard let book, !book.isAudio else { return }
         let ss = s, cc = c
-        if let t = try? await service.chunkText(bookId: book.id, s: ss, c: cc), ss == s, cc == c {
+        if let t = try? await service.chunkText(bookId: book.id, s: ss, c: cc), self.book?.id == book.id, ss == s, cc == c {
             nowText = t.text
         }
     }
@@ -885,10 +998,14 @@ final class ReadingRoomPlayer: ObservableObject {
             await self?.saveNowAsync()
         }
     }
-    private func saveNow() { Task { await saveNowAsync() } }
+    private func saveNow() {
+        guard let book else { return }
+        let position = here, voice = self.voice, speed = self.speed
+        Task { await service.saveProgress(bookId: book.id, s: position.s, c: position.c, pos: position.pos, voice: voice, speed: speed) }
+    }
     private func saveNowAsync() async {
         guard let book else { return }
-        await service.saveProgress(bookId: book.id, s: s, c: c, pos: isAudio ? filePosition : 0, voice: voice, speed: speed)
+        await service.saveProgress(bookId: book.id, s: s, c: c, pos: isAudio ? filePosition : textOffset, voice: voice, speed: speed)
     }
 
     // MARK: lock screen
@@ -904,10 +1021,10 @@ final class ReadingRoomPlayer: ObservableObject {
         center.togglePlayPauseCommand.isEnabled = true
         center.togglePlayPauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.togglePlay() }; return .success }
         center.skipBackwardCommand.isEnabled = true
-        center.skipBackwardCommand.preferredIntervals = [15]
+        center.skipBackwardCommand.preferredIntervals = [10]
         center.skipBackwardCommand.addTarget { [weak self] _ in Task { @MainActor in self?.back() }; return .success }
         center.skipForwardCommand.isEnabled = true
-        center.skipForwardCommand.preferredIntervals = [15]
+        center.skipForwardCommand.preferredIntervals = [10]
         center.skipForwardCommand.addTarget { [weak self] _ in Task { @MainActor in self?.forward() }; return .success }
         center.previousTrackCommand.isEnabled = true
         center.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.previousPart() }; return .success }
