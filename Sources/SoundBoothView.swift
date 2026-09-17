@@ -77,6 +77,7 @@ struct SoundBoothView: View {
         var inputMode = "words"
         var values: [String: String] = [:]
         var clips: [(url: String, name: String)] = []
+        var importError = ""
         var projectId: String? = nil
         var newVoice = false
     }
@@ -92,6 +93,7 @@ struct SoundBoothView: View {
     @State private var isWriting = false
     @State private var isRendering = false
     @State private var isImporting = false
+    @State private var importError = ""
     @State private var isSuggesting = false
     @State private var confirmArmed = false
     @State private var confirmPreview = false
@@ -229,17 +231,17 @@ struct SoundBoothView: View {
     private var editorHint: String {
         if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
         if engine == "seed" { return "Describe the setting, sounds and each voice. Include exact dialogue and identify reference voices as @Audio1, @Audio2 or @Audio3." }
-        return "Write the words to perform. Square brackets give actor directions, such as [Whispers.]. Double parentheses describe sounds, such as ((thunder))."
+        return "Write only the words to perform. A reference clip supplies its voice and accent. To change the recording, use Edit; adding another accent is experimental. Use Seed Audio for sound effects."
     }
 
     private func selectEngine(_ next: String) {
         guard next != engine else { return }
         guard !workspaceBusy else { announce("Finish the current operation or stop the render before switching workspaces."); return }
-        drafts[engine] = WorkspaceDraft(mode: mode, text: text, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, projectId: currentProjectId, newVoice: newVoice)
+        drafts[engine] = WorkspaceDraft(mode: mode, text: text, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice)
         let draft = drafts[next] ?? WorkspaceDraft()
         engine = next; mode = draft.mode; text = draft.text; script = draft.script
         readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
-        inputMode = draft.inputMode; values = draft.values; clips = draft.clips
+        inputMode = draft.inputMode; values = draft.values; clips = draft.clips; importError = draft.importError
         currentProjectId = draft.projectId; newVoice = draft.newVoice
         starterId = ""; showHowTo = false; showEngineDetails = false
         invalidateQuote()
@@ -254,16 +256,16 @@ struct SoundBoothView: View {
             }
             Button("Start a new project from this") {
                 guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
-                currentProjectId = nil; values = [:]; clips = []; newVoice = false
+                currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false
                 script = starter.script; text = ""; readback = ""; mood = ""
                 if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
                 invalidateQuote()
                 announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
             }.disabled(starterId.isEmpty || workspaceBusy)
-            Text("Free to load. These replace the current editor; finish or save your work first. Audio generates only after you confirm its price.").font(.caption)
+            Text("Free to load. These replace the current editor; finish or save your work first. AuK starts paid generation with one press. Other engines show a price confirmation.").font(.caption)
             Button("New blank project") {
                 currentProjectId = nil; script = ""; text = ""; readback = ""; mood = ""
-                voiceLabel = ""; values = [:]; clips = []; newVoice = false
+                voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false
                 invalidateQuote(); announce("New blank project. Other engine drafts are kept.")
             }.disabled(workspaceBusy)
             if engine == "scenema" {
@@ -606,11 +608,19 @@ struct SoundBoothView: View {
                     if isImporting { ProgressView().accessibilityHidden(true) }
                 }
             }
-            .disabled(isImporting || clips.count >= st.clipMax)
+            .disabled(workspaceBusy || clips.count >= st.clipMax)
             .accessibilityLabel(clips.isEmpty ? st.label : "\(st.label). \(clips.count) of \(st.clipMax) imported.")
             .accessibilityHint(st.hint + " Opens Files.")
             Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
+            if !importError.isEmpty {
+                Text(importError + " Retry the import or discard this failed attempt before generating.")
+                    .font(.footnote)
+                Button("Discard failed import") {
+                    importError = ""; invalidateQuote()
+                    announce("Failed import discarded. Review the attached clips before generating.")
+                }
+            }
             ForEach(Array(clips.prefix(st.clipMax).enumerated()), id: \.offset) { i, clip in
                 HStack {
                     Text("\(st.clipMax > 1 ? "@Audio\(i + 1): " : "Cloning: ")\(clip.name)")
@@ -627,10 +637,12 @@ struct SoundBoothView: View {
                     .font(.footnote)
                     .accessibilityLabel("Play the imported clip, \(clip.name)")
                     Button("Remove") {
+                        guard !workspaceBusy else { return }
                         clips.remove(at: i)
                         announce("Clip removed.")
                     }
                     .font(.footnote)
+                    .disabled(workspaceBusy)
                     .accessibilityLabel("Remove \(clip.name)")
                 }
             }
@@ -679,7 +691,7 @@ struct SoundBoothView: View {
                     Text("Hear this voice first — 15 seconds").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(KadeCardButtonStyle())
-                .disabled(isRendering || currentJobId != nil)
+                .disabled(workspaceBusy || !importError.isEmpty)
                 .accessibilityHint("Renders one short sample line in the voice you described, so you can hear the actor before spending on the whole piece.")
             }
 
@@ -690,8 +702,11 @@ struct SoundBoothView: View {
                 Text(generateLabel).frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeHeroButtonStyle())
-            .disabled(isRendering || script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityHint("Opens a confirmation with cost information before any paid generation starts.")
+            .disabled(workspaceBusy || !importError.isEmpty || (script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && values["auk_task"] != "edit"))
+            .accessibilityHint(engine == "scenema" ? "Starts paid generation immediately using the attached reference, if any. Wait for reference imports to finish first." : "Opens a confirmation with cost information before any paid generation starts.")
+            if engine == "scenema" {
+                Text("AuK starts with one press. Startup and processing use billed GPU time; the final cost is available afterward.").font(.footnote)
+            }
 
             if let job = currentJobId {
                 Button(role: .destructive) {
@@ -870,12 +885,15 @@ struct SoundBoothView: View {
     }
 
     private func handleImport(_ result: Result<[URL], Error>) async {
+        guard !workspaceBusy else { announce("Finish the current operation before importing a reference."); return }
+        invalidateQuote(); showRenderConfirmation = false
         switch result {
         case .failure(let err):
-            announce("Couldn't open that file. \(err.localizedDescription)")
+            importError = "Couldn't open that file. \(err.localizedDescription)"
+            announce(importError)
         case .success(let urls):
             guard let url = urls.first else { return }
-            isImporting = true
+            isImporting = true; importError = ""
             defer { isImporting = false }
             /* A Files URL is security-scoped: without this pair the read
              * fails with a permission error that looks exactly like a missing
@@ -885,7 +903,8 @@ struct SoundBoothView: View {
             do {
                 let data = try Data(contentsOf: url)
                 guard data.count <= 20 * 1024 * 1024 else {
-                    announce("That clip is bigger than twenty megabytes. Ten to twenty seconds is all it needs.")
+                    importError = "That clip is bigger than twenty megabytes. Ten to twenty seconds is all it needs."
+                    announce(importError)
                     return
                 }
                 let imported = try await service.importReference(
@@ -900,7 +919,8 @@ struct SoundBoothView: View {
                 announce(imported.spoken + (engine == "seed" ? " It is @Audio\(clips.count). Name it in the script." : ""))
             } catch {
                 Earcons.shared.play(.error)
-                announce((error as? LocalizedError)?.errorDescription ?? "Couldn't read that file. \(error.localizedDescription)")
+                importError = (error as? LocalizedError)?.errorDescription ?? "Couldn't read that file. \(error.localizedDescription)"
+                announce(importError)
             }
         }
     }
@@ -1025,11 +1045,14 @@ struct SoundBoothView: View {
     }
 
     private func renderTapped(preview: Bool, confirmed: Bool = false) async {
+        guard !isImporting else { announce("Wait for the reference clip to finish importing."); return }
+        guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
+        if engine != "lyria" && !clips.isEmpty { body["referenceExpected"] = true }
         body["engine"] = engine; body["mode"] = mode
         body["sourceText"] = text; body["readback"] = readback
         if s.isEmpty {
@@ -1042,7 +1065,7 @@ struct SoundBoothView: View {
         isRendering = true
         defer { isRendering = false }
         do {
-            if !confirmed || !confirmArmed || confirmPreview != preview {
+            if engine != "scenema" && (!confirmed || !confirmArmed || confirmPreview != preview) {
                 let version = quoteVersion
                 body["estimateOnly"] = true
                 let quote = try await service.render(body: body)
@@ -1183,6 +1206,7 @@ struct SoundBoothView: View {
         currentProjectId = nil
         values["auk_task"] = editing ? "edit" : "speech"
         if editing { values["instruction"] = ""; values.removeValue(forKey: "gen_seconds") }
+        importError = ""
         clips = [(url: take.masterUrl ?? take.url, name: title)]
         invalidateQuote()
         announce(editing ? "Take attached. Describe the edit you want. The original is kept." : "Voice reference attached. Write the words you want this voice to say.")
@@ -1199,7 +1223,7 @@ struct SoundBoothView: View {
         readback = p.readback ?? ""
         estimate = nil
         confirmArmed = false
-        values = [:]; clips = []; newVoice = false
+        values = [:]; clips = []; importError = ""; newVoice = false
         if let seed = p.voiceSeed { values["seed"] = String(seed) }
         if let opts = p.options {
             for (k, v) in opts {
