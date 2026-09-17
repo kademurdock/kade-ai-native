@@ -45,7 +45,7 @@ struct SoundBoothView: View {
     @Environment(\.dismiss) private var dismiss
 
     // What she is making
-    @State private var showFailedProjects = false
+    @State private var showFailedProjects = true
     private var visibleProjects: [SoundBoothProject] {
         projects.filter { showFailedProjects || !["failed", "cancelled"].contains($0.state) || !($0.takes ?? []).isEmpty || $0.hasRecoverableAudio == true }
     }
@@ -95,6 +95,9 @@ struct SoundBoothView: View {
     @State private var isSuggesting = false
     @State private var confirmArmed = false
     @State private var confirmPreview = false
+    @State private var showRenderConfirmation = false
+    @State private var renderFailed = false
+    @State private var renderConfirmationMessage = ""
     @State private var quoteVersion = 0
     @State private var starterId = ""
     @State private var newVoice = false
@@ -194,6 +197,18 @@ struct SoundBoothView: View {
             if let g = guide?.engines[e] {
                 announce("\(g.name). \(g.tagline) \(g.where)")
             }
+        }
+        .alert(renderFailed ? "Generation stopped" : "Confirm paid generation", isPresented: $showRenderConfirmation) {
+            if renderFailed {
+                Button("OK", role: .cancel) { }
+            } else {
+                Button("Start paid generation") {
+                    Task { await renderTapped(preview: confirmPreview, confirmed: true) }
+                }
+                Button("Keep editing", role: .cancel) { invalidateQuote() }
+            }
+        } message: {
+            Text(renderConfirmationMessage)
         }
         .onAppear { Task { await load() } }
         .onDisappear { pollTask?.cancel(); pollTask = nil }
@@ -672,13 +687,11 @@ struct SoundBoothView: View {
                 KadeHaptics.press()
                 Task { await renderTapped(preview: false) }
             } label: {
-                Text(confirmArmed ? "\(generateLabel) — confirm" : generateLabel).frame(maxWidth: .infinity)
+                Text(generateLabel).frame(maxWidth: .infinity)
             }
             .buttonStyle(KadeHeroButtonStyle())
             .disabled(isRendering || script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityHint(confirmArmed
-                ? "Double tap again to spend it and start the render."
-                : "Says what it will cost first, then asks once more before spending.")
+            .accessibilityHint("Opens a confirmation with cost information before any paid generation starts.")
 
             if let job = currentJobId {
                 Button(role: .destructive) {
@@ -728,6 +741,12 @@ struct SoundBoothView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(p.summary)
+
+            if p.state == "failed", let error = p.lastError, !error.isEmpty {
+                Text("Generation stopped. \(error)")
+                    .font(.callout)
+                    .accessibilityLabel("Render failed. \(error)")
+            }
 
             let takes = p.takes ?? []
             if !takes.isEmpty {
@@ -813,6 +832,9 @@ struct SoundBoothView: View {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
         }
         await loadProjects()
+        if currentJobId == nil, let latest = projects.first, latest.state == "failed" {
+            announce("Your latest render stopped. \(latest.lastError ?? "No finished audio was returned.") The saved attempt is in the library below.")
+        }
     }
 
     private func loadProjects() async {
@@ -1002,7 +1024,7 @@ struct SoundBoothView: View {
         }
     }
 
-    private func renderTapped(preview: Bool) async {
+    private func renderTapped(preview: Bool, confirmed: Bool = false) async {
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1020,14 +1042,16 @@ struct SoundBoothView: View {
         isRendering = true
         defer { isRendering = false }
         do {
-            if !confirmArmed || confirmPreview != preview {
+            if !confirmed || !confirmArmed || confirmPreview != preview {
                 let version = quoteVersion
                 body["estimateOnly"] = true
                 let quote = try await service.render(body: body)
                 guard quoteVersion == version else { announce("The draft or settings changed. Press again for an updated price."); return }
                 estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
                 let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : (st["auk_task"] as? String == "edit" ? " Editing " : " Cloning ") + "\(clips.map { $0.name }.joined(separator: ", "))."
-                announce((quote.estimate?.spoken ?? "Estimate unavailable.") + clipLine + " Press " + (preview ? "Hear this voice first" : generateLabel) + " again to confirm.")
+                renderConfirmationMessage = (quote.estimate?.spoken ?? "A reliable total price is unavailable. This is a paid generation.") + clipLine
+                renderFailed = false
+                showRenderConfirmation = true
                 return
             }
             confirmArmed = false
@@ -1109,6 +1133,12 @@ struct SoundBoothView: View {
                         KadeHaptics.success()
                     } else {
                         Earcons.shared.play(.error)
+                        if st.state == "failed" {
+                            showFailedProjects = true
+                            renderFailed = true
+                            renderConfirmationMessage = st.error ?? st.spoken ?? "No finished recording was returned. Your saved attempt remains in the library."
+                            showRenderConfirmation = true
+                        }
                     }
                     currentJobId = nil
                     await loadProjects()

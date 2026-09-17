@@ -1019,6 +1019,8 @@ struct ContentView: View {
             go(.announcements)
         case .readingRoom:
             go(.readingRoom)
+        case .soundBooth:
+            go(.soundBooth)
         }
     }
 
