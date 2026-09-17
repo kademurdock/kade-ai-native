@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import AVFoundation
 import MediaPlayer
 import UIKit
@@ -306,24 +307,50 @@ final class ReadingRoomService: ObservableObject {
     struct UploadedBook: Decodable { let book: RRItem; let skipped: [RRSkippedSummary]?; let jacket: String? }
     struct RRSkippedSummary: Decodable { let title: String?; let reason: String? }
 
-    /// A book file (DAISY zip, EPUB, txt, docx, html) through the fork, which
-    /// parses it. Read as Data: text-only DAISY zips are a few megabytes.
+    /// Upload bytes to storage, then check a durable import job using short requests.
     func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false) async throws -> UploadedBook {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
-        let data = try Data(contentsOf: fileURL)
-        guard data.count <= 256 * 1024 * 1024 else { throw RRError(message: "That book ZIP is over the 256 MB import limit. Individual audio or video files can be added through Add audio or video.") }
-        var req = client.multipartRequest(
-            path: "api/kade/reading-room/upload",
-            authorized: true,
-            fields: [("grownUpsOnly", grownUpsOnly ? "1" : "0"), ("private", keepPrivate ? "1" : "0")],
-            fileField: "book",
-            fileData: data,
-            fileName: fileURL.lastPathComponent,
-            fileMimeType: fileURL.pathExtension.lowercased() == "epub" ? "application/epub+zip" : (fileURL.pathExtension.lowercased() == "zip" ? "application/zip" : "application/octet-stream")
-        )
-        req.timeoutInterval = 180
-        return try await json(req, as: UploadedBook.self)
+        let before = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let bytes = (before[.size] as? NSNumber)?.int64Value ?? 0
+        let limit: Int64 = fileURL.pathExtension.lowercased() == "zip" ? 4 * 1024 * 1024 * 1024 : 256 * 1024 * 1024
+        guard bytes > 0, bytes <= limit else { throw RRError(message: "Book ZIPs must be 4 GB or smaller; other book files must be 256 MB or smaller.") }
+        let hashTask = Task.detached(priority: .utility) {
+            let source = try FileHandle(forReadingFrom: fileURL)
+            defer { try? source.close() }
+            var hash = SHA256()
+            while true {
+                try Task.checkCancellation()
+                let block = try source.read(upToCount: 1024 * 1024) ?? Data()
+                if block.isEmpty { break }
+                hash.update(data: block)
+            }
+            return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+        let digest = try await withTaskCancellationHandler(operation: { try await hashTask.value }, onCancel: { hashTask.cancel() })
+        let requestID = "book-" + digest + (keepPrivate ? "-private" : "-shared") + (grownUpsOnly ? "-adult" : "-all")
+        struct Job: Decodable { let id: String; let state: String; let uploadRequired: Bool?; let url: String?; let mime: String?; let result: UploadedBook?; let error: String? }
+        var job = try await json(post("api/kade/reading-room/imports", ["requestId": requestID, "fileName": fileURL.lastPathComponent, "bytes": bytes, "private": keepPrivate, "grownUpsOnly": grownUpsOnly]), as: Job.self)
+        if job.uploadRequired == true {
+            guard let address = job.url, let url = URL(string: address) else { throw RRError(message: "Missing storage address.") }
+            var put = URLRequest(url: url); put.httpMethod = "PUT"; put.timeoutInterval = 7200
+            put.setValue(job.mime ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
+            let (_, response) = try await URLSession.shared.upload(for: put, fromFile: fileURL)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RRError(message: "Storage did not confirm the upload. Retry the same file to recover it.") }
+        }
+        let after = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        guard (before[.size] as? NSNumber) == (after[.size] as? NSNumber), (before[.modificationDate] as? Date) == (after[.modificationDate] as? Date) else { throw RRError(message: "The local book changed during upload. Select the finished file again.") }
+        if job.state != "ready" { job = try await json(post("api/kade/reading-room/imports/\(job.id)/commit", [:]), as: Job.self) }
+        let deadline = Date().addingTimeInterval(7200)
+        while job.state != "ready" {
+            try Task.checkCancellation()
+            if job.state == "failed" { throw RRError(message: job.error ?? "Book import failed. Retry the same file.") }
+            guard Date() < deadline else { throw RRError(message: "Your book is stored and its import is pending. Select the same file to check it again.") }
+            try await Task.sleep(nanoseconds: 8_500_000_000)
+            job = try await json(client.request(path: "api/kade/reading-room/imports/\(job.id)", authorized: true), as: Job.self)
+        }
+        guard let result = job.result else { throw RRError(message: "Import receipt missing. Select the same file to recover it.") }
+        return result
     }
 
     /// Start a recording donation; returns the item to add parts to.
@@ -340,24 +367,70 @@ final class ReadingRoomService: ObservableObject {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let bytes = (attrs[.size] as? NSNumber)?.intValue ?? 0
         let seconds = (try? await AVURLAsset(url: fileURL).load(.duration).seconds) ?? 0
-        struct Pre: Decodable { let key: String; let url: String; let mime: String }
-        let pre = try await json(post("api/kade/reading-room/media/\(item.id)/track/presign", ["fileName": fileURL.lastPathComponent, "mime": "", "bytes": bytes]), as: Pre.self)
-        guard let putURL = URL(string: pre.url) else { throw RRError(message: "Bad upload address.") }
-        var put = URLRequest(url: putURL)
-        put.httpMethod = "PUT"
-        put.setValue(pre.mime, forHTTPHeaderField: "Content-Type")
-        put.timeoutInterval = 3600
-        // The bucket is not kademurdock.com: no pacing gate, no browser UA
-        // needed, and a plain shared session can stream a file from disk.
-        let delegate = UploadProgressDelegate(onProgress: onProgress)
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        let (_, resp) = try await session.upload(for: put, fromFile: fileURL)
-        guard let http = resp as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            throw RRError(message: "Storage did not accept the file (\((resp as? HTTPURLResponse)?.statusCode ?? 0)).")
-        }
+        guard bytes > 0, Int64(bytes) <= 20 * 1024 * 1024 * 1024 else { throw RRError(message: "Recordings must be 20 GB or smaller.") }
+        struct Part: Decodable { let partNumber: Int; let url: String }
+        struct Multipart: Decodable { let uploadId: String; let partBytes: Int; let parts: [Part] }
+        struct Pre: Decodable { let key: String; let url: String?; let mime: String; let multipart: Multipart? }
         struct R: Decodable { let item: RRItem }
-        return try await json(post("api/kade/reading-room/media/\(item.id)/track/done", ["key": pre.key, "title": title, "bytes": bytes, "seconds": seconds.isFinite ? seconds : 0, "originalName": fileURL.lastPathComponent]), as: R.self).item
+        // Save the completion receipt before notifying the library, so a lost
+        // response can be retried with the same storage key.
+        let recoveryKey = "library-track-receipt-" + item.id + "-" + fileURL.lastPathComponent + "-" + String(bytes) + "-" + String((attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
+        if let saved = UserDefaults.standard.data(forKey: recoveryKey), let body = try JSONSerialization.jsonObject(with: saved) as? [String: Any] {
+            let result = try await json(post("api/kade/reading-room/media/\(item.id)/track/done", body), as: R.self).item
+            UserDefaults.standard.removeObject(forKey: recoveryKey)
+            return result
+        }
+        let pre = try await json(post("api/kade/reading-room/media/\(item.id)/track/presign", ["fileName": fileURL.lastPathComponent, "mime": "", "bytes": bytes, "multipart": true]), as: Pre.self)
+        func send(_ file: URL, address: String, offset: Int, length: Int) async throws -> HTTPURLResponse {
+            guard let url = URL(string: address) else { throw RRError(message: "Bad upload address.") }
+            var request = URLRequest(url: url); request.httpMethod = "PUT"; request.timeoutInterval = 7200
+            request.setValue(pre.mime, forHTTPHeaderField: "Content-Type")
+            let delegate = UploadProgressDelegate { progress in onProgress((Double(offset) + progress * Double(length)) / Double(bytes)) }
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            defer { session.finishTasksAndInvalidate() }
+            let (_, response) = try await session.upload(for: request, fromFile: file)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RRError(message: "Storage did not accept the file (\((response as? HTTPURLResponse)?.statusCode ?? 0)).") }
+            return http
+        }
+        var body: [String: Any] = ["key": pre.key, "title": title, "bytes": bytes, "seconds": seconds.isFinite ? seconds : 0, "originalName": fileURL.lastPathComponent]
+        if let multipart = pre.multipart {
+            guard multipart.partBytes > 0, !multipart.parts.isEmpty else { throw RRError(message: "Invalid multipart upload plan.") }
+            var receipts: [[String: Any]] = []
+            let source = try FileHandle(forReadingFrom: fileURL)
+            defer { try? source.close() }
+            for part in multipart.parts {
+                try Task.checkCancellation()
+                let offset = (part.partNumber - 1) * multipart.partBytes
+                let length = min(multipart.partBytes, bytes - offset)
+                guard offset >= 0, length > 0 else { throw RRError(message: "Invalid upload part.") }
+                let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("library-part-" + UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                FileManager.default.createFile(atPath: temporary.path, contents: nil)
+                let output = try FileHandle(forWritingTo: temporary)
+                do {
+                    try source.seek(toOffset: UInt64(offset))
+                    var remaining = length
+                    while remaining > 0 {
+                        try Task.checkCancellation()
+                        let block = try source.read(upToCount: min(1024 * 1024, remaining)) ?? Data()
+                        guard !block.isEmpty else { throw RRError(message: "The local file changed during upload.") }
+                        try output.write(contentsOf: block); remaining -= block.count
+                    }
+                    try output.close()
+                } catch { try? output.close(); throw error }
+                let response = try await send(temporary, address: part.url, offset: offset, length: length)
+                guard let etag = response.value(forHTTPHeaderField: "ETag"), !etag.isEmpty else { throw RRError(message: "Storage omitted the part receipt.") }
+                receipts.append(["partNumber": part.partNumber, "etag": etag])
+            }
+            body["multipart"] = ["uploadId": multipart.uploadId, "parts": receipts]
+        } else {
+            guard let address = pre.url else { throw RRError(message: "Missing upload address.") }
+            _ = try await send(fileURL, address: address, offset: 0, length: bytes)
+        }
+        UserDefaults.standard.set(try JSONSerialization.data(withJSONObject: body), forKey: recoveryKey)
+        let result = try await json(post("api/kade/reading-room/media/\(item.id)/track/done", body), as: R.self).item
+        UserDefaults.standard.removeObject(forKey: recoveryKey)
+        return result
     }
 
     // MARK: voices
