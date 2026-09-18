@@ -180,7 +180,7 @@ struct SoundBoothView: View {
          * sentence that says so, rather than rendering without the clone. */
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: engine == "seed"
+            allowedContentTypes: engine == "seed" || engine == "yue2"
                 ? [.wav, .mp3, .mpeg4Audio, .init(filenameExtension: "ogg") ?? .audio]
                 : [.wav, .mp3, .mpeg4Audio],
             allowsMultipleSelection: false
@@ -821,8 +821,12 @@ struct SoundBoothView: View {
                             Spacer()
                         }
                         HStack {
-                            Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
-                            Button("Edit this take") { prepareTake(take, title: p.title, editing: true) }
+                            if p.engine == "lyria" || p.engine == "yue2" {
+                                Button("Cover this take") { prepareCover(take, project: p) }
+                            } else {
+                                Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
+                                Button("Edit this take") { prepareTake(take, title: p.title, editing: true) }
+                            }
                         }
                         .disabled(workspaceBusy)
                     }
@@ -1135,7 +1139,7 @@ struct SoundBoothView: View {
                 let quote = try await service.render(body: body)
                 guard quoteVersion == version else { announce("The draft or settings changed. Press again for an updated price."); return }
                 estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
-                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : (st["auk_task"] as? String == "edit" ? " Editing " : " Cloning ") + "\(clips.map { $0.name }.joined(separator: ", "))."
+                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : (engine == "yue2" ? " Covering " : st["auk_task"] as? String == "edit" ? " Editing " : " Cloning ") + "\(clips.map { $0.name }.joined(separator: ", "))."
                 renderConfirmationMessage = (quote.estimate?.spoken ?? "A reliable total price is unavailable. This is a paid generation.") + clipLine
                 renderFailed = false
                 showRenderConfirmation = true
@@ -1275,6 +1279,19 @@ struct SoundBoothView: View {
         clips = [(url: take.masterUrl ?? take.url, name: title)]
         invalidateQuote()
         announce(editing ? "Take attached. Describe the edit you want. The original is kept." : "Voice reference attached. Write the words you want this voice to say.")
+        focusStatus = true
+    }
+
+    private func prepareCover(_ take: SoundBoothTake, project: SoundBoothProject) {
+        guard !workspaceBusy else { announce("Finish the current operation first."); return }
+        selectEngine("yue2")
+        currentProjectId = nil
+        values = ["lyrics": project.options?["lyrics"]?.asFieldText ?? ""]
+        script = project.screenplay ?? project.script
+        importError = ""
+        clips = [(url: take.masterUrl ?? take.url, name: project.title)]
+        invalidateQuote()
+        announce("Song attached for a YuE2 cover. Describe the new style and check the lyrics. The original is kept.")
         focusStatus = true
     }
 

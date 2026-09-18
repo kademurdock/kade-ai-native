@@ -35,14 +35,14 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     let backupUrl: String?
     let masterUrl: String?
     let description: String?
-    let seconds: Int?
+    let seconds: Double?
     let costUSD: Double?
     let createdAt: String?
 
     /// What VoiceOver reads for this take's row.
     func label(number: Int) -> String {
         var parts = ["Take \(number)"]
-        if let s = seconds, s > 0 { parts.append("\(s) seconds") }
+        if let s = seconds, s > 0 { parts.append("\(Int(s.rounded())) seconds") }
         let d = (description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !d.isEmpty { parts.append(d) }
         return parts.joined(separator: ", ")
@@ -120,6 +120,7 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
         var parts = [title, engineLabel, stateWord]
         if let t = takes, !t.isEmpty { parts.append("\(t.count) take\(t.count == 1 ? "" : "s")") }
         if let c = costUSD, c > 0 { parts.append("about \(max(1, Int((c * 100).rounded()))) cents") }
+        if engine == "yue2" { parts.append("Execution cost only; startup and idle time are extra") }
         let r = (readback ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !r.isEmpty { parts.append(r) }
         return parts.joined(separator: ". ")
