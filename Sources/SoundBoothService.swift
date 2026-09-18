@@ -99,6 +99,7 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
         switch engine {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
+        case "yue2": return "YuE2"
         default: return "AuK HQ"
         }
     }
@@ -129,6 +130,7 @@ struct SoundBoothScriptResult: Decodable {
     let engine: String
     let mode: String
     let script: String
+    let screenplay: String?
     let readback: String?
     let estimate: SoundBoothEstimate?
     /// Non-nil when the text reads like a DESCRIPTION but was sent to be
@@ -320,9 +322,12 @@ final class SoundBoothService: ObservableObject {
         mood: String?,
         scene: String?,
         shot: String?,
-        clipURLs: [String] = []
+        clipURLs: [String] = [],
+        lyrics: String? = nil
     ) async throws -> SoundBoothScriptResult {
         var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "gender": gender]
+        if engine == "lyria" || engine == "yue2" { body.removeValue(forKey: "gender") }
+        if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
         if let v = voiceDescription, !v.isEmpty { body["voice_description"] = v }
         if let m = mood, !m.isEmpty { body["mood"] = m }
         if let s = scene, !s.isEmpty { body["scene"] = s }

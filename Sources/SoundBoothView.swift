@@ -49,6 +49,8 @@ struct SoundBoothView: View {
     private var visibleProjects: [SoundBoothProject] {
         projects.filter { showFailedProjects || !["failed", "cancelled"].contains($0.state) || !($0.takes ?? []).isEmpty || $0.hasRecoverableAudio == true }
     }
+    @State private var writingUndo: (engine: String, script: String, lyrics: String)?
+    private var isMusic: Bool { engine == "lyria" || engine == "yue2" }
     @State private var engine = "scenema"
     @State private var mode = "easy"
     @State private var text = ""
@@ -139,12 +141,14 @@ struct SoundBoothView: View {
             VStack(alignment: .leading, spacing: 20) {
                 statusBlock
                 engineSection
-                starterSection
-                if engine != "lyria" {
-                    modeSection
-                    writingSection
-                }
                 scriptSection
+                if !isMusic {
+                    DisclosureGroup("Voice, references, and writing desk") {
+                        modeSection
+                        writingSection
+                    }
+                }
+                DisclosureGroup("Starting points and new projects") { starterSection }
                 librarySection
             }
             .padding()
@@ -223,12 +227,13 @@ struct SoundBoothView: View {
     }
 
     private var workspaceBusy: Bool { isWriting || isRendering || isImporting || currentJobId != nil }
-    private var editorTitle: String { engine == "lyria" ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
+    private var editorTitle: String { isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
     private var generateLabel: String {
         if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
-        return engine == "lyria" ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
+        return isMusic ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
     }
     private var editorHint: String {
+        if engine == "yue2" { return "Describe the style and singing voice. Add lyrics in song settings, or use Write my song idea. For a cover, import a source recording there. Its melody guides a new arrangement; it does not clone the singer." }
         if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
         if engine == "seed" { return "Describe the setting, sounds and each voice. Include exact dialogue and identify reference voices as @Audio1, @Audio2 or @Audio3." }
         return "Write only the words to perform. A reference clip supplies its voice and accent. To change the recording, use Edit; adding another accent is experimental. Use Seed Audio for sound effects."
@@ -313,7 +318,7 @@ struct SoundBoothView: View {
                  * Her ask: "people will not know the difference." Each card
                  * says what it is, where it runs, what it costs, what it is
                  * for and not for — as one spoken element, then a button. */
-                ForEach(["scenema", "seed", "lyria"], id: \.self) { key in
+                ForEach(["scenema", "lyria", "yue2", "seed"], id: \.self) { key in
                     if let g = guide.engines[key] {
                         Button {
                             KadeHaptics.press()
@@ -380,6 +385,7 @@ struct SoundBoothView: View {
                     Text("AuK HQ").tag("scenema")
                     Text("Seed Audio").tag("seed")
                     Text("Lyria").tag("lyria")
+                    Text("YuE2").tag("yue2")
                 }
                 .pickerStyle(.segmented)
             }
@@ -419,6 +425,7 @@ struct SoundBoothView: View {
         switch key {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
+        case "yue2": return "YuE2"
         default: return "AuK HQ"
         }
     }
@@ -655,27 +662,42 @@ struct SoundBoothView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(editorTitle).font(.headline).accessibilityAddTraits(.isHeader)
             Text(editorHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
-            if engine == "lyria", let g = currentEngine {
+            if isMusic, let g = currentEngine {
                 DisclosureGroup("How to direct the music", isExpanded: $showHowTo) {
                     ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in Text(tip).font(.footnote) }
                 }
             }
 
             TextEditor(text: $script)
-                .font(.system(.body, design: engine == "lyria" ? .default : .monospaced))
+                .font(.system(.body, design: isMusic ? .default : .monospaced))
                 .frame(minHeight: 160)
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel(editorTitle)
                 .accessibilityHint(editorHint)
 
-            if engine == "lyria", let g = currentEngine {
+            if isMusic, let g = currentEngine {
+                DisclosureGroup("Lyrics, covers, and song settings") {
                 Text("Song options").font(.headline).accessibilityAddTraits(.isHeader)
                 ForEach(g.settings.filter { values["instrumental"] != "1" || ($0.key != "lyrics" && $0.key != "keep_lyrics") }) { setting in
                     settingRow(setting)
                 }
+                }
             }
 
+            HStack {
+                Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
+                    Task { await quickDraft() }
+                }.disabled(workspaceBusy)
+                Button("Surprise me", systemImage: "dice") { inspire() }.disabled(workspaceBusy)
+            }
+            if let previous = writingUndo, previous.engine == engine {
+                Button("Undo writing change") {
+                    script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
+                    invalidateQuote(); announce("Previous writing restored.")
+                }.disabled(workspaceBusy)
+            }
+            Text("Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             if !readback.isEmpty {
                 Text(readback)
                     .font(.footnote)
@@ -705,7 +727,7 @@ struct SoundBoothView: View {
             .disabled(workspaceBusy || !importError.isEmpty || (script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && values["auk_task"] != "edit"))
             .accessibilityHint(engine == "scenema" ? "Starts paid generation immediately using the attached reference, if any. Wait for reference imports to finish first." : "Opens a confirmation with cost information before any paid generation starts.")
             if engine == "scenema" {
-                Text("AuK starts with one press. Startup and processing use billed GPU time; the final cost is available afterward.").font(.footnote)
+                Text("AuK starts with one press. Startup, generation and ten minutes awake after the last job use billed GPU time.").font(.footnote)
             }
 
             if let job = currentJobId {
@@ -970,7 +992,7 @@ struct SoundBoothView: View {
             if out["instrumental"] as? Bool == true { out.removeValue(forKey: "lyrics"); out.removeValue(forKey: "keep_lyrics") }
             return out
         }
-        if out["gender"] == nil { out["gender"] = "female" }
+        if engine != "yue2" && out["gender"] == nil { out["gender"] = "female" }
         if !clips.isEmpty {
             if engine == "seed" { out["audio_urls"] = clips.prefix(3).map { $0.url } }
             else { out["reference_voice_url"] = clips[0].url }
@@ -1002,6 +1024,47 @@ struct SoundBoothView: View {
         }
     }
 
+    private func inspire() {
+        guard !workspaceBusy else { return }
+        writingUndo = (engine, script, values["lyrics"] ?? "")
+        let place = ["a midnight train", "a seaside town", "a kitchen in a thunderstorm", "an old theatre"].randomElement() ?? "home"
+        let turn = ["an unexpected reunion", "a promise kept", "a small act of courage", "something thought lost"].randomElement() ?? "a reunion"
+        script = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes." : "Write a short vivid story about \(place) and \(turn), with a satisfying ending."
+        invalidateQuote(); announce("A new idea is in the editor. Help write this can develop it. Undo restores your previous writing.")
+    }
+
+    private func quickDraft() async {
+        guard !workspaceBusy else { return }
+        let original = script
+        let originalLyrics = values["lyrics"] ?? ""
+        let requestEngine = engine
+        let version = quoteVersion
+        let idea = (script.isEmpty ? text : script).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard idea.count >= 3 else { announce("Write an idea first, or choose Surprise me."); return }
+        isWriting = true
+        defer { isWriting = false }
+        announce("Writing a draft from your idea.")
+        do {
+            let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
+                voiceDescription: values["voice_description"], gender: values["gender"] ?? "female",
+                mood: nil, scene: nil, shot: nil, lyrics: isMusic ? originalLyrics : nil)
+            guard engine == requestEngine, script == original, quoteVersion == version else {
+                announce("Your writing or settings changed. Your current text is kept."); return
+            }
+            var draft = result.screenplay ?? result.script
+            if engine == "yue2" {
+                guard let boundary = draft.range(of: "\nLyrics:", options: .caseInsensitive) else {
+                    announce("The writer did not return separate lyrics. Your idea is kept."); return
+                }
+                values["lyrics"] = String(draft[boundary.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                draft = String(draft[..<boundary.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            writingUndo = (engine, original, originalLyrics)
+            script = draft; readback = result.readback ?? ""; invalidateQuote()
+            announce("Draft ready in the editor. You can edit or undo it. No audio has been generated.")
+        } catch { announce((error as? LocalizedError)?.errorDescription ?? "The writing desk could not finish. Your text is kept.") }
+    }
+
     private func makeScript(kind: String) async {
         guard engine != "lyria", !workspaceBusy else { return }
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1025,7 +1088,7 @@ struct SoundBoothView: View {
                 shot: st["shot"] as? String,
                 clipURLs: engine == "lyria" ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             )
-            script = r.script
+            script = r.screenplay ?? r.script
             readback = r.readback ?? ""
             estimate = r.estimate
             confirmArmed = false
@@ -1045,6 +1108,7 @@ struct SoundBoothView: View {
     }
 
     private func renderTapped(preview: Bool, confirmed: Bool = false) async {
+        guard !isWriting else { announce("Wait for the writing draft to finish."); return }
         guard !isImporting else { announce("Wait for the reference clip to finish importing."); return }
         guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
@@ -1109,6 +1173,7 @@ struct SoundBoothView: View {
             let perSong = health?.engines["lyria"]?.usdPerSong ?? 0.08
             return "About \(max(1, Int((perSong * 100).rounded()))) cents for the song, whatever length it comes out. Lyria is priced per song, not per minute. Usually back in under a minute."
         }
+        if engine == "yue2" { return "YuE2 uses a sleeping GPU at about $1.22 per hour. Startup, generation and ten minutes awake afterward are billed. There is no reliable per-song estimate yet." }
         if engine == "scenema" {
             return "AuK HQ uses a sleeping GPU. Startup and processing are billed. A reliable cost and wait estimate is not available yet. Longer work runs in sections."
         }
