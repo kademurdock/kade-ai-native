@@ -201,6 +201,7 @@ struct SoundBoothGuide: Decodable {
         /// text · choice · toggle · number · clip
         let kind: String
         let options: [String]?
+        let step: Double?
         let min: Double?
         /// For a number: the upper bound. For a clip row: how many clips.
         let max: Double?
@@ -210,7 +211,7 @@ struct SoundBoothGuide: Decodable {
         var id: String { key }
         var clipMax: Int { Int(max ?? 1) }
 
-        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, `default` }
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, `default` }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             key = try c.decode(String.self, forKey: .key)
@@ -218,6 +219,7 @@ struct SoundBoothGuide: Decodable {
             hint = try c.decode(String.self, forKey: .hint)
             kind = try c.decode(String.self, forKey: .kind)
             options = try c.decodeIfPresent([String].self, forKey: .options)
+            step = try? c.decodeIfPresent(Double.self, forKey: .step)
             min = try? c.decodeIfPresent(Double.self, forKey: .min)
             max = try? c.decodeIfPresent(Double.self, forKey: .max)
             // `default` is one of three shapes depending on the kind.
@@ -344,6 +346,11 @@ final class SoundBoothService: ObservableObject {
         return try await post("api/kade/sound-booth/script", body: body, timeout: 120, fallback: "The script desk had trouble. Try again.")
     }
 
+    struct LyricsDraft: Decodable { let transcript: String; let warning: String }
+    func transcribeLyrics(url: String) async throws -> LyricsDraft {
+        try await post("api/kade/sound-booth/reference/lyrics", body: ["url": url], timeout: 210, fallback: "Could not hear the words. Your lyrics are kept.")
+    }
+
     func render(body: [String: Any]) async throws -> SoundBoothRenderResult {
         // Seed Audio is SYNCHRONOUS and can legitimately take three minutes
         // for a two-minute scene; AuK HQ returns as soon as it is queued.
@@ -363,6 +370,14 @@ final class SoundBoothService: ObservableObject {
         struct Wrap: Decodable { let projects: [SoundBoothProject] }
         let w: Wrap = try await get("api/kade/sound-booth/projects", fallback: "Couldn't load your Sound Booth.")
         return w.projects
+    }
+
+    func rename(projectId: String, title: String) async throws {
+        var req = client.request(path: "api/kade/sound-booth/projects/\(projectId)", method: "PATCH", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["title": title])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else { throw decodeError(data, fallback: "Couldn't save that title.") }
     }
 
     func delete(projectId: String) async throws {

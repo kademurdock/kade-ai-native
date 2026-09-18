@@ -54,6 +54,10 @@ struct SoundBoothView: View {
     @State private var engine = "scenema"
     @State private var mode = "easy"
     @State private var text = ""
+    @State private var trackTitle = ""
+    @State private var renameProject: SoundBoothProject?
+    @State private var renameTitle = ""
+    @State private var showRename = false
     @State private var script = ""
     @State private var readback = ""
     @State private var voiceLabel = ""
@@ -72,6 +76,7 @@ struct SoundBoothView: View {
     private struct WorkspaceDraft {
         var mode = "easy"
         var text = ""
+        var title = ""
         var script = ""
         var readback = ""
         var voiceLabel = ""
@@ -92,15 +97,14 @@ struct SoundBoothView: View {
     @State private var projects: [SoundBoothProject] = []
     @State private var estimate: SoundBoothEstimate?
     @State private var statusLine = "Loading the Sound Booth…"
+    @State private var isTranscribing = false
     @State private var isWriting = false
     @State private var isRendering = false
     @State private var isImporting = false
     @State private var importError = ""
     @State private var isSuggesting = false
     @State private var confirmArmed = false
-    @State private var confirmPreview = false
     @State private var showRenderConfirmation = false
-    @State private var renderFailed = false
     @State private var renderConfirmationMessage = ""
     @State private var quoteVersion = 0
     @State private var starterId = ""
@@ -204,18 +208,14 @@ struct SoundBoothView: View {
                 announce("\(g.name). \(g.tagline) \(g.where)")
             }
         }
-        .alert(renderFailed ? "Generation stopped" : "Confirm paid generation", isPresented: $showRenderConfirmation) {
-            if renderFailed {
-                Button("OK", role: .cancel) { }
-            } else {
-                Button("Start paid generation") {
-                    Task { await renderTapped(preview: confirmPreview, confirmed: true) }
-                }
-                Button("Keep editing", role: .cancel) { invalidateQuote() }
-            }
-        } message: {
-            Text(renderConfirmationMessage)
-        }
+        .alert("Generation stopped", isPresented: $showRenderConfirmation) {
+            Button("OK", role: .cancel) { }
+        } message: { Text(renderConfirmationMessage) }
+        .alert("Rename track", isPresented: $showRename) {
+            TextField("Track title", text: $renameTitle)
+            Button("Save title") { Task { await saveTitle() } }
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("Up to 80 characters. This changes the saved title without generating audio.") }
         .onAppear { Task { await load() } }
         .onDisappear { pollTask?.cancel(); pollTask = nil }
     }
@@ -242,9 +242,9 @@ struct SoundBoothView: View {
     private func selectEngine(_ next: String) {
         guard next != engine else { return }
         guard !workspaceBusy else { announce("Finish the current operation or stop the render before switching workspaces."); return }
-        drafts[engine] = WorkspaceDraft(mode: mode, text: text, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice)
+        drafts[engine] = WorkspaceDraft(mode: mode, text: text, title: trackTitle, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice)
         let draft = drafts[next] ?? WorkspaceDraft()
-        engine = next; mode = draft.mode; text = draft.text; script = draft.script
+        trackTitle = draft.title; engine = next; mode = draft.mode; text = draft.text; script = draft.script
         readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
         inputMode = draft.inputMode; values = draft.values; clips = draft.clips; importError = draft.importError
         currentProjectId = draft.projectId; newVoice = draft.newVoice
@@ -262,14 +262,14 @@ struct SoundBoothView: View {
             Button("Start a new project from this") {
                 guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
                 currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false
-                script = starter.script; text = ""; readback = ""; mood = ""
+                trackTitle = starter.title; script = starter.script; text = ""; readback = ""; mood = ""
                 if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
                 invalidateQuote()
                 announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
             }.disabled(starterId.isEmpty || workspaceBusy)
-            Text("Free to load. These replace the current editor; finish or save your work first. AuK starts paid generation with one press. Other engines show a price confirmation.").font(.caption)
+            Text("Free to load. These replace the current editor; finish or save your work first. Generation starts with one press; cost information is shown by the button.").font(.caption)
             Button("New blank project") {
-                currentProjectId = nil; script = ""; text = ""; readback = ""; mood = ""
+                currentProjectId = nil; trackTitle = ""; script = ""; text = ""; readback = ""; mood = ""
                 voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false
                 invalidateQuote(); announce("New blank project. Other engine drafts are kept.")
             }.disabled(workspaceBusy)
@@ -548,6 +548,7 @@ struct SoundBoothView: View {
                 Text(st.label).font(.subheadline)
                 if st.key == "lyrics" {
                     TextEditor(text: binding(st.key))
+                        .disabled(isTranscribing)
                         .frame(minHeight: 150)
                         .padding(6)
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
@@ -581,6 +582,18 @@ struct SoundBoothView: View {
                 ))
                 .accessibilityHint(st.hint)
                 Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        case "range":
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(st.label): \((Double(values[st.key] ?? "") ?? st.defaultNumber ?? 0).formatted())").font(.subheadline)
+                Slider(value: Binding(
+                    get: { Double(values[st.key] ?? "") ?? st.defaultNumber ?? st.min ?? 0 },
+                    set: { values[st.key] = String($0) }
+                ), in: (st.min ?? 0)...(st.max ?? 100), step: st.step ?? 1)
+                .accessibilityLabel(st.label)
+                .accessibilityValue((Double(values[st.key] ?? "") ?? st.defaultNumber ?? 0).formatted())
+                .accessibilityHint(st.hint)
+                Text(st.hint).font(.footnote).foregroundStyle(.secondary)
             }
         case "number":
             VStack(alignment: .leading, spacing: 4) {
@@ -628,6 +641,12 @@ struct SoundBoothView: View {
                     announce("Failed import discarded. Review the attached clips before generating.")
                 }
             }
+            if engine == "yue2" && !clips.isEmpty {
+                Button("Transcribe reference lyrics") { Task { await transcribeLyrics() } }
+                    .disabled(workspaceBusy || !importError.isEmpty)
+                    .accessibilityHint("Tries to hear the sung words. Review and correct the draft; singing can be misheard. Undo writing change restores your previous lyrics. No music generation or credit deduction.")
+                Text("Draft lyrics can contain wrong or missing words. Review before generating. This uses the transcription service and does not deduct credits.").font(.footnote)
+            }
             ForEach(Array(clips.prefix(st.clipMax).enumerated()), id: \.offset) { i, clip in
                 HStack {
                     Text("\(st.clipMax > 1 ? "@Audio\(i + 1): " : "Cloning: ")\(clip.name)")
@@ -668,6 +687,10 @@ struct SoundBoothView: View {
                 }
             }
 
+            TextField("Track title (optional)", text: $trackTitle)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Track title")
+                .accessibilityHint("Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
             TextEditor(text: $script)
                 .font(.system(.body, design: isMusic ? .default : .monospaced))
                 .frame(minHeight: 160)
@@ -725,10 +748,8 @@ struct SoundBoothView: View {
             }
             .buttonStyle(KadeHeroButtonStyle())
             .disabled(workspaceBusy || !importError.isEmpty || (script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && values["auk_task"] != "edit"))
-            .accessibilityHint(engine == "scenema" ? "Starts paid generation immediately using the attached reference, if any. Wait for reference imports to finish first." : "Opens a confirmation with cost information before any paid generation starts.")
-            if engine == "scenema" {
-                Text("AuK starts with one press. Startup, generation and ten minutes awake after the last job use billed GPU time.").font(.footnote)
-            }
+            .accessibilityHint("Starts generation immediately using these settings and any imported reference. " + (currentEngine?.cost ?? ""))
+            Text(currentEngine?.cost ?? localEstimateSentence(for: script)).font(.footnote)
 
             if let job = currentJobId {
                 Button(role: .destructive) {
@@ -763,6 +784,17 @@ struct SoundBoothView: View {
                 }
             }
         }
+    }
+
+    private func saveTitle() async {
+        guard let project = renameProject else { return }
+        let title = renameTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title.count <= 80 else { announce("Use a title from 1 to 80 characters."); return }
+        do {
+            try await service.rename(projectId: project.id, title: title)
+            if currentProjectId == project.id { trackTitle = title }
+            await loadProjects(); announce("Title saved: \(title)")
+        } catch { announce((error as? LocalizedError)?.errorDescription ?? "Could not save the title.") }
     }
 
     private func projectRow(_ p: SoundBoothProject) -> some View {
@@ -834,6 +866,9 @@ struct SoundBoothView: View {
             }
 
             HStack(spacing: 12) {
+                Button("Rename track") {
+                    renameProject = p; renameTitle = p.title; showRename = true
+                }.accessibilityLabel("Rename \(p.title)")
                 Button("Open in the booth") { openInBooth(p) }
                     .accessibilityHint(p.engine == "lyria" ? "Loads this music direction, lyrics and song settings so you can edit them and make another take." : "Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
                 Spacer()
@@ -981,11 +1016,11 @@ struct SoundBoothView: View {
                 let enabled = values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false
                 if st.key == "audio_quality" { out[st.key] = enabled ? "high" : "low" }
                 else { out[st.key] = enabled }
-            case "number":
+            case "number", "range":
                 guard let n = Double(raw) else { continue }
                 if let lo = st.min, n < lo { continue }
                 if let hi = st.max, n > hi { continue }
-                out[st.key] = (st.key == "seed" || st.key == "pitch") ? Int(n.rounded()) : n
+                out[st.key] = (["seed", "pitch", "count", "steps", "weirdness"].contains(st.key)) ? Int(n.rounded()) : n
             case "clip":
                 continue
             default:
@@ -1002,6 +1037,21 @@ struct SoundBoothView: View {
             else { out["reference_voice_url"] = clips[0].url }
         }
         return out
+    }
+
+    private func transcribeLyrics() async {
+        guard !workspaceBusy, importError.isEmpty, let reference = clips.first?.url else { return }
+        writingUndo = (engine, script, values["lyrics"] ?? "")
+        let sourceEngine = engine
+        isTranscribing = true; isWriting = true
+        defer { isTranscribing = false; isWriting = false }
+        announce("Listening for the sung words. Your current lyrics are kept until the draft is ready.")
+        do {
+            let draft = try await service.transcribeLyrics(url: reference)
+            guard engine == sourceEngine, clips.first?.url == reference else { return }
+            values["lyrics"] = draft.transcript
+            invalidateQuote(); announce(draft.warning)
+        } catch { announce((error as? LocalizedError)?.errorDescription ?? "Could not hear the words. Your lyrics are kept.") }
     }
 
     private func suggestEngine() async {
@@ -1111,16 +1161,30 @@ struct SoundBoothView: View {
         }
     }
 
-    private func renderTapped(preview: Bool, confirmed: Bool = false) async {
+    private func renderTapped(preview: Bool) async {
         guard !isWriting else { announce("Wait for the writing draft to finish."); return }
         guard !isImporting else { announce("Wait for the reference clip to finish importing."); return }
         guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
+        if trackTitle.count > 80 { announce("Use a title up to 80 characters."); return }
+        if engine == "yue2", let settings = currentEngine?.settings {
+            for setting in settings where ["number", "range"].contains(setting.kind) {
+                let raw = (values[setting.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if raw.isEmpty { continue }
+                guard let number = Double(raw), number.isFinite,
+                      number >= (setting.min ?? -Double.greatestFiniteMagnitude),
+                      number <= (setting.max ?? Double.greatestFiniteMagnitude),
+                      setting.step != 1 || number.rounded() == number else {
+                    announce("Check \(setting.label). \(setting.hint)"); return
+                }
+            }
+        }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
         if engine != "lyria" && !clips.isEmpty { body["referenceExpected"] = true }
+        body["title"] = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         body["engine"] = engine; body["mode"] = mode
         body["sourceText"] = text; body["readback"] = readback
         if s.isEmpty {
@@ -1133,25 +1197,13 @@ struct SoundBoothView: View {
         isRendering = true
         defer { isRendering = false }
         do {
-            if engine != "scenema" && (!confirmed || !confirmArmed || confirmPreview != preview) {
-                let version = quoteVersion
-                body["estimateOnly"] = true
-                let quote = try await service.render(body: body)
-                guard quoteVersion == version else { announce("The draft or settings changed. Press again for an updated price."); return }
-                estimate = quote.estimate; confirmPreview = preview; confirmArmed = true
-                let clipLine = engine == "lyria" ? "" : clips.isEmpty ? " No reference clip attached." : (engine == "yue2" ? " Covering " : st["auk_task"] as? String == "edit" ? " Editing " : " Cloning ") + "\(clips.map { $0.name }.joined(separator: ", "))."
-                renderConfirmationMessage = (quote.estimate?.spoken ?? "A reliable total price is unavailable. This is a paid generation.") + clipLine
-                renderFailed = false
-                showRenderConfirmation = true
-                return
-            }
             confirmArmed = false
             announce(preview ? "Sending the voice sample…" : "Sending the render…")
             let r = try await service.render(body: body)
             newVoice = false; currentProjectId = r.projectId ?? currentProjectId
             if r.queued == true, let job = r.jobId {
                 currentJobId = job; Earcons.shared.play(.actionStart)
-                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + " Progress will be read here. Long pieces continue while this screen is open.")
+                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + (engine == "yue2" ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."))
                 startPolling(job)
             } else {
                 Earcons.shared.play(.actionDone); KadeHaptics.success()
@@ -1227,7 +1279,6 @@ struct SoundBoothView: View {
                         Earcons.shared.play(.error)
                         if st.state == "failed" {
                             showFailedProjects = true
-                            renderFailed = true
                             renderConfirmationMessage = st.error ?? st.spoken ?? "No finished recording was returned. Your saved attempt remains in the library."
                             showRenderConfirmation = true
                         }
@@ -1285,6 +1336,7 @@ struct SoundBoothView: View {
     private func prepareCover(_ take: SoundBoothTake, project: SoundBoothProject) {
         guard !workspaceBusy else { announce("Finish the current operation first."); return }
         selectEngine("yue2")
+        trackTitle = String((project.title + " (cover)").prefix(80))
         currentProjectId = nil
         values = ["lyrics": project.options?["lyrics"]?.asFieldText ?? ""]
         script = project.screenplay ?? project.script
@@ -1298,6 +1350,7 @@ struct SoundBoothView: View {
     private func openInBooth(_ p: SoundBoothProject) {
         guard !workspaceBusy else { announce("Finish the current operation first."); return }
         selectEngine(p.engine)
+        trackTitle = p.title
         currentProjectId = p.id
         mode = p.mode == "advanced" ? "advanced" : "easy"
         text = p.sourceText ?? ""
