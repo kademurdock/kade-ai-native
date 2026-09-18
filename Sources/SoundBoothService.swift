@@ -344,7 +344,11 @@ final class SoundBoothService: ObservableObject {
         }
         // The script desk calls a model; 90 s server-side is normal, and the
         // 60-second URLSession default is exactly the trap build 169 fell in.
-        return try await post("api/kade/sound-booth/script", body: body, timeout: 120, fallback: "The script desk had trouble. Try again.")
+        // Part 212: the lyric desk reasons before it writes. Kimi K3 at medium
+        // effort measured 73-111 s and at high up to 178 s, so 120 s forced the
+        // server down to low effort. 300 s matches a deep-thinking draft; the
+        // server gives up first and says so in plain words.
+        return try await post("api/kade/sound-booth/script", body: body, timeout: 300, fallback: "The script desk had trouble. Try again.")
     }
 
     struct LyricsDraft: Decodable { let transcript: String; let warning: String }
