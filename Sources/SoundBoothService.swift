@@ -100,6 +100,7 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
         case "yue2": return "YuE2"
+        case "stable": return "Stable Audio"
         default: return "AuK HQ"
         }
     }

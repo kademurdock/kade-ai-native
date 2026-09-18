@@ -50,6 +50,8 @@ struct SoundBoothView: View {
         projects.filter { showFailedProjects || !["failed", "cancelled"].contains($0.state) || !($0.takes ?? []).isEmpty || $0.hasRecoverableAudio == true }
     }
     @State private var writingUndo: (engine: String, script: String, lyrics: String)?
+    private var isEffects: Bool { engine == "stable" }
+    private var usesDirectPrompt: Bool { isMusic || isEffects }
     private var isMusic: Bool { engine == "lyria" || engine == "yue2" }
     @State private var engine = "scenema"
     @State private var mode = "easy"
@@ -146,7 +148,7 @@ struct SoundBoothView: View {
                 statusBlock
                 engineSection
                 scriptSection
-                if !isMusic {
+                if !usesDirectPrompt {
                     DisclosureGroup("Voice, references, and writing desk") {
                         modeSection
                         writingSection
@@ -227,12 +229,13 @@ struct SoundBoothView: View {
     }
 
     private var workspaceBusy: Bool { isWriting || isRendering || isImporting || currentJobId != nil }
-    private var editorTitle: String { isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
+    private var editorTitle: String { isEffects ? "Sound description" : isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
     private var generateLabel: String {
         if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
-        return isMusic ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
+        return isEffects ? "Generate sounds" : isMusic ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
     }
     private var editorHint: String {
+        if isEffects { return "Describe the foreground sound, quieter background layers, their distance and the space around them. Ask for no speech or music when you want only environmental sound." }
         if engine == "yue2" { return "Describe the style and singing voice. Add lyrics in song settings, or use Write my song idea. For a cover, import a source recording there. Its melody guides a new arrangement; it does not clone the singer." }
         if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
         if engine == "seed" { return "Describe the setting, sounds and each voice. Include exact dialogue and identify reference voices as @Audio1, @Audio2 or @Audio3." }
@@ -255,7 +258,7 @@ struct SoundBoothView: View {
     private var starterSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Start something").font(.headline)
-            Picker(engine == "lyria" ? "A music starting point" : engine == "seed" ? "A scene starting point" : "A performance starting point", selection: $starterId) {
+            Picker(isEffects ? "A sound starting point" : isMusic ? "A music starting point" : engine == "seed" ? "A scene starting point" : "A performance starting point", selection: $starterId) {
                 Text("Choose a starting point").tag("")
                 ForEach((guide?.starters ?? []).filter { $0.engine == engine }) { item in Text(item.title).tag(item.id) }
             }
@@ -318,7 +321,7 @@ struct SoundBoothView: View {
                  * Her ask: "people will not know the difference." Each card
                  * says what it is, where it runs, what it costs, what it is
                  * for and not for — as one spoken element, then a button. */
-                ForEach(["scenema", "lyria", "yue2", "seed"], id: \.self) { key in
+                ForEach(["scenema", "lyria", "yue2", "stable", "seed"], id: \.self) { key in
                     if let g = guide.engines[key] {
                         Button {
                             KadeHaptics.press()
@@ -386,6 +389,7 @@ struct SoundBoothView: View {
                     Text("Seed Audio").tag("seed")
                     Text("Lyria").tag("lyria")
                     Text("YuE2").tag("yue2")
+                    Text("Stable Audio").tag("stable")
                 }
                 .pickerStyle(.segmented)
             }
@@ -426,6 +430,7 @@ struct SoundBoothView: View {
         case "seed": return "Seed Audio"
         case "lyria": return "Lyria"
         case "yue2": return "YuE2"
+        case "stable": return "Stable Audio"
         default: return "AuK HQ"
         }
     }
@@ -681,8 +686,8 @@ struct SoundBoothView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(editorTitle).font(.headline).accessibilityAddTraits(.isHeader)
             Text(editorHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
-            if isMusic, let g = currentEngine {
-                DisclosureGroup("How to direct the music", isExpanded: $showHowTo) {
+            if usesDirectPrompt, let g = currentEngine {
+                DisclosureGroup(isEffects ? "How to describe sounds" : "How to direct the music", isExpanded: $showHowTo) {
                     ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in Text(tip).font(.footnote) }
                 }
             }
@@ -692,35 +697,37 @@ struct SoundBoothView: View {
                 .accessibilityLabel("Track title")
                 .accessibilityHint("Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
             TextEditor(text: $script)
-                .font(.system(.body, design: isMusic ? .default : .monospaced))
+                .font(.system(.body, design: usesDirectPrompt ? .default : .monospaced))
                 .frame(minHeight: 160)
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel(editorTitle)
                 .accessibilityHint(editorHint)
 
-            if isMusic, let g = currentEngine {
-                DisclosureGroup("Lyrics, covers, and song settings") {
-                Text("Song options").font(.headline).accessibilityAddTraits(.isHeader)
+            if usesDirectPrompt, let g = currentEngine {
+                DisclosureGroup(isEffects ? "Sound settings" : "Lyrics, covers, and song settings") {
+                Text(isEffects ? "Sound options" : "Song options").font(.headline).accessibilityAddTraits(.isHeader)
                 ForEach(g.settings.filter { values["instrumental"] != "1" || ($0.key != "lyrics" && $0.key != "keep_lyrics") }) { setting in
                     settingRow(setting)
                 }
                 }
             }
 
-            HStack {
-                Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
-                    Task { await quickDraft() }
-                }.disabled(workspaceBusy)
-                Button("Surprise me", systemImage: "dice") { inspire() }.disabled(workspaceBusy)
+            if !isEffects {
+                HStack {
+                    Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
+                        Task { await quickDraft() }
+                    }.disabled(workspaceBusy)
+                    Button("Surprise me", systemImage: "dice") { inspire() }.disabled(workspaceBusy)
+                }
+                if let previous = writingUndo, previous.engine == engine {
+                    Button("Undo writing change") {
+                        script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
+                        invalidateQuote(); announce("Previous writing restored.")
+                    }.disabled(workspaceBusy)
+                }
+                Text("Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             }
-            if let previous = writingUndo, previous.engine == engine {
-                Button("Undo writing change") {
-                    script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
-                    invalidateQuote(); announce("Previous writing restored.")
-                }.disabled(workspaceBusy)
-            }
-            Text("Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             if !readback.isEmpty {
                 Text(readback)
                     .font(.footnote)
@@ -855,7 +862,7 @@ struct SoundBoothView: View {
                         HStack {
                             if p.engine == "lyria" || p.engine == "yue2" {
                                 Button("Cover this take") { prepareCover(take, project: p) }
-                            } else {
+                            } else if p.engine != "stable" {
                                 Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
                                 Button("Edit this take") { prepareTake(take, title: p.title, editing: true) }
                             }
@@ -870,7 +877,7 @@ struct SoundBoothView: View {
                     renameProject = p; renameTitle = p.title; showRename = true
                 }.accessibilityLabel("Rename \(p.title)")
                 Button("Open in the booth") { openInBooth(p) }
-                    .accessibilityHint(p.engine == "lyria" ? "Loads this music direction, lyrics and song settings so you can edit them and make another take." : "Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
+                    .accessibilityHint(p.engine == "stable" ? "Loads this sound description and settings so you can make another take." : p.engine == "lyria" ? "Loads this music direction, lyrics and song settings so you can edit them and make another take." : "Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
                 Spacer()
                 Button(role: .destructive) {
                     Task { await remove(p) }
@@ -1031,7 +1038,7 @@ struct SoundBoothView: View {
             if out["instrumental"] as? Bool == true { out.removeValue(forKey: "lyrics"); out.removeValue(forKey: "keep_lyrics") }
             return out
         }
-        if engine != "yue2" && out["gender"] == nil { out["gender"] = "female" }
+        if engine != "yue2" && engine != "stable" && out["gender"] == nil { out["gender"] = "female" }
         if !clips.isEmpty {
             if engine == "seed" { out["audio_urls"] = clips.prefix(3).map { $0.url } }
             else { out["reference_voice_url"] = clips[0].url }
@@ -1181,7 +1188,7 @@ struct SoundBoothView: View {
         }
         let st = collectedSettings()
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(engine == "lyria" ? "Describe the music you want first." : "Write a script first."); return }
+        guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
         if engine != "lyria" && !clips.isEmpty { body["referenceExpected"] = true }
         body["title"] = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1203,7 +1210,7 @@ struct SoundBoothView: View {
             newVoice = false; currentProjectId = r.projectId ?? currentProjectId
             if r.queued == true, let job = r.jobId {
                 currentJobId = job; Earcons.shared.play(.actionStart)
-                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + (engine == "yue2" ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."))
+                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + ((engine == "yue2" || isEffects) ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."))
                 startPolling(job)
             } else {
                 Earcons.shared.play(.actionDone); KadeHaptics.success()
@@ -1229,6 +1236,7 @@ struct SoundBoothView: View {
             let perSong = health?.engines["lyria"]?.usdPerSong ?? 0.08
             return "About \(max(1, Int((perSong * 100).rounded()))) cents for the song, whatever length it comes out. Lyria is priced per song, not per minute. Usually back in under a minute."
         }
+        if isEffects { return currentEngine?.cost ?? "Provider cost: 2.06 cents per recording. No credit balance deduction during this trial." }
         if engine == "yue2" { return "YuE2 uses a sleeping GPU at about $1.22 per hour. Startup, generation and ten minutes awake afterward are billed. There is no reliable per-song estimate yet." }
         if engine == "scenema" {
             return "AuK HQ uses a sleeping GPU. Startup and processing are billed. A reliable cost and wait estimate is not available yet. Longer work runs in sections."
