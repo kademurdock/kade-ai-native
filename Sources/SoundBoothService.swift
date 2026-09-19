@@ -348,7 +348,55 @@ final class SoundBoothService: ObservableObject {
         // effort measured 73-111 s and at high up to 178 s, so 120 s forced the
         // server down to low effort. 300 s matches a deep-thinking draft; the
         // server gives up first and says so in plain words.
+        // Part 218: a sung draft goes to the deep lane. The server takes it as a
+        // job and answers at once, the writer thinks for minutes, and this asks
+        // after it every eight seconds. No request is ever held open.
+        if (engine == "lyria" || engine == "yue2") && mode == "write" {
+            return try await deepScript(body: body)
+        }
         return try await post("api/kade/sound-booth/script", body: body, timeout: 300, fallback: "The script desk had trouble. Try again.")
+    }
+
+    private struct ScriptJobStart: Decodable { let job: String? }
+    private struct ScriptJobState: Decodable {
+        let state: String?
+        let error: String?
+        let result: SoundBoothScriptResult?
+    }
+
+    private func deepScript(body: [String: Any]) async throws -> SoundBoothScriptResult {
+        let fallback = "The script desk had trouble. Try again."
+        var deep = body
+        deep["background"] = true
+        var req = client.request(path: "api/kade/sound-booth/script", method: "POST", authorized: true, timeout: 60)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: deep)
+        let (data, http) = try await client.send(req)
+        if http.statusCode == 200 {
+            return try JSONDecoder().decode(SoundBoothScriptResult.self, from: data)
+        }
+        // 202 is a new job; 409 is her own draft already being written, so
+        // wait on that one instead of failing.
+        let started = try? JSONDecoder().decode(ScriptJobStart.self, from: data)
+        guard http.statusCode == 202 || http.statusCode == 409, let id = started?.job, !id.isEmpty else {
+            throw decodeError(data, fallback: fallback)
+        }
+        var misses = 0
+        for _ in 0..<100 {
+            try await Task.sleep(nanoseconds: 8_000_000_000)
+            let poll = client.request(path: "api/kade/sound-booth/script/job/\(id)", method: "GET", authorized: true)
+            guard let answer = try? await client.send(poll) else {
+                misses += 1
+                if misses > 6 { throw BoothError(message: "Connection lost while waiting for the draft. Your idea is kept. Try again.") }
+                continue
+            }
+            misses = 0
+            guard answer.1.statusCode == 200 else { throw decodeError(answer.0, fallback: fallback) }
+            let job = try JSONDecoder().decode(ScriptJobState.self, from: answer.0)
+            if job.state == "done", let result = job.result { return result }
+            if job.state == "failed" { throw BoothError(message: job.error ?? fallback) }
+        }
+        throw BoothError(message: "The writer is taking far too long. Your idea is kept. Try again.")
     }
 
     struct LyricsDraft: Decodable { let transcript: String; let warning: String }

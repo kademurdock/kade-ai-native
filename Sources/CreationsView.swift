@@ -153,6 +153,7 @@ private struct CreationPlayerSheet: View {
     let url: URL
     let title: String
     @State private var player = AVPlayer()
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -164,7 +165,15 @@ private struct CreationPlayerSheet: View {
                     player.play()
                 }
                 .onDisappear { player.pause() }
-                .accessibilityLabel("Media player. \(title)")
+                // The sheet had no way out: a swipe-down is not a VoiceOver
+                // gesture and a label on the player hid AVKit's own controls.
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                            .accessibilityHint("Stops playing and goes back.")
+                    }
+                }
+                .accessibilityAction(.escape) { dismiss() }
         }
     }
 }

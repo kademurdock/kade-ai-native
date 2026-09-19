@@ -1104,7 +1104,9 @@ struct SoundBoothView: View {
         guard idea.count >= 3 else { announce("Write an idea first, or choose Surprise me."); return }
         isWriting = true
         defer { isWriting = false }
-        announce("Writing a draft from your idea.")
+        announce(isMusic
+            ? "Writing your song. The writer takes its time, about five minutes, then goes back over it like a producer. You will get a notice when the draft is ready."
+            : "Writing a draft from your idea.")
         do {
             let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
                 voiceDescription: values["voice_description"], gender: values["gender"] ?? "female",
@@ -1399,6 +1401,7 @@ private struct BoothPlayerSheet: View {
     let url: URL
     let title: String
     @State private var player = AVPlayer()
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -1410,7 +1413,15 @@ private struct BoothPlayerSheet: View {
                     player.play()
                 }
                 .onDisappear { player.pause() }
-                .accessibilityLabel("Player. \(title)")
+                // The sheet had no way out: a swipe-down is not a VoiceOver
+                // gesture and a label on the player hid AVKit's own controls.
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                            .accessibilityHint("Stops playing and goes back.")
+                    }
+                }
+                .accessibilityAction(.escape) { dismiss() }
         }
     }
 }
