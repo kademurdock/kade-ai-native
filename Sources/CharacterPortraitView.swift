@@ -9,6 +9,12 @@ struct CharacterPortraitView: View {
     let level: () -> Double
     var listening = false
     var presentation: () -> CharacterPresentation = { .idle }
+    /// Sep 20 2026 (Kade: her mom "barely notices a profile pic", "I want the
+    /// animations to be very very apparent"): the stage is the always-on face at
+    /// the top of a conversation. It keeps blinking and swaying while nobody is
+    /// talking, and its movement is drawn several times larger than a row's.
+    var stage = false
+    var side = 160.0
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -17,27 +23,39 @@ struct CharacterPortraitView: View {
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
-    private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening) }
+    private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
     private var url: URL? {
         guard let path, !path.isEmpty else { return nil }
         return URL(string: path.hasPrefix("/") ? "https://kademurdock.com" + path : path)
     }
     var body: some View {
         if enabled {
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !active)) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / (playing ? 24.0 : 12.0), paused: !active)) { timeline in
                 let performance = active ? presentation() : .idle
                 let pose = CharacterMotion.pose(id: agentID ?? "unknown",
                     time: timeline.date.timeIntervalSinceReferenceDate,
                     level: active && playing ? level() : 0, active: active, presentation: performance)
+                // The stage turns the same bounded pose up: a head that visibly
+                // rocks and bobs, a picture that swells with each loud syllable,
+                // and a ring of light that beats with the voice.
+                let reach = stage ? 6.0 : 1.0
+                let voice = active && playing ? pose.mouth : 0
                 ZStack {
                     RoundedRectangle(cornerRadius: 24).fill(Color.accentColor.opacity(0.08))
+                    if stage {
+                        RoundedRectangle(cornerRadius: 26)
+                            .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
+                            .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
+                    }
                     portrait(pose, face: performance.face)
-                        .frame(width: 160, height: 160)
+                        .frame(width: side, height: side)
                         .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .rotationEffect(.degrees(pose.tilt))
-                        .offset(y: pose.lift)
+                        .scaleEffect(stage ? 1 + voice * 0.07 : 1)
+                        .rotationEffect(.degrees(pose.tilt * reach))
+                        .offset(y: pose.lift * reach)
                 }
-                .frame(width: 172, height: 172)
+                .frame(width: side + 12, height: side + 12)
+                .padding(stage ? 14 : 0)
             }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
@@ -98,32 +116,32 @@ struct CharacterPortraitView: View {
             }
         } else { fallback }
     }
-    /// One 160 pt panel cut from a 3 by 3 sheet.
+    /// One panel cut from a 3 by 3 sheet.
     private func panel(_ image: String, _ index: Int) -> some View {
-        let side = 160.0 * 1254.0 / 414.0, pitch = 160.0 * 420.0 / 414.0
+        let sheetSide = side * 1254.0 / 414.0, pitch = side * 420.0 / 414.0
         return Image(image).resizable()
-            .frame(width: side, height: side)
+            .frame(width: sheetSide, height: sheetSide)
             .offset(x: -Double(index % 3) * pitch, y: -Double(index / 3) * pitch)
-            .frame(width: 160, height: 160, alignment: .topLeading)
+            .frame(width: side, height: side, alignment: .topLeading)
             .clipped()
     }
     /// Keeps only `region` of a panel, fading out toward the region's edge. The
     /// fade is drawn round at the region's height and stretched to its width.
     private func feathered<Content: View>(_ content: Content, region: CGRect, inner: Double) -> some View {
-        let width = region.width * 160, height = region.height * 160
+        let width = region.width * side, height = region.height * side
         return content.mask(alignment: .topLeading) {
             Circle().fill(RadialGradient(stops: [.init(color: .black, location: inner), .init(color: .clear, location: 1)],
                     center: .center, startRadius: 0, endRadius: height / 2))
                 .frame(width: height, height: height)
                 .scaleEffect(x: width / height, y: 1, anchor: .center)
                 .frame(width: width, height: height)
-                .offset(x: region.minX * 160, y: region.minY * 160)
+                .offset(x: region.minX * side, y: region.minY * side)
         }
     }
     private var fallback: some View {
         ZStack {
             Color.accentColor.opacity(0.16)
-            Text(String(name.prefix(1))).font(.system(size: 56, weight: .medium)).foregroundStyle(Color.accentColor)
+            Text(String(name.prefix(1))).font(.system(size: side * 0.35, weight: .medium)).foregroundStyle(Color.accentColor)
         }
     }
 }

@@ -195,6 +195,12 @@ final class AgentsService: ObservableObject {
     private struct AgentDefaultResponse: Decodable {
         struct Row: Decodable { let agentId: String; let count: Int? }
         let top: [Row]
+        /// Sep 20 2026: a main agent Kade picked FOR this person on the server
+        /// ("make it Holly Murdock's default agent"). `stamp` changes each time
+        /// she assigns, so a phone applies an assignment once and the person's
+        /// own later choice in Settings is never overwritten by the same one.
+        struct Assigned: Decodable { let agentId: String; let stamp: String }
+        let assigned: Assigned?
     }
 
     /// Fail-soft fetch of the most-talked-to list. Piggybacks on
@@ -207,6 +213,12 @@ final class AgentsService: ObservableObject {
             guard http.statusCode == 200 else { return }
             let parsed = try decoder.decode(AgentDefaultResponse.self, from: data)
             defaultAgentIds = parsed.top.map { $0.agentId }
+            if let assigned = parsed.assigned,
+               UserDefaults.standard.string(forKey: "kade.defaultAgent.assignedStamp") != assigned.stamp,
+               let agent = agents.first(where: { $0.id == assigned.agentId }) {
+                DefaultAgentStore.set(agent)
+                UserDefaults.standard.set(assigned.stamp, forKey: "kade.defaultAgent.assignedStamp")
+            }
         } catch {
             // quiet by design
         }

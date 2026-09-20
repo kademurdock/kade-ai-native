@@ -86,6 +86,8 @@ struct ContentView: View {
     /// `KadeConversation` still has exactly one destination in the whole
     /// app, and it is not this one.
     @State private var path: [HomeRoute] = []
+    @ObservedObject private var chatPresence = KadeChatPresence.shared
+    @State private var talkBarKeyboardUp = false
 
     /// The one door onto `path`. Every programmatic navigation goes through
     /// here so the conversations-underneath rule lives in exactly one place:
@@ -325,6 +327,28 @@ struct ContentView: View {
                 }
             }
         }
+        /* Sep 20 2026 (Kade, for people in a hurry who get lost: "a talk to my
+         * default agent type button no matter where you are in the app"). One
+         * bar under the whole stack, so every pushed screen gets it without
+         * knowing about it. It steps aside inside a conversation (the composer
+         * owns that spot), while the keyboard is up, and when signed out. */
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSignedIn && !consentPending && !chatPresence.inChat && !talkBarKeyboardUp {
+                Button { go(.mainChat) } label: {
+                    Label("Talk to \(DefaultAgentStore.displayName)", systemImage: "bubble.left.and.bubble.right.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .accessibilityHint("Opens a new conversation with your main agent from anywhere in the app.")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in talkBarKeyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in talkBarKeyboardUp = false }
         .onOpenURL { url in
             // KADE KEYS dictate (July 31 2026): the keyboard's Dictate key
             // opens kadeai://kadekeys-dictate — keyboards can't touch the
@@ -1216,6 +1240,17 @@ struct LibraryFileHandoff: Identifiable, Hashable {
 /// means SwiftUI honours one and silently ignores the rest -- no crash, no
 /// warning, just a screen that reads correctly and does nothing when you
 /// activate it. That shipped once (build 121) and cost a build to find.
+/// Counts the conversation screens on display so the root's Talk bar can step
+/// aside for a composer. Pushed conversations are not all on the root `path`
+/// (the Conversations list pushes its own), so the screens report themselves.
+final class KadeChatPresence: ObservableObject {
+    static let shared = KadeChatPresence()
+    @Published private(set) var open = 0
+    var inChat: Bool { open > 0 }
+    func appeared() { open += 1 }
+    func disappeared() { open = max(0, open - 1) }
+}
+
 enum HomeRoute: Identifiable, Hashable {
     /// Session 26 (her call: "the first thing people should do when they
     /// open the app is land in a chat with an agent... What if I'm rushing

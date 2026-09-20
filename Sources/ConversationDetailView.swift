@@ -545,6 +545,8 @@ struct ConversationDetailView: View {
      * debug flag so she can answer the question herself, in one tap, without
      * waiting for another build. */
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
+    @AppStorage("kadeVoicePortraits") private var voicePortraitsOn = true
+    @State private var keyboardUp = false
     /* ⭐ BUILD 218 bisect, default OFF. ON = the composer is a plain
      * SINGLE-LINE field: no vertical growth, no line-limit range, nothing for
      * the layout to negotiate. Freeze stops when she flips this and the
@@ -640,6 +642,24 @@ struct ConversationDetailView: View {
                  * content to fit; it does not need to be told twice. */
             }
         }
+        /* Sep 20 2026 -- THE FACE STAGE. Kade's mom had never seen a face: the
+         * portrait only ever appeared above a reply while its voice played, so
+         * somebody who reads never met one. The character now lives at the top
+         * of every conversation, always, blinking and swaying while quiet and
+         * moving large while talking. Pinned with its own definite height in a
+         * top inset for the same reason the composer sits in the bottom one
+         * (build 219): it takes no part in the transcript's layout. Hidden from
+         * VoiceOver, never hit-tested, and gone with "Animated voice portraits"
+         * off. It shrinks while the keyboard is up so typing keeps its room. */
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil {
+                faceStage
+            }
+        }
+        .onAppear { KadeChatPresence.shared.appeared() }
+        .onDisappear { KadeChatPresence.shared.disappeared() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1646,11 +1666,6 @@ struct ConversationDetailView: View {
         // the tail chunk only. Short streams keep the single-Text path
         // inside chunkLongText (below threshold it returns [text]).
         VStack(alignment: .leading, spacing: 4) {
-            if voiceService.isClipPlaying {
-                CharacterPortraitView(agentID: voiceService.nowPlayingAgentID,
-                    name: agentDisplayLabel, playing: !voiceService.isPaused,
-                    level: { voiceService.characterLevel() }, presentation: { voiceService.characterPresentation() })
-            }
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(MessageRow.chunkLongText(liveReply).enumerated()), id: \.offset) { piece in
                     Text(piece.element)
@@ -2318,6 +2333,29 @@ struct ConversationDetailView: View {
     private var isSending: Bool {
         if case .sending = sendState { return true }
         return false
+    }
+
+    private var faceStage: some View {
+        let talking = voiceService.isClipPlaying
+        let tall = UIScreen.main.bounds.height
+        let side = keyboardUp ? 84.0 : (tall < 700 ? 132.0 : (tall < 860 ? 176.0 : 208.0))
+        let thinking = isSending
+        return HStack {
+            Spacer(minLength: 0)
+            CharacterPortraitView(agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
+                name: agentDisplayLabel, playing: talking && !voiceService.isPaused,
+                level: { voiceService.characterLevel() },
+                presentation: {
+                    if voiceService.isClipPlaying { return voiceService.characterPresentation() }
+                    return thinking ? CharacterPresentation(activity: .thinking) : .idle
+                },
+                stage: true, side: side)
+            Spacer(minLength: 0)
+        }
+        .frame(height: side + 40)
+        .background(Color(.systemBackground))
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 
     /// Session 26: paperclip at the start of the composer row. All of its
@@ -3929,11 +3967,6 @@ private struct MessageRow: View {
                 Text(message.speakerLabel)
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
-                if voicePlayback != .idle {
-                    CharacterPortraitView(agentID: message.agentId ?? characterVoice.nowPlayingAgentID,
-                        name: message.speakerLabel, playing: voicePlayback == .playing && characterVoice.isClipPlaying,
-                        level: { characterVoice.characterLevel() }, presentation: { characterVoice.characterPresentation() })
-                }
                 messageBodyView
                     // Session 25 (Kade approved the audit list, "All four"):
                     // the transcript used to be bare aligned text -- no

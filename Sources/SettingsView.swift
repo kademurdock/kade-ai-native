@@ -300,8 +300,8 @@ struct SettingsView: View {
             simpleTranscriptRow(searchStyle: false)
             simpleComposerRow(searchStyle: false)
             reduceMotionRow(searchStyle: false)
-            Toggle("Animated voice portraits", isOn: $voicePortraits)
-                .accessibilityHint("Shows the speaking agent while voice messages play. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
+            Toggle("Animated character face", isOn: $voicePortraits)
+                .accessibilityHint("Shows the character's moving face at the top of every conversation. It blinks while quiet and talks along with voice messages. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
