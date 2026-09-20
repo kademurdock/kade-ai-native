@@ -89,6 +89,15 @@ struct AgentPickerView: View {
         return agentsService.defaultAgentIds.compactMap { byId[$0] }.filter { !starred.contains($0.id) }
     }
 
+    /// Sep 20 2026 (her ask): the fully animated characters lead the list. They
+    /// are the ones with moving faces, and between them a newcomer can choose a
+    /// Southern man, a kid, a Black woman or a psychologist as a main agent
+    /// without reading a hundred names.
+    private var animatedAgents: [KadeAgent] {
+        let byId = Dictionary(agentsService.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return CharacterMotion.animatedIDs.compactMap { byId[$0] }
+    }
+
     /// Build 261: the person's starred characters, first of all. Same store
     /// as the web's Favorites shelf.
     private var favoriteAgents: [KadeAgent] {
@@ -248,6 +257,18 @@ struct AgentPickerView: View {
                     rowButton(for: agent)
                 }
             } else {
+                if !animatedAgents.isEmpty {
+                    Section {
+                        ForEach(animatedAgents) { agent in
+                            rowButton(for: agent)
+                        }
+                    } header: {
+                        Text("These ones have moving faces")
+                            .accessibilityAddTraits(.isHeader)
+                    } footer: {
+                        Text("Their faces move and change expression while they talk. A good place to pick your main agent.")
+                    }
+                }
                 if !favoriteAgents.isEmpty {
                     Section {
                         ForEach(favoriteAgents) { agent in

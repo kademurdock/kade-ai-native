@@ -21,6 +21,9 @@ enum CharacterMotion {
     static let lillyFile = "agent-agent_JhouuajXMYsfhCTVMQCv_-avatar-1783012583668.png"
     static let harleyID = "agent_d26Mtu8mgOzkVGQECqO1a"
     static let harleyFile = "agent-agent_d26Mtu8mgOzkVGQECqO1a-avatar-1789921519491.png"
+    /// The characters with a full moving face, in the order the picker shows
+    /// them. A new rigged character joins the picker's top shelf by joining this.
+    static let animatedIDs = [harleyID, lillyID, kianaID, dellaID]
     static func blend(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         let n = max(0, min(1, value))
