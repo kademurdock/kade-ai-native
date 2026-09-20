@@ -727,7 +727,7 @@ struct SoundBoothView: View {
                     }.disabled(workspaceBusy)
                 }
                 Text(isMusic
-                    ? "Writing help does not generate audio. Surprise me asks the writer to invent an original song idea, about twenty seconds and a fraction of a cent; drafting uses the writing model."
+                    ? "Writing help does not generate audio. Surprise me asks the writer to invent an original song idea, about ten seconds and a fraction of a cent; drafting uses the writing model."
                     : "Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             }
             if !readback.isEmpty {
@@ -1095,7 +1095,7 @@ struct SoundBoothView: View {
             let original = script, requestEngine = engine
             isWriting = true
             defer { isWriting = false }
-            announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about twenty seconds.")
+            announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about ten seconds.")
             if let idea = try? await service.songIdea(), !idea.isEmpty {
                 guard engine == requestEngine, script == original else { announce("Your editor changed while the idea was being made. Your current text is kept."); return }
                 writingUndo = (engine, script, values["lyrics"] ?? "")

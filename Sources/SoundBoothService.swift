@@ -317,7 +317,7 @@ final class SoundBoothService: ObservableObject {
 
     /// Surprise me, for songs. The server picks a way of looking, the lyric
     /// writer brainstorms and throws ideas away, and one pitch comes back:
-    /// about twenty seconds and a fraction of a cent. Any failure throws and
+    /// about ten seconds and a fraction of a cent. Any failure throws and
     /// the view falls back to its own free list.
     func songIdea() async throws -> String {
         struct Idea: Decodable { let idea: String }
