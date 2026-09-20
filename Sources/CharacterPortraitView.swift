@@ -86,6 +86,12 @@ struct CharacterPortraitView: View {
             return Sheet(faces: "CharacterDellaFaces", mouths: "CharacterDellaMouths",
                 face: CGRect(x: 0.3, y: 0.2, width: 0.46, height: 0.56), mouth: CGRect(x: 0.38, y: 0.46, width: 0.3, height: 0.19), eyes: CGRect(x: 0.34, y: 0.29, width: 0.38, height: 0.14))
         }
+        // Sep 20 2026: Harley. His two sheets were re-cut to this grid with every
+        // panel moved onto the resting head (the mouth sheet sat 22 px right).
+        if agentID == CharacterMotion.harleyID {
+            return Sheet(faces: "CharacterHarleyFaces", mouths: "CharacterHarleyMouths",
+                face: CGRect(x: 0.28, y: 0.24, width: 0.52, height: 0.5), mouth: CGRect(x: 0.41, y: 0.47, width: 0.27, height: 0.22), eyes: CGRect(x: 0.34, y: 0.31, width: 0.42, height: 0.13))
+        }
         if agentID == CharacterMotion.lillyID {
             return Sheet(faces: "CharacterLillyFaces", mouths: "CharacterLillyMouths",
                 face: CGRect(x: 0.38, y: 0.2, width: 0.46, height: 0.5), mouth: CGRect(x: 0.48, y: 0.48, width: 0.28, height: 0.2), eyes: CGRect(x: 0.4, y: 0.3, width: 0.42, height: 0.18))

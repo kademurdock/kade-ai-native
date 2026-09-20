@@ -19,6 +19,8 @@ enum CharacterMotion {
     static let dellaFile = "agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png"
     static let lillyID = "agent_JhouuajXMYsfhCTVMQCv_"
     static let lillyFile = "agent-agent_JhouuajXMYsfhCTVMQCv_-avatar-1783012583668.png"
+    static let harleyID = "agent_d26Mtu8mgOzkVGQECqO1a"
+    static let harleyFile = "agent-agent_d26Mtu8mgOzkVGQECqO1a-avatar-1789921519491.png"
     static func blend(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         let n = max(0, min(1, value))
@@ -26,7 +28,7 @@ enum CharacterMotion {
     }
     static func prepared(id: String?, path: String?) -> Bool {
         guard let path, let url = URL(string: path) else { return false }
-        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile)
+        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == harleyID && url.lastPathComponent == harleyFile)
     }
     /// Mouth shapes without phonemes: a spoken clip has no word timings, so the
     /// shape follows how loud the sound is (how open) with a new pick about every
