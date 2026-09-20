@@ -67,10 +67,17 @@ final class VoiceService: NSObject, ObservableObject {
 
     @Published private(set) var nowPlayingAgentID: String?
     private var playingCharacterCue = CharacterCue.neutral
+    /// The direction in force for the reply being spoken; see CharacterCue.fromSpeech(_:carrying:).
+    private var carriedCharacterCue = CharacterCue.neutral
+    private func characterCue(for text: String) -> CharacterCue {
+        let cue = CharacterCue.fromSpeech(text, carrying: carriedCharacterCue)
+        carriedCharacterCue = CharacterCue(expression: cue.expression, moment: nil)
+        return cue
+    }
     func characterPresentation() -> CharacterPresentation {
         guard isClipPlaying, !isPaused else { return .idle }
         let elapsed = streamedClipActive ? streamingPlayer.characterElapsed : (currentPlayer?.currentTime ?? 0)
-        return CharacterPresentation(activity: .speaking, expression: playingCharacterCue.expression(at: elapsed), elapsed: elapsed)
+        return CharacterPresentation(activity: .speaking, expression: playingCharacterCue.expression(at: elapsed), elapsed: elapsed, laughing: playingCharacterCue.laughing(at: elapsed))
     }
     func characterLevel() -> Double {
         guard isClipPlaying, !isPaused else { return 0 }
@@ -712,6 +719,7 @@ final class VoiceService: NSObject, ObservableObject {
         nowPlayingKey = nil
         nowPlayingAgentID = nil
         playingCharacterCue = .neutral
+        carriedCharacterCue = .neutral
         isPumping = false
         streamedTurnKey = nil
     }
@@ -938,7 +946,7 @@ final class VoiceService: NSObject, ObservableObject {
                     // `?? streamedTurnKey` covers the pieces that were prefetched
                     // BEFORE the reload handed us an id — they are already out of
                     // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: CharacterCue.fromSpeech(current.item.text))
+                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: characterCue(for: current.item.text))
                     playedAnything = true
                 } else {
                     // Session 23's boop lives on below, at the END of the pump and
@@ -984,7 +992,7 @@ final class VoiceService: NSObject, ObservableObject {
                         self.isPaused = false
                         self.nowPlayingKey = current.item.key ?? self.streamedTurnKey
                         self.nowPlayingAgentID = current.item.agentId
-                        self.playingCharacterCue = CharacterCue.fromSpeech(current.item.text)
+                        self.playingCharacterCue = self.characterCue(for: current.item.text)
                     })
                     streamedClipActive = false
                     isClipPlaying = false
@@ -1015,7 +1023,7 @@ final class VoiceService: NSObject, ObservableObject {
                         return
                     }
                     if let data {
-                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: CharacterCue.fromSpeech(current.item.text))
+                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: characterCue(for: current.item.text))
                         playedAnything = true
                     } else {
                         failedPieces += 1

@@ -7,12 +7,14 @@ struct CharacterPose {
     let tilt: Double
     let lift: Double
     var brow: Double = 0
+    /// Panel on the mouth sheet; 0 is closed and lets the face's own mouth show.
+    var viseme: Int = 0
     static let still = CharacterPose(mouth: 0, blink: 0, tilt: 0, lift: 0)
 }
 
 enum CharacterMotion {
     static let kianaID = "agent_6llV0eMu4fmIaj8f2x1Sb"
-    static let kianaFile = "agent-agent_6llV0eMu4fmIaj8f2x1Sb-avatar-1788871984269.png"
+    static let kianaFile = "agent-agent_6llV0eMu4fmIaj8f2x1Sb-avatar-1789863013865.png"
     static let dellaID = "agent_BSOLa3eNEZyjs-7abCjMt"
     static let dellaFile = "agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png"
     static let lillyID = "agent_JhouuajXMYsfhCTVMQCv_"
@@ -25,6 +27,21 @@ enum CharacterMotion {
     static func prepared(id: String?, path: String?) -> Bool {
         guard let path, let url = URL(string: path) else { return false }
         return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile)
+    }
+    /// Mouth shapes without phonemes: a spoken clip has no word timings, so the
+    /// shape follows how loud the sound is (how open) with a new pick about every
+    /// syllable, so the lips keep moving between round, spread and open.
+    /// Mouth sheet panels: 0 closed, 1 slightly open, 2 open, 3 round oh, 4 pursed
+    /// oo, 5 spread ee, 6 pressed, 7 teeth together, 8 wide open.
+    static func viseme(time: Double, strength: Double, seed: UInt32) -> Int {
+        guard strength.isFinite, strength > 0.06, time.isFinite, time >= 0 else { return 0 }
+        let slot = UInt32(truncatingIfNeeded: Int(time / 0.14))
+        var h: UInt32 = ((slot &+ 1) &* 2654435761) ^ seed
+        h = (h ^ (h >> 15)) &* 2246822519
+        let r = Double(h ^ (h >> 13)) / 4294967296.0
+        if strength < 0.25 { return r < 0.6 ? 1 : (r < 0.8 ? 4 : 7) }
+        if strength < 0.55 { return r < 0.45 ? 2 : (r < 0.75 ? 5 : 4) }
+        return r < 0.4 ? 3 : (r < 0.75 ? 8 : 2)
     }
     static func pose(id: String, time: Double, level: Double, active: Bool, presentation: CharacterPresentation = .idle) -> CharacterPose {
         guard active, time.isFinite, time >= 0 else { return .still }
@@ -50,7 +67,8 @@ enum CharacterMotion {
         if presentation.expression == .skeptical { tilt += gesture * 0.8 }
         if presentation.expression == .concerned { tilt -= gesture * 0.5 }
         return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
-            brow: presentation.expression == .neutral ? mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth) : 0)
+            brow: presentation.expression == .neutral ? mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth) : 0,
+            viseme: viseme(time: time, strength: mouth, seed: seed))
     }
 }
 

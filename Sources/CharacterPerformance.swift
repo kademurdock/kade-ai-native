@@ -1,16 +1,38 @@
 import Foundation
 
+/// The nine drawn faces on a character's expression sheet, in panel order.
+enum CharacterFace: Int, CaseIterable {
+    case neutral = 0, smile, laugh, surprised, skeptical, angry, sad, worried, closed
+}
+
 enum CharacterExpression: String, Codable, CaseIterable {
     case neutral, warm, amused, serious, concerned, skeptical, surprised
+    // Sep 19 2026 (Kade: "a wide scope of keywords and expressions"). The first
+    // seven stay first and keep their names: call metadata sends them by name.
+    case tender, calm, confident, playful, excited, smug, curious, thoughtful
+    case dry, frustrated, angry, disgusted, afraid, sad, tired
     var cell: Int? {
         switch self {
-        case .neutral: return nil
         case .amused: return 0
         case .serious: return 1
         case .concerned: return 2
         case .skeptical: return 3
         case .surprised: return 4
         case .warm: return 5
+        default: return nil
+        }
+    }
+    /// Twenty-two expressions share eight drawn faces. Whole faces only: a
+    /// half-strength face shows two sets of eyebrows.
+    var face: CharacterFace {
+        switch self {
+        case .warm, .tender, .amused, .playful, .excited: return .smile
+        case .skeptical, .dry, .smug: return .skeptical
+        case .frustrated, .angry, .disgusted: return .angry
+        case .surprised: return .surprised
+        case .sad: return .sad
+        case .concerned, .afraid: return .worried
+        default: return .neutral
         }
     }
 }
@@ -45,17 +67,17 @@ struct CharacterCue: Equatable {
                 let ignored = ["breath", "pant", "huff", "grunt", "groan", "moan", "snort", "wail", "whimper", "whine", "sniffle", "sniff", "shriek", "squeal", "howl", "clear throat", "cough", "sneeze", "hiccup", "yawn", "burp", "snore", "choke", "gag", "swallow", "gulp", "spit", "tongue click", "mouth click", "mouth sound", "lip smack", "kiss", "shush", "raspberry", "whistle", "bleh", "chew", "slurp", "babble", "beatbox", "growl"]
                 if !ignored.contains(exact) {
                     result = .neutral
-                    let tokens = Set(words)
-                    if tokens.isDisjoint(with: ["not", "never", "without", "no"]) {
-                        let rules: [(CharacterExpression, Set<String>)] = [
-                            (.concerned, ["sad", "sadness", "worried", "concerned", "sorrowful"]),
-                            (.serious, ["serious", "solemn", "firm"]),
-                            (.skeptical, ["skeptical", "sceptical", "doubtful", "unconvinced"]),
-                            (.surprised, ["surprised", "astonished", "startled", "shocked"]),
-                            (.amused, ["amused", "playful", "delighted", "grinning", "excited"]),
-                            (.warm, ["warm", "fond", "friendly", "tender"])]
-                        result.expression = rules.first { !tokens.isDisjoint(with: $0.1) }?.0 ?? .neutral
+                    // A negated word is dropped, not the whole direction:
+                    // "warm but not letting it slide" is still warm, "not sad" is nothing.
+                    var kept: [String] = []
+                    var skipNext = false
+                    for word in words {
+                        if skipNext { skipNext = false; continue }
+                        if ["not", "never", "without", "no", "hardly", "zero"].contains(word) { skipNext = true; continue }
+                        kept.append(word)
                     }
+                    let tokens = Set(kept)
+                    result.expression = CharacterCue.vocabulary.first { !tokens.isDisjoint(with: $0.1) }?.0 ?? .neutral
                 }
             }
             rest = rest[end.upperBound...]
@@ -64,10 +86,56 @@ struct CharacterCue: Equatable {
     }
 }
 
+extension CharacterCue {
+    /// First match wins, so the stronger and more visible feeling sits higher.
+    /// Same families and order as the web's avatar-expression.mjs, as single words.
+    static let vocabulary: [(CharacterExpression, Set<String>)] = [
+        (.angry, ["angry", "anger", "mad", "furious", "fury", "livid", "seething", "fuming", "rage", "raging", "enraged", "irate", "hot", "heated", "snarling", "growling", "outraged", "pissed", "venomous", "spitting", "hostile", "fierce", "biting", "scathing", "yelling", "shouting", "screaming", "roaring", "barking"]),
+        (.frustrated, ["frustrated", "frustration", "exasperated", "irritated", "annoyed", "annoyance", "impatient", "impatience", "clipped", "curt", "terse", "snappy", "snapping", "testy", "aggravated", "bristling", "gritted"]),
+        (.afraid, ["afraid", "scared", "fear", "fearful", "frightened", "terrified", "panicked", "panicky", "alarmed", "nervous", "nervously", "anxious", "anxiously", "anxiety", "jittery", "shaky", "shaking", "trembling", "uneasy", "spooked", "dread", "rattled"]),
+        (.sad, ["sad", "sadness", "sadly", "sorrow", "sorrowful", "grief", "grieving", "mournful", "heartbroken", "tearful", "teary", "crying", "wounded", "hurt", "aching", "bereft", "lonely", "wistful", "melancholy", "defeated", "deflated", "crestfallen", "hollow"]),
+        (.concerned, ["worried", "worry", "concerned", "concern", "troubled", "protective", "sympathetic", "sympathy", "compassionate", "apologetic", "sorry", "regretful", "pained"]),
+        (.disgusted, ["disgusted", "disgust", "revolted", "repulsed", "appalled", "sneering", "contempt", "contemptuous", "scornful", "scorn", "disdain", "disdainful", "withering"]),
+        (.surprised, ["surprised", "surprise", "astonished", "startled", "shocked", "stunned", "amazed", "amazement", "awed", "awestruck", "disbelief", "disbelieving", "incredulous", "floored", "blindsided", "marveling"]),
+        (.excited, ["excited", "excitedly", "excitement", "thrilled", "elated", "ecstatic", "overjoyed", "joyful", "joyous", "joy", "jubilant", "delighted", "delight", "giddy", "bubbly", "bright", "brightly", "bouncy", "bouncing", "buzzing", "hyped", "pumped", "eager", "eagerly", "enthusiastic", "exuberant", "gushing", "beaming", "triumphant", "celebrating"]),
+        (.amused, ["amused", "amusement", "laughing", "chuckling", "giggling", "cackling", "snickering", "tickled", "funny", "humor", "humorous", "grinning", "grin", "mirth", "entertained", "wheezing"]),
+        (.playful, ["playful", "playfully", "teasing", "teasingly", "tease", "mischievous", "mischief", "impish", "cheeky", "sly", "slyly", "flirty", "flirting", "flirtatious", "coy", "sassy", "sass", "saucy", "silly", "goofy", "joking", "kidding", "ribbing", "needling", "conspiratorial", "winking"]),
+        (.smug, ["smug", "smugly", "proud", "proudly", "gloating", "cocky", "superior", "vindicated", "satisfied", "preening"]),
+        (.skeptical, ["skeptical", "skeptically", "sceptical", "doubtful", "doubting", "doubt", "unconvinced", "suspicious", "suspiciously", "dubious", "wary", "warily", "unimpressed", "arch", "archly", "pointed", "pointedly", "questioning"]),
+        (.serious, ["serious", "seriously", "solemn", "solemnly", "firm", "firmly", "stern", "sternly", "grave", "gravely", "sober", "level", "leveling", "measured", "steady", "steadily", "direct", "blunt", "bluntly", "resolute", "commanding", "authoritative", "warning", "urgent", "urgently", "intense", "intensely", "earnest", "earnestly", "sincere", "sincerely"]),
+        (.dry, ["dry", "dryly", "drily", "deadpan", "flat", "flatly", "wry", "wryly", "sardonic", "sarcastic", "sarcastically", "ironic", "droll", "laconic", "monotone", "unbothered", "bored", "unamused"]),
+        (.tired, ["tired", "weary", "wearily", "exhausted", "worn", "drained", "sleepy", "drowsy", "groggy", "yawning", "spent", "fatigued", "sluggish", "raspy", "hoarse"]),
+        (.thoughtful, ["thoughtful", "thoughtfully", "thinking", "pondering", "musing", "mulling", "reflective", "reflecting", "considering", "careful", "carefully", "cautious", "cautiously", "contemplative", "deliberate", "deliberately"]),
+        (.curious, ["curious", "curiously", "curiosity", "intrigued", "interested", "inquisitive", "fascinated", "nosy", "probing", "puzzled", "perplexed", "confused", "quizzical"]),
+        (.tender, ["tender", "tenderly", "soft", "softly", "softer", "softening", "gentle", "gently", "quiet", "quietly", "quieter", "hushed", "whisper", "whispering", "whispered", "murmuring", "intimate", "soothing", "comforting", "loving", "lovingly", "affectionate"]),
+        (.warm, ["warm", "warmly", "warmer", "warming", "warmth", "fond", "fondly", "friendly", "kind", "kindly", "welcoming", "smiling", "smile", "glad", "happy", "happily", "cheerful", "cheerfully", "cheery", "sunny", "pleasant", "pleased", "grateful", "appreciative", "encouraging", "supportive"]),
+        (.confident, ["confident", "confidently", "sure", "certain", "assured", "bold", "boldly", "decisive", "strong", "strongly", "brisk", "briskly", "crisp", "crisply"]),
+        (.calm, ["calm", "calmly", "calmer", "calming", "relaxed", "easy", "easygoing", "unhurried", "settled", "settling", "peaceful", "serene", "mellow", "even", "evenly", "patient", "patiently", "reassuring", "grounded"]),
+    ]
+
+    /// The app speaks a reply one sentence per clip and only the first clip
+    /// carries the character's direction, so a clip with no direction of its
+    /// own keeps the one before it. A leading sound alone (a laugh) plays over
+    /// the carried direction. A new direction, or reset, replaces it.
+    static func fromSpeech(_ text: String, carrying previous: CharacterCue) -> CharacterCue {
+        let cue = fromSpeech(text)
+        let leadsWithTag = text.drop(while: { $0.isWhitespace }).hasPrefix("%%%")
+        if !leadsWithTag { return CharacterCue(expression: previous.expression, moment: nil) }
+        if cue.expression == .neutral, cue.moment != nil { return CharacterCue(expression: previous.expression, moment: cue.moment) }
+        return cue
+    }
+    /// A laugh is the one sound with a face of its own.
+    func laughing(at elapsed: Double) -> Bool {
+        elapsed.isFinite && elapsed >= 0 && elapsed < 0.8 && moment == .amused
+    }
+}
+
 struct CharacterPresentation {
     var activity: CharacterActivity = .idle
     var expression: CharacterExpression = .neutral
     var elapsed: Double = 0
+    var laughing = false
+    var face: CharacterFace { laughing ? .laugh : expression.face }
     static let idle = CharacterPresentation()
 }
 
@@ -106,6 +174,6 @@ struct CharacterPlaybackTimeline {
               let clip = clips.first(where: { $0.start <= time && time < $0.end }),
               let identity = clip.identity, identity.speech, identity.speakerID == expectedID else { return nil }
         let elapsed = time - clip.start
-        return CharacterPresentation(activity: .speaking, expression: identity.cue.expression(at: elapsed), elapsed: elapsed)
+        return CharacterPresentation(activity: .speaking, expression: identity.cue.expression(at: elapsed), elapsed: elapsed, laughing: identity.cue.laughing(at: elapsed))
     }
 }

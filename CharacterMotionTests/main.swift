@@ -82,4 +82,23 @@ for expression in CharacterExpression.allCases {
     let off = CharacterMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 1, active: false, presentation: presentation)
     check(off.mouth == 0 && off.brow == 0 && off.lift == 0 && off.tilt == 0, "disabled reaction stays completely still")
 }
+for expression in CharacterExpression.allCases { check(expression.face != .laugh && expression.face != .closed, "a direction never parks on the laugh or the blink panel") }
+check(CharacterExpression.angry.face == .angry && CharacterExpression.tender.face == .smile && CharacterExpression.dry.face == .skeptical && CharacterExpression.afraid.face == .worried && CharacterExpression.calm.face == .neutral, "twenty-two expressions share eight drawn faces")
+let carriedFrom = CharacterCue.fromSpeech("%%%flat and hot like you are mad%%% Eight hundred dollars.")
+check(CharacterCue.fromSpeech("Somebody typed your name into a spreadsheet.", carrying: carriedFrom).expression == .angry, "a sentence with no direction keeps the reply's direction")
+let carriedLaugh = CharacterCue.fromSpeech("%%%laugh%%% Sorry.", carrying: carriedFrom)
+check(carriedLaugh.expression == .angry && carriedLaugh.moment == .amused && carriedLaugh.laughing(at: 0.2) && !carriedLaugh.laughing(at: 1), "a leading laugh plays over the carried direction")
+check(CharacterCue.fromSpeech("%%%warm%%% Hey.", carrying: carriedFrom).expression == .warm, "a new direction replaces the carried one")
+check(CharacterCue.fromSpeech("%%%reset%%% Anyway.", carrying: carriedFrom).expression == .neutral, "reset clears the carried direction")
+check(CharacterPresentation(activity: .speaking, expression: .warm, elapsed: 0.1, laughing: true).face == .laugh, "the laugh borrows the laughing face")
+check(CharacterMotion.viseme(time: 1, strength: 0.02, seed: 7) == 0 && CharacterMotion.viseme(time: .nan, strength: 0.5, seed: 7) == 0, "silence and a bad clock close the mouth")
+var shapes = Set<Int>()
+for tick in 0..<200 {
+    let quiet = CharacterMotion.viseme(time: Double(tick) * 0.14, strength: 0.4, seed: 99), loud = CharacterMotion.viseme(time: Double(tick) * 0.14, strength: 0.9, seed: 99)
+    check((1...8).contains(quiet) && [2, 3, 8].contains(loud), "bounded mouth shapes; a loud syllable is an open mouth")
+    shapes.insert(quiet)
+}
+check(shapes.count >= 3, "the mouth keeps changing shape")
+check(CharacterMotion.viseme(time: 3.01, strength: 0.4, seed: 7) == CharacterMotion.viseme(time: 3.05, strength: 0.4, seed: 7), "one shape per syllable slot, no flicker")
+check(CharacterMotion.pose(id: "a", time: 2, level: 1, active: false).viseme == 0, "off is a closed mouth")
 print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")
