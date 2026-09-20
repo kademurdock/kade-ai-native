@@ -315,6 +315,16 @@ final class SoundBoothService: ObservableObject {
         try await post("api/kade/sound-booth/suggest", body: ["text": text], timeout: 30, fallback: "Couldn't suggest right now.")
     }
 
+    /// Surprise me, for songs. The server picks a way of looking, the lyric
+    /// writer brainstorms and throws ideas away, and one pitch comes back:
+    /// about twenty seconds and a fraction of a cent. Any failure throws and
+    /// the view falls back to its own free list.
+    func songIdea() async throws -> String {
+        struct Idea: Decodable { let idea: String }
+        let made: Idea = try await post("api/kade/sound-booth/idea", body: [:], timeout: 90, fallback: "The writer could not be reached.")
+        return made.idea
+    }
+
     /// mode "format" keeps her words verbatim and only adds structure;
     /// "write" drafts a whole piece from a description.
     func makeScript(

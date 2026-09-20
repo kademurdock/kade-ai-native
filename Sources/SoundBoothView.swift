@@ -718,7 +718,7 @@ struct SoundBoothView: View {
                     Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
                         Task { await quickDraft() }
                     }.disabled(workspaceBusy)
-                    Button("Surprise me", systemImage: "dice") { inspire() }.disabled(workspaceBusy)
+                    Button("Surprise me", systemImage: "dice") { Task { await inspire() } }.disabled(workspaceBusy)
                 }
                 if let previous = writingUndo, previous.engine == engine {
                     Button("Undo writing change") {
@@ -726,7 +726,9 @@ struct SoundBoothView: View {
                         invalidateQuote(); announce("Previous writing restored.")
                     }.disabled(workspaceBusy)
                 }
-                Text("Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
+                Text(isMusic
+                    ? "Writing help does not generate audio. Surprise me asks the writer to invent an original song idea, about twenty seconds and a fraction of a cent; drafting uses the writing model."
+                    : "Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             }
             if !readback.isEmpty {
                 Text(readback)
@@ -1085,8 +1087,25 @@ struct SoundBoothView: View {
         }
     }
 
-    private func inspire() {
+    private func inspire() async {
         guard !workspaceBusy else { return }
+        /// Songs: the writer invents the idea (fork POST /sound-booth/idea). The
+        /// list below is only what she gets when the writer cannot be reached.
+        if isMusic {
+            let original = script, requestEngine = engine
+            isWriting = true
+            defer { isWriting = false }
+            announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about twenty seconds.")
+            if let idea = try? await service.songIdea(), !idea.isEmpty {
+                guard engine == requestEngine, script == original else { announce("Your editor changed while the idea was being made. Your current text is kept."); return }
+                writingUndo = (engine, script, values["lyrics"] ?? "")
+                script = idea
+                invalidateQuote(); announce("A new song idea is in the editor. Choose Surprise me again for another, or develop it with the writing button. Undo restores your previous writing.")
+                return
+            }
+            guard engine == requestEngine, script == original else { return }
+            announce("The writer could not be reached, so this idea comes from the short list.")
+        }
         writingUndo = (engine, script, values["lyrics"] ?? "")
         let place = ["a midnight train", "a seaside town", "a kitchen in a thunderstorm", "an old theatre"].randomElement() ?? "home"
         let turn = ["an unexpected reunion", "a promise kept", "a small act of courage", "something thought lost"].randomElement() ?? "a reunion"
