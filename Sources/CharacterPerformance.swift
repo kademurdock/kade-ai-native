@@ -1,8 +1,9 @@
 import Foundation
 
-/// The nine drawn faces on a character's expression sheet, in panel order.
+/// Original sheet indices remain stable; additional faces use the nuance sheet.
 enum CharacterFace: Int, CaseIterable {
     case neutral = 0, smile, laugh, surprised, skeptical, angry, sad, worried, closed
+    case curious, thoughtful, playful, confident, tender, tired, serious, delighted
 }
 
 enum CharacterExpression: String, Codable, CaseIterable {
@@ -22,12 +23,19 @@ enum CharacterExpression: String, Codable, CaseIterable {
         default: return nil
         }
     }
-    /// Twenty-two expressions share eight drawn faces. Whole faces only: a
-    /// half-strength face shows two sets of eyebrows.
+    /// Delivery directions select a complete expression rather than a partial overlay.
     var face: CharacterFace {
         switch self {
-        case .warm, .tender, .amused, .playful, .excited: return .smile
-        case .skeptical, .dry, .smug: return .skeptical
+        case .warm, .amused: return .smile
+        case .curious: return .curious
+        case .thoughtful: return .thoughtful
+        case .playful, .smug: return .playful
+        case .confident: return .confident
+        case .tender: return .tender
+        case .tired: return .tired
+        case .serious: return .serious
+        case .excited: return .delighted
+        case .skeptical, .dry: return .skeptical
         case .frustrated, .angry, .disgusted: return .angry
         case .surprised: return .surprised
         case .sad: return .sad
@@ -135,7 +143,12 @@ struct CharacterPresentation {
     var expression: CharacterExpression = .neutral
     var elapsed: Double = 0
     var laughing = false
-    var face: CharacterFace { laughing ? .laugh : expression.face }
+    var face: CharacterFace {
+        if laughing { return .laugh }
+        if expression == .neutral && activity == .thinking { return .thoughtful }
+        if expression == .neutral && activity == .listening { return .curious }
+        return expression.face
+    }
     static let idle = CharacterPresentation()
 }
 

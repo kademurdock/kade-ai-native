@@ -35,10 +35,9 @@ struct CharacterPortraitView: View {
                 let pose = CharacterMotion.pose(id: agentID ?? "unknown",
                     time: timeline.date.timeIntervalSinceReferenceDate,
                     level: active && playing ? level() : 0, active: active, presentation: performance)
-                // The stage turns the same bounded pose up: a head that visibly
-                // rocks and bobs, a picture that swells with each loud syllable,
-                // and a ring of light that beats with the voice.
-                let reach = stage ? 6.0 : 1.0
+                // Facial expression and individual gestures carry the performance;
+                // the larger stage adds a little reach without amplifying it sixfold.
+                let reach = stage ? 1.6 : 1.0
                 let voice = active && playing ? pose.mouth : 0
                 ZStack {
                     RoundedRectangle(cornerRadius: 24).fill(Color.accentColor.opacity(0.08))
@@ -50,7 +49,7 @@ struct CharacterPortraitView: View {
                     portrait(pose, face: performance.face)
                         .frame(width: side, height: side)
                         .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .scaleEffect(stage ? 1 + voice * 0.07 : 1)
+                        .scaleEffect(active ? pose.scale : 1)
                         .rotationEffect(.degrees(pose.tilt * reach))
                         .offset(y: pose.lift * reach)
                 }
@@ -75,6 +74,14 @@ struct CharacterPortraitView: View {
     private struct Sheet {
         let faces: String, mouths: String
         let face: CGRect, mouth: CGRect, eyes: CGRect
+    }
+    private var nuanceAsset: String {
+        switch agentID {
+        case CharacterMotion.kianaID: return "CharacterKianaNuance"
+        case CharacterMotion.dellaID: return "CharacterDellaNuance"
+        case CharacterMotion.lillyID: return "CharacterLillyNuance"
+        default: return "CharacterHarleyNuance"
+        }
     }
     private var sheet: Sheet? {
         guard prepared else { return nil }
@@ -103,8 +110,9 @@ struct CharacterPortraitView: View {
             ZStack(alignment: .topLeading) {
                 panel(sheet.faces, CharacterFace.neutral.rawValue)
                 // Every drawn face sits ready at zero opacity so a change is a dissolve.
-                ForEach(1..<8, id: \.self) { index in
-                    feathered(panel(sheet.faces, index), region: sheet.face, inner: 0.72)
+                ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed }, id: \.rawValue) { drawnFace in
+                    let index = drawnFace.rawValue
+                    feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
                         .opacity(face.rawValue == index ? 1 : 0)
                 }
                 .animation(active ? .easeInOut(duration: 0.45) : nil, value: face)

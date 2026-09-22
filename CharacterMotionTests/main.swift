@@ -83,7 +83,16 @@ for expression in CharacterExpression.allCases {
     check(off.mouth == 0 && off.brow == 0 && off.lift == 0 && off.tilt == 0, "disabled reaction stays completely still")
 }
 for expression in CharacterExpression.allCases { check(expression.face != .laugh && expression.face != .closed, "a direction never parks on the laugh or the blink panel") }
-check(CharacterExpression.angry.face == .angry && CharacterExpression.tender.face == .smile && CharacterExpression.dry.face == .skeptical && CharacterExpression.afraid.face == .worried && CharacterExpression.calm.face == .neutral, "twenty-two expressions share eight drawn faces")
+check(CharacterExpression.angry.face == .angry && CharacterExpression.tender.face == .tender && CharacterExpression.dry.face == .skeptical && CharacterExpression.afraid.face == .worried && CharacterExpression.calm.face == .neutral, "extended expressions retain established emotional faces")
+check(CharacterPresentation(activity: .thinking).face == .thoughtful, "thinking shows the thoughtful glance")
+check(CharacterPresentation(activity: .listening).face == .curious, "listening shows interest")
+let nuanced: [CharacterExpression] = [.curious, .thoughtful, .playful, .confident, .tender, .tired, .serious, .excited]
+check(Set(nuanced.map { $0.face.rawValue }).count == 8, "eight distinct additional faces")
+for id in CharacterMotion.animatedIDs { for tick in 0..<1000 {
+    let pose = CharacterMotion.pose(id: id, time: Double(tick) / 24, level: 0.2, active: true)
+    check(abs(pose.tilt) <= 2.8 && abs(pose.lift) <= 3.2 && pose.scale >= 1 && pose.scale <= 1.04, "real character motion bounds")
+    check(CharacterMotion.pose(id: id, time: Double(tick) / 24, level: 0, active: true).viseme == 0, "silent portraits never invent speech")
+} }
 let carriedFrom = CharacterCue.fromSpeech("%%%flat and hot like you are mad%%% Eight hundred dollars.")
 check(CharacterCue.fromSpeech("Somebody typed your name into a spreadsheet.", carrying: carriedFrom).expression == .angry, "a sentence with no direction keeps the reply's direction")
 let carriedLaugh = CharacterCue.fromSpeech("%%%laugh%%% Sorry.", carrying: carriedFrom)

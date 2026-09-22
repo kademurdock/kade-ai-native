@@ -9,6 +9,7 @@ struct CharacterPose {
     var brow: Double = 0
     /// Panel on the mouth sheet; 0 is closed and lets the face's own mouth show.
     var viseme: Int = 0
+    var scale: Double = 1
     static let still = CharacterPose(mouth: 0, blink: 0, tilt: 0, lift: 0)
 }
 
@@ -59,7 +60,7 @@ enum CharacterMotion {
         let secondBlink = floor(t / period).truncatingRemainder(dividingBy: 3) == 1 && blinkPhase > period - 0.52 && blinkPhase < period - 0.36
         let blink = secondBlink ? sin((blinkPhase - period + 0.52) / 0.16 * .pi) : (blinkPhase > period - 0.2 ? sin((blinkPhase - period + 0.2) / 0.2 * .pi) : 0)
         let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
-        let tempo = id == dellaID ? 0.8 : 1.0
+        let tempo = id == dellaID ? 0.72 : (id == harleyID ? 0.83 : (id == lillyID ? 1.18 : 1.0))
         var tilt = sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32
         var lift = sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4)
         if presentation.activity == .listening {
@@ -71,9 +72,20 @@ enum CharacterMotion {
         if presentation.expression == .amused { lift += gesture * 0.75 }
         if presentation.expression == .skeptical { tilt += gesture * 0.8 }
         if presentation.expression == .concerned { tilt -= gesture * 0.5 }
+        let energy = id == dellaID ? 0.72 : (id == harleyID ? 0.82 : (id == lillyID ? 1.15 : 1.0))
+        let quiet: Double = [.sad, .tired, .serious, .concerned, .afraid].contains(presentation.expression) ? 0.45 : 1
+        let beat = (t * tempo).truncatingRemainder(dividingBy: 8.6)
+        let nod = beat > 6.7 ? pow(sin((beat - 6.7) / 1.9 * .pi), 2) : 0
+        if animatedIDs.contains(id) {
+            tilt += (sin(t * tempo * 0.43) * 0.75 + sin(t * tempo * 0.19) * 0.45) * energy * quiet
+            lift += (nod * 1.5 + sin(t * tempo * 1.25) * mouth * 0.65) * energy * quiet
+        }
+        tilt = max(-2.8, min(2.8, tilt))
+        lift = max(-3.2, min(3.2, lift))
         return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
             brow: presentation.expression == .neutral ? mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth) : 0,
-            viseme: viseme(time: time, strength: mouth, seed: seed))
+            viseme: viseme(time: time, strength: mouth, seed: seed),
+            scale: animatedIDs.contains(id) ? 1.012 + sin(t * tempo * 0.85) * 0.004 + mouth * 0.012 * quiet : 1)
     }
 }
 
