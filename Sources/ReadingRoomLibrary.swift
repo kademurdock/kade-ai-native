@@ -344,13 +344,16 @@ struct ArchiveSection: View {
     @State private var folderMoveTo = ""
     @State private var showFolderMove = false
     private func canManage(_ item: RRItem) -> Bool { librarian || (!me.isEmpty && item.owner == me) }
-    @State private var page: RRArchivePage?
-    @State private var path = ""
-    @State private var pageNo = 0
-    @State private var scope = "public"
+    /* Sep 23 2026 (B7): where you are in the archive, and your search, belong
+     * to the Library screen now. This section is rebuilt every time Browse is
+     * chosen, and a trip to Listen or Add must not drop you back at the top. */
+    @Binding var page: RRArchivePage?
+    @Binding var path: String
+    @Binding var pageNo: Int
+    @Binding var scope: String
     @State private var status = ""
-    @State private var query = ""
-    @State private var results: [RRItem] = []
+    @Binding var query: String
+    @Binding var results: [RRItem]
 
     var body: some View {
         Section {
@@ -359,7 +362,7 @@ struct ArchiveSection: View {
                 Button("Search") { Task { await doSearch() } }
             }
             ForEach(results) { item in itemRow(item) }
-        } header: { Text("Find something in the library") }
+        } header: { Text("Find something in the library").accessibilityAddTraits(.isHeader) }
 
         Section {
             Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in results = []; Task { await load("", 0) } }
@@ -407,7 +410,7 @@ struct ArchiveSection: View {
                     }
                 }
             } else { Text(status.isEmpty ? "Loading…" : status).foregroundStyle(.secondary) }
-        } header: { Text("The archive") }
+        } header: { Text("The archive").accessibilityAddTraits(.isHeader) }
         .task { if page == nil { await load("", 0) } }
         .alert("Move \(moving?.title ?? "") to", isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } })) {
             TextField("Folder, like Video/Commercials", text: $moveTo)
@@ -429,11 +432,14 @@ struct ArchiveSection: View {
 
     private func itemRow(_ item: RRItem) -> some View {
         Button { open(item) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.title).font(.headline)
-                Text(detail(item)).font(.subheadline).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                LibraryJacket(kind: item.kind, category: item.category, title: item.title)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title).font(.headline)
+                    Text(detail(item)).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityLabel(item.spokenRow(where: "archive") + (item.described == true ? ", described" : ""))
         .accessibilityHint("Opens it.")
@@ -465,19 +471,31 @@ struct CollectionsSection: View {
     @State private var shared: [RRCollectionRow] = []
     @State private var newTitle = ""
     @State private var status = ""
+    @State private var loaded = false
+    @FocusState private var naming: Bool
 
     var body: some View {
         Section {
-            Text("Playlists you put together from anything in the library — yours until you share them.").font(.footnote).foregroundStyle(.secondary)
-            if mine.isEmpty && shared.isEmpty { Text("No collections yet. Name one below, then use \"Add to a collection\" on anything you play.").foregroundStyle(.secondary) }
+            /* Sep 23 2026 (B10): an empty screen teaches. What a collection is,
+             * and one button that takes you to making one. Only once the list
+             * has really loaded, so nobody hears "no collections" before theirs
+             * arrive. */
+            if loaded && mine.isEmpty && shared.isEmpty {
+                Text("No collections yet. A collection is your own playlist: books, recordings and videos from the library that play one after another. Name one here, then choose \"Add to a collection\" on anything you open.").foregroundStyle(.secondary)
+                Button("Make a collection") { naming = true }
+                    .accessibilityHint("Puts you in the name box below. Type a name, then choose Make it.")
+            } else {
+                Text("Playlists you put together from anything in the library — yours until you share them.").font(.footnote).foregroundStyle(.secondary)
+            }
             ForEach(mine) { c in row(c, mine: true) }
             ForEach(shared) { c in row(c, mine: false) }
             HStack {
                 TextField("New collection name", text: $newTitle).textFieldStyle(.roundedBorder)
+                    .focused($naming)
                 Button("Make it") { Task { await make() } }.disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             if !status.isEmpty { Text(status).font(.footnote).foregroundStyle(.secondary) }
-        } header: { Text("Collections") }
+        } header: { Text("Collections").accessibilityAddTraits(.isHeader) }
         .task { await reload() }
     }
     private func row(_ c: RRCollectionRow, mine: Bool) -> some View {
@@ -491,7 +509,7 @@ struct CollectionsSection: View {
         .accessibilityHint("Opens the collection.")
     }
     func reload() async {
-        do { let c = try await service.collections(); mine = c.mine; shared = c.shared } catch { status = error.localizedDescription }
+        do { let c = try await service.collections(); mine = c.mine; shared = c.shared; loaded = true } catch { status = error.localizedDescription }
     }
     private func make() async {
         do { _ = try await service.newCollection(newTitle.trimmingCharacters(in: .whitespaces)); UIAccessibility.post(notification: .announcement, argument: "Made \(newTitle)."); newTitle = ""; await reload() } catch { status = error.localizedDescription }
@@ -572,19 +590,19 @@ struct SubmissionsSection: View {
             TextField("What is it (optional)", text: $title).textFieldStyle(.roundedBorder)
             TextField("Why it belongs (optional)", text: $note, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1 ... 3)
             Button("Submit for consideration") { Task { await submit() } }.disabled(url.trimmingCharacters(in: .whitespaces).isEmpty)
-        } header: { Text("Submit a link for the librarian") }
+        } header: { Text("Submit a link for the librarian").accessibilityAddTraits(.isHeader) }
 
         Section {
             if mine.isEmpty { Text("Nothing submitted yet.").foregroundStyle(.secondary) }
             ForEach(mine) { sb in row(sb, review: false) }
-        } header: { Text("Your submissions") }
+        } header: { Text("Your submissions").accessibilityAddTraits(.isHeader) }
 
         if librarian {
             Section {
                 Text("You are the librarian. Approve a link and it is fetched into the collection from TubeVault's Cloud tab; approve a file and it goes into the library at once. The person who submitted it is told either way.").font(.footnote).foregroundStyle(.secondary)
                 if waiting.isEmpty { Text("Nothing waiting.").foregroundStyle(.secondary) }
                 ForEach(waiting) { sb in row(sb, review: true) }
-            } header: { Text("Waiting for the librarian") }
+            } header: { Text("Waiting for the librarian").accessibilityAddTraits(.isHeader) }
         }
         }
         .task { if let l = incomingLink, url.isEmpty { url = l }; await reload() }
