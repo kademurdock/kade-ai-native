@@ -85,7 +85,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: "YES"
         # PART 91.4 — the last accessibility-audit finding, and it was a real
         # one for SIGHTED users. There was no AccentColor asset at all, so
         # everything tinted fell back to iOS system blue (#007AFF): white text
@@ -119,14 +119,14 @@ targets:
         # no on-device speech recognition is used (no NSSpeechRecognitionUsageDescription
         # needed), audio is just captured and uploaded to the fork's existing
         # /api/files/speech/stt endpoint (Deepgram), same as the web app.
-        NSMicrophoneUsageDescription: "Kade-AI uses your microphone so you can talk to your companions with your voice instead of typing."
+        NSMicrophoneUsageDescription: "Kade-AI uses your microphone so you can talk to your characters with your voice instead of typing."
         # Session 13 ("calling and spotters"): Spotter/Live mode shares your
         # camera during a call so your Spotter can see and describe what's
         # around you -- same crash-without-this-key rule as the mic string
         # above. Only requested the moment you actually tap "Bring in your
         # Spotter" (CameraCaptureController.start()), never on a plain voice call.
         NSCameraUsageDescription: "Kade-AI uses your camera so your Spotter can see what's around you and describe it during a call."
-        NSLocationWhenInUseUsageDescription: "Kade-AI uses your location, only while the app is open and only when you turn on Share my location, so your companions can tell you where you are, what's nearby, and how to walk there."
+        NSLocationWhenInUseUsageDescription: "Kade-AI uses your location, only while the app is open and only when you turn on Share my location, so your characters can tell you where you are, what's nearby, and how to walk there."
         # Session 14 (lock-screen call controls). Two things need this:
         # a call must keep its audio engine running when the screen locks or
         # the app goes to the background -- otherwise hanging up from the
