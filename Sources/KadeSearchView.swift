@@ -353,6 +353,8 @@ struct KadeSearchPlace: Identifiable {
         KadeSearchPlace(title: "Agent work", caption: "Replies saved after a dropped connection", symbol: "checklist", tint: .indigo, route: .agentWork, keywords: "agent work saved replies requests tasks dropped connection"),
         KadeSearchPlace(title: "Bookmarks", caption: "Conversations you tagged", symbol: "bookmark.fill", tint: .red, route: .bookmarks, keywords: "bookmarks bookmark tags tagged saved favorites"),
         KadeSearchPlace(title: "Settings", caption: "Voices, ringtone, text and sound", symbol: "gearshape", tint: .gray, route: .settings, keywords: "settings preferences ringtone ring voice speed font contrast haptics sounds main character password account icon notifications"),
+        KadeSearchPlace(title: "App icon", caption: "Put a character's face on your home screen", symbol: "app.badge", tint: .pink, route: .settingsSearch("app icon"), keywords: "app icon icons home screen picture face logo kiana harley della lilly classic"),
+        KadeSearchPlace(title: "Notifications", caption: "Turn phone notifications on or off", symbol: "bell.badge", tint: .red, route: .settingsSearch("notifications"), keywords: "notifications notification push permission allow banners turn on off"),
         KadeSearchPlace(title: "Morning brief", caption: "Your daily rundown", symbol: "sun.max", tint: .yellow, route: .brief, keywords: "brief morning daily news rundown"),
         KadeSearchPlace(title: "Help", caption: "How everything works", symbol: "questionmark.circle", tint: .mint, route: .help, keywords: "help how guide instructions where is lost gestures"),
     ]
