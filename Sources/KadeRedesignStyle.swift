@@ -55,31 +55,34 @@ struct KadePaintedHeader: View {
     var height: CGFloat = 120
     @KadeContrastPolicy private var highContrast: Bool
 
+    /// The size comes from the empty frame; the picture is an overlay on it,
+    /// so a scaled-to-fill image can never widen the screen it sits on.
     var body: some View {
-        Group {
-            if let picture = UIImage(named: imageName) {
-                Image(uiImage: picture)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                ZStack {
-                    LinearGradient(
-                        colors: highContrast
-                            ? [tint, tint]
-                            : [tint.opacity(0.85), tint.opacity(0.45)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                    Image(systemName: symbol)
-                        .font(.system(size: height * 0.42, weight: .semibold))
-                        .foregroundStyle(.white.opacity(highContrast ? 1 : 0.85))
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .overlay {
+                if let picture = UIImage(named: imageName) {
+                    Image(uiImage: picture)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        LinearGradient(
+                            colors: highContrast
+                                ? [tint, tint]
+                                : [tint.opacity(0.85), tint.opacity(0.45)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        Image(systemName: symbol)
+                            .font(.system(size: height * 0.42, weight: .semibold))
+                            .foregroundStyle(.white.opacity(highContrast ? 1 : 0.85))
+                    }
                 }
             }
-        }
-        .frame(height: height)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .accessibilityHidden(true)
-        .allowsHitTesting(false)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }
 
