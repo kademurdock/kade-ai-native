@@ -10,6 +10,7 @@ import UIKit
 /// house patterns: one combined element per entry, forget on the actions
 /// rotor, every change announced.
 struct LogbookView: View {
+    private let apiClient: KadeAPIClient
     @StateObject private var service: LogbookService
     @State private var page: LogbookService.LogbookPage?
     @State private var addingNew = false
@@ -72,6 +73,7 @@ struct LogbookView: View {
     }
 
     init(apiClient: KadeAPIClient) {
+        self.apiClient = apiClient
         _service = StateObject(wrappedValue: LogbookService(client: apiClient))
     }
 
@@ -277,7 +279,8 @@ struct LogbookView: View {
                         TextEditor(text: $newText)
                             .frame(minHeight: 120)
                             .accessibilityLabel("Entry text")
-                            .accessibilityHint("What happened, or how the day went. Dictation works here.")
+                            .accessibilityHint("What happened, or how the day went.")
+                        DictationButton(apiClient: apiClient, text: $newText, fieldName: "logbook entry").disabled(busy)
                     } footer: {
                         Text("Dated today, in your own words. Any of your companions can recall entries you add here.")
                     }
@@ -304,7 +307,8 @@ struct LogbookView: View {
                         TextEditor(text: $editText)
                             .frame(minHeight: 120)
                             .accessibilityLabel("Entry text")
-                            .accessibilityHint("Fix the wording. Dictation works here. The entry keeps its date and who holds it.")
+                            .accessibilityHint("Fix the wording. The entry keeps its date and who holds it.")
+                        DictationButton(apiClient: apiClient, text: $editText, fieldName: "logbook entry").disabled(busy)
                     } footer: {
                         Text("From \(entry.spokenDate). Only the wording changes — the date and who holds the entry stay put.")
                     }

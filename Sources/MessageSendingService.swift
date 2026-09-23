@@ -104,6 +104,7 @@ final class MessageSendingService: ObservableObject {
         parentMessageId: String?,
         agentId: String?,
         files: [[String: Any]]? = nil,
+        inputSource: String? = nil,
         onText: ((String) -> Void)? = nil,
         onThink: ((String) -> Void)? = nil,
         onTool: ((String) -> Void)? = nil
@@ -113,7 +114,8 @@ final class MessageSendingService: ObservableObject {
             conversationId: conversationId,
             parentMessageId: parentMessageId,
             agentId: agentId,
-            files: files
+            files: files,
+            inputSource: inputSource
         )
         /* Build 212: the second half of the send-prologue bisect (see the
          * long note in ConversationDetailView.performSend). startGeneration
@@ -158,13 +160,15 @@ final class MessageSendingService: ObservableObject {
         conversationId: String?,
         parentMessageId: String?,
         agentId: String?,
-        files: [[String: Any]]? = nil
+        files: [[String: Any]]? = nil,
+        inputSource: String? = nil
     ) async throws -> StartResponse {
         var body: [String: Any] = [
             "text": text,
             "messageId": UUID().uuidString,
             "endpoint": "agents",
         ]
+        if inputSource == "voice_transcript" { body["kadeInputSource"] = inputSource }
         // Omit the key entirely for a brand-new conversation -- see the
         // type doc's "NEW CONVERSATIONS" section for why omission
         // (specifically, not an empty string or a client-made UUID) is

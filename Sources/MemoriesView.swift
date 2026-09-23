@@ -235,6 +235,7 @@ struct MemoriesView: View {
         .task { await reload() }
         .sheet(item: $editingCard) { card in
             MemoryEditSheet(
+                apiClient: apiClient,
                 title: card.spokenKey,
                 original: card.value
             ) { newValue in
@@ -244,7 +245,7 @@ struct MemoriesView: View {
             }
         }
         .sheet(isPresented: $addingNew) {
-            MemoryAddSheet { key, value in
+            MemoryAddSheet(apiClient: apiClient) { key, value in
                 try await service.create(key: key, value: value)
                 UIAccessibility.post(notification: .announcement, argument: "Memory saved.")
                 await reload()
@@ -298,6 +299,7 @@ struct MemoriesView: View {
 /// Edit one card's text. The topic key stays put — renames are the memory
 /// keeper's business; this sheet is for correcting the remembered truth.
 private struct MemoryEditSheet: View {
+    let apiClient: KadeAPIClient
     let title: String
     let original: String
     let onSave: (String) async throws -> Void
@@ -307,7 +309,8 @@ private struct MemoryEditSheet: View {
     @State private var saving = false
     @State private var errorText: String?
 
-    init(title: String, original: String, onSave: @escaping (String) async throws -> Void) {
+    init(apiClient: KadeAPIClient, title: String, original: String, onSave: @escaping (String) async throws -> Void) {
+        self.apiClient = apiClient
         self.title = title
         self.original = original
         self.onSave = onSave
@@ -321,6 +324,7 @@ private struct MemoryEditSheet: View {
                     TextEditor(text: $text)
                         .frame(minHeight: 140)
                         .accessibilityLabel("The memory")
+                    DictationButton(apiClient: apiClient, text: $text, fieldName: "memory").disabled(saving)
                 } footer: {
                     if let errorText {
                         Text(errorText).foregroundStyle(.red)
@@ -355,6 +359,7 @@ private struct MemoryEditSheet: View {
 
 /// Add a card by hand — topic plus the memory, saved shared.
 private struct MemoryAddSheet: View {
+    let apiClient: KadeAPIClient
     let onSave: (String, String) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -372,6 +377,7 @@ private struct MemoryAddSheet: View {
                     TextEditor(text: $value)
                         .frame(minHeight: 120)
                         .accessibilityLabel("The memory")
+                    DictationButton(apiClient: apiClient, text: $value, fieldName: "memory").disabled(saving)
                 } footer: {
                     if let errorText {
                         Text(errorText).foregroundStyle(.red)

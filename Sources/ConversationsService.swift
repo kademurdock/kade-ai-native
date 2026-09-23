@@ -115,12 +115,13 @@ struct KadeMessage: Codable, Identifiable {
     /// site (the optimistic placeholder in ConversationDetailView) compiles
     /// unchanged -- same pattern tokenCount used.
     var files: [KadeMessageFile]? = nil
+    var kadeInputSource: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case messageId, conversationId, createdAt, isCreatedByUser, sender, text, content
         case parentMessageId
         case tokenCount
-        case files
+        case files, kadeInputSource
         case agentId = "model"
     }
 

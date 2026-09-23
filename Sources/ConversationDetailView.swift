@@ -106,6 +106,7 @@ struct ConversationDetailView: View {
     @State private var generatedTitle: String?
 
     @State private var draftText: String = ""
+    @State private var draftInputSource: String?
     @State private var sendState: SendState = .idle
     /// The currently in-flight `send()`/`retry()`/`regenerate()` Task, if
     /// any -- session 17's Stop button cancels whichever one is actually
@@ -401,6 +402,7 @@ struct ConversationDetailView: View {
     private struct FailedAttempt {
         let text: String
         let parentId: String?
+        let inputSource: String?
     }
     @State private var failedAttempt: FailedAttempt?
 
@@ -898,6 +900,9 @@ struct ConversationDetailView: View {
         // Session 20 earcons: the same three send moments get a short,
         // gentle non-speech sound (honouring the Sound effects switch),
         // COMPLEMENTING -- never replacing -- VoiceOver's own spoken cue.
+        .onChange(of: draftText) { _, text in
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draftInputSource = nil }
+        }
         .onChange(of: sendState) { old, new in
             if case .sending = new {
                 endSpeechWait()
@@ -2752,7 +2757,7 @@ struct ConversationDetailView: View {
         .accessibilityHint(
             voiceService.isRecording
                 ? "Stops recording and fills your message with what you said."
-                : "Records your voice and turns it into a message you can review before sending."
+                : "Uses Kade-AI's voice transcription to fill your message. Try it if your phone's keyboard mishears you. Review before sending."
         )
     }
 
@@ -2850,6 +2855,8 @@ struct ConversationDetailView: View {
         if UIAccessibility.isVoiceOverRunning {
             a11yFocus = .sendButton
         }
+        let inputSource = draftInputSource
+        draftInputSource = nil
         draftText = ""
         await Self.nextRunLoopTurn()
         // Build 220: the crumb that build 211's bisect was missing. If a
@@ -2879,7 +2886,7 @@ struct ConversationDetailView: View {
             case .auto: stamped = trimmed
             }
         }
-        await performSend(text: stamped, parentId: parentId)
+        await performSend(text: stamped, parentId: parentId, inputSource: inputSource)
     }
 
     /// Session 17. Stops whatever `performSend` currently has in flight --
@@ -3066,6 +3073,7 @@ struct ConversationDetailView: View {
     private func beginEdit(_ message: KadeMessage) {
         guard canEdit(message) else { return }
         draftText = message.displayText
+        draftInputSource = message.kadeInputSource
         sendParentOverride = message.parentMessageId
         a11yFocus = .composerField
     }
@@ -3080,7 +3088,7 @@ struct ConversationDetailView: View {
               let promptingUser = messages.first(where: { $0.messageId == parentId }) else {
             return
         }
-        await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId, includeAttachment: false)
+        await performSend(text: promptingUser.displayText, parentId: promptingUser.parentMessageId, includeAttachment: false, inputSource: promptingUser.kadeInputSource)
     }
 
     /// Build 207: one full turn of the main run loop. The awaited
@@ -3097,7 +3105,7 @@ struct ConversationDetailView: View {
     /// The shared guts of every send -- a plain Send tap (via `send()`
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
-    private func performSend(text: String, parentId: String?, includeAttachment: Bool = true) async {
+    private func performSend(text: String, parentId: String?, includeAttachment: Bool = true, inputSource: String? = nil) async {
         failedAttempt = nil
         let optimisticMessage = KadeMessage(
             messageId: "pending-\(UUID().uuidString)",
@@ -3108,7 +3116,8 @@ struct ConversationDetailView: View {
             text: text,
             content: nil,
             parentMessageId: parentId,
-            agentId: nil
+            agentId: nil,
+            kadeInputSource: inputSource
         )
         /* ⭐ BUILD 211 -- THE COMMIT THAT WAS STILL FUSED (Aug 18 2026).
          *
@@ -3243,6 +3252,7 @@ struct ConversationDetailView: View {
                 parentMessageId: parentId,
                 agentId: selectedAgentId,
                 files: files,
+                inputSource: inputSource,
                 onText: { chunk in
                     guard !chunk.isEmpty else { return }
                     if speechWorkPhase != .reply { speechWorkPhase = .reply }
@@ -3590,7 +3600,7 @@ struct ConversationDetailView: View {
             } else {
                 sendState = .failed("Didn't get a reply. Check your connection and try again.")
             }
-            failedAttempt = FailedAttempt(text: text, parentId: parentId)
+            failedAttempt = FailedAttempt(text: text, parentId: parentId, inputSource: inputSource)
             a11yFocus = .composerError
         } catch {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
@@ -3604,7 +3614,7 @@ struct ConversationDetailView: View {
             // sent from the user's point of view, only the "did the reply
             // come back" half failed.
             sendState = .failed("Didn't get a reply. Check your connection and try again.")
-            failedAttempt = FailedAttempt(text: text, parentId: parentId)
+            failedAttempt = FailedAttempt(text: text, parentId: parentId, inputSource: inputSource)
             a11yFocus = .composerError
         }
     }
@@ -3629,7 +3639,7 @@ struct ConversationDetailView: View {
     private func retry() async {
         guard let attempt = failedAttempt else { return }
         failedAttempt = nil
-        await performSend(text: attempt.text, parentId: attempt.parentId)
+        await performSend(text: attempt.text, parentId: attempt.parentId, inputSource: attempt.inputSource)
     }
 
     // MARK: - Voice input (Phase 5)
@@ -3703,6 +3713,7 @@ struct ConversationDetailView: View {
             // can only ever ADD words now.
             let existingDraft = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
             draftText = existingDraft.isEmpty ? text : existingDraft + " " + text
+            draftInputSource = "voice_transcript"
             voiceInputError = nil
             a11yFocus = .composerField
         } catch let error as VoiceService.VoiceError {

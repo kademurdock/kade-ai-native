@@ -135,11 +135,13 @@ struct AgentEditorView: View {
                     Section("Description") {
                         TextField("A short line describing them", text: $description, axis: .vertical)
                             .accessibilityLabel("Description")
+                        DictationButton(apiClient: apiClient, text: $description, fieldName: "description")
                     }
                     Section {
                         TextField("Who they are, how they talk, what they know", text: $instructions, axis: .vertical)
                             .lineLimit(6...20)
                             .accessibilityLabel("Persona and instructions")
+                        DictationButton(apiClient: apiClient, text: $instructions, fieldName: "personality")
                         Button("Help me write this (about 1 cent)") {
                             showingWriter = true
                         }

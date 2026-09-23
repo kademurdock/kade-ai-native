@@ -100,6 +100,8 @@ struct FeedbackReportView: View {
                             .lineLimit(4...10)
                             .textFieldStyle(.roundedBorder)
                             .accessibilityLabel("What happened, in your own words")
+                        DictationButton(apiClient: apiClient, text: $detail, fieldName: "report")
+                            .disabled(isSubmitting)
                     }
 
                     if let errorMessage {

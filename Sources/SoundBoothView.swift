@@ -467,6 +467,7 @@ struct SoundBoothView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel(currentInput?.boxLabel ?? "What should it say")
                 .accessibilityHint(currentInput?.boxHint ?? "Type the words you want performed.")
+            DictationButton(apiClient: apiClient, text: $text, fieldName: "sound idea")
 
             if let g = currentEngine {
                 DisclosureGroup(isExpanded: $showHowTo) {
@@ -703,6 +704,7 @@ struct SoundBoothView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel(editorTitle)
                 .accessibilityHint(editorHint)
+            DictationButton(apiClient: apiClient, text: $script, fieldName: "script")
 
             if usesDirectPrompt, let g = currentEngine {
                 DisclosureGroup(isEffects ? "Sound settings" : "Lyrics, covers, and song settings") {
