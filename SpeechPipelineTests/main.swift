@@ -882,6 +882,22 @@ check("seek cuts within a buffer", StreamingWavParser.framesToSkip(seconds: 10, 
 check("negative position starts at the beginning", StreamingWavParser.framesToSkip(seconds: -10, rate: 24000, bufferStart: 0, count: 9600) == 0)
 check("invalid position cannot overflow", StreamingWavParser.framesToSkip(seconds: .infinity, rate: 24000, bufferStart: 0, count: 9600) == 0)
 check("malformed audio cannot supply a seek duration", StreamingWavParser.pcmDuration(Data([1, 2, 3])) == nil)
+// A delivery change inside a piece must govern the NEXT piece, too.
+for (cue, expected) in [("concerned", "%%%concerned%%%"), ("reset", "Tell me"), ("sigh", "%%%amused%%%")] {
+    var streamer = SpeechStreamer(firstPieceChars: 1, minPieceChars: 1, maxPieceChars: 8000)
+    let first = streamer.push("%%%amused%%% That was funny, %%%\(cue)%%% but are you okay? ")
+    let next = streamer.push("Tell me what happened over there. ")
+    check("inline \(cue) keeps all original words", first.count == 1 && first[0].contains("but are you okay?"))
+    check("inline \(cue) governs the following piece", next.first?.hasPrefix(expected) == true, "got \(next)")
+}
+do {
+    var streamer = SpeechStreamer(firstPieceChars: 1, minPieceChars: 1, maxPieceChars: 8000)
+    _ = streamer.push("%%%warm%%% I was hoping you would call. ")
+    let middle = streamer.push("Well, %%%wry%%% that certainly went somewhere. ")
+    let next = streamer.push("I had a different plan for lunch. ")
+    check("mid-piece change retains opening carry", middle.first?.hasPrefix("%%%warm%%%") == true)
+    check("mid-piece change replaces earlier carry", next.first?.hasPrefix("%%%wry%%%") == true, "got \(next)")
+}
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")
