@@ -443,3 +443,67 @@ workflows:
       - character-audit/runtime.log
       - character-audit/compile.log
       - character-audit/*.png
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SEP 23 2026 — THE REDESIGN TOUR. Neither Kade nor a session can see the
+  # screens, and the redesign is visual by nature, so this photographs them:
+  # a Debug simulator build (never signed, never uploaded) walks the DEBUG
+  # screenshot tour in ContentView, which signs in the test seat, visits every
+  # tab and a few screens, and drops a marker file at each stop so the photo is
+  # taken when the screen has actually arrived. Two passes: light with default
+  # text, then dark with an accessibility text size (where two-up tiles stack).
+  #
+  # Credentials are NOT in this file: pass KADE_TOUR_EMAIL and KADE_TOUR_PASS
+  # as environment variables on the API trigger. About 8-9 Mac minutes a run.
+  ios-redesign-tour:
+    name: Redesign tour screenshots (simulator only, no signing or upload)
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Build for the simulator and photograph every tab
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+          SIM=$(xcrun simctl list devices available -j | python3 -c "import sys,json;d=json.load(sys.stdin);devs=[x for rows in d['devices'].values() for x in rows if 'iPhone' in x['name']];pro=[x for x in devs if 'Pro' in x['name'] and 'Max' not in x['name']];print((pro or devs)[0]['udid'])")
+          echo "Simulator: $SIM"
+          xcrun simctl boot "$SIM" || true
+          xcrun simctl bootstatus "$SIM" -b
+          set +e
+          xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug -destination "id=$SIM" -derivedDataPath "$CM_BUILD_DIR/sim-derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build > "$CM_BUILD_DIR/simulator-build.log" 2>&1
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            grep -m 20 -E 'error:' "$CM_BUILD_DIR/simulator-build.log" > "$CM_BUILD_DIR/first-errors.txt"
+            cat "$CM_BUILD_DIR/first-errors.txt"
+            exit $STATUS
+          fi
+          APP="$CM_BUILD_DIR/sim-derived/Build/Products/Debug-iphonesimulator/KadeAI.app"
+          xcrun simctl install "$SIM" "$APP" || exit 1
+          xcrun simctl status_bar "$SIM" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+          shoot () {
+            PASS="$1"
+            SIMCTL_CHILD_KADE_TOUR=1 SIMCTL_CHILD_KADE_TOUR_EMAIL="$KADE_TOUR_EMAIL" SIMCTL_CHILD_KADE_TOUR_PASS="$KADE_TOUR_PASS" xcrun simctl launch "$SIM" com.kademurdock.kadeai
+            sleep 2
+            DATA=$(xcrun simctl get_app_container "$SIM" com.kademurdock.kadeai data)
+            for i in $(seq 0 12); do
+              for t in $(seq 1 60); do [ -f "$DATA/Documents/tour-stop-$i.txt" ] && break; sleep 1; done
+              if [ ! -f "$DATA/Documents/tour-stop-$i.txt" ]; then echo "stop $i never arrived in pass $PASS"; break; fi
+              sleep 2
+              NAME=$(cat "$DATA/Documents/tour-stop-$i.txt")
+              xcrun simctl io "$SIM" screenshot "$CM_BUILD_DIR/tour-$PASS-$(printf %02d $i)-$NAME.png"
+            done
+            xcrun simctl terminate "$SIM" com.kademurdock.kadeai
+            rm -f "$DATA"/Documents/tour-stop-*.txt
+          }
+          xcrun simctl ui "$SIM" appearance light
+          shoot light
+          xcrun simctl ui "$SIM" appearance dark
+          xcrun simctl ui "$SIM" content_size accessibility-medium
+          shoot darklarge
+          exit 0
+    artifacts:
+      - tour-*.png
+      - simulator-build.log
+      - first-errors.txt

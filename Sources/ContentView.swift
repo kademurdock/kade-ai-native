@@ -840,25 +840,61 @@ struct ContentView: View {
     /// seat's credentials, and this walks the app through its best rooms on a
     /// timer while the workflow snaps frames. Never runs on a real device,
     /// never with real accounts.
+    ///
+    /// Sep 23 2026 redesign: the tour walks the five tabs, and each stop drops
+    /// a marker file (`tour-stop-N.txt`, holding the stop's name) in the app's
+    /// Documents folder, so the `ios-redesign-tour` workflow photographs each
+    /// screen when it has actually arrived instead of on a guessed timer.
     private func startScreenshotTourIfAsked() {
         let env = ProcessInfo.processInfo.environment
         guard env["KADE_TOUR"] == "1",
               let tourEmail = env["KADE_TOUR_EMAIL"],
               let tourPass = env["KADE_TOUR_PASS"] else { return }
         Task {
+            tourMark(0, "launch")
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             await auth.signIn(email: tourEmail, password: tourPass)
+            // The test seat on a fresh simulator has never seen the data-use
+            // notice. This tour is DEBUG-only and simulator-only, so it
+            // records the answer rather than photographing the notice at
+            // every stop. Release builds contain none of this.
+            if case .signedIn(let user) = auth.state {
+                DataUseConsent.record(for: user.id)
+                consentBump &+= 1
+            }
             try? await Task.sleep(nanoseconds: 6_000_000_000)
-            let stops: [HomeRoute?] = [nil, .conversations, .debateRoom, .prompts, .settings]
-            for stop in stops {
-                if let stop {
-                    go(stop)
-                } else {
-                    tab = .talk
-                    talkPath = []
-                }
-                try? await Task.sleep(nanoseconds: 7_000_000_000)
+            let stops: [(String, () -> Void)] = [
+                ("launch-chat", { tab = .talk; talkPath = [.mainChat] }),
+                ("talk", { tab = .talk; talkPath = [] }),
+                ("library", { tab = .library; libraryPath = [] }),
+                ("create", { tab = .create; createPath = [] }),
+                ("play", { tab = .play; playPath = [] }),
+                ("more", { tab = .more; morePath = [] }),
+                ("search", { tab = .more; morePath = [.search] }),
+                ("settings", { go(.settings) }),
+                ("sound-booth", { go(.soundBooth) }),
+                ("help", { go(.help) }),
+                ("marketplace", { go(.marketplace) }),
+                ("saved-chat", {
+                    if let convo = conversationsService.conversations.first {
+                        go(.savedChat(convo))
+                    } else {
+                        go(.conversations)
+                    }
+                }),
+            ]
+            for (index, stop) in stops.enumerated() {
+                stop.1()
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                tourMark(index + 1, stop.0)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
+    }
+
+    private func tourMark(_ index: Int, _ name: String) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        try? name.write(to: docs.appendingPathComponent("tour-stop-\(index).txt"), atomically: true, encoding: .utf8)
     }
 #endif
 
