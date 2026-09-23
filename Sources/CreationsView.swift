@@ -285,6 +285,8 @@ struct MyCreationsView: View {
     @State private var kindFilter = "all"
     @State private var showArchived = false
     @State private var archivingId: String?
+    /// Redesign B10: the empty screen's "Open the Sound Booth" button.
+    @Environment(\.kadeNavigation) private var nav
     private var visibleAssets: [KadeAssetItem] {
         assets.filter { asset in
             (showArchived || asset.archived != true) &&
@@ -312,12 +314,20 @@ struct MyCreationsView: View {
             if let loadError, assets.isEmpty {
                 errorState(loadError)
             } else if assets.isEmpty && hasLoaded {
+                // Redesign B10: what goes here, and one button to go make
+                // something. The texts and the button are separate VoiceOver
+                // stops; nothing here is combined (the Amber rule).
                 VStack(spacing: 8) {
-                    Text("Nothing here yet.")
+                    Text("Nothing made yet")
                         .font(.headline)
-                    Text("Pictures, videos, and songs you make with your companions land here automatically — ask any of them to draw or film something.")
+                    Text("Songs, pictures and videos you make show up here.")
                         .font(.body).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    Button("Open the Sound Booth") { nav.open(.soundBooth) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .padding(.top, 4)
+                        .accessibilityHint("Opens the Sound Booth, where you make songs and sounds.")
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -496,10 +506,11 @@ struct WallOfFameView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear { a11yFocus = .status }
             } else if assets.isEmpty && hasLoaded {
+                // Redesign B10: the empty wall says what lands here.
                 VStack(spacing: 8) {
-                    Text("The Wall is empty so far.")
+                    Text("Nothing on the wall yet")
                         .font(.headline)
-                    Text("When anyone in the family puts a creation on the Wall, everyone sees it here.")
+                    Text("When anyone in the family shares a creation, it lands here.")
                         .font(.body).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }

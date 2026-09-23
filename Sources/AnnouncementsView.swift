@@ -100,8 +100,15 @@ struct AnnouncementsView: View {
                     ProgressView("Loading…")
                         .accessibilityLabel("Loading announcements")
                 } else if announcements.isEmpty {
-                    Text("Nothing yet. When Kade-AI ships something new, the What's New announcement lands here — including any you missed.")
-                        .foregroundStyle(.secondary)
+                    // Redesign B10: the empty list says what goes here. One
+                    // VoiceOver stop, as before.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No announcements yet")
+                            .font(.headline)
+                        Text("News about the app from Kade lands here.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                 } else {
                     ForEach(announcements, id: \.listId) { item in
                         VStack(alignment: .leading, spacing: 4) {

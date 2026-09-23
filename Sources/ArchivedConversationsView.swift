@@ -33,6 +33,9 @@ struct ArchivedConversationOpen: Identifiable, Hashable {
 
 struct ArchivedConversationsView: View {
     @EnvironmentObject private var conversationsService: ConversationsService
+    /// Redesign B3: who each archived chat is with (the face, the "with
+    /// Kiana" line and the spoken label), same as the main list.
+    @EnvironmentObject private var agentsService: AgentsService
 
     @State private var rows: [KadeConversation] = []
     @State private var nextCursor: String?
@@ -113,15 +116,22 @@ struct ArchivedConversationsView: View {
                 Button {
                     selectedConversation = ArchivedConversationOpen(conversation: convo)
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(convo.displayTitle)
-                            .font(.body)
-                        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
-                            Text(relative)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        // Redesign B3: decoration (hidden from VoiceOver, takes
+                        // no taps); the row's label says the name.
+                        KadeCharacterFace(agentID: convo.agentId, name: characterName(for: convo) ?? "", size: 44)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(convo.displayTitle)
+                                .font(.body)
+                            if let detail = detailLine(for: convo) {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityFocused($focusedRowID, equals: convo.id)
@@ -185,11 +195,36 @@ struct ArchivedConversationsView: View {
         }
     }
 
+    /// "Grocery list, with Kiana. Archived. 2 hours ago" (redesign B3: the
+    /// face is decoration, so the label says who; left out when unknown).
     private func accessibleLabel(for convo: KadeConversation) -> String {
-        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
-            return "\(convo.displayTitle). Archived. \(relative)"
+        var title = convo.displayTitle
+        if let name = characterName(for: convo) {
+            title += ", with \(name)"
         }
-        return "\(convo.displayTitle). Archived."
+        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
+            return "\(title). Archived. \(relative)"
+        }
+        return "\(title). Archived."
+    }
+
+    /// Redesign B3: the character's name, or nil when the roster doesn't
+    /// know it (not loaded yet, a removed character, or none).
+    private func characterName(for convo: KadeConversation) -> String? {
+        let name = agentsService.name(for: convo.agentId)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    /// The row's visible second line: "with Kiana · 2 hours ago".
+    private func detailLine(for convo: KadeConversation) -> String? {
+        var parts: [String] = []
+        if let name = characterName(for: convo) {
+            parts.append("with \(name)")
+        }
+        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
+            parts.append(relative)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func restore(_ convo: KadeConversation) async {

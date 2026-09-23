@@ -53,8 +53,15 @@ struct AlertsView: View {
                     ProgressView("Loading…")
                         .accessibilityLabel("Loading your alerts")
                 } else if recent.isEmpty {
-                    Text("Nothing yet. Reminders, birthday wishes, and check-in notes will show up here once they start arriving.")
-                        .foregroundStyle(.secondary)
+                    // Redesign B10: the empty list says what goes here and
+                    // how to get one. One VoiceOver stop, as before.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No reminders yet")
+                            .font(.headline)
+                        Text("Ask any character to remind you of something, and it shows up here.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                 } else {
                     ForEach(recent) { nudge in
                         VStack(alignment: .leading, spacing: 4) {
@@ -120,7 +127,7 @@ struct AlertsView: View {
             } header: {
                 Text("How alerts reach you")
             } footer: {
-                Text("In chat means the next companion you talk to passes it along. Phone notification uses this phone. Phone call rings the number above.")
+                Text("In chat means the next character you talk to passes it along. Phone notification uses this phone. Phone call rings the number above.")
             }
 
             Section {
