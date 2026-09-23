@@ -587,7 +587,11 @@ struct ConversationDetailView: View {
      * is on -- long messages still type fine, they just scroll in one line. */
     @AppStorage("kade.chat.simpleComposer") private var simpleComposer = false
 
-    var body: some View {
+    /// The first half of the chat screen's modifier chain, split out of `body`
+    /// in the Sep 23 2026 redesign: the whole chain in one expression ran past
+    /// the compiler's type-check time limit. Same views, same modifiers, same
+    /// order; `body` continues the chain from here.
+    private var chatCore: some View {
         VStack(spacing: 0) {
             Group {
                 if isLoading {
@@ -975,6 +979,10 @@ struct ConversationDetailView: View {
                 try? await Task.sleep(nanoseconds: 1_700_000_000)
             }
         }
+    }
+
+    var body: some View {
+        chatCore
         // Session 20 earcons: the same three send moments get a short,
         // gentle non-speech sound (honouring the Sound effects switch),
         // COMPLEMENTING -- never replacing -- VoiceOver's own spoken cue.
