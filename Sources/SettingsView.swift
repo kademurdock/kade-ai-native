@@ -579,7 +579,7 @@ struct SettingsView: View {
             switch self {
             case .mainAgent: return "Your main character"
             case .appIcon: return "App icon"
-            case .ringtone: return "Agent call ringtone"
+            case .ringtone: return "Call ringtone"
             case .voiceDefault: return "Hear replies by default"
             case .thinkingProgress: return "Spoken thinking progress"
             case .streamingVoice: return "Faster voice (streaming)"
@@ -636,7 +636,7 @@ struct SettingsView: View {
             switch self {
             case .mainAgent: return "agent main default character characters companion who answers opens picker"
             case .appIcon: return "app icon icons home screen picture face logo look change kiana harley della lilly classic"
-            case .ringtone: return "ringtone ring rings tone tones sound call calls phone marimba preview stop music"
+            case .ringtone: return "ringtone ring rings tone tones sound call calls phone marimba preview stop music agent character"
             case .voiceDefault: return "voice messages hear replies out loud read aloud speak spoken tts audio default on automatically"
             case .thinkingProgress: return "thinking progress deep think spoken voiceover announce"
             case .streamingVoice: return "faster voice streaming stream latency delay gap wait quick sooner beta first word space between message"
@@ -781,12 +781,12 @@ struct SettingsView: View {
                     openChevron
                 }
             } label: {
-                tileLabel("Agent call ringtone", systemImage: "phone.fill", tint: SectionTint.calls)
+                tileLabel("Call ringtone", systemImage: "phone.fill", tint: SectionTint.calls)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel((searchStyle ? "Calls. " : "") + "Agent call ringtone: \(RingtoneSettingsView.label(forId: currentRingtoneId))")
+        .accessibilityLabel((searchStyle ? "Calls. " : "") + "Call ringtone: \(RingtoneSettingsView.label(forId: currentRingtoneId))")
         .accessibilityHint("Opens the ringtone picker — every tone grouped by feel, played out loud as you choose.")
     }
 
@@ -1495,7 +1495,7 @@ struct RingtoneSettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(callRingtone == tone.id ? "\(tone.label), your current ringtone" : tone.label)
-                        .accessibilityHint("Sets this as your agent-call ringtone and plays it so you can hear it. Tap another to compare, or Stop preview to hush it.")
+                        .accessibilityHint("Sets this as the ringtone for character calls and plays it so you can hear it. Tap another to compare, or Stop preview to hush it.")
                     }
                 } header: {
                     Text(group).accessibilityAddTraits(.isHeader)
