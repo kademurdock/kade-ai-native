@@ -81,7 +81,7 @@ struct ClubhouseView: View {
             } header: {
                 Text("Rooms")
             } footer: {
-                Text("Live family voice rooms with a shared jukebox. Person to person on Kade's own room server — a companion only ever hears a room you invited them into.")
+                Text("Live family voice rooms with a shared jukebox. Person to person on Kade's own room server — a character only ever hears a room you invited them into.")
             }
             Section {
                 TextField("Your group's passcode", text: $hotelCode)
@@ -173,7 +173,7 @@ struct ClubhouseView: View {
                 }
                 if let botName = service.botName {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("\(botName) — companion guest, invited by \(service.botAnchorName)\(service.botBusy ? " — thinking" : "")")
+                        Text("\(botName) — character guest, invited by \(service.botAnchorName)\(service.botBusy ? " — thinking" : "")")
                         HStack {
                             Button("Your turn, \(botName)") { service.cueBot() }
                                 .buttonStyle(.borderedProminent)
@@ -369,7 +369,7 @@ struct ClubhouseView: View {
                         HStack {
                             Text("Who to invite")
                             Spacer()
-                            Text(service.agents.first(where: { $0.id == pickedAgentId })?.name ?? "Pick a companion")
+                            Text(service.agents.first(where: { $0.id == pickedAgentId })?.name ?? "Pick a character")
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -378,7 +378,7 @@ struct ClubhouseView: View {
                             ? "Who to invite. Nobody picked yet."
                             : "Who to invite. Currently \(service.agents.first(where: { $0.id == pickedAgentId })?.name ?? "someone")."
                     )
-                    .accessibilityHint("Opens a searchable list of companions.")
+                    .accessibilityHint("Opens a searchable list of characters.")
                     Button("Invite them in") {
                         if let agent = service.agents.first(where: { $0.id == pickedAgentId }) {
                             service.inviteBot(agent)
@@ -393,7 +393,7 @@ struct ClubhouseView: View {
             } header: {
                 Text("Company")
             } footer: {
-                Text("Invite one companion as a guest. Press their talk button when it's their turn and they answer out loud in their own voice; between turns they follow along by rough transcription. Anyone can show them the door.")
+                Text("Invite one character as a guest. Press their talk button when it's their turn and they answer out loud in their own voice; between turns they follow along by rough transcription. Anyone can show them the door.")
             }
         }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.audio]) { result in
@@ -495,11 +495,11 @@ private struct CompanionPickerSheet: View {
                     }
                 } footer: {
                     Text(search.isEmpty
-                        ? "\(agents.count) companions — search above to shorten the list."
+                        ? "\(agents.count) characters — search above to shorten the list."
                         : "Showing \(hits.count) of \(agents.count).")
                 }
             }
-            .searchable(text: $search, prompt: "Search companions")
+            .searchable(text: $search, prompt: "Search characters")
             .navigationTitle("Who to invite")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

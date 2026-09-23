@@ -116,7 +116,7 @@ struct AgentConnectionsView: View {
             } header: {
                 Text("Who \(agentName) can hand off to")
             } footer: {
-                Text("Mid-conversation, \(agentName) can pass the person to a connected companion when the topic fits. Up to \(Self.maxEdges) connections.")
+                Text("Mid-conversation, \(agentName) can pass the person to a connected character when the topic fits. Up to \(Self.maxEdges) connections.")
             }
 
             if edges.count < Self.maxEdges {
@@ -124,11 +124,11 @@ struct AgentConnectionsView: View {
                     TextField("Type a name to narrow the list", text: $filter)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
-                        .accessibilityLabel("Search companions")
-                        .accessibilityHint("Narrows the list of companions below.")
+                        .accessibilityLabel("Search characters")
+                        .accessibilityHint("Narrows the list of characters below.")
 
                     if allAgents.isEmpty && !isLoading {
-                        Text("Couldn't load the companion list. Pull down to try again.")
+                        Text("Couldn't load the character list. Pull down to try again.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(addCandidates) { agent in

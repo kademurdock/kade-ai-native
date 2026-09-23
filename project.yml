@@ -175,7 +175,7 @@ targets:
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: com.kademurdock.kadeai.callSpotter
             UIApplicationShortcutItemTitle: Call your Spotter
-            UIApplicationShortcutItemSubtitle: Live visual companion
+            UIApplicationShortcutItemSubtitle: Sees through your camera
             UIApplicationShortcutItemIconSymbolName: eye
           - UIApplicationShortcutItemType: com.kademurdock.kadeai.transcribe
             UIApplicationShortcutItemTitle: Transcribe

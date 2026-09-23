@@ -390,7 +390,7 @@ struct AgentEditorView: View {
                             .buttonStyle(.plain)
                             // Same Form-row rule as the Voice button above.
                             .accessibilityLabel("Connections")
-                            .accessibilityHint("Companions this agent can hand a conversation off to mid-chat.")
+                            .accessibilityHint("Characters this agent can hand a conversation off to mid-chat.")
 
                             Button {
                                 showingActions = true

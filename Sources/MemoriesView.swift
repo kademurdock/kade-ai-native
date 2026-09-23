@@ -98,12 +98,12 @@ struct MemoriesView: View {
                         }
                     }
                 }
-                .accessibilityHint("While this is on, your companions keep small memory cards about what you share. Turn it off and nothing new is saved.")
+                .accessibilityHint("While this is on, your characters keep small memory cards about what you share. Turn it off and nothing new is saved.")
             } footer: {
                 if let page, let total = page.totalTokens, total > 0 {
                     Text(usageSentence(page))
                 } else {
-                    Text("Your companions file small memory cards about what you share — a good friend taking notes. Cards a character heard privately stay with that character.")
+                    Text("Your characters file small memory cards about what you share — a good friend taking notes. Cards a character heard privately stay with that character.")
                 }
             }
 
@@ -114,7 +114,7 @@ struct MemoriesView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Bring your ChatGPT memories")
                             .font(.body.weight(.semibold))
-                        Text("Moving in? Paste the list ChatGPT kept about you, or upload your export — your companions know you from day one.")
+                        Text("Moving in? Paste the list ChatGPT kept about you, or upload your export — your characters know you from day one.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -168,7 +168,7 @@ struct MemoriesView: View {
                 }
             } else if let page, page.memories.isEmpty {
                 Section {
-                    Text("No memory cards yet. They'll appear here as your companions get to know you — or add one yourself with the plus button.")
+                    Text("No memory cards yet. They'll appear here as your characters get to know you — or add one yourself with the plus button.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -225,7 +225,7 @@ struct MemoriesView: View {
                 } label: {
                     Label("Add a memory", systemImage: "plus")
                 }
-                .accessibilityHint("Write a memory card yourself — it saves as a shared card every companion can see.")
+                .accessibilityHint("Write a memory card yourself — it saves as a shared card every character can see.")
             }
         }
         .navigationDestination(isPresented: $showingImport) {
@@ -382,7 +382,7 @@ private struct MemoryAddSheet: View {
                     if let errorText {
                         Text(errorText).foregroundStyle(.red)
                     } else {
-                        Text("Saves as a shared card — every companion will know it.")
+                        Text("Saves as a shared card — every character will know it.")
                     }
                 }
             }

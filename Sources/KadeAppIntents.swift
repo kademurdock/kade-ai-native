@@ -135,7 +135,7 @@ struct AgentCallPayload: Identifiable, Equatable {
 struct CallSpotterIntent: AppIntent {
     static var title: LocalizedStringResource = "Call your Spotter"
     static var description = IntentDescription(
-        "Starts a live call with your visual companion, who can see through your camera and describe what's around you."
+        "Starts a live call with your Spotter, who can see through your camera and describe what's around you."
     )
     static var openAppWhenRun: Bool = true
 
@@ -350,7 +350,7 @@ struct KadeAppShortcuts: AppShortcutsProvider {
 struct OpenMatchmakerIntent: AppIntent {
     static var title: LocalizedStringResource = "Matchmaker"
     static var description = IntentDescription(
-        "Opens the Matchmaker: five quick questions, then three companions who might be a good fit."
+        "Opens the Matchmaker: five quick questions, then three characters who might be a good fit."
     )
     static var openAppWhenRun: Bool = true
 
@@ -376,7 +376,7 @@ struct OpenGameRoomIntent: AppIntent {
 struct OpenDebateRoomIntent: AppIntent {
     static var title: LocalizedStringResource = "Debate Room"
     static var description = IntentDescription(
-        "Opens the Debate Room, where you set a topic and let your companions go back and forth."
+        "Opens the Debate Room, where you set a topic and let your characters go back and forth."
     )
     static var openAppWhenRun: Bool = true
 
@@ -389,7 +389,7 @@ struct OpenDebateRoomIntent: AppIntent {
 struct OpenAgentBuilderIntent: AppIntent {
     static var title: LocalizedStringResource = "Agent Builder"
     static var description = IntentDescription(
-        "Opens the Agent Builder so you can create or edit your own companions."
+        "Opens the Agent Builder so you can create or edit your own characters."
     )
     static var openAppWhenRun: Bool = true
 

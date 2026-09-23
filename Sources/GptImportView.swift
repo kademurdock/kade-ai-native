@@ -29,7 +29,7 @@ struct GptImportView: View {
     var body: some View {
         List {
             Section {
-                Text("Moving in from ChatGPT? Your companions here can start out already knowing you. Two ways — use either or both.")
+                Text("Moving in from ChatGPT? Your characters here can start out already knowing you. Two ways — use either or both.")
                     .font(.body)
             }
 
@@ -60,7 +60,7 @@ struct GptImportView: View {
                 Toggle(isOn: $alsoMine) {
                     Text("Also read my old conversations into my logbook")
                 }
-                .accessibilityHint("Your companions will remember your life from back then. It takes a while and keeps going in the background.")
+                .accessibilityHint("Your characters will remember your life from back then. It takes a while and keeps going in the background.")
                 Button {
                     showPicker = true
                 } label: {
@@ -108,7 +108,7 @@ struct GptImportView: View {
                 req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
                 let (data, http) = try await apiClient.send(req)
                 if http.statusCode == 200 {
-                    announce(&pasteStatus, "Saved. Your companions know you now — the cards are on the Memories screen.")
+                    announce(&pasteStatus, "Saved. Your characters know you now — the cards are on the Memories screen.")
                 } else {
                     let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
                     announce(&pasteStatus, msg ?? "That didn't work. Try again.")

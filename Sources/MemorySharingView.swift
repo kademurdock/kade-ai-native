@@ -66,7 +66,7 @@ struct MemorySharingView: View {
     var body: some View {
         Form {
             Section {
-                Text("Your companions each keep their own memories of you. Sharing lets them read the facts the others were told — memory cards and logbook lines — marked as secondhand, so you never have to say a thing twice. Their opinions, and their own read of you, stay their own.")
+                Text("Your characters each keep their own memories of you. Sharing lets them read the facts the others were told — memory cards and logbook lines — marked as secondhand, so you never have to say a thing twice. Their opinions, and their own read of you, stay their own.")
                     .font(.callout)
             }
             if isLoading {
@@ -74,9 +74,9 @@ struct MemorySharingView: View {
             } else {
                 Section("Who shares") {
                     Picker("Sharing", selection: $mode) {
-                        Text("Off — each companion knows only what you told it").tag("off")
-                        Text("All my companions").tag("all")
-                        Text("Only the companions I pick").tag("list")
+                        Text("Off — each character knows only what you told it").tag("off")
+                        Text("All my characters").tag("all")
+                        Text("Only the characters I pick").tag("list")
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
@@ -84,7 +84,7 @@ struct MemorySharingView: View {
                 if mode == "list" {
                     Section("Pick who shares with each other") {
                         if companions.count < 2 {
-                            Text("Only one companion has memories of you so far, so there is nobody to share with yet.")
+                            Text("Only one character has memories of you so far, so there is nobody to share with yet.")
                                 .foregroundStyle(.secondary)
                         }
                         ForEach(companions) { c in
@@ -102,7 +102,7 @@ struct MemorySharingView: View {
                         if saving { ProgressView() } else { Text("Save sharing") }
                     }
                     .disabled(saving || (mode == "list" && agents.count < 2))
-                    .accessibilityHint(mode == "list" && agents.count < 2 ? "Pick at least two companions first." : "Takes effect on your next message.")
+                    .accessibilityHint(mode == "list" && agents.count < 2 ? "Pick at least two characters first." : "Takes effect on your next message.")
                     if let note {
                         Text(note)
                             .font(.callout)

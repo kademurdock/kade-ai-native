@@ -168,9 +168,9 @@ struct LogbookView: View {
                         .foregroundStyle(.secondary)
                 }
                 if let page, page.entries.isEmpty, service.loadError == nil {
-                    Text("Nothing here yet. Your logbook fills up as you share your days with your companions — or add a line yourself with the plus button.")
+                    Text("Nothing here yet. Your logbook fills up as you share your days with your characters — or add a line yourself with the plus button.")
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("Nothing here yet. Your logbook fills up as you share your days with your companions, or add a line yourself with the add entry button.")
+                        .accessibilityLabel("Nothing here yet. Your logbook fills up as you share your days with your characters, or add a line yourself with the add entry button.")
                 }
                 ForEach(days, id: \.date) { day in
                     Text(day.spoken)
@@ -262,7 +262,7 @@ struct LogbookView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Add entry")
-                .accessibilityHint("Write or dictate a line for today. Anything you add here can be recalled by any of your companions.")
+                .accessibilityHint("Write or dictate a line for today. Anything you add here can be recalled by any of your characters.")
             }
         }
         .refreshable { await reload() }
@@ -282,7 +282,7 @@ struct LogbookView: View {
                             .accessibilityHint("What happened, or how the day went.")
                         DictationButton(apiClient: apiClient, text: $newText, fieldName: "logbook entry").disabled(busy)
                     } footer: {
-                        Text("Dated today, in your own words. Any of your companions can recall entries you add here.")
+                        Text("Dated today, in your own words. Any of your characters can recall entries you add here.")
                     }
                 }
                 .navigationTitle("Add to your logbook")

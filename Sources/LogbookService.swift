@@ -46,8 +46,8 @@ final class LogbookService: ObservableObject {
         var holder: String {
             if source == "manual" { return "Added by you" }
             if let name = agentName, !name.isEmpty { return "With \(name)" }
-            if (agentId ?? "").isEmpty { return "Shared with every companion" }
-            return "With one of your companions"
+            if (agentId ?? "").isEmpty { return "Shared with every character" }
+            return "With one of your characters"
         }
     }
 

@@ -101,7 +101,7 @@ struct BriefView: View {
                         } label: {
                             Label(speaking ? "Stop" : "Listen", systemImage: speaking ? "stop.circle" : "play.circle")
                         }
-                        .accessibilityHint("Reads today's brief aloud in your companion's voice.")
+                        .accessibilityHint("Reads today's brief aloud in your character's voice.")
                     } header: {
                         Text("Today's brief")
                     }
@@ -110,7 +110,7 @@ struct BriefView: View {
                 Section {
                     Toggle("Morning brief on", isOn: $enabled)
                         .onChange(of: enabled) { _, _ in queueSave() }
-                        .accessibilityHint("When on, your companion sends a brief to this phone every morning at the time below.")
+                        .accessibilityHint("When on, your character sends a brief to this phone every morning at the time below.")
                     DatePicker("Delivery time", selection: $time, displayedComponents: .hourAndMinute)
                         .onChange(of: time) { _, _ in queueSave() }
                         .accessibilityHint("What time each morning the brief arrives.")
@@ -141,7 +141,7 @@ struct BriefView: View {
                 } header: {
                     Text("What's in it")
                 } footer: {
-                    Text("Your companion writes it fresh each morning from what you've checked here.")
+                    Text("Your character writes it fresh each morning from what you've checked here.")
                 }
 
                 Section {

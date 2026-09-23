@@ -68,7 +68,7 @@ struct AgentManagerView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("New agent")
-                .accessibilityHint("Create a new companion from scratch.")
+                .accessibilityHint("Create a new character from scratch.")
             }
             // Build 202 — the quiz door. Eight questions, no wrong answers,
             // a painted portrait at the end. Same brain as the website's
@@ -126,7 +126,7 @@ struct AgentManagerView: View {
         VStack(spacing: 12) {
             Text("No agents of your own yet.")
                 .font(.headline)
-            Text("Build a companion with their own name, persona, and voice in the conversation.")
+            Text("Build a character with their own name, persona, and voice in the conversation.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

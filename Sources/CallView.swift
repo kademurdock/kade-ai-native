@@ -450,7 +450,7 @@ struct CallView: View {
         .accessibilityHint(
             callService.liveOn
                 ? "Double-tap to hand the call back to \(agentName)."
-                : "Double-tap to bring in your live visual companion."
+                : "Double-tap to bring in your Spotter."
         )
     }
 
