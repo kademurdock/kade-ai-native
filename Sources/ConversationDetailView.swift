@@ -458,13 +458,26 @@ struct ConversationDetailView: View {
     /// who always wants the quick answer shouldn't re-pick it every day)
     /// but deep RESETS to auto on launch — the Session-23 rule that "why is
     /// she slow today, days later" is the wrong kind of surprise, kept.
+    /// Sep 23 2026 redesign (B2, Kade's words): "Fast" replaces "Instant"
+    /// everywhere people see or hear it. The raw value stays "instant" on
+    /// purpose -- it is what UserDefaults already holds, and the send marker
+    /// is still [INSTANT <ms>].
     enum ThinkMode: String {
         case auto, deep, instant
         var spoken: String {
             switch self {
             case .auto: return "Thinking: automatic. She decides per question."
             case .deep: return "Thinking: deep. Always takes her time."
-            case .instant: return "Thinking: instant. Always the quick answer."
+            case .instant: return "Thinking: fast. Always the quick answer."
+            }
+        }
+        /// The visible caption under the brain button. VoiceOver never reads
+        /// it: the button's value already says the mode.
+        var caption: String {
+            switch self {
+            case .auto: return "Auto"
+            case .deep: return "Deep"
+            case .instant: return "Fast"
             }
         }
     }
@@ -497,6 +510,21 @@ struct ConversationDetailView: View {
     @State private var preparingVoiceMessageId: String?
     @State private var deletingMessage: KadeMessage?
     @State private var showingSpeedPicker = false
+    /// Sep 23 2026 redesign (B4): "Pick up where you left off" reads the
+    /// conversation list; `.task` fetches it at most once per instance when
+    /// this chat opened over an empty one.
+    @State private var pickUpListRequested = false
+    /// Sep 23 2026 redesign (B13): the notification card's one-time life on
+    /// this screen -- see `offerPushCardAfterReply()`. `chatOnScreen` follows
+    /// onAppear/onDisappear so the card's one announcement never plays while
+    /// this chat is covered or gone.
+    @State private var pushCard: PushCardPhase = .off
+    @State private var chatOnScreen = false
+    /// At most one notification check per app RUN, not one per reply and
+    /// not one per chat (the same run-sticky static shape as
+    /// `thinkModeGlobal`).
+    @MainActor private static var pushCardChecked = false
+    private enum PushCardPhase { case off, waiting, shown, announced }
 
     @State private var voiceInputError: String?
 
@@ -570,12 +598,18 @@ struct ConversationDetailView: View {
                     errorState(loadError)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if messages.isEmpty {
-                    Text(conversationId == nil
-                         ? "Pick an agent below, then send your first message to start chatting."
-                         : "No messages in this conversation.")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Sep 23 2026 redesign (B4): a brand-new chat used to say
+                    // "Pick an agent below…" although the character was
+                    // usually already picked. It now welcomes you instead.
+                    if conversationId == nil {
+                        firstChatWelcome
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Text("No messages in this conversation.")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     if messageSearchActive {
                         messageSearchBar
@@ -627,10 +661,24 @@ struct ConversationDetailView: View {
          * that will not converge. */
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !isLoading && loadError == nil {
+                /* Sep 23 2026 redesign (B5): the agent row and the read-aloud
+                 * row are ONE line now (`chatControlRow`), so the stack is
+                 * one sibling shorter. The meter keeps its rules and sits
+                 * just above that line; the composer is untouched. B13's
+                 * notification card, when it is up, is the top row. Still
+                 * no fixedSize here (build 220's note below stands). */
                 VStack(spacing: 0) {
-                    agentSection
+                    if pushCardOnScreen {
+                        PushInviteCard(
+                            name: agentsService.name(for: selectedAgentId) ?? "your character",
+                            onTurnOn: { turnOnNotificationsFromCard() },
+                            onNotNow: { notNowFromCard() }
+                        )
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                    }
                     contextMeter
-                    readAloudToggle
+                    chatControlRow
                     composer
                 }
                 /* ⭐ BUILD 220: 219's `.fixedSize(horizontal: false,
@@ -651,19 +699,34 @@ struct ConversationDetailView: View {
          * moving large while talking. Pinned with its own definite height in a
          * top inset for the same reason the composer sits in the bottom one
          * (build 219): it takes no part in the transcript's layout. Hidden from
-         * VoiceOver, never hit-tested, and gone with "Animated voice portraits"
-         * off. It shrinks while the keyboard is up so typing keeps its room. */
+         * VoiceOver, and gone with "Animated voice portraits" off. It shrinks
+         * while the keyboard is up so typing keeps its room.
+         *
+         * Sep 23 2026 redesign: a TAP on the stage opens the character picker
+         * for sighted people (B3); VoiceOver users keep the "Talking to" row,
+         * so the stage stays hidden. A soft mood light behind it follows the
+         * face (C5) -- see `faceStage`. */
         .safeAreaInset(edge: .top, spacing: 0) {
             if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil {
                 faceStage
             }
         }
-        .onAppear { KadeChatPresence.shared.appeared() }
-        .onDisappear { KadeChatPresence.shared.disappeared() }
+        .onAppear {
+            KadeChatPresence.shared.appeared()
+            chatOnScreen = true
+        }
+        .onDisappear {
+            KadeChatPresence.shared.disappeared()
+            chatOnScreen = false
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
+        // Sep 23 2026 redesign (A1): the app root is a TabView now. Inside a
+        // conversation the composer owns the bottom of the screen, so the tab
+        // bar steps aside; Back to the list brings it back.
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             // Session 17 VoiceOver-trap fix: the post-call transcript sheet
             // (see `isStandalonePresentation` above) is the root of its own
@@ -693,7 +756,9 @@ struct ConversationDetailView: View {
                         Image(systemName: "eye")
                     }
                     .accessibilityLabel("Call your Spotter")
-                    .accessibilityHint("Starts a live call with your visual companion straight away, without picking anyone first.")
+                    // Sep 23 2026 redesign (B2): "companion" is gone from
+                    // what people hear; the Spotter is named instead.
+                    .accessibilityHint("Starts a live call with your Spotter straight away, without picking anyone first.")
                 }
             }
             ToolbarItem(placement: .primaryAction) {
@@ -743,8 +808,9 @@ struct ConversationDetailView: View {
         }
         .task {
             // Session 17 (Kade: "a native way to access settings like
-            // speech and whatnot"): seed this view's own "Voice messages"
-            // toggle from the persisted app-wide default the FIRST time
+            // speech and whatnot"): seed this view's own "Hear replies"
+            // toggle (called "Voice messages" until the Sep 23 2026
+            // redesign) from the persisted app-wide default the FIRST time
             // this instance appears -- every ConversationDetailView
             // instance started this at a hardcoded `false` before this,
             // so there is no existing per-conversation choice this could
@@ -809,6 +875,18 @@ struct ConversationDetailView: View {
                 }
             }
             await agentsService.loadIfNeeded()
+            /* Sep 23 2026 redesign (B4): "Pick up where you left off" reads
+             * the conversation list. A chat the root opened is usually pushed
+             * over a list that already loaded, so this rarely fires; when it
+             * does (a cold launch straight into the chat), fetch the first
+             * page once. Gated exactly like the button (`showSpotterShortcut`,
+             * the root-opened chats), and last in this task so nothing above
+             * waits on it. */
+            if conversation == nil, showSpotterShortcut, !pickUpListRequested,
+               conversationsService.conversations.isEmpty, !conversationsService.isLoadingList {
+                pickUpListRequested = true
+                await conversationsService.loadFirstPage()
+            }
         }
         // Phase 7 (accessibility polish -- haptics, KADE_AI_iOS_ROADMAP_2026-
         // 07-15.md Phase B item 6: "a light haptic on key moments -- send,
@@ -1035,6 +1113,10 @@ struct ConversationDetailView: View {
                         Earcons.shared.stopWaitingLoop()
                     }
                 }
+                // Sep 23 2026 redesign (B13): the notification ask waits for a
+                // real reply. This only reads a flag and queues a delayed
+                // Task; nothing lands in the reply's own commit.
+                offerPushCardAfterReply()
             }
             else if case .failed = new {
                 spokenTurnLive = false
@@ -1072,6 +1154,8 @@ struct ConversationDetailView: View {
 
         .onChange(of: voiceService.isSpeaking) { was, speaking in
             if !speaking { scheduleThinkingResume() }
+            // B13: a waiting notification card shows once the voice is done.
+            if !speaking { showPushCardWhenQuiet() }
             if was, !speaking, awaitingSpokenReply {
                 /* Build 254: reaching here means the speak queue drained
                  * without a clip ever starting -- the isClipPlaying watcher
@@ -1085,6 +1169,12 @@ struct ConversationDetailView: View {
                 }
                 endSpeechWait()
             }
+        }
+        // B13: a card that appeared while a sheet, a call, the reader or
+        // another screen covered this chat gets its one announcement when the
+        // chat is uncovered again.
+        .onChange(of: pushCardHeldBack) { _, held in
+            if !held { showPushCardWhenQuiet() }
         }
         // Same Phase B ask, "recording start/stop" -- driven directly by
         // VoiceService's own published `isRecording` so this can never drift
@@ -1228,8 +1318,9 @@ struct ConversationDetailView: View {
         } message: { _ in
             Text("This removes the single message for good. Anything replying to it stays.")
         }
+        // Sep 23 2026 redesign (B2): "Voice speed" (was "Voice message speed").
         .confirmationDialog(
-            "Voice message speed",
+            "Voice speed",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
@@ -1238,7 +1329,7 @@ struct ConversationDetailView: View {
                     voiceService.playbackRate = rate
                     UIAccessibility.post(
                         notification: .announcement,
-                        argument: "Voice message speed \(VoiceService.rateSpokenLabel(rate))."
+                        argument: "Voice speed \(VoiceService.rateSpokenLabel(rate))."
                     )
                 }
             }
@@ -2018,31 +2109,250 @@ struct ConversationDetailView: View {
         await refreshContextProjection()
     }
 
+    // MARK: - Sep 23 2026 redesign: the first chat's welcome (B4)
+
+    /// Three plain openers that suit ANY character: no persona assumed,
+    /// nothing that only makes sense for one of them.
+    private static let starterLines = [
+        "What can you help me with?",
+        "Tell me something good about today.",
+        "Help me think something through."
+    ]
+
+    /// B4 (Sep 23 2026 redesign, "the first chat welcomes you"). Replaces the
+    /// old "Pick an agent below, then send your first message" line, which
+    /// asked a newcomer to pick someone who was usually already picked.
+    ///
+    /// A plain VStack in the empty transcript area: no lazy container, no
+    /// GeometryReader. It is gone the moment the first send appends the
+    /// optimistic row, and the send moment parks VoiceOver on the send button
+    /// first, so nothing VoiceOver is on disappears under it. While the
+    /// keyboard is up only the greeting stays: the same "typing keeps its
+    /// room" rule as the face stage, and the whole block cannot fit above a
+    /// keyboard.
+    private var firstChatWelcome: some View {
+        VStack(spacing: 14) {
+            Text(welcomeHeading)
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+            if !keyboardUp {
+                VStack(spacing: 10) {
+                    ForEach(Self.starterLines, id: \.self) { line in
+                        Button {
+                            useStarter(line)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "text.bubble")
+                                    .foregroundStyle(Color.accentColor)
+                                    .accessibilityHidden(true)
+                                Text(line)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .buttonStyle(KadeCardButtonStyle())
+                        .accessibilityLabel("Starter: \(line)")
+                        .accessibilityHint("Puts this in the message box so you can change it or send it.")
+                    }
+                }
+                // Only in chats the ROOT opened (the launch chat and the Talk
+                // tab's button, both `showSpotterShortcut`): those ride the
+                // root's path, so the root can swap this chat for the old one.
+                // A new chat from the list's pencil button is an isPresented
+                // push, and replacing the path under it could strand the blank
+                // chat on top.
+                if showSpotterShortcut, let earlier = pickUpConversation {
+                    PickUpWhereYouLeftOffButton(
+                        conversation: earlier,
+                        characterName: agentsService.name(for: earlier.agentId)
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+
+    /// "Say hello to Kiana". With nobody picked it points at the "Talking to"
+    /// row below; before the roster has loaded it greets without a name
+    /// rather than saying hello to "Loading…".
+    private var welcomeHeading: String {
+        guard let selectedAgentId else { return "Choose who to talk to below" }
+        if let name = agentsService.name(for: selectedAgentId) { return "Say hello to \(name)" }
+        return "Say hello"
+    }
+
+    /// A starter fills the message box and does NOT send: the person can
+    /// change it or send it. VoiceOver lands on the field so the filled words
+    /// are read straight back, the same move `beginEdit` makes.
+    private func useStarter(_ line: String) {
+        draftText = line
+        draftInputSource = nil
+        a11yFocus = .composerField
+    }
+
+    /// The newest earlier conversation with the character this chat is
+    /// pointed at, else the newest of all, and never this one. The service
+    /// keeps the list newest first.
+    private var pickUpConversation: KadeConversation? {
+        let earlier = conversationsService.conversations.filter { $0.conversationId != conversationId }
+        if let selectedAgentId, let same = earlier.first(where: { $0.agentId == selectedAgentId }) {
+            return same
+        }
+        return earlier.first
+    }
+
+    // MARK: - Sep 23 2026 redesign: the notification card (B13)
+
+    private var pushCardOnScreen: Bool {
+        pushCard == .shown || pushCard == .announced
+    }
+
+    /// True while something covers this chat: another screen pushed over it
+    /// (or this one gone), a sheet, a call, or the reading view.
+    private var pushCardHeldBack: Bool {
+        !chatOnScreen || activeSheet != nil || readingMessage != nil || showingCall || showingSpotterCall
+    }
+
+    /// B13 (Sep 23 2026 redesign, "first-run manners"). Until build 311 the
+    /// app asked for notifications at launch, on the sign-in screen, before a
+    /// newcomer knew what the app was (see KadePushPermission). The ask now
+    /// comes here, after a real reply, with its reason.
+    ///
+    /// Called from the sending -> idle branch. The first reply of the app run
+    /// spends the run's one check (`pushCardChecked`); later replies only
+    /// nudge a card that is already waiting on this screen. The permission
+    /// check runs a second and a half later, clear of the reply's own commit,
+    /// its focus move and the start of its voice.
+    private func offerPushCardAfterReply() {
+        let firstLook = !Self.pushCardChecked
+        guard firstLook || pushCard == .waiting else { return }
+        guard messages.contains(where: { !$0.isCreatedByUser }) else { return }
+        Self.pushCardChecked = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if firstLook {
+                guard await KadePushPermission.shouldOfferCard() else { return }
+                showPushCardWhenQuiet(from: .waiting)
+            } else {
+                showPushCardWhenQuiet()
+            }
+        }
+    }
+
+    /// Moves the card along: waiting -> shown once the reply's voice has
+    /// finished and no send is running; shown -> announced once nothing covers
+    /// this chat. ONE announcement, at low priority so it waits for VoiceOver
+    /// to finish what it is reading (the reply itself, when Hear replies is
+    /// off). Focus is never moved to the card. Works on a local copy of the
+    /// phase, so it never reads back a @State value it wrote in the same turn.
+    private func showPushCardWhenQuiet(from start: PushCardPhase? = nil) {
+        let current = pushCard
+        var phase = start ?? current
+        if phase == .waiting, !voiceService.isSpeaking, !isSending {
+            phase = .shown
+        }
+        if phase == .shown, !pushCardHeldBack {
+            phase = .announced
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: NSAttributedString(
+                    string: "Notifications are off. A card above the message box can turn them on.",
+                    attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                )
+            )
+        }
+        if phase != current { pushCard = phase }
+    }
+
+    /// "Turn on notifications". The card goes, and VoiceOver is parked on the
+    /// message box, BEFORE the system alert takes the screen, so focus never
+    /// comes back to a card that no longer exists. The answer is spoken a
+    /// breath after the alert closes, once VoiceOver has settled again.
+    private func turnOnNotificationsFromCard() {
+        closePushCard()
+        KadePushPermission.request { granted in
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: granted
+                        ? "Notifications are on."
+                        : "Notifications stay off. You can change this in the iPhone Settings app."
+                )
+            }
+        }
+    }
+
+    /// "Not now": this card never asks again (Settings keeps the switch).
+    private func notNowFromCard() {
+        KadePushPermission.dismissCard()
+        closePushCard()
+    }
+
+    private func closePushCard() {
+        pushCard = .off
+        if UIAccessibility.isVoiceOverRunning {
+            a11yFocus = .composerField
+        }
+    }
+
     // MARK: - Agent switcher (Phase 4)
 
-    /// A single row above the composer showing who will answer next, with a
-    /// tap target to open `AgentPickerView`. Disabled while a send is in
-    /// flight — switching mid-wait wouldn't affect the reply already
-    /// requested, only the confusion of tapping something that visibly does
-    /// nothing to it.
+    /// B5 (Sep 23 2026 redesign, "a tidier chat bottom", from the audit): the
+    /// agent row and the read-aloud row share ONE line,
+    /// [Kiana ›] [Voice] ... [Hear replies: On] [1×]. The swipe order is
+    /// unchanged (Talking to, Voice, Hear replies, speed), and every control
+    /// stays its own sibling element: nothing here is combined or ignored
+    /// (the Amber rule, see `readAloudToggle`). At accessibility text sizes
+    /// the line becomes two through KadeToolRow's eager AnyLayout switch:
+    /// the same controls in the same order. No ViewThatFits, GeometryReader,
+    /// fixedSize or lineLimit range, because this inset is where the 204-225
+    /// freeze hunt lived and each of those makes the layout measure more than
+    /// once. The leading half takes the spare width, which puts the read-aloud
+    /// half at the trailing edge. The read-aloud half has layout priority, so
+    /// a stack's equal-shares split can never squeeze "Hear replies: On"
+    /// while the name has room to spare; a long name wraps instead, as both
+    /// texts did on the old two rows. The static bar background matches the
+    /// composer's (its own background is untouched), so the two read as one
+    /// bar; see `ChatControlRowBackground` for high contrast.
+    private var chatControlRow: some View {
+        KadeToolRow {
+            agentSection
+                .frame(maxWidth: .infinity, alignment: .leading)
+            readAloudToggle
+                .layoutPriority(1)
+        }
+        .padding(.horizontal)
+        .background(ChatControlRowBackground())
+    }
+
+    /// Who will answer next, with a tap target to open `AgentPickerView`: the
+    /// leading half of `chatControlRow`. Disabled while a send is in flight —
+    /// switching mid-wait wouldn't affect the reply already requested, only
+    /// the confusion of tapping something that visibly does nothing to it.
     private var agentSection: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 4) {
             Button {
                 activeSheet = .agentPicker
             } label: {
-                HStack {
+                HStack(spacing: 4) {
                     Text(agentDisplayLabel)
                         .font(.footnote)
-                    Spacer()
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(isSending)
             .accessibilityLabel("Talking to \(agentDisplayLabel)")
-            .accessibilityHint("Opens the list of agents to switch who answers your next message.")
+            .accessibilityHint("Opens the list of characters to switch who answers your next message.")
             .accessibilityFocused($a11yFocus, equals: .agentButton)
 
             // Session 25: moved here from the toolbar (see the toolbar
@@ -2059,22 +2369,24 @@ struct ConversationDetailView: View {
                 Image(systemName: "waveform")
                     .font(.footnote)
                     .foregroundStyle(.tint)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(selectedAgentId == nil)
             .accessibilityLabel("Voice")
             .accessibilityHint("Change the voice \(agentDisplayLabel) speaks in.")
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
     }
 
+    /// Sep 23 2026 redesign (B2): the fallbacks say "character", the word
+    /// people see and hear for a persona everywhere now.
     private var agentDisplayLabel: String {
         if let selectedAgentId, let name = agentsService.name(for: selectedAgentId) {
             return name
         }
         if agentsService.isLoading { return "Loading…" }
-        return selectedAgentId == nil ? "No agent selected" : "Current agent"
+        return selectedAgentId == nil ? "No character selected" : "Current character"
     }
 
     /// `conversation?.displayTitle` reads oddly before a new conversation
@@ -2260,8 +2572,11 @@ struct ConversationDetailView: View {
         // activation -- no children:.ignore needed or wanted), and the
         // speed control is a true SIBLING element instead of living inside
         // the toggle's flattened shadow. The session-11 name-vs-state
-        // pattern (label "Voice messages", value On/Off) is unchanged.
-        HStack(spacing: 6) {
+        // pattern (a label, then the value On/Off) is unchanged.
+        // Sep 23 2026 redesign: the label is "Hear replies" (B2, Kade's
+        // word; "Voice messages" sounded like recording a voice note), and
+        // this pair is now the trailing half of `chatControlRow` (B5).
+        HStack(spacing: 8) {
             Button {
                 readAloudEnabled.toggle()
                 if !readAloudEnabled {
@@ -2271,32 +2586,30 @@ struct ConversationDetailView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
-                    Text(readAloudEnabled ? "Voice messages: On" : "Voice messages: Off")
+                    Text(readAloudEnabled ? "Hear replies: On" : "Hear replies: Off")
                         .font(.footnote)
                     if voiceService.isSpeaking {
                         ProgressView().scaleEffect(0.7)
                     }
                 }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Voice messages")
+            .accessibilityLabel("Hear replies")
             .accessibilityValue(readAloudEnabled ? "On" : "Off")
             .accessibilityHint(
                 readAloudEnabled
-                    ? "Turns off automatic voice messages."
-                    : "Turns on automatic voice messages. Each new reply from \(conversationTitleForCopy) will play as a voice message in its own voice."
+                    ? "Turns Hear replies off. New replies won't play out loud."
+                    : "Turns Hear replies on. Each new reply from \(conversationTitleForCopy) will play out loud in its own voice."
             )
             .accessibilityAddTraits(.isToggle)
             .sensoryFeedback(trigger: readAloudEnabled) { _, _ in
                 FeedbackPrefs.gate(.selection)
             }
 
-            Spacer()
-
             speedButton
         }
-        .padding(.horizontal)
-        .padding(.top, 4)
     }
 
     /// Aug 6 2026 (Kade: "seems redundant now to have that stop audio
@@ -2304,14 +2617,15 @@ struct ConversationDetailView: View {
     /// standalone morphing Pause/Resume/Stop control is GONE. Its powers
     /// live on where she actually uses them — each message's rotor carries
     /// Play/Pause/Resume, "Stop and clear" rides as a custom action there,
-    /// and flipping Voice Messages off still kills playback instantly. If a
+    /// and flipping Hear replies off still kills playback instantly. If a
     /// sighted family member misses a visible pause, revert THIS commit.
-    /// Playback-speed control, sitting beside the voice-messages toggle
+    /// Playback-speed control, sitting beside the Hear replies toggle
     /// because that is where someone already is when they decide a voice is
     /// too slow. Its own sibling accessibility element, never combined into
     /// the toggle (same house rule as everywhere else here), and it reads
     /// its current value rather than burying it in the label -- the exact
-    /// fix session 11 made to the toggle itself.
+    /// fix session 11 made to the toggle itself. Named "Voice speed" since
+    /// the Sep 23 2026 redesign (B2; it was "Voice message speed").
     ///
     /// Applied client-side via `AVAudioPlayer.rate`, NOT by asking the TTS
     /// service to synthesize faster: re-synthesizing would re-bill every
@@ -2326,9 +2640,11 @@ struct ConversationDetailView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary.opacity(0.5)))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Voice message speed")
+        .accessibilityLabel("Voice speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
         .accessibilityHint("Double-tap to change how fast voice messages play.")
     }
@@ -2345,6 +2661,16 @@ struct ConversationDetailView: View {
         let tall = UIScreen.main.bounds.height
         let side = keyboardUp ? 84.0 : (tall < 700 ? 132.0 : (tall < 860 ? 176.0 : 208.0))
         let thinking = isSending
+        /* C5 (Sep 23 2026 redesign) — THE MOOD LIGHT reads the same
+         * presentation the portrait performs (the voice's direction while a
+         * clip plays, thinking while a send is out, idle otherwise), but once
+         * per body pass, never per frame. That is enough: the expression only
+         * changes at clip boundaries, and every clip start and end publishes
+         * on VoiceService (isClipPlaying, nowPlayingKey), which re-runs this
+         * body. The stage's own TimelineView stays the only per-frame clock. */
+        let mood = StageMood(talking
+            ? voiceService.characterPresentation()
+            : (thinking ? CharacterPresentation(activity: .thinking) : .idle))
         return HStack {
             Spacer(minLength: 0)
             CharacterPortraitView(agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
@@ -2358,9 +2684,20 @@ struct ConversationDetailView: View {
             Spacer(minLength: 0)
         }
         .frame(height: side + 40)
+        // A background, so the glow can never change the stage's size.
+        .background(StageMoodLight(mood: mood))
         .background(Color(.systemBackground))
+        /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
+         * character picker, for sighted people; it is the same sheet as the
+         * "Talking to" row and is off while a send is out, like that row.
+         * The stage stays hidden from VoiceOver, whose users have that row.
+         * CharacterPortraitView keeps its own allowsHitTesting(false), so the
+         * tap lands on this content shape. */
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !isSending { activeSheet = .agentPicker }
+        }
         .accessibilityHidden(true)
-        .allowsHitTesting(false)
     }
 
     /// Session 26: paperclip at the start of the composer row. All of its
@@ -2687,6 +3024,10 @@ struct ConversationDetailView: View {
     /// VoiceOver activation is direct and layout-independent at any text
     /// size. Announces its flip like the web toggle does (aria-live there,
     /// an announcement here), because the visual state change is silent.
+    /// Sep 23 2026 redesign (B2): a sighted person now SEES the mode, as a
+    /// small caption under the icon ("Auto", "Deep", "Fast"), hidden from
+    /// VoiceOver because the value already says it. The key is 44 points
+    /// square; the circle became a rounded square to hold icon and word.
     private var deepThinkButton: some View {
         Button {
             let next: ThinkMode = thinkMode == .auto ? .deep : thinkMode == .deep ? .instant : .auto
@@ -2697,24 +3038,31 @@ struct ConversationDetailView: View {
             UserDefaults.standard.set(next.rawValue, forKey: Self.thinkModeKey)
             UIAccessibility.post(notification: .announcement, argument: next.spoken)
         } label: {
-            Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
-                .font(.title3)
-                .foregroundStyle(thinkMode == .auto ? Color.secondary : Color.accentColor)
-                .padding(6)
-                .background(
-                    Circle().strokeBorder(
-                        thinkMode == .auto ? Color.secondary.opacity(0.4) : Color.accentColor,
-                        lineWidth: thinkMode == .auto ? 1 : 2
-                    )
+            VStack(spacing: 1) {
+                Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
+                    .font(.title3)
+                Text(thinkMode.caption)
+                    .font(.caption2)
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(thinkMode == .auto ? Color.secondary : Color.accentColor)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 44, minHeight: 44)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(
+                    thinkMode == .auto ? Color.secondary.opacity(0.4) : Color.accentColor,
+                    lineWidth: thinkMode == .auto ? 1 : 2
                 )
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isSending)
         .accessibilityLabel("Thinking")
         .accessibilityValue(
-            thinkMode == .auto ? "Automatic" : thinkMode == .deep ? "Deep" : "Instant"
+            thinkMode == .auto ? "Automatic" : thinkMode == .deep ? "Deep" : "Fast"
         )
-        .accessibilityHint("Automatic decides per question. Deep always takes longer for careful answers. Instant always answers fast. Applies to every message until changed.")
+        .accessibilityHint("Automatic decides per question. Deep always takes longer for careful answers. Fast always answers quickly. Applies to every message until changed.")
         .sensoryFeedback(trigger: thinkMode) { _, _ in
             FeedbackPrefs.gate(.selection)
         }
@@ -4478,5 +4826,229 @@ private final class LiveStreamBuffers {
     func resetSpeech() {
         speech = SpeechStreamer()
         spokenChars = 0
+    }
+}
+
+/// B4 (Sep 23 2026 redesign): "Pick up where you left off" under the first
+/// chat's welcome. Kade's launch still opens a FRESH chat; this is the way
+/// back to the last one without a trip through the list.
+///
+/// Its own small view on purpose: it is the only thing in this file that
+/// reads the root's `kadeNavigation` environment. That value is a bundle of
+/// closures SwiftUI cannot compare, so every root re-render counts as a
+/// change for whoever reads it -- here that is one button, not the whole
+/// chat screen.
+private struct PickUpWhereYouLeftOffButton: View {
+    let conversation: KadeConversation
+    let characterName: String?
+    @Environment(\.kadeNavigation) private var nav
+
+    var body: some View {
+        let title = conversation.displayTitle
+        let when = KadeDateFormatting.relative(from: conversation.updatedAt)
+        Button {
+            nav.openConversation(conversation)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pick up where you left off")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(Self.detail(title: title, name: characterName, when: when))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(KadeCardButtonStyle())
+        .accessibilityLabel(Self.spoken(title: title, name: characterName, when: when))
+        .accessibilityHint("Opens that conversation.")
+    }
+
+    /// Visible second line: “Grocery list” with Kiana, 2 hours ago.
+    private static func detail(title: String, name: String?, when: String?) -> String {
+        var line = "\u{201C}\(title)\u{201D}"
+        if let name { line += " with \(name)" }
+        if let when { line += ", \(when)" }
+        return line
+    }
+
+    /// Spoken: "Pick up where you left off: Grocery list, with Kiana, 2 hours ago".
+    private static func spoken(title: String, name: String?, when: String?) -> String {
+        var label = "Pick up where you left off: \(title)"
+        if let name { label += ", with \(name)" }
+        if let when { label += ", \(when)" }
+        return label
+    }
+}
+
+/// B5 (Sep 23 2026 redesign): the one-line control row's static background.
+/// The composer's own `.bar` material normally, so the row and the composer
+/// read as one bar; a solid fill under the app's high contrast or Reduce
+/// Transparency, where nothing may be see-through. Never animated, never
+/// live glass: this is the freeze-era bottom inset.
+private struct ChatControlRowBackground: View {
+    @KadeContrastPolicy private var highContrast: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        if highContrast || reduceTransparency {
+            Color(.secondarySystemBackground)
+        } else {
+            Rectangle().fill(.bar)
+        }
+    }
+}
+
+/// C5 (Sep 23 2026 redesign) — the mood light's colour families, read from
+/// the same `CharacterPresentation` the face stage performs: warm for a
+/// smile, a laugh, delight, play and tenderness; cool while a reply is being
+/// thought; soft violet for worry, sadness and seriousness; the accent,
+/// faint, the rest of the time.
+private enum StageMood: CaseIterable {
+    case idle, warm, thinking, low
+
+    init(_ presentation: CharacterPresentation) {
+        if case .thinking = presentation.activity {
+            self = .thinking
+            return
+        }
+        switch presentation.face {
+        case .smile, .laugh, .delighted, .playful, .tender: self = .warm
+        case .worried, .sad, .serious: self = .low
+        default: self = .idle
+        }
+    }
+
+    /// System colours, so light and dark appearance each get their own shade.
+    var center: Color {
+        switch self {
+        case .idle: return .accentColor
+        case .warm: return .orange
+        case .thinking: return .teal
+        case .low: return .purple
+        }
+    }
+
+    var edge: Color {
+        switch self {
+        case .idle: return .accentColor
+        case .warm: return .pink
+        case .thinking: return .blue
+        case .low: return .gray
+        }
+    }
+
+    /// How strong the middle of the glow is; idle is the faint one.
+    var strength: Double {
+        switch self {
+        case .idle: return 0.12
+        case .warm: return 0.34
+        case .thinking: return 0.3
+        case .low: return 0.26
+        }
+    }
+}
+
+/// C5: the glow itself, drawn as the face stage's BACKGROUND so it can never
+/// change the stage's size or layout. Decorative: hidden, never hit-tested.
+/// One layer per mood sits ready at zero opacity (the same dissolve the
+/// portrait uses for its faces), so a mood change is a cross-fade: animated,
+/// easeInOut 0.6 s, only when the motion policy allows, and instant
+/// otherwise. The ellipse fades out exactly at the stage's edges, so it
+/// never ends in a hard line above the transcript. High contrast gets no
+/// glow at all.
+private struct StageMoodLight: View {
+    let mood: StageMood
+    @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
+    @KadeContrastPolicy private var highContrast: Bool
+
+    var body: some View {
+        if !highContrast {
+            ZStack {
+                ForEach(StageMood.allCases, id: \.self) { layer in
+                    EllipticalGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: layer.center.opacity(layer.strength), location: 0),
+                            .init(color: layer.edge.opacity(layer.strength * 0.55), location: 0.55),
+                            .init(color: layer.edge.opacity(0), location: 1)
+                        ]),
+                        center: .center,
+                        startRadiusFraction: 0,
+                        endRadiusFraction: 0.5
+                    )
+                    .opacity(layer == mood ? 1 : 0)
+                }
+            }
+            .animation(motionAllowed ? .easeInOut(duration: 0.6) : nil, value: mood)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+/// B13 (Sep 23 2026 redesign, "first-run manners"): the notification ask,
+/// with its reason, as a small non-modal card at the top of the chat's bottom
+/// bar. Never inside the transcript or the composer's own layout, and never
+/// given VoiceOver focus: the chat posts one announcement when it appears.
+/// A heading, the reason, then two sibling buttons that each own their label
+/// (the Amber rule), side by side and stacked at accessibility text sizes.
+/// Solid fills and a real border, thicker in high contrast.
+private struct PushInviteCard: View {
+    let name: String
+    let onTurnOn: () -> Void
+    let onNotNow: () -> Void
+    @KadeContrastPolicy private var highContrast: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Stay in touch")
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text("Turn on notifications so \(name) can tell you when a long reply is ready, and so characters can call you.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            KadeToolRow {
+                Button {
+                    onTurnOn()
+                } label: {
+                    Text("Turn on notifications")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                Button {
+                    onNotNow()
+                } label: {
+                    Text("Not now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    highContrast ? Color.primary.opacity(0.65) : Color.primary.opacity(0.14),
+                    lineWidth: highContrast ? 1.5 : 1
+                )
+        )
     }
 }
