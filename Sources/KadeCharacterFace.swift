@@ -62,12 +62,25 @@ struct KadeCharacterFace: View {
         }
     }
 
-    private var monogram: some View {
-        ZStack {
-            Color(hue: KadeCharacterFace.hue(for: name), saturation: 0.5, brightness: 0.78)
-            Text(String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(.white)
+    /// A coloured initial, or, when the name isn't known (a removed character,
+    /// the roster still loading), a plain grey chat bubble instead of a blank
+    /// coloured tile.
+    @ViewBuilder private var monogram: some View {
+        let initial = String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+        if initial.isEmpty {
+            ZStack {
+                Color(.systemGray4)
+                Image(systemName: "bubble.left.fill")
+                    .font(.system(size: size * 0.4, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        } else {
+            ZStack {
+                Color(hue: KadeCharacterFace.hue(for: name), saturation: 0.5, brightness: 0.78)
+                Text(initial)
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
         }
     }
 
