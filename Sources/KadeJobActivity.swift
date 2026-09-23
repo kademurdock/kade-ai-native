@@ -47,6 +47,19 @@ enum KadeJobActivity {
         }
     }
 
+    /// A card left over from an earlier run of the app (it was closed while a
+    /// job ran) can't be updated by this run, which never knew it. Ends each
+    /// one at launch so the Lock Screen never shows a job as still working
+    /// when nothing is watching it. The room the job lives in shows its real
+    /// state.
+    static func endLeftovers() {
+        for activity in Activity<KadeJobActivityAttributes>.activities where live[activity.id] == nil {
+            Task {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+    }
+
     /// Ends the card with its last words showing for a few minutes, so a
     /// person who glances at the Lock Screen later still sees "Ready to play".
     static func finish(_ id: String?, status: String, failed: Bool = false) {

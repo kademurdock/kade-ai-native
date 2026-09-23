@@ -35,8 +35,16 @@ enum KadeWidgetPalette {
 enum KadeWidgetLinks {
     /// kadeai://library/continue: pick up the Library where you left off.
     static let continueListening = URL(string: "kadeai://library/continue")!
-    /// kadeai://jobs: the Live Activity card and its Dynamic Island.
-    static let jobs = URL(string: "kadeai://jobs")!
+    /// kadeai://jobs?kind=song: the Live Activity card and its Dynamic
+    /// Island. The kind lets the app open the right room (the Sound Booth for
+    /// a song or scene, the Library for an upload).
+    static func jobs(kind: String) -> URL {
+        var parts = URLComponents()
+        parts.scheme = "kadeai"
+        parts.host = "jobs"
+        parts.queryItems = [URLQueryItem(name: "kind", value: kind)]
+        return parts.url ?? URL(string: "kadeai://jobs")!
+    }
 
     /// kadeai://talk?agent=<id>: a new chat with that character. The four ids
     /// are fixed constants made of letters, digits, "-" and "_", all of which

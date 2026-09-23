@@ -111,6 +111,9 @@ struct KadeAIApp: App {
                     // ASKS. The ask waits for the first reply, with a reason —
                     // see KadePushPermission.
                     KadePushPermission.registerAtLaunch()
+                    // Redesign (C3): lock-screen job cards from an earlier run
+                    // can't be updated by this one, so they end now.
+                    KadeJobActivity.endLeftovers()
                 }
                 .onChange(of: auth.state) { _, newState in
                     // Link the device to whoever is actually signed in right

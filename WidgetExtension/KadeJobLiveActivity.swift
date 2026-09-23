@@ -122,7 +122,7 @@ struct KadeJobLiveActivity: Widget {
             KadeJobLockScreenView(job: KadeJobSummary(context))
                 .activityBackgroundTint(KadeWidgetPalette.brown)
                 .activitySystemActionForegroundColor(KadeWidgetPalette.cream)
-                .widgetURL(KadeWidgetLinks.jobs)
+                .widgetURL(KadeWidgetLinks.jobs(kind: context.attributes.kind))
         } dynamicIsland: { context in
             KadeJobLiveActivity.island(KadeJobSummary(context))
         }
@@ -174,7 +174,7 @@ struct KadeJobLiveActivity: Widget {
                 .foregroundStyle(job.tint)
                 .accessibilityLabel(job.spokenSummary)
         }
-        .widgetURL(KadeWidgetLinks.jobs)
+        .widgetURL(KadeWidgetLinks.jobs(kind: job.kind))
         .keylineTint(job.tint)
     }
 }

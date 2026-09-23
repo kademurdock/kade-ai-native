@@ -28,7 +28,17 @@ struct OpenSpotterIntent: AppIntent {
     static var openAppWhenRun: Bool = true
     static var isDiscoverable: Bool = false
 
+    #if KADE_APP_TARGET
+    /// Inside the app (openAppWhenRun, and the app compiles this file too),
+    /// the call goes through IntentRouter exactly like CallSpotterIntent, so
+    /// nothing depends on OpenURLIntent accepting a custom scheme.
+    func perform() async throws -> some IntentResult {
+        await MainActor.run { IntentRouter.shared.request(.spotterCall) }
+        return .result()
+    }
+    #else
     func perform() async throws -> some IntentResult & OpensIntent {
         .result(opensIntent: OpenURLIntent(URL(string: "kadeai://spotter")!))
     }
+    #endif
 }

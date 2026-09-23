@@ -828,6 +828,12 @@ struct ContentView: View {
             }
         case "search":
             go(.search)
+        case "jobs":
+            // The lock-screen progress card (KadeWidgets): an upload opens
+            // the Library, a song or scene the Sound Booth.
+            let kind = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "kind" })?.value ?? ""
+            go(kind == "upload" ? .readingRoom : .soundBooth)
         default:
             break
         }
