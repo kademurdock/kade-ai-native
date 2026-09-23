@@ -81,6 +81,8 @@ final class KadeA11yAuditUITests: XCTestCase {
     /// the skip line as the lane telling the truth rather than as a failure.
     private struct Stop {
         let name: String
+        /// Sep 23 2026 redesign: every screen starts from one of the five tabs.
+        let tab: String
         let path: [String]
     }
 
@@ -89,15 +91,19 @@ final class KadeA11yAuditUITests: XCTestCase {
     /// Spotter. Those cost real time and real network on every run and their
     /// failure mode is a hung simulator, not a finding.
     private static let stops: [Stop] = [
-        Stop(name: "Home", path: []),
-        Stop(name: "Settings", path: ["Settings"]),
-        Stop(name: "Settings, Accessibility", path: ["Settings", "Accessibility"]),
-        Stop(name: "Your conversations", path: ["Your conversations"]),
-        Stop(name: "The Marketplace", path: ["The Marketplace"]),
-        Stop(name: "The Prompt Library", path: ["The Prompt Library"]),
-        Stop(name: "Bookmarks", path: ["Bookmarks"]),
-        Stop(name: "Transcribe", path: ["Transcribe a voice memo"]),
-        Stop(name: "Help", path: ["Help"])
+        Stop(name: "Talk (conversations)", tab: "Talk", path: []),
+        Stop(name: "Library", tab: "Library", path: []),
+        Stop(name: "Create", tab: "Create", path: []),
+        Stop(name: "Play", tab: "Play", path: []),
+        Stop(name: "More", tab: "More", path: []),
+        Stop(name: "Search everything", tab: "More", path: ["Search everything"]),
+        Stop(name: "Settings", tab: "More", path: ["Settings"]),
+        Stop(name: "Settings, Accessibility", tab: "More", path: ["Settings", "Accessibility"]),
+        Stop(name: "The Marketplace", tab: "Play", path: ["The Marketplace"]),
+        Stop(name: "The Prompt Library", tab: "Create", path: ["The Prompt Library"]),
+        Stop(name: "Bookmarks", tab: "More", path: ["Bookmarks"]),
+        Stop(name: "Transcribe", tab: "Talk", path: ["Transcribe a voice memo"]),
+        Stop(name: "Help", tab: "More", path: ["Help"])
     ]
 
     // MARK: - State
@@ -164,15 +170,15 @@ final class KadeA11yAuditUITests: XCTestCase {
 
         // 3 — the walk.
         for stop in Self.stops {
-            guard navigateHome() else {
-                skip(stop.name, "could not get back to the home screen")
+            guard goTo(tab: stop.tab) else {
+                skip(stop.name, "could not get to the \(stop.tab) tab")
                 continue
             }
             guard follow(path: stop.path, for: stop.name) else { continue }
             audit(screen: stop.name)
         }
 
-        _ = navigateHome()
+        _ = goTo(tab: "Talk")
         emit("KADE_A11Y_SUMMARY|screens=\(screensAudited)|skipped=\(screensSkipped)|issues=\(issueCount)")
     }
 
@@ -243,9 +249,9 @@ final class KadeA11yAuditUITests: XCTestCase {
             return false
         }
 
-        let emailField = app.textFields["Email"]
+        let emailField = app.textFields["Email or phone number"]
         guard emailField.waitForExistence(timeout: 30) else {
-            skip("every signed-in screen", "the Email field never appeared")
+            skip("every signed-in screen", "the Email or phone number field never appeared")
             return false
         }
         emailField.tap()
@@ -266,10 +272,13 @@ final class KadeA11yAuditUITests: XCTestCase {
         }
         signIn.tap()
 
-        // The home screen's "Tools" header is the tell that sign-in landed.
-        // 60 seconds because this is a real round trip to kademurdock.com on a
-        // CI box, and a slow network is not an accessibility finding.
-        guard app.staticTexts["Tools"].waitForExistence(timeout: 60) else {
+        // The tab bar is the tell that sign-in landed (the launch chat hides
+        // it, so look for the Back button's way home as well: the Talk tab's
+        // list sits under the chat). 60 seconds because this is a real round
+        // trip to kademurdock.com on a CI box, and a slow network is not an
+        // accessibility finding.
+        guard app.tabBars.buttons["Talk"].waitForExistence(timeout: 60)
+                || app.navigationBars.buttons.element(boundBy: 0).waitForExistence(timeout: 5) else {
             skip("every signed-in screen",
                  "sign-in did not complete within 60 seconds — network, or the test seat's password changed")
             return false
@@ -277,15 +286,24 @@ final class KadeA11yAuditUITests: XCTestCase {
         return true
     }
 
-    /// Taps Back until the home screen's "Tools" header is showing again.
-    private func navigateHome() -> Bool {
+    /// Gets to the start of one tab. The tab bar hides inside a conversation,
+    /// so Back comes first when it isn't showing; then the tab is tapped twice
+    /// (the first selects it, the second returns it to its start).
+    private func goTo(tab: String) -> Bool {
         for _ in 0..<5 {
-            if app.staticTexts["Tools"].exists { return true }
+            let tabButton = app.tabBars.buttons[tab]
+            if tabButton.exists && tabButton.isHittable {
+                tabButton.tap()
+                Thread.sleep(forTimeInterval: 0.8)
+                tabButton.tap()
+                Thread.sleep(forTimeInterval: 1.2)
+                return true
+            }
             let back = app.navigationBars.buttons.element(boundBy: 0)
             if back.exists && back.isHittable { back.tap() } else { break }
-            _ = app.staticTexts["Tools"].waitForExistence(timeout: 3)
+            Thread.sleep(forTimeInterval: 1.0)
         }
-        return app.staticTexts["Tools"].exists
+        return false
     }
 
     private func follow(path: [String], for name: String) -> Bool {
