@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import UserNotifications
 
 /// The real Settings tab session 17/18's own doc comments kept flagging as
 /// "still open" -- Kade: "We also need a native way to access settings
@@ -37,6 +38,17 @@ import AVFoundation
 /// for this specific control (reads its current value rather than burying
 /// it in the label, its own sibling accessibility element, never combined
 /// into the toggle -- session 11 fixed a real bug getting to that state).
+///
+/// SEP 23 2026 REDESIGN (B9, C1, B13, B2, A3). Settings now looks like the
+/// iPhone's own: a coloured tile on every row (`KadeSettingsIconStyle`,
+/// hidden from VoiceOver, one colour per section) and an arrow on every row
+/// that opens a screen. New: an App icon section (Classic, Kiana, Harley,
+/// Della, Lilly), and a Notifications status row with the one button that
+/// fixes it. The two freeze-hunt switches moved to a last Troubleshooting
+/// section. Words: "Main character", "Hear replies by default", "Voice
+/// speed", "character" for companion; the old words stay in the search
+/// keywords. `initialQuery` lets the app-wide search open this screen with
+/// the words already typed.
 struct SettingsView: View {
     /// Aug 4 2026 (her pick): VoiceOver-spoken progress during long deep
     /// thinks ("Still thinking -- about 900 characters so far," roughly
@@ -58,6 +70,10 @@ struct SettingsView: View {
     // appends the whisper head line while it's on.
     @AppStorage("kade.speech.whisperMode") private var whisperMode = false
     let apiClient: KadeAPIClient
+    /// Sep 23 2026 redesign (A3): the app-wide search opens Settings with the
+    /// words already typed. Copied into `settingsQuery` once, on first
+    /// appear, and only if nothing is typed yet. "" opens the plain list.
+    var initialQuery: String = ""
 
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var appearance: AppearancePreferences
@@ -121,6 +137,19 @@ struct SettingsView: View {
     @State private var mainAgentName = DefaultAgentStore.displayName
     /// Part 85 — the settings search query. Empty = the normal sections.
     @State private var settingsQuery = ""
+    /// A3: `initialQuery` is copied in once. Coming Back from a pushed screen
+    /// must not type it again after the person cleared it.
+    @State private var seededInitialQuery = false
+    /// C1: mirror of `UIApplication.shared.alternateIconName` (UIKit's value
+    /// isn't observed), so the checkmark moves the moment a new icon lands.
+    @State private var currentAppIconName: String?
+    /// B13: this phone's notification permission, read on appear and each
+    /// time the app comes back to the front (the person may have just
+    /// changed it in the Settings app). nil until the first read lands.
+    @State private var pushStatus: UNAuthorizationStatus?
+    @Environment(\.scenePhase) private var scenePhase
+    /// B9: the row arrows step up from tertiary to secondary grey here.
+    @KadeContrastPolicy private var highContrast: Bool
 
     private var trimmedQuery: String {
         settingsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,6 +159,9 @@ struct SettingsView: View {
         List {
             if trimmedQuery.isEmpty {
                 mainAgentSection
+                if UIApplication.shared.supportsAlternateIcons {
+                    appIconSection
+                }
                 voiceAudioSection
                 callsSection
                 notificationsSection
@@ -140,6 +172,7 @@ struct SettingsView: View {
                 locationSection
                 accountSection
                 supportSection
+                troubleshootingSection
             } else {
                 searchResultsSection
             }
@@ -148,8 +181,22 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadLongTaskPing() }
+        .task { await refreshPushStatus() }
         .onAppear {
             currentRingtoneId = UserDefaults.standard.string(forKey: PushService.ringtoneDefaultsKey) ?? "ring_classic"
+            currentAppIconName = UIApplication.shared.alternateIconName
+            if !seededInitialQuery {
+                seededInitialQuery = true
+                if settingsQuery.isEmpty && !initialQuery.isEmpty {
+                    settingsQuery = initialQuery
+                }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Back from the Settings app (after "Open iPhone Settings").
+            if phase == .active {
+                Task { await refreshPushStatus() }
+            }
         }
         .sheet(isPresented: $showingMainAgentPicker) {
             AgentPickerView(currentAgentId: DefaultAgentStore.storedId) { agent in
@@ -157,7 +204,7 @@ struct SettingsView: View {
                 mainAgentName = agent.name
                 UIAccessibility.post(
                     notification: .announcement,
-                    argument: "\(agent.name) is now your main agent."
+                    argument: "\(agent.name) is now your main character."
                 )
             }
         }
@@ -192,7 +239,7 @@ struct SettingsView: View {
             ShareSheet(item: item)
         }
         .confirmationDialog(
-            "Voice message speed",
+            "Voice speed",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
@@ -201,7 +248,7 @@ struct SettingsView: View {
                     voiceService.playbackRate = rate
                     UIAccessibility.post(
                         notification: .announcement,
-                        argument: "Voice message speed \(VoiceService.rateSpokenLabel(rate))."
+                        argument: "Voice speed \(VoiceService.rateSpokenLabel(rate))."
                     )
                 }
             }
@@ -219,9 +266,23 @@ struct SettingsView: View {
         Section {
             mainAgentRow(searchStyle: false)
         } header: {
-            sectionHeader("Main agent")
+            sectionHeader("Main character")
         } footer: {
-            Text("The app opens into a chat with your main agent, and new chats start with them. Pick anyone -- a Kade-AI character or one of your own. You can still switch who answers inside any single conversation.")
+            Text("The app opens into a chat with your main character, and new chats start with them. Pick anyone -- a Kade-AI character or one of your own. You can still switch who answers inside any single conversation.")
+        }
+    }
+
+    private var appIconSection: some View {
+        // Sep 23 2026 redesign (C1): the picture on the home screen. Holly
+        // can have Harley there. Shown only where iOS allows the change.
+        Section {
+            ForEach(KadeAppIcon.allCases) { choice in
+                appIconRow(choice, searchStyle: false)
+            }
+        } header: {
+            sectionHeader("App icon")
+        } footer: {
+            Text("The picture your home screen shows for Kade-AI. Your iPhone shows a short message when it changes.")
         }
     }
 
@@ -236,7 +297,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("Voice message speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
+            Text("Voice speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
         }
     }
 
@@ -249,12 +310,13 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Calls")
         } footer: {
-            Text("When a companion calls you, this is the sound your phone rings with. The picker plays every tone out loud so the choice is made by ear — and an agent can pick a different tone for one specific scheduled call; every tone has a name they know.")
+            Text("When a character calls you, this is the sound your phone rings with. The picker plays every tone out loud so the choice is made by ear — and a character can pick a different tone for one specific scheduled call; every tone has a name they know.")
         }
     }
 
     private var notificationsSection: some View {
         Section {
+            notificationPermissionRows(searchStyle: false)
             longTaskPingRow(searchStyle: false)
             briefRow(searchStyle: false)
         } header: {
@@ -272,7 +334,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Memory")
         } footer: {
-            Text("What your companions keep about you, in your hands — hear it, edit it, forget it.")
+            Text("What your characters keep about you, in your hands — hear it, edit it, forget it.")
         }
     }
 
@@ -297,11 +359,11 @@ struct SettingsView: View {
             soundEffectsRow(searchStyle: false)
             hapticsRow(searchStyle: false)
             sensorySyncRow(searchStyle: false)
-            simpleTranscriptRow(searchStyle: false)
-            simpleComposerRow(searchStyle: false)
             reduceMotionRow(searchStyle: false)
-            Toggle("Animated character face", isOn: $voicePortraits)
-                .accessibilityHint("Shows the character's moving face at the top of every conversation. It blinks while quiet and talks along with voice messages. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
+            Toggle(isOn: $voicePortraits) {
+                tileLabel("Animated character face", systemImage: "face.smiling", tint: SectionTint.feedback)
+            }
+            .accessibilityHint("Shows the character's moving face at the top of every conversation. It blinks while quiet and talks along with voice messages. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
@@ -309,17 +371,19 @@ struct SettingsView: View {
             // audition the current set and redesign from real hearings
             // rather than memory. Plain Buttons in Form rows, each its
             // own element, no children:.ignore (the Amber rule).
-            DisclosureGroup("Hear every sound") {
+            DisclosureGroup {
                 auditionSoundRow("Message sent", .messageSent)
                 auditionSoundRow("Reply landed", .messageReceived)
                 auditionSoundRow("Working", .actionStart)
                 auditionSoundRow("Done", .actionDone)
                 auditionSoundRow("Something went wrong", .error)
+            } label: {
+                tileLabel("Hear every sound", systemImage: "music.note", tint: SectionTint.feedback)
             }
             .disabled(!feedback.soundEffects)
             .accessibilityHint("Opens a list of every sound the app makes, each with a play button.")
 
-            DisclosureGroup("Feel every tap") {
+            DisclosureGroup {
                 auditionTapRow("Tap") { KadeHaptics.tap() }
                 auditionTapRow("Success") { KadeHaptics.success() }
                 auditionTapRow("Warning") { KadeHaptics.warning() }
@@ -335,6 +399,8 @@ struct SettingsView: View {
                 auditionTapRow("Arriving: a call") { KadeHaptics.arrival(.call) }
                 auditionTapRow("Arriving: a reminder") { KadeHaptics.arrival(.reminder) }
                 auditionTapRow("Arriving: an alert") { KadeHaptics.arrival(.alert) }
+            } label: {
+                tileLabel("Feel every tap", systemImage: "hand.tap", tint: SectionTint.feedback)
             }
             .disabled(!feedback.haptics)
             .accessibilityHint("Opens a list of every haptic the app uses, each with a button that fires it once.")
@@ -408,6 +474,20 @@ struct SettingsView: View {
         }
     }
 
+    private var troubleshootingSection: some View {
+        // Sep 23 2026 redesign (B9): the builds 217/218 freeze-hunt switches,
+        // moved out of Feedback & Sounds so the everyday sections come
+        // first. Still one tap deep, and still found by search.
+        Section {
+            simpleTranscriptRow(searchStyle: false)
+            simpleComposerRow(searchStyle: false)
+        } header: {
+            sectionHeader("Troubleshooting")
+        } footer: {
+            Text("Only change these if the app freezes and Kade asks you to try them.")
+        }
+    }
+
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
@@ -424,8 +504,10 @@ struct SettingsView: View {
     @State private var showingDataUse = false
     private var dataUseRow: some View {
         Button { showingDataUse = true } label: {
-            Label("What Kade-AI sends, and who to", systemImage: "hand.raised")
+            opensScreenLabel("What Kade-AI sends, and who to", systemImage: "hand.raised", tint: SectionTint.support)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("What Kade-AI sends, and who to")
         .accessibilityHint("Opens the list of what leaves your phone and which companies receive it, the same one you agreed to when you signed in.")
         .sheet(isPresented: $showingDataUse) {
             NavigationStack {
@@ -479,29 +561,32 @@ struct SettingsView: View {
     /// speed/rate/fast find voice speed, vibrate/buzz find haptics — so a
     /// person types the word THEY have, not the word the screen has.
     private enum SettingRow: String, CaseIterable, Identifiable {
-        case mainAgent, ringtone
+        case mainAgent, appIcon, ringtone
         case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, pronunciation
-        case longTaskPing, brief
+        case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
         case highContrast, font, spacing
-        case soundEffects, haptics, sensorySync, simpleTranscript, simpleComposer, reduceMotion
+        case soundEffects, haptics, sensorySync, reduceMotion
         case keyboardPhrases, keyboardClean
         case location
         case usage, accountSecurity, export
         case diagnostics
+        case simpleTranscript, simpleComposer
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .mainAgent: return "Your main agent"
+            case .mainAgent: return "Your main character"
+            case .appIcon: return "App icon"
             case .ringtone: return "Agent call ringtone"
-            case .voiceDefault: return "Voice messages by default"
+            case .voiceDefault: return "Hear replies by default"
             case .thinkingProgress: return "Spoken thinking progress"
             case .streamingVoice: return "Faster voice (streaming)"
             case .whisper: return "Whisper mode"
-            case .speed: return "Voice message speed"
+            case .speed: return "Voice speed"
             case .pronunciation: return "Pronunciation Dictionary"
+            case .notificationPermission: return "Notifications"
             case .longTaskPing: return "Tell me when a slow reply lands"
             case .brief: return "Morning brief"
             case .memories: return "Memories"
@@ -528,35 +613,42 @@ struct SettingsView: View {
 
         var section: String {
             switch self {
-            case .mainAgent: return "Main agent"
+            case .mainAgent: return "Main character"
+            case .appIcon: return "App icon"
             case .ringtone: return "Calls"
             case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .pronunciation: return "Voice & Audio"
-            case .longTaskPing, .brief: return "Notifications"
+            case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
             case .highContrast, .font, .spacing: return "Accessibility"
-            case .soundEffects, .haptics, .sensorySync, .simpleTranscript, .simpleComposer, .reduceMotion: return "Feedback & Sounds"
+            case .soundEffects, .haptics, .sensorySync, .reduceMotion: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
             case .location: return "Location"
             case .usage, .accountSecurity, .export: return "Account"
             case .diagnostics: return "Support"
+            case .simpleTranscript, .simpleComposer: return "Troubleshooting"
             }
         }
 
+        /// Sep 23 2026 (B2): the old words stay here on purpose, so "main
+        /// agent", "voice messages" and "voice message speed" still find the
+        /// renamed rows.
         var keywords: String {
             switch self {
-            case .mainAgent: return "agent main default character companion who answers opens picker"
+            case .mainAgent: return "agent main default character characters companion who answers opens picker"
+            case .appIcon: return "app icon icons home screen picture face logo look change kiana harley della lilly classic"
             case .ringtone: return "ringtone ring rings tone tones sound call calls phone marimba preview stop music"
-            case .voiceDefault: return "voice messages read aloud speak spoken tts audio default on"
+            case .voiceDefault: return "voice messages hear replies out loud read aloud speak spoken tts audio default on automatically"
             case .thinkingProgress: return "thinking progress deep think spoken voiceover announce"
             case .streamingVoice: return "faster voice streaming stream latency delay gap wait quick sooner beta first word space between message"
             case .whisper: return "whisper quiet night hushed gentle soft volume"
-            case .speed: return "speed rate fast slow playback voice quicker talk faster"
+            case .speed: return "speed rate fast slow playback voice message messages quicker talk faster"
             case .pronunciation: return "pronunciation pronounce names dictionary say saying word words"
+            case .notificationPermission: return "notifications notify push alerts banner permission allow turn on"
             case .longTaskPing: return "notification notify ping slow reply long task push tell alert"
             case .brief: return "morning brief briefing rundown daily news push"
-            case .memories: return "memory memories remember cards forget companions know"
+            case .memories: return "memory memories remember cards forget companions characters know"
             case .logbook: return "logbook diary journal days record entries"
-            case .memorySharing: return "share sharing companions together both kiana della tell twice"
+            case .memorySharing: return "share sharing companions characters together both kiana della tell twice"
             case .highContrast: return "contrast dark black theme appearance display low vision"
             case .font: return "font text typeface easy read dyslexic letters"
             case .spacing: return "spacing line space text gap read"
@@ -587,7 +679,9 @@ struct SettingsView: View {
     }
 
     private var matchedRows: [SettingRow] {
-        SettingRow.allCases.filter { $0.matches(trimmedQuery) }
+        SettingRow.allCases.filter { row in
+            row.matches(trimmedQuery) && (row != .appIcon || UIApplication.shared.supportsAlternateIcons)
+        }
     }
 
     private var searchResultsSection: some View {
@@ -614,6 +708,10 @@ struct SettingsView: View {
     private func searchRow(_ row: SettingRow) -> some View {
         switch row {
         case .mainAgent: mainAgentRow(searchStyle: true)
+        case .appIcon:
+            ForEach(KadeAppIcon.allCases) { choice in
+                appIconRow(choice, searchStyle: true)
+            }
         case .ringtone: ringtoneRow(searchStyle: true)
         case .voiceDefault: voiceDefaultRow(searchStyle: true)
         case .thinkingProgress: thinkingProgressRow(searchStyle: true)
@@ -621,6 +719,7 @@ struct SettingsView: View {
         case .whisper: whisperRow(searchStyle: true)
         case .speed: speedRow(searchStyle: true)
         case .pronunciation: pronunciationRow(searchStyle: true)
+        case .notificationPermission: notificationPermissionRows(searchStyle: true)
         case .longTaskPing: longTaskPingRow(searchStyle: true)
         case .brief: briefRow(searchStyle: true)
         case .memories: memoriesRow(searchStyle: true)
@@ -658,14 +757,18 @@ struct SettingsView: View {
             showingMainAgentPicker = true
         } label: {
             LabeledContent {
-                Text(mainAgentName)
+                HStack(spacing: 8) {
+                    Text(mainAgentName)
+                    openChevron
+                }
             } label: {
-                Label("Your main agent", systemImage: "person.crop.circle.badge.checkmark")
+                tileLabel("Your main character", systemImage: "person.crop.circle.badge.checkmark", tint: SectionTint.mainCharacter)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(searchStyle ? searchLabel(.mainAgent, "Your main agent: \(mainAgentName)") : "Your main agent: \(mainAgentName)")
-        .accessibilityHint("Opens the agent picker. Your main agent answers when the app opens into a chat, and every new chat starts with them.")
+        .accessibilityLabel(searchStyle ? searchLabel(.mainAgent, "Your main character: \(mainAgentName)") : "Your main character: \(mainAgentName)")
+        .accessibilityHint("Opens the character picker. Your main character answers when the app opens into a chat, and every new chat starts with them.")
     }
 
     private func ringtoneRow(searchStyle: Bool) -> some View {
@@ -673,10 +776,14 @@ struct SettingsView: View {
             showingRingtones = true
         } label: {
             LabeledContent {
-                Text(RingtoneSettingsView.label(forId: currentRingtoneId))
+                HStack(spacing: 8) {
+                    Text(RingtoneSettingsView.label(forId: currentRingtoneId))
+                    openChevron
+                }
             } label: {
-                Label("Agent call ringtone", systemImage: "bell.badge")
+                tileLabel("Agent call ringtone", systemImage: "phone.fill", tint: SectionTint.calls)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel((searchStyle ? "Calls. " : "") + "Agent call ringtone: \(RingtoneSettingsView.label(forId: currentRingtoneId))")
@@ -685,30 +792,30 @@ struct SettingsView: View {
 
     private func voiceDefaultRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $voiceService.defaultReadAloudOn) {
-            Text(searchStyle ? searchLabel(.voiceDefault, "Voice messages by default") : "Voice messages by default")
+            tileLabel(searchStyle ? searchLabel(.voiceDefault, "Hear replies by default") : "Hear replies by default", systemImage: "ear", tint: SectionTint.voice)
         }
-        .accessibilityHint("New conversations start with voice messages already on. You can still turn it off in any single conversation.")
+        .accessibilityHint("Replies play out loud by themselves in every new conversation. You can still turn this off in any single conversation.")
     }
 
     private func thinkingProgressRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $spokenThinkingProgress) {
-            Text(searchStyle ? searchLabel(.thinkingProgress, "Spoken thinking progress") : "Spoken thinking progress")
+            tileLabel(searchStyle ? searchLabel(.thinkingProgress, "Spoken thinking progress") : "Spoken thinking progress", systemImage: "ellipsis.bubble", tint: SectionTint.voice)
         }
         .accessibilityHint("During a long Deep Think, VoiceOver quietly says how much thinking has streamed so far, about every twenty seconds. The thoughts themselves are never read out loud.")
     }
 
     private func streamingVoiceRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $voiceService.streamingPlaybackOn) {
-            Text(searchStyle ? searchLabel(.streamingVoice, "Faster voice (streaming)") : "Faster voice (streaming)")
+            tileLabel(searchStyle ? searchLabel(.streamingVoice, "Faster voice (streaming)") : "Faster voice (streaming)", systemImage: "bolt.fill", tint: SectionTint.voice)
         }
         .accessibilityHint("Her voice starts almost immediately instead of waiting for each whole clip to arrive — the gap between a message landing and hearing it gets much shorter. New and still being tested: if a voice reply ever sounds odd, turn this off and it plays the old way.")
     }
 
     private func whisperRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $whisperMode) {
-            Text(searchStyle ? searchLabel(.whisper, "Whisper mode (night-quiet voices)") : "Whisper mode (night-quiet voices)")
+            tileLabel(searchStyle ? searchLabel(.whisper, "Whisper mode (night-quiet voices)") : "Whisper mode (night-quiet voices)", systemImage: "moon.stars.fill", tint: SectionTint.voice)
         }
-        .accessibilityHint("While this is on, companions deliver every voice reply hushed, slow, and gentle. Same words, night-quiet delivery. Flip it off and they go back to full life.")
+        .accessibilityHint("While this is on, characters deliver every voice reply hushed, slow, and gentle. Same words, night-quiet delivery. Flip it off and they go back to full life.")
     }
 
     private func speedRow(searchStyle: Bool) -> some View {
@@ -716,18 +823,19 @@ struct SettingsView: View {
             showingSpeedPicker = true
         } label: {
             HStack {
-                Text("Voice message speed")
+                tileLabel("Voice speed", systemImage: "speedometer", tint: SectionTint.voice)
                     .foregroundStyle(Color.primary)
                 Spacer()
                 Text(VoiceService.rateLabel(voiceService.playbackRate))
                     .foregroundStyle(.secondary)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         // Session 26, the Amber rule (build 139 / df915e2): no
         // children:.ignore on a Button — this was the exact construction
         // that killed Amber's conversation rows. Label/value/hint stay.
-        .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice message speed") : "Voice message speed")
+        .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice speed") : "Voice speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
         .accessibilityHint("Double-tap to change how fast voice messages and Spotter calls play back.")
     }
@@ -736,7 +844,7 @@ struct SettingsView: View {
         Button {
             showingPronunciationDictionary = true
         } label: {
-            Label("Pronunciation Dictionary", systemImage: "textformat.abc")
+            opensScreenLabel("Pronunciation Dictionary", systemImage: "textformat.abc", tint: SectionTint.voice)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.pronunciation, "Pronunciation Dictionary") : "Pronunciation Dictionary")
@@ -762,7 +870,7 @@ struct SettingsView: View {
                 Task { await saveLongTaskPing(newValue) }
             }
         )) {
-            Text(searchStyle ? searchLabel(.longTaskPing, "Tell me when a slow reply lands") : "Tell me when a slow reply lands")
+            tileLabel(searchStyle ? searchLabel(.longTaskPing, "Tell me when a slow reply lands") : "Tell me when a slow reply lands", systemImage: "hourglass", tint: SectionTint.notifications)
         }
         .disabled(!longTaskPingLoaded)
         .accessibilityHint("Sends a notification if a reply takes more than about half a minute and you've already left the app.")
@@ -775,58 +883,60 @@ struct SettingsView: View {
         Button {
             showingBrief = true
         } label: {
-            Label("Morning brief", systemImage: "sun.horizon")
+            opensScreenLabel("Morning brief", systemImage: "sun.horizon", tint: SectionTint.notifications)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.brief, "Morning brief") : "Morning brief")
-        .accessibilityHint("Your companion's morning rundown — turn it on, pick the time, choose what's in it, and hear today's.")
+        .accessibilityHint("Your character's morning rundown — turn it on, pick the time, choose what's in it, and hear today's.")
     }
 
     private func memoriesRow(searchStyle: Bool) -> some View {
         Button {
             showingMemories = true
         } label: {
-            Label("Memories", systemImage: "brain.head.profile")
+            opensScreenLabel("Memories", systemImage: "brain.head.profile", tint: SectionTint.memory)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.memories, "Memories") : "Memories")
-        .accessibilityHint("Every memory card your companions keep about you — hear them, edit them, forget them, or add one. New memories also announce themselves in chat the moment they're saved.")
+        .accessibilityHint("Every memory card your characters keep about you — hear them, edit them, forget them, or add one. New memories also announce themselves in chat the moment they're saved.")
     }
 
     private func logbookRow(searchStyle: Bool) -> some View {
         Button {
             showingLogbook = true
         } label: {
-            Label("Your Logbook", systemImage: "book.closed")
+            opensScreenLabel("Your Logbook", systemImage: "book.closed", tint: SectionTint.memory)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.logbook, "Your Logbook") : "Your Logbook")
-        .accessibilityHint("The dated record your companions keep of your days — browse by day, add a line by voice, or forget entries for good.")
+        .accessibilityHint("The dated record your characters keep of your days — browse by day, add a line by voice, or forget entries for good.")
     }
 
     private func memorySharingRow(searchStyle: Bool) -> some View {
         Button {
             showingMemorySharing = true
         } label: {
-            Label("Memory sharing", systemImage: "person.2.wave.2")
+            opensScreenLabel("Memory sharing", systemImage: "person.2.wave.2", tint: SectionTint.memory)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.memorySharing, "Memory sharing") : "Memory sharing")
-        .accessibilityHint("Let your companions share the facts you tell each of them — memory cards and logbook lines, marked secondhand — so you never say a thing twice. Their opinions stay their own.")
+        .accessibilityHint("Let your characters share the facts you tell each of them — memory cards and logbook lines, marked secondhand — so you never say a thing twice. Their opinions stay their own.")
     }
 
     private func highContrastRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $appearance.highContrast) {
-            Text(searchStyle ? searchLabel(.highContrast, "High contrast") : "High contrast")
+            tileLabel(searchStyle ? searchLabel(.highContrast, "High contrast") : "High contrast", systemImage: "circle.lefthalf.filled", tint: SectionTint.accessibility)
         }
         .accessibilityHint("Switches the whole app to a true-black dark appearance.")
     }
 
     private func fontRow(searchStyle: Bool) -> some View {
-        Picker(searchStyle ? searchLabel(.font, "Easy-read font") : "Easy-read font", selection: $appearance.fontFamily) {
+        Picker(selection: $appearance.fontFamily) {
             ForEach(AppearancePreferences.FontFamily.allCases) { font in
                 Text(font.displayName).tag(font)
             }
+        } label: {
+            tileLabel(searchStyle ? searchLabel(.font, "Easy-read font") : "Easy-read font", systemImage: "textformat", tint: SectionTint.accessibility)
         }
         .accessibilityHint("Changes the font used for message text.")
         .sensoryFeedback(trigger: appearance.fontFamily) { _, _ in
@@ -835,10 +945,12 @@ struct SettingsView: View {
     }
 
     private func spacingRow(searchStyle: Bool) -> some View {
-        Picker(searchStyle ? searchLabel(.spacing, "Line spacing") : "Line spacing", selection: $appearance.lineSpacing) {
+        Picker(selection: $appearance.lineSpacing) {
             ForEach(AppearancePreferences.LineSpacingLevel.allCases) { level in
                 Text(level.displayName).tag(level)
             }
+        } label: {
+            tileLabel(searchStyle ? searchLabel(.spacing, "Line spacing") : "Line spacing", systemImage: "text.alignleft", tint: SectionTint.accessibility)
         }
         .accessibilityHint("Changes the space between lines of message text.")
         .sensoryFeedback(trigger: appearance.lineSpacing) { _, _ in
@@ -848,14 +960,14 @@ struct SettingsView: View {
 
     private func soundEffectsRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.soundEffects) {
-            Text(searchStyle ? searchLabel(.soundEffects, "Sound effects") : "Sound effects")
+            tileLabel(searchStyle ? searchLabel(.soundEffects, "Sound effects") : "Sound effects", systemImage: "speaker.wave.2.fill", tint: SectionTint.feedback)
         }
         .accessibilityHint("Short sounds when a message sends, a reply lands, or something goes wrong. They play alongside VoiceOver, never over it.")
     }
 
     private func hapticsRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.haptics) {
-            Text(searchStyle ? searchLabel(.haptics, "Haptics") : "Haptics")
+            tileLabel(searchStyle ? searchLabel(.haptics, "Haptics") : "Haptics", systemImage: "iphone.radiowaves.left.and.right", tint: SectionTint.feedback)
         }
         .accessibilityHint("Gentle taps at key moments -- sending, a reply landing, recording start and stop, a call connecting or ending.")
     }
@@ -864,10 +976,10 @@ struct SettingsView: View {
         // Session 23 (Kade: "make them pulse with the visuals...
         // you could always turn it off").
         Toggle(isOn: $feedback.sensorySync) {
-            Text(searchStyle ? searchLabel(.sensorySync, "Pulse with the visuals") : "Pulse with the visuals")
+            tileLabel(searchStyle ? searchLabel(.sensorySync, "Pulse with the visuals") : "Pulse with the visuals", systemImage: "waveform.path", tint: SectionTint.feedback)
         }
         .disabled(!feedback.haptics)
-        .accessibilityHint("When something on screen is gently pulsing, like the dot while a companion is thinking, a soft tap pulses in time with it. Haptics must be on.")
+        .accessibilityHint("When something on screen is gently pulsing, like the dot while a character is thinking, a soft tap pulses in time with it. Haptics must be on.")
     }
 
     private func simpleTranscriptRow(searchStyle: Bool) -> some View {
@@ -877,7 +989,7 @@ struct SettingsView: View {
          * waiting on another build. Default OFF; harmless to leave on
          * if she ever prefers the plainer transcript. */
         Toggle(isOn: $simpleTranscript) {
-            Text(searchStyle ? searchLabel(.simpleTranscript, "Simple transcript (troubleshooting)") : "Simple transcript (troubleshooting)")
+            tileLabel(searchStyle ? searchLabel(.simpleTranscript, "Simple transcript (troubleshooting)") : "Simple transcript (troubleshooting)", systemImage: "doc.plaintext", tint: SectionTint.troubleshooting)
         }
         .accessibilityHint("Renders each message as plain text with no per-message actions, bubble, or timestamp. Turn this on if sending a message freezes the app -- it tells us whether the message rows are the cause. Message actions are still available from the Actions menu.")
     }
@@ -888,7 +1000,7 @@ struct SettingsView: View {
          * froze with every row a bare Text), so this one aims at the
          * only other text-measuring surface on the screen. */
         Toggle(isOn: $simpleComposer) {
-            Text(searchStyle ? searchLabel(.simpleComposer, "Simple composer (troubleshooting)") : "Simple composer (troubleshooting)")
+            tileLabel(searchStyle ? searchLabel(.simpleComposer, "Simple composer (troubleshooting)") : "Simple composer (troubleshooting)", systemImage: "square.and.pencil", tint: SectionTint.troubleshooting)
         }
         .accessibilityHint("Makes the message box a single line that scrolls instead of growing to five lines. Turn this on if sending still freezes the app -- it tells us whether the message box is the cause. You can still type and send messages of any length.")
     }
@@ -896,7 +1008,7 @@ struct SettingsView: View {
     @AppStorage("kadeVoicePortraits") private var voicePortraits = true
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {
-            Text(searchStyle ? searchLabel(.reduceMotion, "Reduce motion") : "Reduce motion")
+            tileLabel(searchStyle ? searchLabel(.reduceMotion, "Reduce motion") : "Reduce motion", systemImage: "pause.circle", tint: SectionTint.feedback)
         }
         .accessibilityHint("Turns off the app's decorative animations even if your iPhone's own Reduce Motion setting is off. Your system Reduce Motion setting is always honored on top of this.")
     }
@@ -905,7 +1017,7 @@ struct SettingsView: View {
         Button {
             showingKeyboardPhrases = true
         } label: {
-            Label("My Keyboard Phrases", systemImage: "keyboard")
+            opensScreenLabel("My Keyboard Phrases", systemImage: "keyboard", tint: SectionTint.kadeKeys)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.keyboardPhrases, "My Keyboard Phrases") : "My Keyboard Phrases")
@@ -914,23 +1026,23 @@ struct SettingsView: View {
 
     private func keyboardCleanRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $keyboardAutoClean) {
-            Text(searchStyle ? searchLabel(.keyboardClean, "Clean up keyboard dictation") : "Clean up keyboard dictation")
+            tileLabel(searchStyle ? searchLabel(.keyboardClean, "Clean up keyboard dictation") : "Clean up keyboard dictation", systemImage: "wand.and.stars", tint: SectionTint.kadeKeys)
         }
         .accessibilityHint("When the keyboard's Transcribe key takes your words, the transcript is tidied automatically -- filler words out, grammar fixed, your meaning untouched -- before it types. Turn off to type exactly what was heard.")
     }
 
     private func locationRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $locationShare.enabled) {
-            Text(searchStyle ? searchLabel(.location, "Share my location with your companions") : "Share my location with your companions")
+            tileLabel(searchStyle ? searchLabel(.location, "Share my location with your characters") : "Share my location with your characters", systemImage: "location.fill", tint: SectionTint.location)
         }
-        .accessibilityHint("Lets companions answer where am I, what's around me, and give walking directions, using this phone's location while the app is open.")
+        .accessibilityHint("Lets characters answer where am I, what's around me, and give walking directions, using this phone's location while the app is open.")
     }
 
     private func usageRow(searchStyle: Bool) -> some View {
         Button {
             showingUsage = true
         } label: {
-            Label("Usage & Balance", systemImage: "dollarsign.circle")
+            opensScreenLabel("Usage & Balance", systemImage: "dollarsign.circle", tint: SectionTint.account)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.usage, "Usage & Balance") : "Usage & Balance")
@@ -944,7 +1056,7 @@ struct SettingsView: View {
         Button {
             showingAccountSecurity = true
         } label: {
-            Label("Password & Account", systemImage: "key")
+            opensScreenLabel("Password & Account", systemImage: "key.fill", tint: SectionTint.account)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.accountSecurity, "Password & Account") : "Password & Account")
@@ -960,7 +1072,7 @@ struct SettingsView: View {
         Button {
             Task { await downloadMyData() }
         } label: {
-            Label(exportBusy ? "Gathering your data…" : "Download your data", systemImage: "arrow.down.doc")
+            tileLabel(exportBusy ? "Gathering your data…" : "Download your data", systemImage: "arrow.down.doc", tint: SectionTint.account)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.export, exportBusy ? "Gathering your data" : "Download your data") : (exportBusy ? "Gathering your data" : "Download your data"))
@@ -969,11 +1081,203 @@ struct SettingsView: View {
 
     private func diagnosticsRow(searchStyle: Bool) -> some View {
         ShareLink(items: KadeCrashWatch.shared.shareableFiles()) {
-            Label("Share diagnostics", systemImage: "stethoscope")
+            tileLabel("Share diagnostics", systemImage: "stethoscope", tint: SectionTint.support)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(searchStyle ? searchLabel(.diagnostics, "Share diagnostics") : "Share diagnostics")
         .accessibilityHint("Opens the share sheet with recent crash reports and a short trail of app events, so they can be sent for debugging. Conversations are never included.")
+    }
+
+    // MARK: - Sep 23 2026 redesign: tiles and arrows (B9)
+
+    /// One tile colour per section, like the iPhone's own Settings.
+    private enum SectionTint {
+        static let mainCharacter = Color.indigo
+        static let appIcon = Color.pink
+        static let voice = Color.purple
+        static let calls = Color.green
+        static let notifications = Color.red
+        static let memory = Color.purple
+        static let accessibility = Color.blue
+        static let feedback = Color.orange
+        static let kadeKeys = Color.gray
+        static let location = Color.teal
+        static let account = Color.brown
+        static let support = Color.gray
+        static let troubleshooting = Color.gray
+    }
+
+    /// A row title with its coloured tile. The tile is hidden from VoiceOver,
+    /// so the title stays the row's spoken label.
+    private func tileLabel(_ title: String, systemImage: String, tint: Color) -> some View {
+        Label(title, systemImage: systemImage)
+            .labelStyle(KadeSettingsIconStyle(tint: tint))
+    }
+
+    /// The arrow at the end of a row that opens a screen. Decoration: hidden.
+    /// Toggles never get one. High contrast gets the stronger grey.
+    private var openChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(highContrast ? HierarchicalShapeStyle.secondary : HierarchicalShapeStyle.tertiary)
+            .accessibilityHidden(true)
+    }
+
+    /// Tile, title, then the arrow, for a row that opens a screen. The whole
+    /// row width takes the tap, like the iPhone's own Settings.
+    private func opensScreenLabel(_ title: String, systemImage: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            tileLabel(title, systemImage: systemImage, tint: tint)
+            Spacer(minLength: 8)
+            openChevron
+        }
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Sep 23 2026 redesign: the app icon (C1)
+
+    /// One home-screen picture. The thumbnail and the checkmark are
+    /// decoration (hidden); the row says "Kiana app icon" and carries the
+    /// Selected trait when it's the current one.
+    private func appIconRow(_ choice: KadeAppIcon, searchStyle: Bool) -> some View {
+        let isCurrent = KadeAppIcon.matching(alternateIconName: currentAppIconName) == choice
+        let hint: String = choice == .classic
+            ? "Puts the classic K back on your home screen."
+            : "Puts \(choice.displayName)'s face on your home screen."
+        return Button {
+            chooseAppIcon(choice)
+        } label: {
+            HStack(spacing: 12) {
+                appIconThumbnail(choice)
+                Text(choice.displayName)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 8)
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(SectionTint.appIcon)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(searchStyle ? searchLabel(.appIcon, "\(choice.displayName) app icon") : "\(choice.displayName) app icon")
+        .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+        .accessibilityHint(hint)
+    }
+
+    /// A still, fixed 44-point square (the freeze-era rule: a picture that
+    /// arrives late never moves a row). Characters show their smile panel;
+    /// Classic shows the rounded K the launch screen uses.
+    private func appIconThumbnail(_ choice: KadeAppIcon) -> some View {
+        Group {
+            if let sheet = KadeCharacterFaceSheet.forAgent(choice.agentID) {
+                sheet.panel(.smile, side: 44)
+            } else {
+                Image("LaunchMark")
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityHidden(true)
+    }
+
+    /// Asks iOS to swap the home-screen icon. iOS shows its own short alert
+    /// too; the announcement says which picture landed, or that none did.
+    private func chooseAppIcon(_ choice: KadeAppIcon) {
+        guard UIApplication.shared.supportsAlternateIcons else {
+            UIAccessibility.post(notification: .announcement, argument: "This iPhone can't change the app icon.")
+            return
+        }
+        guard UIApplication.shared.alternateIconName != choice.alternateIconName else {
+            currentAppIconName = choice.alternateIconName
+            UIAccessibility.post(notification: .announcement, argument: "Your app icon is already \(choice.displayName).")
+            return
+        }
+        UIApplication.shared.setAlternateIconName(choice.alternateIconName) { error in
+            // UIKit may call back off the main queue.
+            DispatchQueue.main.async {
+                if let error {
+                    KadeBreadcrumbs.drop("app icon change to \(choice.displayName) failed: \(error.localizedDescription)")
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Your app icon didn't change. Please try again in a moment."
+                    )
+                } else {
+                    currentAppIconName = choice.alternateIconName
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Your app icon is now \(choice.displayName)."
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Sep 23 2026 redesign: the notification ask, Settings half (B13)
+
+    /// The status row, then the one button that changes it: "Turn on
+    /// notifications" if this phone was never asked, "Open iPhone Settings"
+    /// if the answer was No (iOS never asks twice). Nothing more when on.
+    /// The status row is plain text with no control inside, so combining it
+    /// is safe under the Amber rule. Its spoken label skips the search
+    /// prefix: the section is also called Notifications.
+    @ViewBuilder
+    private func notificationPermissionRows(searchStyle: Bool) -> some View {
+        LabeledContent {
+            Text(pushStatusText)
+        } label: {
+            tileLabel("Notifications", systemImage: "bell.fill", tint: SectionTint.notifications)
+        }
+        .accessibilityElement(children: .combine)
+        if pushStatus == .notDetermined {
+            Button("Turn on notifications") {
+                turnOnNotifications()
+            }
+            .accessibilityHint("Asks your iPhone to let Kade-AI send notifications, so a character can tell you when a long reply is ready, and can call you.")
+        } else if pushStatus == .denied {
+            Button("Open iPhone Settings") {
+                KadePushPermission.openSystemSettings()
+            }
+            .accessibilityHint("Notifications are off for Kade-AI. Turn them on in the Settings app, under Kade-AI.")
+        }
+    }
+
+    private var pushStatusText: String {
+        guard let pushStatus else { return "Checking" }
+        switch pushStatus {
+        case .notDetermined: return "Not set up yet"
+        case .denied: return "Off"
+        case .authorized, .provisional, .ephemeral: return "On"
+        @unknown default: return "On"
+        }
+    }
+
+    private func turnOnNotifications() {
+        KadePushPermission.request { granted in
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: granted
+                    ? "Notifications are on."
+                    : "Notifications are still off. You can turn them on later in the Settings app."
+            )
+            Task { await refreshPushStatus() }
+        }
+    }
+
+    /// Reads this phone's permission. Coming back from the Settings app
+    /// after "Open iPhone Settings" is the one change this screen didn't make
+    /// itself, so that one is spoken; `turnOnNotifications` speaks its own.
+    private func refreshPushStatus() async {
+        let status = await KadePushPermission.currentStatus()
+        let wasDenied = pushStatus == .denied
+        pushStatus = status
+        if wasDenied && status != .denied && status != .notDetermined {
+            UIAccessibility.post(notification: .announcement, argument: "Notifications are on.")
+        }
     }
 
     /// The long-task preference lives on the same per-user prefs doc as the
@@ -1093,6 +1397,55 @@ private struct NudgePrefsEnvelope: Decodable {
     let prefs: Prefs?
 }
 
+// MARK: - Settings row icon tiles (Sep 23 2026 redesign, B9)
+
+/// A Settings row label in the iPhone's own style: a white SF Symbol on a
+/// small rounded colour tile, then the title. Unlike `KadeTileLabelStyle`
+/// (the home tiles) it draws no arrow, because a switch row must not look
+/// like it opens a screen; rows that DO open one add their own. The tile is
+/// hidden from VoiceOver, so the title stays the spoken label. Solid tiles
+/// under high contrast and Reduce Transparency.
+struct KadeSettingsIconStyle: LabelStyle {
+    @KadeContrastPolicy private var highContrast: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var tint: Color
+    @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 29
+
+    /// Grows with Dynamic Type, capped so the largest sizes keep a sane row.
+    private var side: CGFloat { min(tileSide, 44) }
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: side * 0.24, style: .continuous)
+                    .fill(tileFill)
+                configuration.icon
+                    .font(.system(size: side * 0.55, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: side, height: side)
+            .accessibilityHidden(true)
+
+            configuration.title
+                // Row separators start under the text, as in the iPhone's Settings.
+                .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
+        }
+    }
+
+    private var tileFill: some ShapeStyle {
+        if highContrast || reduceTransparency {
+            // Solid, no gradient: maximum figure/ground separation.
+            return AnyShapeStyle(tint)
+        }
+        return AnyShapeStyle(
+            LinearGradient(
+                colors: [tint.opacity(0.95), tint.opacity(0.75)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        )
+    }
+}
+
 // MARK: - The ringtone picker's own screen (Part 85 — demoted from the main list)
 
 /// Part 75 (Aug 21 2026): which sound an agent CALL rings with -- the
@@ -1121,7 +1474,7 @@ struct RingtoneSettingsView: View {
                 }
                 .accessibilityHint("Stops the ringtone that's playing right now.")
             } footer: {
-                Text("Tap any tone to hear it and make it yours; tap Stop preview to hush it. An agent can pick a different tone for one specific scheduled call — every tone has a name they know.")
+                Text("Tap any tone to hear it and make it yours; tap Stop preview to hush it. A character can pick a different tone for one specific scheduled call — every tone has a name they know.")
             }
             ForEach(Self.ringtoneGroups, id: \.self) { group in
                 Section {
