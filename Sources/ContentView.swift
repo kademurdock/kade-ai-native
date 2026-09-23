@@ -74,6 +74,8 @@ struct ContentView: View {
     @ObservedObject private var router = IntentRouter.shared
     @ObservedObject private var chatPresence = KadeChatPresence.shared
     @ObservedObject private var unread = KadeUnread.shared
+    /// Part 278: "Update Kade-AI?" when this copy is behind (KadeUpdateCheck).
+    @ObservedObject private var updates = KadeUpdateCheck.shared
 
     /// The five tabs and each one's own place.
     @State private var tab: KadeTab = .talk
@@ -135,6 +137,7 @@ struct ContentView: View {
             consumePendingShare()
             if isSignedIn {
                 Task { await KadeUnread.shared.refresh(client: apiClient) }
+                Task { await KadeUpdateCheck.shared.check(client: apiClient) }
             }
         }
         .onAppear {
@@ -174,12 +177,29 @@ struct ContentView: View {
                 .tag(KadeTab.play)
             moreStack(user)
                 .tabItem { Label(KadeTab.more.title, systemImage: KadeTab.more.systemImage) }
-                .badge(unread.total)
+                .badge(unread.total + (updates.available == nil ? 0 : 1))
                 .tag(KadeTab.more)
         }
         .environment(\.kadeNavigation, navigation)
         .onAppear {
             LibraryNowPlaying.shared.bind(client: apiClient, voice: voiceService)
+        }
+        // Part 278: the update alert, on a view of its own (never two
+        // presentations on one view, the build-121 rule).
+        .background {
+            Color.clear
+                .alert(
+                    updates.prompt.map { updates.title(for: $0) } ?? "Update Kade-AI?",
+                    isPresented: updateAlertShowing,
+                    presenting: updates.prompt
+                ) { offer in
+                    Button("Update") { updates.openUpdate(offer) }
+                    if !offer.required {
+                        Button("Not now", role: .cancel) { updates.notNow(offer) }
+                    }
+                } message: { offer in
+                    Text(updates.message(for: offer))
+                }
         }
         .fullScreenCover(isPresented: $callingSpotter) {
             CallView(
@@ -752,6 +772,17 @@ struct ContentView: View {
     /// Agree take effect immediately. `&+=` because it only has to CHANGE.
     @State private var consentBump = 0
 
+    /// Part 278: the update alert waits while the data-use notice or a call
+    /// covers the tabs, and shows the moment they are gone.
+    private var updateAlertShowing: Binding<Bool> {
+        Binding(
+            get: { updates.prompt != nil && !consentPending && !callingSpotter && agentCallPayload == nil },
+            set: { showing in
+                if !showing { updates.prompt = nil }
+            }
+        )
+    }
+
     private var consentPending: Bool {
         _ = consentBump
         guard case .signedIn(let user) = auth.state else { return false }
@@ -1042,6 +1073,12 @@ struct ContentView: View {
                 UIAccessibility.post(notification: .announcement, argument: "Signed in as \(user.displayName).")
             }
             Task { await KadeUnread.shared.refresh(client: apiClient, force: true) }
+            // Part 278: after the launch chat has settled, see whether this
+            // copy is behind. The alert itself waits for the data-use notice.
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                await KadeUpdateCheck.shared.check(client: apiClient)
+            }
             // Session 26 chat-first launch: the moment a session lands
             // (cold-start restore or a fresh sign-in), open the main-agent
             // chat on the Talk tab — unless a Siri intent is already waiting

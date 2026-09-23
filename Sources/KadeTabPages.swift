@@ -214,6 +214,10 @@ struct MoreHomeView: View {
     @Environment(\.kadeNavigation) private var nav
     @EnvironmentObject private var auth: AuthService
     @ObservedObject private var unread = KadeUnread.shared
+    @ObservedObject private var updates = KadeUpdateCheck.shared
+    /// Part 278: what "Check for updates" found, shown as its caption and
+    /// spoken, so the answer is visible as well as heard.
+    @State private var updateCheckNote: String?
     @State private var showingWeb = false
     @State private var webLoadFailed = false
     @State private var showWebLoadAlert = false
@@ -245,6 +249,12 @@ struct MoreHomeView: View {
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 .accessibilityElement(children: .combine)
 
+                // Part 278: only while this copy is behind.
+                if let offer = updates.available {
+                    row("Update Kade-AI", icon: "arrow.down.app.fill", tint: .green, caption: "A newer version is ready in \(offer.storeName)",
+                        spoken: "Update Kade-AI", hint: "Opens \(offer.storeName) so you can install the newest version.") { updates.openUpdate(offer) }
+                }
+
                 row("Search everything", icon: "magnifyingglass", tint: .blue, caption: "Places, characters, chats, the Library",
                     spoken: "Search everything", hint: "Finds places in the app, characters, your chats and the Library.") { nav.open(.search) }
 
@@ -269,6 +279,12 @@ struct MoreHomeView: View {
                     spoken: "Tell Kade how it's going", hint: "Opens a short form that goes straight to Kade with your name on it.") { showingFeedback = true }
                 row("Open Kade-AI web", icon: "safari", tint: .blue, caption: "The full website, inside the app",
                     spoken: "Open Kade-AI web", hint: "Opens the full Kade-AI web app in a browser inside this app.") { showingWeb = true }
+                row("Check for updates", icon: "arrow.triangle.2.circlepath", tint: .green,
+                    caption: updateCheckNote ?? "You have version \(updates.installedDescription)",
+                    spoken: "Check for updates",
+                    hint: "Checks whether a newer Kade-AI is ready. You have version \(updates.installedDescription).") {
+                    Task { await checkForUpdates() }
+                }
 
                 // Session 24: server-gated; rendered only for an ADMIN account,
                 // so nobody else ever hears a section they can't use.
@@ -316,6 +332,27 @@ struct MoreHomeView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Check your connection and try again.")
+        }
+    }
+
+    /// Part 278: a check on demand. Behind: the app-wide "Update Kade-AI?"
+    /// alert answers. Otherwise the answer becomes this row's caption and is
+    /// spoken.
+    private func checkForUpdates() async {
+        let words: String?
+        switch await updates.check(client: apiClient, force: true) {
+        case .behind:
+            words = nil
+        case .upToDate:
+            words = "You have the newest version, \(updates.installedDescription)."
+        case .unknown:
+            words = "Couldn't check for updates right now. Try again in a minute."
+        case .notChecked:
+            words = "This copy of Kade-AI can't check for updates."
+        }
+        updateCheckNote = words
+        if let words {
+            UIAccessibility.post(notification: .announcement, argument: words)
         }
     }
 
