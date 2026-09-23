@@ -167,20 +167,22 @@ struct AgentPickerView: View {
             VStack(spacing: 0) {
                 searchField
                 Group {
+                    // Redesign B2: "character" is the everyday word, in what
+                    // people see and hear, on this whole screen.
                     if agentsService.isLoading && agentsService.agents.isEmpty {
-                        ProgressView("Loading agents…")
-                            .accessibilityLabel("Loading agents")
+                        ProgressView("Loading characters…")
+                            .accessibilityLabel("Loading characters")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let error = agentsService.loadError, agentsService.agents.isEmpty {
                         errorState(error)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if agentsService.agents.isEmpty {
-                        Text("No agents available.")
+                        Text("No characters available.")
                             .foregroundStyle(.secondary)
                             .padding()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if isSearching && filtered.isEmpty {
-                        Text("No agents match \"\(searchText)\".")
+                        Text("No characters match \"\(searchText)\".")
                             .foregroundStyle(.secondary)
                             .padding()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -189,7 +191,7 @@ struct AgentPickerView: View {
                     }
                 }
             }
-            .navigationTitle("Choose agent")
+            .navigationTitle("Choose a character")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -224,13 +226,13 @@ struct AgentPickerView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField("Search agents", text: $searchText)
+            TextField("Search characters", text: $searchText)
                 .focused($isSearchFieldFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .onSubmit { isSearchFieldFocused = false }
-                .accessibilityLabel("Search agents")
+                .accessibilityLabel("Search characters")
                 .accessibilityHint("Type a name to narrow the list below.")
             if !searchText.isEmpty {
                 Button {
@@ -263,10 +265,10 @@ struct AgentPickerView: View {
                             rowButton(for: agent)
                         }
                     } header: {
-                        Text("These ones have moving faces")
+                        Text("Characters with moving faces")
                             .accessibilityAddTraits(.isHeader)
                     } footer: {
-                        Text("Their faces move and change expression while they talk. A good place to pick your main agent.")
+                        Text("Their faces move and change expression while they talk. A good place to pick your main character.")
                     }
                 }
                 if !favoriteAgents.isEmpty {
@@ -371,12 +373,17 @@ struct AgentPickerView: View {
         // construction as the fix.
         .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
         .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
-        .accessibilityHint("Switches to this agent for your next message.")
+        .accessibilityHint("Switches to this character for your next message.")
     }
 
     private func row(for agent: KadeAgent) -> some View {
         let isSelected = agent.id == currentAgentId
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: 12) {
+            // Redesign B3: the character's face. Decoration: it hides itself
+            // from VoiceOver and takes no taps; the row's label above still
+            // starts with the name. A fixed 44 pt square, so a picture that
+            // arrives late never moves the row.
+            KadeCharacterFace(agentID: agent.id, name: agent.name, size: 44)
             VStack(alignment: .leading, spacing: 4) {
                 Text(agent.name)
                     .font(.body)

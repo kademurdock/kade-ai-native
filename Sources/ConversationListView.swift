@@ -8,12 +8,29 @@ import SwiftUI
 /// - Pagination is an explicit "Load more" button, not silent infinite
 ///   scroll — a predictable, discoverable action beats a scroll-triggered
 ///   fetch that a screen-reader user can't see coming.
+/// - Sep 23 2026 redesign: this is the ROOT of the Talk tab (A1). Rows show
+///   the character's face and name (B3) under date headings (B6), and the
+///   empty state has a real "Start a new chat" button (B10).
 struct ConversationListView: View {
+    /// Redesign A1: the Talk tab's own block (Call your Spotter first, her
+    /// standing rule, then Describe and Transcribe), passed in by the tab
+    /// root. When set, it is the FIRST section of the list, above the rows
+    /// and above the loading, error and empty states alike, so Spotter is
+    /// always the first thing on this screen. `nil` (plain
+    /// `ConversationListView()`) is the screen as it always was. `var` with a
+    /// default, not `let`, so the synthesized memberwise init takes it as a
+    /// defaulted parameter (the reasoning on
+    /// `ConversationDetailView.initialAgentId`).
+    var talkHeader: AnyView? = nil
+
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var apiClient: KadeAPIClient
+    /// Redesign B3: who each chat is with, for the row's "with Kiana" line
+    /// and its spoken label.
+    @EnvironmentObject private var agentsService: AgentsService
     // Session 11: drives navigation programmatically now instead of via
-    // NavigationLink(value:) -- see the row Button's doc comment in `list`
-    // for why.
+    // NavigationLink(value:) -- see the row Button's doc comment in
+    // `conversationButton(for:)` for why.
     @State private var selectedConversation: KadeConversation?
     /// Bookmarks (session 33, leftovers item 3): which conversation the
     /// tag-editor sheet is open FOR. Sheet-not-push, same reasoning as the
@@ -40,6 +57,18 @@ struct ConversationListView: View {
     /// conversations screen -- same `isPresented` destination pattern as
     /// `startingNewConversation` above.
     @State private var showingArchived = false
+    /// Redesign A1: as the Talk tab's root, the list gets covered by screens
+    /// none of the flags above know about (Spotter, Describe, the launch
+    /// chat, a chat opened from another tab all push through the tab's own
+    /// path), and leaving the tab hides it too. The session-24 rule (never
+    /// move focus while another screen sits on top of the list) has to see
+    /// those, so the list tracks itself: SwiftUI runs onDisappear when
+    /// something is pushed over it or its tab is left, and onAppear when it
+    /// is back. `listCoverings` counts the covers, so a refetch that started
+    /// on the way back can tell whether anything covered the list again
+    /// before it finished.
+    @State private var listOnScreen = false
+    @State private var listCoverings = 0
 
     // Session 14 (Kade: "maybe a rotor of actions in the conversations list
     // where you can delete stuff? Stuff like that.").
@@ -79,7 +108,13 @@ struct ConversationListView: View {
 
     var body: some View {
         Group {
-            if conversationsService.isLoadingList && conversationsService.conversations.isEmpty {
+            // Redesign A1: with the Talk header the screen is ALWAYS the
+            // list; loading, error and empty render as a row under the header
+            // (`listStateRow`), so the header keeps one identity, and
+            // VoiceOver keeps its place on it, when the first page lands.
+            if talkHeader != nil {
+                list
+            } else if conversationsService.isLoadingList && conversationsService.conversations.isEmpty {
                 ProgressView("Loading your conversations…")
                     .accessibilityLabel("Loading your conversations")
             } else if let error = conversationsService.listError, conversationsService.conversations.isEmpty {
@@ -126,7 +161,17 @@ struct ConversationListView: View {
             // this view, per NavigationLink), whether or not the fetch
             // above actually ran -- so re-opening the list a second time in
             // the same session still gets a predictable starting focus.
-            focusedConversationID = conversationsService.conversations.first?.id
+            // Redesign A1: only WITHOUT the Talk header. As the Talk tab's
+            // root, VoiceOver starts at the top, where Spotter is (her
+            // standing rule: Spotter first), so nothing is steered on appear.
+            // Coming back from a conversation still lands on its row (the
+            // `selectedConversation` and new-chat handlers below).
+            if talkHeader == nil {
+                focusedConversationID = conversationsService.conversations.first?.id
+            }
+            // Redesign B3: names for the rows' "with Kiana" line. A no-op
+            // once the roster is in, which every chat screen loads anyway.
+            await agentsService.loadIfNeeded()
         }
         .onChange(of: startingNewConversation) { was, isNow in
             // Session 22 LIVE BUG (Amber A: made a new chat, backed out,
@@ -139,6 +184,9 @@ struct ConversationListView: View {
             // focus on the newest row -- the chat she was just inside --
             // so backing out and going back in works the way it reads.
             if was && !isNow {
+                // Redesign A1: anything pushed over the list (or a tab
+                // switch) while this refetch waits bumps `listCoverings`.
+                let coveringsAtReturn = listCoverings
                 Task {
                     await conversationsService.loadFirstPage()
                     // Session 24 LIVE BUG (Kade: her newborn "New Chat"
@@ -155,7 +203,8 @@ struct ConversationListView: View {
                     // as the never-do rules in PROJECT_STATUS: never move
                     // list focus while another screen sits pushed on top of
                     // the list.
-                    if selectedConversation == nil && !startingNewConversation && !showingArchived {
+                    if selectedConversation == nil && !startingNewConversation && !showingArchived
+                        && listCoverings == coveringsAtReturn {
                         focusedConversationID = conversationsService.conversations.first?.id
                     }
                 }
@@ -171,7 +220,9 @@ struct ConversationListView: View {
             // ConversationDetailView), so only steer focus when this list
             // is actually the screen on top. Delete/archive (this guard's
             // real audience) always happen with the list on top anyway.
-            if selectedConversation == nil, !startingNewConversation, !showingArchived,
+            // Redesign A1: `listOnScreen` also covers what the Talk tab
+            // pushes through its own path, and other tabs.
+            if selectedConversation == nil, !startingNewConversation, !showingArchived, listOnScreen,
                let current = focusedConversationID,
                !conversationsService.conversations.contains(where: { $0.id == current }) {
                 focusedConversationID = conversationsService.conversations.first?.id
@@ -185,6 +236,10 @@ struct ConversationListView: View {
                 focusedConversationID = opened.id
             }
         }
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var filteredConversations: [KadeConversation] {
@@ -209,6 +264,10 @@ struct ConversationListView: View {
     /// appear here: the conversation list's job on open is to land you on
     /// your most recent conversation (deliberate, session 11), and hijacking
     /// that into a keyboard would undo a fix Kade specifically asked for.
+    /// Redesign A1: under the Talk header the field rides INSIDE the list,
+    /// below the header (see `list`), which is why the clear button is
+    /// `.borderless`: in a List row a default-style button turns the whole
+    /// row into its tap target, so a tap beside the field would clear it.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -232,6 +291,7 @@ struct ConversationListView: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Clear search")
             }
         }
@@ -244,96 +304,75 @@ struct ConversationListView: View {
 
     private var list: some View {
         VStack(spacing: 0) {
-            searchField
+            // Without the Talk header the search field stays pinned above
+            // the list, as it always was. With it, the field moves into the
+            // list under the header (`listBody`), so Spotter stays first.
+            if talkHeader == nil {
+                searchField
+            }
             listBody
+        }
+        // Redesign A1: see `listOnScreen`.
+        .onAppear { listOnScreen = true }
+        .onDisappear {
+            listOnScreen = false
+            listCoverings += 1
         }
     }
 
     private var listBody: some View {
         List {
-            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                searchSummaryRow
+            // Redesign A1: the Talk tab's own block (Call your Spotter first,
+            // her standing rule) is the FIRST section, above every state.
+            if let talkHeader {
+                Section {
+                    talkHeader
+                }
             }
-            ForEach(filteredConversations) { convo in
-                Button {
-                    selectedConversation = convo
-                } label: {
-                    row(for: convo)
+            if conversationsService.conversations.isEmpty {
+                // Only reached under the Talk header: without it, `body`
+                // shows these states full screen instead of the list.
+                Section {
+                    listStateRow
+                        .listRowSeparator(.hidden)
                 }
-                .buttonStyle(.plain)
-                .accessibilityFocused($focusedConversationID, equals: convo.id)
-                // Session 11 history: rows could be VoiceOver-SELECTED but
-                // not ACTIVATED; the fix landed on a plain Button driving
-                // local selection + .navigationDestination(item:), with
-                // children:.ignore + an explicit label -- and that .ignore
-                // half survived until today.
-                // Session 22 (Amber A, build 146): her "New Chat" row read
-                // fine but double-tap did NOTHING, while her longer-titled
-                // voice-chat row in the SAME list opened -- the exact
-                // layout-dependent signature of the build-139 Amber rule.
-                // children:.ignore on a Button costs it direct VoiceOver
-                // activation; double-tap degrades to a synthesized tap at a
-                // layout-dependent point that can miss per row shape and
-                // text size (server, data, and the strict decode were all
-                // live-exonerated first -- the failure had to be this row).
-                // A Button flattens its label natively and the explicit
-                // accessibilityLabel below still overrides the reading, so
-                // dropping .ignore is byte-identical to VoiceOver. Same fix
-                // 1bd0ccb applied to the admin + archived rows.
-                .accessibilityLabel(accessibleLabel(for: convo))
-                .accessibilityHint("Opens this conversation.")
-                // Rename/Archive/Delete live ONLY on `.swipeActions` below.
-                // Session 21g: they used to ALSO be declared as explicit
-                // `.accessibilityActions`, but `.swipeActions` already
-                // surface as VoiceOver custom actions on their own, so every
-                // action got announced TWICE in the Actions rotor (Kade:
-                // "delete and share... listed twice"). Removing the explicit
-                // set leaves exactly one, still one rotor flick from the row,
-                // with the swipe kept as the sighted affordance. Do NOT
-                // re-add `.accessibilityActions` alongside the swipe -- that
-                // is exactly what caused the duplication.
-                // Build 261: pin/unpin on the leading edge; surfaces in the
-                // Actions rotor like the others (no accessibilityActions --
-                // that would read twice).
-                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button {
-                        Task { await conversationsService.setPinned(id: convo.id, pinned: !convo.isPinned, title: convo.displayTitle) }
-                    } label: {
-                        Label(convo.isPinned ? "Unpin" : "Pin to top", systemImage: convo.isPinned ? "pin.slash" : "pin")
-                    }
-                    .tint(.orange)
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        deletingConversation = convo
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    Button {
-                        beginRename(convo)
-                    } label: {
-                        Label("Rename", systemImage: "pencil")
-                    }
-                    Button {
-                        Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
-                    } label: {
-                        Label("Archive", systemImage: "archivebox")
-                    }
-                    Button {
-                        sharingConversation = convo
-                    } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        taggingConversation = convo
-                    } label: {
-                        Label("Bookmark", systemImage: "bookmark")
+            } else {
+                if talkHeader != nil {
+                    Section {
+                        searchField
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowSeparator(.hidden)
                     }
                 }
-
-            }
-            if conversationsService.hasMore && searchText.isEmpty {
-                loadMoreRow
+                if isSearching {
+                    // Redesign B6: a search shows the flat filtered list, as
+                    // it always did, with no date groups.
+                    Section {
+                        searchSummaryRow
+                        ForEach(filteredConversations) { convo in
+                            conversationButton(for: convo)
+                        }
+                    }
+                } else {
+                    // Redesign B6: real headings (Pinned, Today, Yesterday,
+                    // This week, This month, Earlier), so the Headings rotor
+                    // jumps by date.
+                    ForEach(conversationGroups, id: \.title) { group in
+                        Section {
+                            ForEach(group.conversations) { convo in
+                                conversationButton(for: convo)
+                            }
+                        } header: {
+                            Text(group.title)
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                    }
+                }
+                if conversationsService.hasMore && searchText.isEmpty {
+                    Section {
+                        loadMoreRow
+                    }
+                }
             }
         }
         .listStyle(.plain)
@@ -405,6 +444,87 @@ struct ConversationListView: View {
         }
     }
 
+    /// One conversation row, wired the same way in every section (the date
+    /// groups and the flat search results), so the accessibility contract
+    /// has exactly one home (`AgentPickerView.rowButton(for:)`'s pattern).
+    private func conversationButton(for convo: KadeConversation) -> some View {
+        Button {
+            selectedConversation = convo
+        } label: {
+            row(for: convo)
+        }
+        .buttonStyle(.plain)
+        .accessibilityFocused($focusedConversationID, equals: convo.id)
+        // Session 11 history: rows could be VoiceOver-SELECTED but
+        // not ACTIVATED; the fix landed on a plain Button driving
+        // local selection + .navigationDestination(item:), with
+        // children:.ignore + an explicit label -- and that .ignore
+        // half survived until today.
+        // Session 22 (Amber A, build 146): her "New Chat" row read
+        // fine but double-tap did NOTHING, while her longer-titled
+        // voice-chat row in the SAME list opened -- the exact
+        // layout-dependent signature of the build-139 Amber rule.
+        // children:.ignore on a Button costs it direct VoiceOver
+        // activation; double-tap degrades to a synthesized tap at a
+        // layout-dependent point that can miss per row shape and
+        // text size (server, data, and the strict decode were all
+        // live-exonerated first -- the failure had to be this row).
+        // A Button flattens its label natively and the explicit
+        // accessibilityLabel below still overrides the reading, so
+        // dropping .ignore is byte-identical to VoiceOver. Same fix
+        // 1bd0ccb applied to the admin + archived rows.
+        .accessibilityLabel(accessibleLabel(for: convo))
+        .accessibilityHint("Opens this conversation.")
+        // Rename/Archive/Delete live ONLY on `.swipeActions` below.
+        // Session 21g: they used to ALSO be declared as explicit
+        // `.accessibilityActions`, but `.swipeActions` already
+        // surface as VoiceOver custom actions on their own, so every
+        // action got announced TWICE in the Actions rotor (Kade:
+        // "delete and share... listed twice"). Removing the explicit
+        // set leaves exactly one, still one rotor flick from the row,
+        // with the swipe kept as the sighted affordance. Do NOT
+        // re-add `.accessibilityActions` alongside the swipe -- that
+        // is exactly what caused the duplication.
+        // Build 261: pin/unpin on the leading edge; surfaces in the
+        // Actions rotor like the others (no accessibilityActions --
+        // that would read twice).
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                Task { await conversationsService.setPinned(id: convo.id, pinned: !convo.isPinned, title: convo.displayTitle) }
+            } label: {
+                Label(convo.isPinned ? "Unpin" : "Pin to top", systemImage: convo.isPinned ? "pin.slash" : "pin")
+            }
+            .tint(.orange)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                deletingConversation = convo
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            Button {
+                beginRename(convo)
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button {
+                Task { await conversationsService.archiveConversation(id: convo.id, title: convo.displayTitle) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            Button {
+                sharingConversation = convo
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                taggingConversation = convo
+            } label: {
+                Label("Bookmark", systemImage: "bookmark")
+            }
+        }
+    }
+
     /// One-line "what am I looking at" summary while a filter is active.
     /// Its own VoiceOver stop on purpose: without it, typing into the search
     /// field and getting silence gives no way to tell "nothing matched" from
@@ -432,29 +552,124 @@ struct ConversationListView: View {
         renamingConversation = convo
     }
 
+    /// Redesign B3: "Pinned. Grocery list, with Kiana, 2 hours ago". The face
+    /// on the row is decoration, so the label says who the chat is with.
     private func accessibleLabel(for convo: KadeConversation) -> String {
         let pin = convo.isPinned ? "Pinned. " : ""
-        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
-            return "\(pin)\(convo.displayTitle). \(relative)"
+        var parts = [convo.displayTitle]
+        if let name = characterName(for: convo) {
+            parts.append("with \(name)")
         }
-        return pin + convo.displayTitle
+        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
+            parts.append(relative)
+        }
+        return pin + parts.joined(separator: ", ")
+    }
+
+    /// Redesign B3: the character this chat is with, by name. nil when the
+    /// roster doesn't know (not loaded yet, a removed character, or none), and
+    /// then the row simply leaves "with …" out.
+    private func characterName(for convo: KadeConversation) -> String? {
+        let name = agentsService.name(for: convo.agentId)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    /// The row's visible second line: "with Kiana · 2 hours ago".
+    private func detailLine(for convo: KadeConversation) -> String? {
+        var parts: [String] = []
+        if let name = characterName(for: convo) {
+            parts.append("with \(name)")
+        }
+        if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
+            parts.append(relative)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func row(for convo: KadeConversation) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                if convo.isPinned {
-                    Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            // Redesign B3: the character's face. Decoration: it hides itself
+            // from VoiceOver and takes no taps (the row's label says the
+            // name), and it's a fixed 44 pt square, so a picture that
+            // arrives late never moves the row.
+            KadeCharacterFace(agentID: convo.agentId, name: characterName(for: convo) ?? "", size: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if convo.isPinned {
+                        Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(convo.displayTitle)
+                        .font(.body)
                 }
-                Text(convo.displayTitle)
-                    .font(.body)
+                if let detail = detailLine(for: convo) {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            if let relative = KadeDateFormatting.relative(from: convo.updatedAt) {
-                Text(relative)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        // The whole row takes the tap, the face and the space after the
+        // title included (the face ignores touches itself).
+        .contentShape(Rectangle())
+    }
+
+    /// Redesign B6: the dated groups, in the order they're shown. "This
+    /// week" is the previous 7 days, "This month" the previous 30.
+    private enum DateGroup: CaseIterable {
+        case today, yesterday, thisWeek, thisMonth, earlier
+
+        var title: String {
+            switch self {
+            case .today: return "Today"
+            case .yesterday: return "Yesterday"
+            case .thisWeek: return "This week"
+            case .thisMonth: return "This month"
+            case .earlier: return "Earlier"
             }
         }
+    }
+
+    /// Redesign B6: the rows under real headings: "Pinned" (only if any),
+    /// then the dated groups, each left out when empty. Every group keeps the
+    /// list's own order (newest first), and a pinned row sits only under
+    /// Pinned, so no conversation is ever listed twice (the list keys rows by
+    /// conversation id).
+    private var conversationGroups: [(title: String, conversations: [KadeConversation])] {
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: Date())
+        var pinned: [KadeConversation] = []
+        var dated: [DateGroup: [KadeConversation]] = [:]
+        for convo in conversationsService.conversations {
+            if convo.isPinned {
+                pinned.append(convo)
+            } else {
+                dated[dateGroup(for: convo, calendar: calendar, startOfToday: startOfToday), default: []].append(convo)
+            }
+        }
+        var groups: [(title: String, conversations: [KadeConversation])] = []
+        if !pinned.isEmpty {
+            groups.append((title: "Pinned", conversations: pinned))
+        }
+        for group in DateGroup.allCases {
+            if let rows = dated[group], !rows.isEmpty {
+                groups.append((title: group.title, conversations: rows))
+            }
+        }
+        return groups
+    }
+
+    /// By `updatedAt`. A date that won't parse goes to Earlier; one slightly
+    /// in the future (a phone clock behind the server's) counts as Today.
+    private func dateGroup(for convo: KadeConversation, calendar: Calendar, startOfToday: Date) -> DateGroup {
+        guard let date = KadeDateFormatting.date(from: convo.updatedAt) else { return .earlier }
+        if calendar.isDateInToday(date) { return .today }
+        if calendar.isDateInYesterday(date) { return .yesterday }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: startOfToday).day ?? Int.max
+        if days < 0 { return .today }
+        if days <= 7 { return .thisWeek }
+        if days <= 30 { return .thisMonth }
+        return .earlier
     }
 
     // No .accessibilityElement wrapping here: it's a plain Button ("Load
@@ -476,24 +691,57 @@ struct ConversationListView: View {
         }
     }
 
+    /// Loading, error or empty as ONE row under the Talk header, checked in
+    /// the same order `body` checks them when there's no header.
+    @ViewBuilder
+    private var listStateRow: some View {
+        if conversationsService.isLoadingList {
+            ProgressView("Loading your conversations…")
+                .accessibilityLabel("Loading your conversations")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical)
+        } else if let error = conversationsService.listError {
+            errorState(error)
+                .frame(maxWidth: .infinity)
+        } else {
+            emptyState
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Redesign B10: the empty screen teaches: what goes here, plus one
+    /// VISIBLE button to do it. (The audit: the old line pointed at a "New
+    /// Conversation" button that was only a pencil icon.) The words stay one
+    /// VoiceOver stop, and the button is their sibling. The old
+    /// `.accessibilityElement(children: .combine)` wraps the words only,
+    /// never the button (the Amber rule).
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 52))
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
-            Text("No conversations yet")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            // Session 11: used to say "Start a chat on the web app and
-            // it'll show up here" -- true when this was written, no longer
-            // true now that starting one is possible right here.
-            Text("Tap New Conversation above to start one.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                Text("No conversations yet")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                // Session 11: used to say "Start a chat on the web app and
+                // it'll show up here" -- true when this was written, no longer
+                // true now that starting one is possible right here.
+                Text("Start one with \(DefaultAgentStore.displayName), or anyone you like.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .accessibilityElement(children: .combine)
+            Button("Start a new chat") {
+                startingNewConversation = true
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityHint("Starts a new conversation.")
         }
         .padding()
-        .accessibilityElement(children: .combine)
     }
 
     private func errorState(_ message: String) -> some View {

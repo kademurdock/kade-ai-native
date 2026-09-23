@@ -20,6 +20,8 @@ struct BookmarksView: View {
     @State private var renameText = ""
     @State private var deletingTag: KadeTag?
     @State private var announcement: String?
+    /// Redesign B10: the empty shelf's "Go to your conversations" button.
+    @Environment(\.kadeNavigation) private var nav
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: TagsService(client: apiClient))
@@ -33,14 +35,23 @@ struct BookmarksView: View {
                     // arriving here for the first time hears what
                     // bookmarks are and where the "add" lives, instead
                     // of an unexplained empty list.
-                    Text(
-                        "No bookmarks yet. Add one below, then attach it to any "
-                        + "conversation from the conversation list: touch and hold "
-                        + "a conversation (or use the VoiceOver rotor's actions) "
-                        + "and choose Bookmark."
-                    )
-                    .foregroundStyle(.secondary)
+                    // Redesign B10: every empty screen teaches, with one
+                    // line saying what goes here and one button to go do it.
+                    // The words are one stop and the button is its own row,
+                    // never folded into the text (the Amber rule).
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Nothing bookmarked yet")
+                            .font(.headline)
+                        Text("Bookmark a conversation from its row actions in your conversation list, and it shows up here, grouped by tag.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                     .accessibilitySortPriority(1)
+                    Button("Go to your conversations") {
+                        nav.select(.talk)
+                    }
+                    .accessibilitySortPriority(1)
+                    .accessibilityHint("Switches to the Talk tab, where your conversations are.")
                 }
                 ForEach(service.tags) { tag in
                     NavigationLink(value: tag) {
