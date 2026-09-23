@@ -295,7 +295,7 @@ struct MoreHomeView: View {
         .task { await unread.refresh(client: apiClient) }
         .refreshable { await unread.refresh(client: apiClient, force: true) }
         .sheet(isPresented: $showingFeedback) {
-            FeedbackReportView(apiClient: apiClient)
+            FeedbackReportView(apiClient: apiClient, entry: "how-its-going")
         }
         .sheet(isPresented: $showingWeb) {
             SafariView(url: URL(string: "https://kademurdock.com")!, loadFailed: $webLoadFailed)

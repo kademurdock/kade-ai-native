@@ -29,15 +29,24 @@ final class FeedbackReportService {
     private let client: KadeAPIClient
     init(apiClient: KadeAPIClient) { client = apiClient }
 
-    func submit(category: String, subject: String, detail: String) async throws {
+    /// `entry` names the door the report came through: nil for Help's "Report
+    /// a problem", "how-its-going" for the More tab's "Tell Kade how it's
+    /// going" (Sep 23 2026 redesign). The platform, app version and phone
+    /// model ride along (fork Part 269, `feedbackClientFields`) so the board
+    /// can tell an iPhone report from an Android or web one.
+    func submit(category: String, subject: String, detail: String, entry: String? = nil) async throws {
         var req = client.request(path: "api/kade/feedback", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String] = [
+        var body: [String: String] = [
             "category": category,
             "subject": subject,
             "detail": detail,
             "surface": "app",
+            "platform": "ios",
+            "appVersion": Self.appVersion,
+            "device": Self.deviceDescription,
         ]
+        if let entry { body["entry"] = entry }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
@@ -46,10 +55,30 @@ final class FeedbackReportService {
             throw ReportError(message: message ?? "Couldn't save your report. Try again.")
         }
     }
+
+    static var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
+    /// "iPhone15,2, iOS 18.6": the model identifier, not a marketing name,
+    /// because it needs no lookup table that goes stale.
+    static var deviceDescription: String {
+        var info = utsname()
+        uname(&info)
+        let model = withUnsafePointer(to: &info.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+        }
+        return "\(model), iOS \(UIDevice.current.systemVersion)"
+    }
 }
 
 struct FeedbackReportView: View {
     let apiClient: KadeAPIClient
+    /// nil = Help's "Report a problem"; "how-its-going" = the More tab's
+    /// "Tell Kade how it's going", which opens on Feedback rather than Bug.
+    var entry: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var category = "bug"
@@ -70,7 +99,9 @@ struct FeedbackReportView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Found something broken, or wishing for something new? Say it here — it goes straight to Kade with your name on it, so she can follow up.")
+                    Text(entry == "how-its-going"
+                         ? "Tell Kade how it's going: something you love, something that's hard to find, something broken, or an idea. It goes straight to her with your name on it, so she can follow up."
+                         : "Found something broken, or wishing for something new? Say it here — it goes straight to Kade with your name on it, so she can follow up.")
                         .font(.body)
                         .foregroundStyle(.secondary)
 
@@ -126,8 +157,11 @@ struct FeedbackReportView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Report a problem")
+            .navigationTitle(entry == "how-its-going" ? "How it's going" : "Report a problem")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if entry == "how-its-going", subject.isEmpty, detail.isEmpty { category = "feedback" }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -145,7 +179,8 @@ struct FeedbackReportView: View {
             try await service.submit(
                 category: category,
                 subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
-                detail: detail.trimmingCharacters(in: .whitespacesAndNewlines)
+                detail: detail.trimmingCharacters(in: .whitespacesAndNewlines),
+                entry: entry
             )
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()
