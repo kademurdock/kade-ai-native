@@ -338,6 +338,21 @@ struct SpeechStreamer {
         // otherwise cost a synthesis call to say nothing.
         guard piece.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
 
+        // Preserve the instruction in force at the END of this piece. The
+        // opening instruction still governs its first words, but cannot undo
+        // a later change (or reset) when the next provider request begins.
+        defer {
+            if let last = lastDirection(of: piece) {
+                if Self.isResetTag(last) {
+                    clearCarry()
+                } else {
+                    carriedDirection = last
+                    carriedPieces = 0
+                    carriedChars = 0
+                }
+            }
+        }
+
         if let lead = leadingDirection(of: piece) {
             /* PART 92.11 — REMEMBER THE DIRECTION, BUT NEVER SPEAK IT ALONE.
              *
@@ -426,6 +441,19 @@ struct SpeechStreamer {
         let inner = String(piece[piece.index(piece.startIndex, offsetBy: 3)..<close.lowerBound])
             .trimmingCharacters(in: .whitespaces)
         return Self.isNonVerbalSound(inner) ? nil : inner
+    }
+
+    private func lastDirection(of piece: String) -> String? {
+        var position = piece.startIndex
+        var last: String?
+        while let open = piece.range(of: "%%%", range: position..<piece.endIndex),
+              let close = piece.range(of: "%%%", range: open.upperBound..<piece.endIndex) {
+            let inner = String(piece[open.upperBound..<close.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !inner.isEmpty && !Self.isNonVerbalSound(inner) { last = inner }
+            position = close.upperBound
+        }
+        return last
     }
 
     /* ⭐ PART 95 (Aug 28 2026) — THE SOUND LIST CATCHES UP WITH THE PROXY'S.
