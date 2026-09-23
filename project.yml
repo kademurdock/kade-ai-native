@@ -76,6 +76,9 @@ targets:
       # Commented, not deleted: an unsignable target fails EVERY build, not
       # just this feature's. Full tree: branch `share-extension-parked`.
       - target: KadeShare
+      # Sep 23 2026 redesign (C2, C3, C7): the widget extension, embedded the
+      # same way. It has no App Group, so nothing here waits on the portal.
+      - target: KadeWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
@@ -109,6 +112,9 @@ targets:
           UIImageName: LaunchMark
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
+        # Sep 23 2026 redesign (C3): lets the app start the lock-screen
+        # progress cards (KadeJobActivity.swift) that KadeWidgets draws.
+        NSSupportsLiveActivities: true
         # KADE KEYS dictate (July 31 2026): the keyboard bounces here to
         # record (iOS forbids keyboard microphones, the Wispr dance).
         CFBundleURLTypes:
@@ -287,6 +293,43 @@ targets:
               NSExtensionActivationSupportsMovieWithMaxCount: 1
               NSExtensionActivationSupportsFileWithMaxCount: 1
               NSExtensionActivationSupportsText: true
+
+  # WIDGETS (Sep 23 2026 redesign C2, C3, C7) — one WidgetKit extension for
+  # the "Talk to your character" widget, the long-job Live Activity card and
+  # the iOS 18 "Call your Spotter" control. Fourth bundle id, fetched with
+  # --create like the others (codemagic.yaml).
+  #
+  # NO entitlements and NO App Group, on purpose. Assigning a group to a new
+  # App ID is the portal-only step that parked KadeShare for days (see its
+  # story above). So the widget shows only what it knows without the app's
+  # data (the four drawn faces and the time of day), and every tap is a
+  # kadeai:// link the app routes. Adding a group here later means that same
+  # portal step FIRST, then the entitlement, never the other way round.
+  KadeWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - WidgetExtension
+      # The Live Activity's shape: one file in both processes, the same
+      # one-contract-file rule as KadeShareStore.swift above.
+      - path: Sources/KadeJobActivityAttributes.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.widgets
+        MARKETING_VERSION: "2.1.0"
+        CURRENT_PROJECT_VERSION: 100
+        DEVELOPMENT_TEAM: JQPWZ2RL9P
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Manual
+    info:
+      path: WidgetExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Kade-AI
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
   # GAP 3 (Aug 2026) — Apple's performAccessibilityAudit, run in CI on the
   # Codemagic Mac. Simulator only, never signed, never published; see
