@@ -83,6 +83,107 @@ struct KadePaintedHeader: View {
     }
 }
 
+// MARK: - Captioned tiles and rows (B1)
+
+/// B1, "every tile says what it does, on screen". The home tiles' fun names
+/// (The Parlor, Kade's Clubhouse, Matchmaker…) explained themselves only in
+/// VoiceOver hints, so a sighted newcomer saw names and no meaning. This is the
+/// two-up grid tile with a short plain caption under the title. The caption is
+/// HIDDEN from VoiceOver on purpose: every tile's hint already says the same
+/// thing, and hearing it twice would make the grid slower by ear, not clearer.
+struct KadeCaptionedTileLabelStyle: LabelStyle {
+    @KadeContrastPolicy private var highContrast: Bool
+    var tint: Color
+    var caption: String
+    @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 44
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: tileSide * 0.24, style: .continuous)
+                    .fill(highContrast ? AnyShapeStyle(tint) : AnyShapeStyle(LinearGradient(
+                        colors: [tint.opacity(0.95), tint.opacity(0.7)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing)))
+                configuration.icon
+                    .font(.system(size: min(tileSide, 48) * 0.5, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: min(tileSide, 48), height: min(tileSide, 48))
+            .accessibilityHidden(true)
+
+            configuration.title
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+
+            Text(caption)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+    }
+}
+
+/// The full-width row version: icon tile, title with an optional caption under
+/// it, an optional "2 new" badge, and the chevron. Caption, badge, tile and
+/// chevron are all decorative; the Button's own label (set at the call site)
+/// carries the words, including the count.
+struct KadeRowLabelStyle: LabelStyle {
+    @KadeContrastPolicy private var highContrast: Bool
+    var tint: Color
+    var caption: String? = nil
+    var badge: Int = 0
+    @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 36
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: tileSide * 0.24, style: .continuous)
+                    .fill(highContrast ? AnyShapeStyle(tint) : AnyShapeStyle(LinearGradient(
+                        colors: [tint.opacity(0.95), tint.opacity(0.7)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing)))
+                configuration.icon
+                    .font(.system(size: min(tileSide, 48) * 0.5, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: min(tileSide, 48), height: min(tileSide, 48))
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                configuration.title
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let caption {
+                    Text(caption)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityHidden(true)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            KadeNewBadge(count: badge)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 // MARK: - Unread badge (B11)
 
 /// "2 new" as a small capsule. Decorative: the row that shows it must also put

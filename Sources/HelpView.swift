@@ -23,12 +23,44 @@ struct HelpView: View {
     /// keeps every existing `HelpView()` call site compiling untouched.
     var apiClient: KadeAPIClient? = nil
     @State private var showingReport = false
+    @Environment(\.kadeNavigation) private var nav
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                Text("Everything Kade-AI can do, and how to get to it. Turn on the Headings rotor to jump between sections.")
+                Text("Everything Kade-AI can do, and how to get to it. With VoiceOver, turn on the Headings rotor to jump between sections; without it, just scroll.")
                     .font(.body)
+
+                /* Sep 23 2026 redesign (A4): "Where is…?" first, because
+                 * "where did that go" is the question people actually open
+                 * Help with. Each answer is a button that takes you there.
+                 * Signed out there is nowhere to go yet, so it waits. */
+                if apiClient != nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Where is…?")
+                            .font(.title3.bold())
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(HelpPlace.all) { place in
+                            Button {
+                                nav.open(place.route)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(place.thing)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
+                                    Text(place.whereItIs)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(place.thing): \(place.whereItIs)")
+                            .accessibilityHint("Takes you there.")
+                        }
+                    }
+                }
 
                 // Session 23: the tester loop, closed -- Amber's first-day
                 // bugs traveled by mouth; now any tester can file from the
@@ -69,7 +101,7 @@ struct HelpView: View {
                     }
                 }
 
-                Text("Still stuck? Open Kade-AI web from the home screen and use the help pages there, or just ask any companion — they know how the app works.")
+                Text("Still stuck? Search everything on the More tab finds any place in the app by the word you'd use. Or just ask any character — they know how the app works.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -83,6 +115,29 @@ struct HelpView: View {
             }
         }
     }
+}
+
+/// One answer in Help's "Where is…?" list (redesign A4): the thing people are
+/// looking for, where it lives now, and the route that takes them there.
+struct HelpPlace: Identifiable {
+    let thing: String
+    let whereItIs: String
+    let route: HomeRoute
+    var id: String { thing }
+
+    static let all: [HelpPlace] = [
+        HelpPlace(thing: "Your conversations", whereItIs: "Talk tab, under Call your Spotter", route: .conversations),
+        HelpPlace(thing: "Your books, tapes and radio", whereItIs: "Library tab", route: .readingRoom),
+        HelpPlace(thing: "Making a song or a scene", whereItIs: "Create tab, Sound Booth", route: .soundBooth),
+        HelpPlace(thing: "Things you've made", whereItIs: "Create tab, My Creations", route: .myCreations),
+        HelpPlace(thing: "Games", whereItIs: "Play tab, The Parlor", route: .parlor),
+        HelpPlace(thing: "Family voice rooms", whereItIs: "Play tab, Kade's Clubhouse", route: .lounge),
+        HelpPlace(thing: "Meeting new characters", whereItIs: "Play tab, Marketplace", route: .marketplace),
+        HelpPlace(thing: "Reminders", whereItIs: "More tab, Alerts", route: .alerts),
+        HelpPlace(thing: "News from Kade", whereItIs: "More tab, Announcements", route: .announcements),
+        HelpPlace(thing: "Ringtone, voice speed, your main character, app icon", whereItIs: "More tab, Settings", route: .settings),
+        HelpPlace(thing: "Anything else", whereItIs: "More tab, Search everything", route: .search),
+    ]
 }
 
 struct HelpEntry: Identifiable {
@@ -101,81 +156,87 @@ struct HelpSection: Identifiable {
         // a plain-language entry here -- newest first, what changed and what
         // to try -- so she hears it in-app instead of digging through chat
         // history. KEEP THIS CURRENT: every future batch should rewrite the
-        // newest entry before the build fires, and collapse older ones.
+        // newest entry before the build fires, and collapse older ones. The
+        // one-time card on the Talk tab (KadeWhatsNew.swift) says the same
+        // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build",
-                body: "Kade Keys learned to take dictation \u{2014} the keyboard's big Dictate key bounces into Kade-AI, you talk, Deepgram cleans it up, and one swipe back later the words type themselves right where your cursor was (Allow Full Access on; without it they land on the clipboard instead). Debate rooms throw parties now: the host opens the doors from the share button and hands out a four-character code, friends join from the Debate Room screen, talk in the room, ask for turns \u{2014} and every phone hears every line in the cast's own voices. And turns went patient for real: the app asks for a turn and checks back while the server thinks \u{2014} a Deep Think turn can reason for five whole minutes and nothing hangs up on it."
+                title: "Newest build: an easier layout",
+                body: "Everything now lives in five tabs along the bottom of the screen: Talk, Library, Create, Play and More. Each tab keeps your place, so going to Talk and back to Library lands you right where you were, and tapping the tab you're already on takes you back to its start. The app still opens into a chat with your main character, Call your Spotter is still the first button on the Talk tab, and backing out of a chat still lands on your conversations, now grouped by day with each character's face beside them. Your book keeps playing while you move around the app, with a small Now Playing bar above the tabs, and it pauses by itself for a voice message or a call. New too: Search everything, a Where is list at the top of Help, little new badges on Alerts and Announcements, a friendlier first chat with starter lines, a Sound Booth that asks what you want to make, and in Settings, your pick of app icon: Kiana, Harley, Della or Lilly's face."
             ),
             HelpEntry(
-                title: "The build before",
-                body: "A stop button for voices in chat and the Debate Room \u{2014} always in the same spot, skips ahead when the debate's running itself. Debate clips became pure dialogue (VoiceOver rows still say the names), slow turns stopped being called failures, and thinking got real room. Before that: The Debate Room grew a voice and a will of its own. Every new line now plays out loud in that character's own voice; \u{2018}Play this line\u{2019} and \u{2018}Play from here\u{2019} on any line catch you up on demand; Keep it going runs the debate by itself in stretches of twelve turns, each clip finishing before the next begins; the brain toggle makes every turn a Deep Think turn; and you can add or remove characters mid-debate, with the Narrator noting arrivals and exits. Also in this build: when a reply dies on the server, the transcript now says so plainly \u{2014} \u{2018}the thinking engine was jammed up, ask again\u{2019} \u{2014} instead of blaming tool activity."
-            ),
-            HelpEntry(
-                title: "Two builds back",
-                body: "Kade Keys arrived: a custom keyboard with big, spoken quick phrases plus globe, space and delete \u{2014} add it under Settings, General, Keyboard. And the build before that brought two new home tiles. Bookmarks: put a tag on any conversation from the conversation list \u{2014} flick to Bookmark in the Actions rotor \u{2014} then find everything carrying that tag gathered on the Bookmarks screen. Prompts: your saved prompt library, native \u{2014} browse or search, hear the full text, and Use in a new chat drops the prompt into the message box pre-typed. The context meter grew up too: when the gauge appears, the numbers come from the server's own math instead of the app's rough estimate."
+                title: "Recently",
+                body: "The four main characters got real faces that move while they talk, at the top of every conversation. The Library arrived: books read aloud by a voice you pick, plus the family archive of tapes, radio, commercials and described videos. The Sound Booth writes and sings whole songs, scenes with several voices, and sound effects. Kade Keys learned to take dictation, and debate rooms can throw parties with a four-character code."
             ),
             HelpEntry(
                 title: "Earlier",
-                body: "Kade's Clubhouse went fully native, with hidden passcode-only Hotel rooms, and the Game Room folded into the Parlor. The Clubhouse's shared jukebox with radio fights and personal volume, private Hotel rooms with speakable passcodes, and companion guests who talk in rooms. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Recording that stops itself only after ten silent seconds. Report a problem at the top of this Help screen. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Spotter call audio fixed, with a chirp when audio starts flowing. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Game Room, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
+                body: "Kade's Clubhouse went fully native, with hidden passcode-only Hotel rooms, and the Game Room folded into the Parlor. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Report a problem from Help or the More tab. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
             ),
         ]),
         HelpSection(title: "Getting around", entries: [
             HelpEntry(
-                title: "The home screen",
-                body: "Sign in once and the app remembers you. Everything is grouped in three sections you can jump between with the Headings rotor: Talk holds Call your Spotter, Your conversations, and Alerts. Tools holds Transcribe, Describe, Matchmaker, The Parlor (with the Game Room's standings inside it), Kade's Clubhouse, Debate Room, Agent Builder, The Marketplace, Bookmarks, The Prompt Library, My Creations, and the Wall of Fame. Settings and help holds Settings, this help, the full web app, and Sign out."
+                title: "The five tabs",
+                body: "The bar along the bottom has five tabs. Talk holds Call your Spotter, Talk to your main character, Describe, Transcribe, and all your conversations. Library holds books read aloud, tapes, radio and the family archive. Create holds the Sound Booth, My Creations, the Wall of Fame, Agent Builder and the Prompt Library. Play holds The Parlor's games, Kade's Clubhouse, the Debate Room, the Matchmaker and the Marketplace. More holds search, Alerts, Announcements, Agent work, Bookmarks, Settings, this help, a way to tell Kade how it's going, the web app, and Sign out. With VoiceOver each one reads as, for example, Library, tab, 2 of 5. The bar hides inside a conversation, where the message box needs the room."
+            ),
+            HelpEntry(
+                title: "Search everything",
+                body: "Search everything is the magnifying glass at the top of Talk, Library, Create and Play, and the second row on More. Type the word you'd use yourself: ringtone finds Settings, games finds The Parlor, a name like Harley starts a chat with him, and a book title searches the Library. Results come in groups, each with its own heading."
             ),
             HelpEntry(
                 title: "Your conversations",
-                body: "Every chat you've had, newest first, including the written version of every call. Double-tap a conversation to open it. There's a search field above the list that filters what's loaded, and the archive box button up top holds everything you've archived — restorable any time."
+                body: "Every chat you've had, newest first and grouped by day: Pinned, Today, Yesterday, This week, This month and Earlier, each a heading you can jump between. Each row shows who the chat is with. Double-tap a conversation to open it, or just tap it without VoiceOver. There's a search field above the list that filters what's loaded, and the archive box button up top holds everything you've archived, restorable any time."
             ),
             HelpEntry(
                 title: "Bookmarks",
-                body: "Bookmarks are tags for conversations. Focus any conversation row, flick down through the Actions rotor to Bookmark, and check off the tags you want on it \u{2014} or type a brand-new one right there. The Bookmarks tile on the home screen lists every tag with a count, and opening a tag shows exactly the conversations carrying it. Deleting a bookmark never touches the conversations themselves."
+                body: "Bookmarks are tags for conversations. With VoiceOver, focus any conversation row, flick down through the Actions rotor to Bookmark, and check off the tags you want on it, or type a brand-new one right there. Without VoiceOver, swipe the row to the left and tap Bookmark. Bookmarks on the More tab lists every tag with a count, and opening a tag shows exactly the conversations carrying it. Deleting a bookmark never touches the conversations themselves."
             ),
             HelpEntry(
                 title: "The Prompt Library",
-                body: "The Prompts tile holds saved prompts \u{2014} yours and any shared with you. Open one to hear the whole text, then Use in a new chat: you land in a fresh conversation with the prompt already typed into the message box, ready to send as-is or edit first. Save a new prompt lives at the bottom of the library list; name and text are all it needs."
+                body: "Prompts, on the Create tab, holds saved prompts, yours and any shared with you. Open one to hear the whole text, then Use in a new chat: you land in a fresh conversation with the prompt already typed into the message box, ready to send as-is or edit first. Save a new prompt lives at the bottom of the library list; name and text are all it needs."
             ),
             HelpEntry(
                 title: "Actions on a conversation",
-                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Rename, Archive, Delete, Share and Bookmark. Sighted users can swipe the row sideways for the same things. Archive tucks a chat away without deleting it — find it again under the archive box button, where Restore brings it home."
+                body: "With VoiceOver, focus a conversation row and flick down through the Actions rotor for Pin, Rename, Archive, Delete, Share and Bookmark. Without VoiceOver, swipe the row sideways for the same things: right to pin, left for the rest. Archive tucks a chat away without deleting it; find it again under the archive box button, where Restore brings it home."
             ),
             HelpEntry(
                 title: "Starting a new chat",
-                body: "The pencil button in the conversation list starts a fresh conversation. Whoever you were last talking to carries over until you pick someone else."
+                body: "Talk to your main character, near the top of the Talk tab, starts a fresh conversation with them; the pencil button in the conversation list does the same. A new chat says hello with a few starter lines: tap one to put it in the message box, change it if you like, then send. If you'd rather carry on from before, Pick up where you left off opens your last conversation with that character."
             ),
         ]),
         HelpSection(title: "Chatting", entries: [
             HelpEntry(
                 title: "Sending a message",
-                body: "Type in the box at the bottom and activate Send. If a send fails you'll get a Retry button that resends exactly what you wrote — you don't have to type it again."
+                body: "Type in the box at the bottom and activate Send. If a send fails you'll get a Retry button that resends exactly what you wrote, so you don't have to type it again."
             ),
             HelpEntry(
                 title: "Talking instead of typing",
-                body: "The microphone button next to the composer records what you say, turns it into text, and drops it into the box so you can check it before sending."
+                body: "The microphone button next to the message box records what you say, turns it into text, and drops it into the box so you can check it before sending."
+            ),
+            HelpEntry(
+                title: "Thinking: Auto, Deep or Fast",
+                body: "The brain button beside the message box says how hard your character thinks. Auto decides per question, Deep always takes its time for careful answers, and Fast always answers quickly. It stays how you set it until you change it."
             ),
             HelpEntry(
                 title: "Actions on a message",
-                body: "Focus any message and flick down through the Actions rotor: Copy Text, Play as Voice Message, Share Text, Save Voice Message, and — on the most recent turn only — Edit and Resend, Regenerate Reply, and Delete Message."
+                body: "With VoiceOver, focus any message and flick down through the Actions rotor: Copy Text, Play as Voice Message, Share Text, Save Voice Message, and, on the most recent turn only, Edit and Resend, Regenerate Reply, and Delete Message. Without VoiceOver, the Message actions button, the circle with three dots under each message, opens the same list."
             ),
             HelpEntry(
                 title: "Why Edit and Delete only work on the newest messages",
                 body: "The app shows your conversation as one straight line in the order it happened. Editing or deleting something from the middle would leave an answer to a question that no longer exists, so those actions are deliberately limited to the latest turn."
             ),
             HelpEntry(
-                title: "Switching companions",
-                body: "The companion button at the top of a conversation opens the picker. It lands you straight in a search field with the keyboard up — start typing a name, or dismiss the keyboard to browse Recent and the category sections underneath."
+                title: "Switching characters",
+                body: "The Talking to row just above the message box opens the character picker, and so does tapping the face at the top of the conversation. The picker lands you in a search field with the keyboard up: start typing a name, or put the keyboard away to browse the characters with moving faces, your favorites, and the sections underneath."
             ),
         ]),
-        HelpSection(title: "Voice messages", entries: [
+        HelpSection(title: "Hearing replies", entries: [
             HelpEntry(
                 title: "Hearing replies out loud",
-                body: "Turn Voice messages on in a conversation and every reply is spoken in that companion's own voice as it arrives. It's a toggle — VoiceOver reads its value as On or Off."
+                body: "Turn Hear replies on in a conversation and every reply is spoken in that character's own voice as it arrives. It's a switch; VoiceOver reads it as On or Off. Settings, Hear replies by default, turns it on for every new chat."
             ),
             HelpEntry(
-                title: "Speed",
-                body: "The speed control beside the toggle runs from 0.75 up to 2 times. It takes effect straight away, even in the middle of a clip, and it's remembered next time."
+                title: "Voice speed",
+                body: "The speed button beside Hear replies runs from 0.75 up to 2 times. It takes effect straight away, even in the middle of a clip, and it's remembered next time."
             ),
             HelpEntry(
                 title: "Saving one",
@@ -185,27 +246,27 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Calling", entries: [
             HelpEntry(
                 title: "Starting a call",
-                body: "The call button at the top of any conversation starts a real-time voice call with that companion. Just talk — there's no button to hold."
+                body: "The call button at the top of any conversation starts a real-time voice call with that character. Just talk; there's no button to hold."
             ),
             HelpEntry(
                 title: "Interrupting",
-                body: "Just start talking over her and she stops, the same way the phone line has always worked — she tries to ignore the room and only stops for an actual word, so a TV or your screen reader shouldn't set her off. Stop Talking is still there for the times you'd rather not make a sound, and it's the only thing that works while your microphone is muted, since a muted mic gives her nothing to hear."
+                body: "Just start talking over her and she stops, the same way the phone line has always worked. She tries to ignore the room and only stops for an actual word, so a TV or your screen reader shouldn't set her off. Stop Talking is still there for the times you'd rather not make a sound, and it's the only thing that works while your microphone is muted, since a muted mic gives her nothing to hear."
             ),
             HelpEntry(
                 title: "Deep Think, mid-conversation",
-                body: "Deep Think on the call screen is for when you ask something you'd rather she took her time on. Double-tap it, ask your question, and she thinks it through instead of answering straight off. It turns itself off after that one answer, so the rest of the call stays quick — and you can say \"deep think on\" out loud instead if your hands are busy."
+                body: "Deep Think on the call screen is for when you ask something you'd rather she took her time on. Activate it, ask your question, and she thinks it through instead of answering straight off. It turns itself off after that one answer, so the rest of the call stays quick, and you can say \"deep think on\" out loud instead if your hands are busy."
             ),
             HelpEntry(
                 title: "Your Spotter",
-                body: "Bring in your Spotter hands the call to your live visual companion, who can see through your camera and describe what's in front of you. The status line and captions change to her name so you always know who's talking."
+                body: "Call your Spotter, the first button on the Talk tab, starts a call with your live visual helper, who sees through your camera and describes what's in front of you. On a call with anyone else, Bring in your Spotter hands the call over. The status line and captions change to her name so you always know who's talking."
             ),
             HelpEntry(
-                title: "Letting the companion you're already talking to see",
+                title: "Letting the character you're already talking to see",
                 body: "Let her see your camera is different from Spotter: the same voice you're already talking to gains sight and works what she sees into her own replies, instead of handing the call to someone else."
             ),
             HelpEntry(
                 title: "The flashlight",
-                body: "In a dark room the flashlight now comes on by itself so the camera has something to work with, and announces that it did. Touch the flashlight button once and it stops deciding for you for the rest of that call."
+                body: "In a dark room the flashlight comes on by itself so the camera has something to work with, and announces that it did. Touch the flashlight button once and it stops deciding for you for the rest of that call."
             ),
             HelpEntry(
                 title: "If a call drops",
@@ -213,7 +274,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Audio check",
-                body: "The call screen has a line reporting where the sound is going, the volume, and how many clips have arrived and played. If a call ever has no sound, read that line out — it says which part failed."
+                body: "The call screen has a line reporting where the sound is going, the volume, and how many clips have arrived and played. If a call ever has no sound, read that line out; it says which part failed."
             ),
             HelpEntry(
                 title: "The lock screen",
@@ -221,13 +282,23 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "After you hang up",
-                body: "Every call is written up as a normal conversation you can read and carry on in text. Hanging up waits a moment and opens it for you, and there's a Skip button if you'd rather not wait. That written-up call opens over your original conversation — there's a Close button, top left, to get back to it."
+                body: "Every call is written up as a normal conversation you can read and carry on in text. Hanging up waits a moment and opens it for you, and there's a Skip button if you'd rather not wait. That written-up call opens over your original conversation; there's a Close button, top left, to get back to it."
+            ),
+        ]),
+        HelpSection(title: "The Library", entries: [
+            HelpEntry(
+                title: "Three parts",
+                body: "The Library tab is split three ways by a switch near the top. Listen holds what you're reading or hearing now, your shelf and your collections. Browse holds search, the archive's folders and loose donations. Add holds every way to donate a book or a recording. Continue, at the very top, picks up the book you were last in."
+            ),
+            HelpEntry(
+                title: "It keeps playing",
+                body: "A book or recording keeps playing while you use the rest of the app. A small Now Playing bar sits above the tabs with the title, Play or Pause, and Stop and close; tap the title to go back to the full player. A voice message or a call pauses the book by itself, and the bar then offers Resume. The lock screen and your headphone buttons keep working the whole time."
             ),
         ]),
         HelpSection(title: "Transcribe", entries: [
             HelpEntry(
                 title: "What it's for",
-                body: "Recording a thought, or a long voice memo somebody sent you, and getting it back as text you can edit and keep."
+                body: "Recording a thought, or a long voice memo somebody sent you, and getting it back as text you can edit and keep. It's on the Talk tab."
             ),
             HelpEntry(
                 title: "Recording in takes",
@@ -235,11 +306,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Importing a file",
-                body: "Import audio file picks a recording someone sent you from Files, iCloud Drive, or another app — a voice memo, a video's audio, up to about two hours long — and adds its words to the transcript the same way a recorded take does."
+                body: "Import audio file picks a recording someone sent you from Files, iCloud Drive, or another app (a voice memo, a video's audio, up to about two hours long) and adds its words to the transcript the same way a recorded take does."
             ),
             HelpEntry(
                 title: "Quick Dictate",
-                body: "Reachable by Siri (\"quick dictate with Kade-AI\"), a Home Screen Quick Action, or an Action Button — lands you here already listening. Tap Stop when you're done and the clean text is on your clipboard immediately, ready to paste into whatever you were doing. This is the fast way to get your voice into any app without a whole separate keyboard to install."
+                body: "Reachable by Siri (\"quick dictate with Kade-AI\"), a Home Screen Quick Action, or an Action Button: it lands you here already listening. Tap Stop when you're done and the clean text is on your clipboard immediately, ready to paste into whatever you were doing."
             ),
             HelpEntry(
                 title: "Tidying it up",
@@ -253,25 +324,25 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Describe", entries: [
             HelpEntry(
                 title: "What it's for",
-                body: "Getting a photo, video, flyer, letter, screenshot, or document described to you, or read back word for word — a menu, a piece of mail, a photo or video someone sent you."
+                body: "Getting a photo, video, flyer, letter, screenshot, or document described to you, or read back word for word: a menu, a piece of mail, a photo or video someone sent you. It's on the Talk tab."
             ),
             HelpEntry(
                 title: "Adding something",
-                body: "Add a photo, video, or document gives you three ways in: Take a photo with the camera right now, Choose a photo or video from your library, or Choose a file for a PDF, Word document, text file, or video from Files. Videos top out at 30 megabytes — a clip of a few minutes, not a whole movie."
+                body: "Add a photo, video, or document gives you three ways in: Take a photo with the camera right now, Choose a photo or video from your library, or Choose a file for a PDF, Word document, text file, or video from Files. Videos top out at 30 megabytes: a clip of a few minutes, not a whole movie."
             ),
             HelpEntry(
                 title: "What you get back",
-                body: "A full spoken description — people, objects, colors, layout, and any text read word for word. For a video, the description covers what happens over the course of the clip, not just a single frame. For documents there's also Document text: the exact wording, separate from the description, for when you need it precise rather than summarized."
+                body: "A full spoken description: people, objects, colors, layout, and any text read word for word. For a video, the description covers what happens over the course of the clip, not just a single frame. For documents there's also Document text: the exact wording, separate from the description, for when you need it precise rather than summarized."
             ),
             HelpEntry(
                 title: "Dates it finds",
-                body: "If a document or photo has a future date on it — an appointment, a due date, an event — it shows up under Dates found with its own Save reminder button."
+                body: "If a document or photo has a future date on it (an appointment, a due date, an event) it shows up under Dates found with its own Save reminder button."
             ),
         ]),
         HelpSection(title: "My Creations and the Wall of Fame", entries: [
             HelpEntry(
                 title: "My Creations",
-                body: "Every picture, video, and song you've made with your companions, newest first. Each one reads its description in a single swipe, then Play for videos and songs, Save or share to put it in your Photos through the share sheet, and a Wall of Fame switch to share it with the family or take it back off."
+                body: "On the Create tab: every picture, video, and song you've made with your characters, newest first. Each one reads its description in a single swipe, then Play for videos and songs, Save or share to put it in your Photos through the share sheet, and a Wall of Fame switch to share it with the family or take it back off."
             ),
             HelpEntry(
                 title: "Wall of Fame",
@@ -281,132 +352,140 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Games, Matchmaker, and Game Room", entries: [
             HelpEntry(
                 title: "Playing a game",
-                body: "You don't need a special screen for this — just tell any companion \"deal me in\" in an ordinary chat, on a call, or by phone, and they'll deal you into Blackjack, Uno, Trivia, Hangman, and more. The game runs right in the conversation."
+                body: "The Parlor on the Play tab has every game on a menu. You can also just tell any character \"deal me in\" in an ordinary chat, on a call, or by phone, and they'll deal you into Blackjack, Uno, Trivia, Hangman, and more. The game runs right in the conversation."
             ),
             HelpEntry(
                 title: "The Matchmaker",
-                body: "Five quick questions about what you're in the mood for, then three companions who might be a good match, each with why they were picked. Nothing you answer is saved, and you can retake it as many times as you like. A Start talking to button on each match takes you straight into a new conversation with them."
+                body: "Five quick questions about what you're in the mood for, then three characters who might be a good match, each with why they were picked. Nothing you answer is saved, and you can retake it as many times as you like. A Start talking to button on each match takes you straight into a new conversation with them."
             ),
             HelpEntry(
                 title: "The Game Room",
-                body: "Family standings from every finished game — who's won the most, recent results, and highlights like the biggest Blackjack win. It lives inside The Parlor now, on the menu right under the games. Walking away from a table mid-game doesn't count against you; only played-out games land there."
+                body: "Family standings from every finished game: who's won the most, recent results, and highlights like the biggest Blackjack win. It lives inside The Parlor, on the menu right under the games. Walking away from a table mid-game doesn't count against you; only played-out games land there."
             ),
         ]),
         HelpSection(title: "Kade's Clubhouse", entries: [
             HelpEntry(
                 title: "What it is",
-                body: "Live voice rooms for the family — real stereo sound, person to person on Kade's own room server, and the whole screen is native now: no web page in the middle. Tap Kade's Clubhouse on the home screen, pick a room like The Porch, and you're in with your mic live. The roster says who's here and who's talking, one button mutes your mic, and another reads the room out loud. Joining can take a few extra seconds while a sleeping room server wakes up — the screen says so while it happens."
+                body: "Live voice rooms for the family: real stereo sound, person to person on Kade's own room server. Open Kade's Clubhouse on the Play tab, pick a room like The Porch, and you're in with your mic live. The roster says who's here and who's talking, one button mutes your mic, and another reads the room out loud. Joining can take a few extra seconds while a sleeping room server wakes up; the screen says so while it happens."
             ),
             HelpEntry(
                 title: "The shared jukebox",
-                body: "One music player for the whole room, and everybody holds the remote: anyone can play, pause, skip ahead, jump back, or stop it, and it changes for everyone — like a real living-room stereo. Add a song from your files politely with Add it to the queue, or rudely with Cut in and play it now. If somebody skips your song, hit Back a song and take it back — radio fights are allowed. Your music volume is yours alone: it starts low so talk carries over the music, and the volume slider changes only your ears. Voices always come through at full volume."
+                body: "One music player for the whole room, and everybody holds the remote: anyone can play, pause, skip ahead, jump back, or stop it, and it changes for everyone, like a real living-room stereo. Add a song from your files politely with Add it to the queue, or rudely with Cut in and play it now. If somebody skips your song, hit Back a song and take it back; radio fights are allowed. Your music volume is yours alone: it starts low so talk carries over the music, and the volume slider changes only your ears. Voices always come through at full volume."
             ),
             HelpEntry(
-                title: "The Hotel — private rooms",
-                body: "Private rooms that stay off the list on purpose — the code is the key. Check in with your group's passcode and the Hotel finds your room; nobody ever sees a list of who has a room open. Open a room of your own with a name and a speakable passcode — letters and numbers only — and pass the code around. A Parlor party table's code works as a passcode too, so one code can carry both the cards and the voices. Whoever opened a room can close it for good, from the same screen."
+                title: "The Hotel: private rooms",
+                body: "Private rooms that stay off the list on purpose; the code is the key. Check in with your group's passcode and the Hotel finds your room; nobody ever sees a list of who has a room open. Open a room of your own with a name and a speakable passcode (letters and numbers only) and pass the code around. A Parlor party table's code works as a passcode too, so one code can carry both the cards and the voices. Whoever opened a room can close it for good, from the same screen."
             ),
             HelpEntry(
-                title: "Companion guests",
-                body: "From inside any room you can invite one companion to sit in as a guest. They're honest about being a turn-taker: press Your turn with their name when you want them to speak, and they answer out loud in their own voice for the whole room. Between turns they follow the conversation through a rough transcription. Anyone in the room can ask them to leave — and rooms with no guest seated are never transcribed at all."
+                title: "Character guests",
+                body: "From inside any room you can invite one character to sit in as a guest. They're honest about being a turn-taker: press Your turn with their name when you want them to speak, and they answer out loud in their own voice for the whole room. Between turns they follow the conversation through a rough transcription. Anyone in the room can ask them to leave, and rooms with no guest seated are never transcribed at all."
             ),
         ]),
         HelpSection(title: "Debate Room and Conversation Hall", entries: [
             HelpEntry(
                 title: "Starting a room",
-                body: "The plus button in Debate Room lets you set a topic or scene, add optional ground rules, and pick 2 to 6 companions to put in it together."
+                body: "The Debate Room is on the Play tab. Its plus button lets you set a topic or scene, add optional ground rules, and pick 2 to 6 characters to put in it together."
             ),
             HelpEntry(
                 title: "Running a room",
-                body: "Continue lets whoever's turn it is speak next. Choose who's next lets you pick a specific companion to jump in out of turn. You can type something yourself at any point \u{2014} you don't have to wait for a turn."
+                body: "Continue lets whoever's turn it is speak next. Choose who's next lets you pick a specific character to jump in out of turn. You can type something yourself at any point; you don't have to wait for a turn."
             ),
             HelpEntry(
                 title: "Hearing the debate",
-                body: "Voices is on by default: every new line plays out loud in that character's own voice the moment it lands. Opening an old room never reads the whole backlog at you \u{2014} flick to \u{2018}Play this line\u{2019} or \u{2018}Play from here\u{2019} in the Actions rotor on any line (or long-press it) to catch up from wherever you like. The speaker toggle under the turn buttons turns voices off and on."
+                body: "Voices is on by default: every new line plays out loud in that character's own voice the moment it lands. Opening an old room never reads the whole backlog at you. With VoiceOver, flick to \u{2018}Play this line\u{2019} or \u{2018}Play from here\u{2019} in the Actions rotor on any line; without it, touch and hold the line for the same choices. The speaker toggle under the turn buttons turns voices off and on."
             ),
             HelpEntry(
                 title: "Keep it going",
-                body: "The forward toggle runs the debate by itself \u{2014} each character takes their turn, each clip finishes before the next turn starts, twelve turns at a stretch, then it pauses and says so before spending more. Any error or daily cap stops it immediately, out loud. Turn it off any time to take the wheel back."
+                body: "The forward toggle runs the debate by itself: each character takes their turn, each clip finishes before the next turn starts, twelve turns at a stretch, then it pauses and says so before spending more. Any error or daily cap stops it immediately, out loud. Turn it off any time to take the wheel back."
             ),
             HelpEntry(
                 title: "Deep Think debates",
-                body: "The brain toggle makes every turn reason hard before speaking \u{2014} slower and a little costlier, but the arguments come back sharper. It remembers the setting per room."
+                body: "The brain toggle makes every turn reason hard before speaking: slower and a little costlier, but the arguments come back sharper. It remembers the setting per room."
             ),
             HelpEntry(
                 title: "Changing the cast",
-                body: "The person-with-a-plus button in the top corner adds or removes characters mid-debate \u{2014} a room holds two to six. The Narrator notes who joined or left right in the transcript, so returning characters know what they walked into."
+                body: "The person-with-a-plus button in the top corner adds or removes characters mid-debate; a room holds two to six. The Narrator notes who joined or left right in the transcript, so returning characters know what they walked into."
             ),
             HelpEntry(
                 title: "Debate parties",
-                body: "The share button holds the party door: Open the doors mints a four-character code. Anyone signed in types it into \u{2018}Join a debate by code\u{2019} on the Debate Room screen and steps inside \u{2014} they can say their piece, ask for turns, and hear every line land in the cast's voices on their own phone. The Narrator notes who walks in. Hosts keep the keys: cast changes, Hall sharing, and closing the doors stay yours."
+                body: "The share button holds the party door: Open the doors mints a four-character code. Anyone signed in types it into \u{2018}Join a debate by code\u{2019} on the Debate Room screen and steps inside. They can say their piece, ask for turns, and hear every line land in the cast's voices on their own phone. The Narrator notes who walks in. Hosts keep the keys: cast changes, Hall sharing, and closing the doors stay yours."
             ),
             HelpEntry(
                 title: "Sharing to the Hall",
-                body: "The share button in the top corner of a room lets you share it, with a title, to the Conversation Hall \u{2014} where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
+                body: "The share button in the top corner of a room lets you share it, with a title, to the Conversation Hall, where everyone signed in to a grown-up account on the family plan can read it. Stop sharing at any time from the same button."
             ),
             HelpEntry(
                 title: "The Conversation Hall",
-                body: "Reached from Debate Room's Hall button. Every shared room, newest first \u{2014} tap one to read the whole thing. Grown-up accounts only."
+                body: "Reached from Debate Room's Hall button. Every shared room, newest first; tap one to read the whole thing. Grown-up accounts only."
             ),
         ]),
         HelpSection(title: "Agent Builder", entries: [
             HelpEntry(
-                title: "Creating an agent",
-                body: "The plus button in Agent Builder lets you build a new companion from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to four conversation starters — tappable opening lines people see when they start a chat."
+                title: "Creating a character",
+                body: "Agent Builder is on the Create tab. Its plus button builds a new character from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to four conversation starters, the tappable opening lines people see when they start a chat."
             ),
             HelpEntry(
                 title: "Editing, duplicating, or deleting one",
-                body: "Tap any agent in your list to open and change it. Swipe it, or use the Actions rotor, for Delete and Duplicate — Duplicate makes a full copy, announces it, and drops it in your list ready to rename. Deleting an agent doesn't touch conversations you already had with them."
+                body: "Tap any character in your list to open and change it. Swipe it, or use the Actions rotor with VoiceOver, for Delete and Duplicate. Duplicate makes a full copy, announces it, and drops it in your list ready to rename. Deleting a character doesn't touch conversations you already had with them."
             ),
             HelpEntry(
                 title: "Tools",
-                body: "The Tools group in the editor lists real abilities you can switch on for an agent — making pictures, sending phone notifications, placing calls, checking weather, and more. The count in the group's label tells you how many are on. Anything this app doesn't recognize stays exactly as it was, so editing here never quietly unplugs something set up on the web."
+                body: "The Tools group in the editor lists real abilities you can switch on for a character: making pictures, sending phone notifications, placing calls, checking weather, and more. The count in the group's label tells you how many are on. Anything this app doesn't recognize stays exactly as it was, so editing here never quietly unplugs something set up on the web."
             ),
             HelpEntry(
                 title: "Avatar photo",
-                body: "While editing an existing agent, the Avatar section picks a photo from your library to be that agent's picture. It uploads when you press Save. The picture shows on the web version today; native list rows don't draw pictures yet."
+                body: "While editing an existing character, the Avatar section picks a photo from your library to be that character's picture. It uploads when you press Save, and shows beside their name in the character picker and your conversation list."
             ),
             HelpEntry(
                 title: "Version history",
-                body: "While editing an existing agent, Version history lists every setup you've saved over. Tap one to restore it — the setup you're replacing is kept as the newest entry first, so restoring is always undoable."
+                body: "While editing an existing character, Version history lists every setup you've saved over. Tap one to restore it. The setup you're replacing is kept as the newest entry first, so restoring is always undoable."
             ),
             HelpEntry(
                 title: "What's not here yet",
-                body: "Custom actions, connecting other agents together, and attaching knowledge files exist on the web version and are still on the list for native."
+                body: "Custom actions, connecting other characters together, and attaching knowledge files exist on the web version and are still on the list for the app."
             ),
         ]),
         HelpSection(title: "Settings", entries: [
             HelpEntry(
                 title: "Finding it",
-                body: "The Settings button on the home screen holds Speech, Accessibility, Feedback, and Account together in one place, including the Pronunciation Dictionary and Usage & Balance."
+                body: "Settings is on the More tab. It has its own search field at the top, and Search everything finds settings too: try ringtone, speed, or font."
+            ),
+            HelpEntry(
+                title: "Your app icon",
+                body: "Settings, App icon, lets you swap the Kade-AI icon on your home screen for Kiana, Harley, Della or Lilly's face, or back to the classic K."
             ),
             HelpEntry(
                 title: "Usage & Balance",
-                body: "Under Account, Usage & Balance shows what this account has spent this month and overall — chat, voices, pictures, phone calls — plus your balance. It's read-only: the one link opens the chip-in page in your browser, and nothing is ever charged from inside the app."
+                body: "Under Account, Usage & Balance shows what this account has spent this month and overall (chat, voices, pictures, phone calls) plus your balance. It's read-only: the one link opens the chip-in page in your browser, and nothing is ever charged from inside the app."
             ),
             HelpEntry(
-                title: "Speech",
-                body: "Turn voice messages on by default for every new conversation, set how fast voice messages and Spotter calls play back, and open the Pronunciation Dictionary."
+                title: "Voice & Audio",
+                body: "Turn Hear replies on by default for every new conversation, set the voice speed for replies and Spotter calls, and open the Pronunciation Dictionary."
             ),
             HelpEntry(
                 title: "Accessibility",
-                body: "High contrast switches the whole app to a true-black dark appearance. Easy-read font and line spacing currently change how conversation messages look — Lexend and OpenDyslexic are both included. Text size isn't set here: your iPhone's own Display & Text Size setting under Settings, Accessibility already resizes everything in this app."
+                body: "High contrast switches the whole app to a true-black dark appearance with solid colors and real borders. Easy-read font and line spacing currently change how conversation messages look; Lexend and OpenDyslexic are both included. Text size isn't set here: your iPhone's own Display & Text Size setting under Settings, Accessibility already resizes everything in this app."
+            ),
+            HelpEntry(
+                title: "Troubleshooting",
+                body: "The last section of Settings holds two switches that only matter if the app freezes and Kade asks you to try them."
             ),
         ]),
         HelpSection(title: "Pronunciation Dictionary", entries: [
             HelpEntry(
                 title: "What it's for",
-                body: "A name or word Kade-AI mishears or says wrong — add it here once, spelled the way it sounds, and it's used everywhere: recognizing your voice on calls and in Transcribe, and reading it back correctly in voice messages and Spotter calls."
+                body: "A name or word Kade-AI mishears or says wrong: add it here once, spelled the way it sounds, and it's used everywhere, recognizing your voice on calls and in Transcribe, and reading it back correctly in replies and Spotter calls."
             ),
             HelpEntry(
                 title: "Adding a word",
-                body: "The plus button adds one entry: the word as it's normally spelled, and a respelling for how it should sound — for example, Kade spelled out as Katie."
+                body: "The plus button adds one entry: the word as it's normally spelled, and a respelling for how it should sound. For example, Kade spelled out as Katie."
             ),
             HelpEntry(
                 title: "Changing or removing one",
-                body: "Tap an entry to change its pronunciation. The word itself can't be edited in place — swipe it away (or use the Actions rotor) and add a fresh entry if the word was wrong, not just how it sounds."
+                body: "Tap an entry to change its pronunciation. The word itself can't be edited in place: swipe it away (or use the Actions rotor with VoiceOver) and add a fresh entry if the word was wrong, not just how it sounds."
             ),
         ]),
-        HelpSection(title: "Siri and Quick Actions", entries: [
+        HelpSection(title: "Siri, widgets and shortcuts", entries: [
             HelpEntry(
                 title: "Calling your Spotter hands-free",
                 body: "Say \"Hey Siri, call my Spotter with Kade-AI\" and the app opens straight into a Spotter call. You don't have to find the app or the button first."
@@ -414,6 +493,18 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "The other phrases",
                 body: "\"Hey Siri, quick dictate with Kade-AI\" starts listening immediately and copies the result to your clipboard when you stop. \"Hey Siri, transcribe with Kade-AI\" opens the transcriber ready to record without auto-starting. \"Hey Siri, describe something with Kade-AI\" opens Describe. \"Hey Siri, open my Kade-AI conversations\" goes straight to your conversation list."
+            ),
+            HelpEntry(
+                title: "Home Screen widget",
+                body: "Touch and hold an empty spot on your Home Screen, tap Edit, then Add Widget, and pick Kade-AI. The widget shows your character's face, which changes with the time of day, and a Talk button; the larger size adds Continue listening for the Library. To choose which character it shows, touch and hold the widget and pick Edit Widget."
+            ),
+            HelpEntry(
+                title: "Call your Spotter from Control Center",
+                body: "On iOS 18 and later, Call your Spotter can sit in Control Center, on the Lock Screen, or on the Action Button: edit Control Center, tap Add a Control, and search for Kade-AI."
+            ),
+            HelpEntry(
+                title: "Progress on the Lock Screen",
+                body: "While the Sound Booth makes a song or a Library upload runs, its progress shows on the Lock Screen and in the Dynamic Island, and VoiceOver reads it there, so you can put the phone down and check back."
             ),
             HelpEntry(
                 title: "The Action Button",
@@ -425,31 +516,31 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Quick Actions on the app icon",
-                body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts — Call your Spotter, Transcribe, Describe, Quick Dictate, and Your conversations — without needing to say anything out loud."
+                body: "Touch and hold the Kade-AI icon on your Home Screen for the same shortcuts (Call your Spotter, Transcribe, Describe, Quick Dictate, and Your conversations) without needing to say anything out loud."
             ),
         ]),
         HelpSection(title: "Kade Keys keyboard", entries: [
             HelpEntry(
                 title: "Adding the keyboard",
-                body: "Settings, General, Keyboard, Keyboards, Add New Keyboard, then pick Kade Keys. In any app, the globe key on the system keyboard switches between keyboards \u{2014} hold it and pick Kade Keys, or tap it to cycle. Everything on Kade Keys is a big labeled button: your phrases, then globe, space and delete along the bottom."
+                body: "Settings, General, Keyboard, Keyboards, Add New Keyboard, then pick Kade Keys. In any app, the globe key on the system keyboard switches between keyboards: hold it and pick Kade Keys, or tap it to cycle. Everything on Kade Keys is a big labeled button: your phrases, then globe, space and delete along the bottom."
             ),
             HelpEntry(
                 title: "Dictating with Kade Keys",
-                body: "The big Dictate key opens Kade-AI listening (keyboards aren't allowed microphones \u{2014} every dictation keyboard does this dance). Say your piece, tap Stop, then swipe back to where you were \u{2014} the words type themselves. That self-typing needs Allow Full Access (Settings, General, Keyboard, Kade Keys); Apple gates shared storage behind the same switch as network access, but this keyboard makes no connections at all. Without the switch, your words wait on the clipboard \u{2014} one long-press paste. The six quick phrases sit under the Dictate key, same as ever."
+                body: "The big Dictate key opens Kade-AI listening (keyboards aren't allowed microphones; every dictation keyboard does this dance). Say your piece, tap Stop, then swipe back to where you were, and the words type themselves. That self-typing needs Allow Full Access (Settings, General, Keyboard, Kade Keys); Apple gates shared storage behind the same switch as network access, but this keyboard makes no connections at all. Without the switch, your words wait on the clipboard: one long-press paste. The six quick phrases sit under the Dictate key, same as ever."
             ),
         ]),
         HelpSection(title: "Notifications and account", entries: [
             HelpEntry(
                 title: "Notifications",
-                body: "The app asks once, at first launch. Notifications go to whoever is signed in on this device, and signing out unlinks it so nothing lands for the wrong account. The Alerts button on the home screen keeps the history: your last 15 reminders and check-ins, how each one arrived, and your delivery choices, with a test button to prove the whole path works."
+                body: "The app asks about notifications after your first reply, with a card saying why: so your character can tell you when a long reply is ready, and so characters can call you. Say Not now and it won't ask again; Settings, Notifications, can turn them on any time. Notifications go to whoever is signed in on this device, and signing out unlinks it so nothing lands for the wrong account. Alerts, on the More tab, keeps the history: your last 15 reminders and check-ins, how each one arrived, and your delivery choices, with a test button to prove the whole path works. A small new badge shows when something arrived since you last looked."
             ),
             HelpEntry(
                 title: "Signing out",
-                body: "Sign out on the home screen clears your saved session on this phone and empties the conversation and companion lists so nothing of yours is left on screen."
+                body: "Sign out, at the bottom of the More tab, clears your saved session on this phone, stops any book that's playing, and empties the conversation and character lists so nothing of yours is left on screen."
             ),
             HelpEntry(
                 title: "What's still on the web",
-                body: "Nearly everything is native now. The web app remains the place to top up the server fund, create an agent's custom actions, and fine-tune a connection's handoff wording -- and it stays available any time as a backup."
+                body: "Nearly everything is in the app now. The web app remains the place to top up the server fund, create a character's custom actions, and fine-tune a connection's handoff wording, and it stays available any time from the More tab as a backup."
             ),
         ]),
     ]
