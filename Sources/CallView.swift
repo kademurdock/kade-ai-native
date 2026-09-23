@@ -120,6 +120,7 @@ struct CallView: View {
             .navigationTitle(agentName)
             .navigationBarTitleDisplayMode(.inline)
         }
+        .onAppear { LibraryNowPlaying.shared.pauseForOtherAudio("a call") }
         .task {
             // FIX (session 21e, Kade: "I don't think she can actually see my
             // camera... she might be hallucinating"). The camera captured

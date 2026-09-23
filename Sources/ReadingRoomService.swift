@@ -44,7 +44,10 @@ struct RRProgress: Codable, Hashable {
     var speed: Double?
     var finished: Bool?
     var where_: String?
-    enum CodingKeys: String, CodingKey { case s, c, pos, voice, speed, finished, where_ = "where" }
+    /// When this progress row last changed (the server's timestamp, ISO).
+    /// Sep 23 2026 (B7): picks the Library's "Continue" item.
+    var updatedAt: String?
+    enum CodingKeys: String, CodingKey { case s, c, pos, voice, speed, finished, where_ = "where", updatedAt }
 }
 
 struct RRItem: Codable, Identifiable, Hashable {
@@ -308,7 +311,9 @@ final class ReadingRoomService: ObservableObject {
     struct RRSkippedSummary: Decodable { let title: String?; let reason: String? }
 
     /// Upload bytes to storage, then check a durable import job using short requests.
-    func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false) async throws -> UploadedBook {
+    /// `onProgress` (Sep 23 2026, C3) hears the storage upload's 0...1 for
+    /// the lock-screen card; without it the upload runs exactly as before.
+    func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false, onProgress: (@MainActor (Double) -> Void)? = nil) async throws -> UploadedBook {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
         let before = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -335,7 +340,15 @@ final class ReadingRoomService: ObservableObject {
             guard let address = job.url, let url = URL(string: address) else { throw RRError(message: "Missing storage address.") }
             var put = URLRequest(url: url); put.httpMethod = "PUT"; put.timeoutInterval = 7200
             put.setValue(job.mime ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
-            let (_, response) = try await URLSession.shared.upload(for: put, fromFile: fileURL)
+            let response: URLResponse
+            if let onProgress {
+                // The same progress delegate the recording uploads use.
+                let session = URLSession(configuration: .default, delegate: UploadProgressDelegate(onProgress: onProgress), delegateQueue: nil)
+                defer { session.finishTasksAndInvalidate() }
+                response = try await session.upload(for: put, fromFile: fileURL).1
+            } else {
+                response = try await URLSession.shared.upload(for: put, fromFile: fileURL).1
+            }
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RRError(message: "Storage did not confirm the upload. Retry the same file to recover it.") }
         }
         let after = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -660,6 +673,9 @@ final class ReadingRoomPlayer: ObservableObject {
     func play() {
         guard let book, seekTask == nil else { return }
         prepareSession()
+        // Sep 23 2026 (A2): takes the lock-screen buttons back after a call
+        // (see yieldRemoteControls). A no-op while they are still wired.
+        wireRemote()
         if book.isAudio {
             avPlayer?.playImmediately(atRate: Float(speed))
             isPlaying = true
@@ -1105,6 +1121,15 @@ final class ReadingRoomPlayer: ObservableObject {
         center.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.nextPart() }; return .success }
         center.stopCommand.isEnabled = false
     }
+    /// Sep 23 2026 (A2): the book now outlives its screen, so a call can start
+    /// while it is open. The call screen wires play/pause to its own barge-in
+    /// and, on hang-up, removes EVERY target from those commands. The book
+    /// lets go of the buttons for the call (LibraryNowPlaying calls this) and
+    /// `play()` takes them back.
+    func yieldRemoteControls() {
+        unwireRemote()
+    }
+
     private func unwireRemote() {
         guard remoteWired else { return }
         remoteWired = false
