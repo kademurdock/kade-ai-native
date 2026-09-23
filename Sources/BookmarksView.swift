@@ -48,7 +48,7 @@ struct BookmarksView: View {
                     .accessibilityElement(children: .combine)
                     .accessibilitySortPriority(1)
                     Button("Go to your conversations") {
-                        nav.select(.talk)
+                        nav.open(.conversations)
                     }
                     .accessibilitySortPriority(1)
                     .accessibilityHint("Switches to the Talk tab, where your conversations are.")
