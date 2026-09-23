@@ -167,7 +167,39 @@ struct SoundBoothStatus: Decodable {
     let durationS: Double?
     let costUSD: Double?
     let spoken: String?
+    /// Sep 23 2026 (C3): how far along, when the server knows. A YuE2 or
+    /// Stable Audio batch counts finished takes; an AuK HQ piece made in
+    /// parts counts parts. Read only for the lock-screen card.
+    let completed: Int?
+    let total: Int?
+    struct Parts: Decodable { let total: Int?; let done: Int?; let joined: Bool? }
+    let multipart: Parts?
     var isFinished: Bool { state == "done" || state == "failed" || state == "cancelled" }
+}
+
+extension SoundBoothStatus {
+    /// C3: the lock-screen card's words for a render still going. Stages only
+    /// ("Waiting its turn", "Recording", "Mixing"); how far along rides in
+    /// `cardProgress`, so the words stay the same from one poll to the next
+    /// until the stage really changes.
+    var cardStatus: String {
+        if let parts = multipart, let count = parts.total, count > 1, (parts.done ?? 0) >= count {
+            return "Mixing"
+        }
+        let started = multipart?.done ?? completed ?? 0
+        return state == "queued" && started == 0 ? "Waiting its turn" : "Recording"
+    }
+
+    /// 0...1 when the server counts parts or takes; nil for a single piece.
+    var cardProgress: Double? {
+        if let parts = multipart, let count = parts.total, count > 1 {
+            return min(1, Double(parts.done ?? 0) / Double(count))
+        }
+        if let count = total, count > 1 {
+            return min(1, Double(completed ?? 0) / Double(count))
+        }
+        return nil
+    }
 }
 
 /// THE GUIDE (Part 121). Her ask: "I don't think people will know the
@@ -427,6 +459,82 @@ final class SoundBoothService: ObservableObject {
     struct CancelResult: Decodable { let ok: Bool?; let state: String?; let spoken: String? }
     func cancel(jobId: String) async throws -> CancelResult {
         try await post("api/kade/sound-booth/cancel/\(jobId)", body: [:], timeout: 30, fallback: "Couldn't stop that render.")
+    }
+
+    // MARK: - Lock-screen cards for renders (Sep 23 2026 redesign, C3)
+    //
+    // A queued render (AuK HQ, YuE2, Stable Audio) outlives the screen: she can
+    // leave while it records, the server keeps going, and the booth picks the
+    // job back up the next time it opens. This service lives only as long as
+    // the screen, so the card ids live on the TYPE, filed under the render's
+    // project, where the next visit finds them instead of starting a second
+    // card beside the first. Lyria and Seed Audio record inside one request,
+    // so their card starts and ends within that request and is never filed.
+
+    private struct RenderCard { let id: String; var status: String; var progress: Double? }
+    private static var renderCards: [String: RenderCard] = [:]
+
+    /// A new card. Nil when none could be shown, which is not an error.
+    func startRenderCard(kind: String, title: String, status: String) -> String? {
+        KadeJobActivity.start(kind: kind, title: title, status: status)
+    }
+
+    /// Files a card that is showing `status` under the render's project (or
+    /// its job, when the server named no project).
+    func fileRenderCard(_ id: String?, under key: String, showing status: String) {
+        guard let id else { return }
+        if let earlier = Self.renderCards[key], earlier.id != id {
+            KadeJobActivity.finish(earlier.id, status: "Ended", failed: true)
+        }
+        Self.renderCards[key] = RenderCard(id: id, status: status, progress: nil)
+    }
+
+    /// Moves a filed card on, but only when the stage changes or known
+    /// progress has moved a tenth or more since the card last changed.
+    func updateRenderCard(under key: String, status: String, progress: Double?) {
+        guard var card = Self.renderCards[key] else { return }
+        let last = card.progress ?? 0
+        let moved = progress.map { abs($0 - last) >= 0.1 } ?? false
+        guard status != card.status || moved else { return }
+        card.status = status
+        card.progress = progress
+        Self.renderCards[key] = card
+        KadeJobActivity.update(card.id, status: status, progress: progress)
+    }
+
+    func finishRenderCard(under key: String, status: String, failed: Bool = false) {
+        guard let card = Self.renderCards.removeValue(forKey: key) else { return }
+        KadeJobActivity.finish(card.id, status: status, failed: failed)
+    }
+
+    /// The card of a request no project holds yet (Lyria, Seed Audio).
+    func finishRenderCard(id: String?, status: String, failed: Bool = false) {
+        KadeJobActivity.finish(id, status: status, failed: failed)
+    }
+
+    /// A render that ended while the booth was closed left its card up. The
+    /// project list says how it ended, so the card can say so too. A project
+    /// still working keeps its card; the resumed poll moves it on.
+    func settleRenderCards(with projects: [SoundBoothProject]) {
+        for (key, card) in Self.renderCards {
+            guard let project = projects.first(where: { $0.id == key || ($0.jobs ?? []).contains(key) }),
+                  !project.isWorking else { continue }
+            Self.renderCards[key] = nil
+            switch project.state {
+            case "done": KadeJobActivity.finish(card.id, status: "Ready to play")
+            case "cancelled": KadeJobActivity.finish(card.id, status: "Stopped", failed: true)
+            default: KadeJobActivity.finish(card.id, status: Self.cardReason(project.lastError), failed: true)
+            }
+        }
+    }
+
+    /// A short plain reason for a card that ends without audio: the server's
+    /// own first sentence when it is short, otherwise just "Didn't finish".
+    static func cardReason(_ message: String?) -> String {
+        let first = (message ?? "").split(separator: ".").first
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        guard !first.isEmpty, first.count <= 60 else { return "Didn't finish" }
+        return "Didn't finish. \(first.prefix(1).uppercased())\(first.dropFirst())."
     }
 
     func projects() async throws -> [SoundBoothProject] {

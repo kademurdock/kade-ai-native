@@ -17,6 +17,11 @@ import UniformTypeIdentifiers
 // files."
 //
 // SHAPE, top to bottom:
+//   0. (Sep 23 2026, redesign B8) WHAT DO YOU WANT TO MAKE — four plain
+//      goals: a song, a scene or story with voices, music or sound effects,
+//      reading something in a voice. The goal picks the engine and shows only
+//      its form; the engine cards below now live under "Advanced: choose the
+//      engine", and the last goal opens straight away next time.
 //   1. ENGINE — AuK HQ (her own GPU, one actor performing, queued, ~2c/min)
 //      or Seed Audio (fal, a whole scene with music and several voices,
 //      seconds, ~19c/min). The hint says which one leaves the estate.
@@ -93,6 +98,22 @@ struct SoundBoothView: View {
     @State private var drafts: [String: WorkspaceDraft] = [:]
     @State private var showEngineDetails = false
 
+    // What she wants to make (redesign B8, Sep 23 2026). The last goal and the
+    // engine last used for it are remembered, so the booth opens straight into
+    // them; `choosingGoal` is the front door with the four choices.
+    @AppStorage("kade.soundBooth.goal") private var savedGoal = ""
+    @AppStorage("kade.soundBooth.engine") private var savedEngine = ""
+    @State private var choosingGoal = false
+    @State private var showEngineChoice = false
+    /// Set by a goal pick, so the engine card's own sentence does not talk
+    /// over "Making a song. The form is below."
+    @State private var quietEngineChange = false
+    /// The goal announcement VoiceOver is still speaking. Focus moves to the
+    /// form's first field once it has been heard, not on top of it.
+    @State private var focusAfterAnnouncement: String?
+    /// Nil while the four choices are showing.
+    private var goal: BoothGoal? { choosingGoal ? nil : BoothGoal(rawValue: savedGoal) }
+
     // Live state
     @State private var health: SoundBoothHealth?
     @State private var guide: SoundBoothGuide?
@@ -122,10 +143,21 @@ struct SoundBoothView: View {
     @State private var catalog: VoiceCatalog.Snapshot = .empty
 
     @AccessibilityFocusState private var focusStatus: Bool
+    /// B8: where VoiceOver lands after the goal changes.
+    @AccessibilityFocusState private var boothFocus: BoothFocus?
 
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
         _service = StateObject(wrappedValue: SoundBoothService(apiClient: apiClient))
+        /* B8: open straight into the last goal, on the engine last used for it
+         * (a YuE2 regular lands on YuE2, not back on Lyria), or on the four
+         * choices the first time. */
+        if let last = BoothGoal(rawValue: UserDefaults.standard.string(forKey: "kade.soundBooth.goal") ?? "") {
+            let used = UserDefaults.standard.string(forKey: "kade.soundBooth.engine") ?? ""
+            _engine = State(initialValue: last.engines.contains(used) ? used : last.engines[0])
+        } else {
+            _choosingGoal = State(initialValue: true)
+        }
     }
 
     /// ONE sheet per view (the DescribeView rule).
@@ -142,19 +174,113 @@ struct SoundBoothView: View {
         }
     }
 
+    /// B8: what she wants to make, in plain words. Each goal owns the engines
+    /// that can make it, and the first is the one the booth picks: Lyria for a
+    /// song (the guide's own "start with Lyria"), with YuE2 one tap away under
+    /// Advanced; Seed Audio for several voices; Stable Audio, the booth's
+    /// sound-effects lane, for music or sounds with no singing; AuK HQ for one
+    /// voice. Every engine belongs to exactly one goal, so the heading above
+    /// the form always matches the form.
+    private enum BoothGoal: String, CaseIterable, Identifiable {
+        case song, scene, sounds, reading
+        var id: String { rawValue }
+
+        var engines: [String] {
+            switch self {
+            case .song: return ["lyria", "yue2"]
+            case .scene: return ["seed"]
+            case .sounds: return ["stable"]
+            case .reading: return ["scenema"]
+            }
+        }
+        static func forEngine(_ key: String) -> BoothGoal {
+            allCases.first { $0.engines.contains(key) } ?? .reading
+        }
+        var title: String {
+            switch self {
+            case .song: return "A song"
+            case .scene: return "A scene or story with voices"
+            case .sounds: return "Music or sound effects"
+            case .reading: return "Reading something in a voice"
+            }
+        }
+        /// Shown under the title; VoiceOver gets the same idea from the hint.
+        var caption: String {
+            switch self {
+            case .song: return "Words and music, sung."
+            case .scene: return "Several voices, music and sound effects."
+            case .sounds: return "No singing."
+            case .reading: return "One voice performing your words."
+            }
+        }
+        var spokenLabel: String {
+            switch self {
+            case .song: return "Make a song"
+            case .scene: return "Make a scene or story with voices"
+            case .sounds: return "Make music or sound effects"
+            case .reading: return "Read something in a voice"
+            }
+        }
+        var hint: String {
+            switch self {
+            case .song: return "Opens the song form. Describe a song, or bring your own words, and a singer performs it with music."
+            case .scene: return "Opens the scene form. Several people talk, with music and sound effects around them, like a radio play."
+            case .sounds: return "Opens the sound form. Describe the music or sounds you want. Nobody sings or speaks."
+            case .reading: return "Opens the reading form. Type your words, and one voice performs them with real acting."
+            }
+        }
+        /// The first half of the announcement after a pick.
+        var making: String {
+            switch self {
+            case .song: return "Making a song"
+            case .scene: return "Making a scene or story with voices"
+            case .sounds: return "Making music or sound effects"
+            case .reading: return "Reading something in a voice"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .song: return "music.mic"
+            case .scene: return "theatermasks.fill"
+            case .sounds: return "waveform"
+            case .reading: return "book.fill"
+            }
+        }
+        var tint: Color {
+            switch self {
+            case .song: return .pink
+            case .scene: return .orange
+            case .sounds: return .teal
+            case .reading: return .purple
+            }
+        }
+    }
+
+    private enum BoothFocus: Hashable { case question, firstField }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                /* C4: the booth's painted banner. Decoration only (hidden from
+                 * VoiceOver, never takes a tap); the gradient stands in until
+                 * the picture is in the asset catalog. */
+                KadePaintedHeader(imageName: "HeaderSoundBooth", symbol: "mic.and.signal.meter.fill", tint: .indigo, height: 110)
+                if let goal { changeGoalButton(goal) } else { goalChoices }
                 statusBlock
-                engineSection
-                scriptSection
-                if !usesDirectPrompt {
-                    DisclosureGroup("Voice, references, and writing desk") {
-                        modeSection
-                        writingSection
+                if let goal {
+                    goalHeader(goal)
+                    scriptSection
+                    if !usesDirectPrompt {
+                        DisclosureGroup("Voice, references, and writing desk") {
+                            modeSection
+                            writingSection
+                        }
                     }
+                    DisclosureGroup("Starting points and new projects") { starterSection }
+                } else {
+                    // A render picked back up on the front door can still be stopped.
+                    stopRenderButton
                 }
-                DisclosureGroup("Starting points and new projects") { starterSection }
                 librarySection
             }
             .padding()
@@ -206,9 +332,22 @@ struct SoundBoothView: View {
         }
         .onChange(of: engine) { _, e in
             invalidateQuote()
+            /* B8: a goal pick announces itself ("Making a song…"); the engine
+             * card's sentence would talk over it. Every other engine change
+             * still says which engine and where it runs. */
+            if quietEngineChange { quietEngineChange = false; return }
             if let g = guide?.engines[e] {
                 announce("\(g.name). \(g.tagline) \(g.where)")
             }
+        }
+        /* B8: the goal announcement is heard in full, THEN VoiceOver lands on
+         * the form's first field. Moving focus on top of the announcement would
+         * cut it off. Without VoiceOver nothing is spoken and nothing moves. */
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
+            guard let waiting = focusAfterAnnouncement,
+                  (note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String) == waiting else { return }
+            focusAfterAnnouncement = nil
+            if goal != nil && activeSheet == nil { boothFocus = .firstField }
         }
         .alert("Generation stopped", isPresented: $showRenderConfirmation) {
             Button("OK", role: .cancel) { }
@@ -243,7 +382,7 @@ struct SoundBoothView: View {
     }
 
     private func selectEngine(_ next: String) {
-        guard next != engine else { return }
+        guard next != engine else { settleGoal(on: next); return }
         guard !workspaceBusy else { announce("Finish the current operation or stop the render before switching workspaces."); return }
         drafts[engine] = WorkspaceDraft(mode: mode, text: text, title: trackTitle, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice)
         let draft = drafts[next] ?? WorkspaceDraft()
@@ -253,6 +392,109 @@ struct SoundBoothView: View {
         currentProjectId = draft.projectId; newVoice = draft.newVoice
         starterId = ""; showHowTo = false; showEngineDetails = false
         invalidateQuote()
+        settleGoal(on: next)
+    }
+
+    // MARK: - What do you want to make? (redesign B8, Sep 23 2026)
+
+    /// The front door. A newcomer used to meet the heading "Engine" and five
+    /// model names; now it is one plain question and four goals, each of which
+    /// picks its engine. Every engine is still there, under Advanced in each
+    /// goal's form.
+    private var goalChoices: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("What do you want to make?")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($boothFocus, equals: .question)
+            ForEach(BoothGoal.allCases) { g in
+                Button { chooseGoal(g) } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(g.title)
+                            Text(g.caption).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: g.symbol)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                .labelStyle(KadeTileLabelStyle(tint: g.tint))
+                .accessibilityLabel(g.spokenLabel)
+                .accessibilityHint(g.hint)
+            }
+        }
+    }
+
+    /// Back to the four choices. Nothing is cleared: every engine keeps its
+    /// draft while the screen is open, the same as switching engines.
+    private func changeGoalButton(_ g: BoothGoal) -> some View {
+        Button {
+            KadeHaptics.press()
+            focusAfterAnnouncement = nil
+            choosingGoal = true
+            Task {
+                // One render pass for the question to exist (the LogbookView wait).
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if goal == nil && activeSheet == nil { boothFocus = .question }
+            }
+        } label: {
+            Label("Change what you're making", systemImage: "arrow.uturn.left")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(KadeCardButtonStyle())
+        .disabled(workspaceBusy)
+        .accessibilityLabel("Change what you're making")
+        .accessibilityValue(g.title)
+        .accessibilityHint(workspaceBusy
+            ? "Available once the current job finishes or is stopped."
+            : "Goes back to the four choices: a song, a scene or story with voices, music or sound effects, or reading something in a voice. Your work here is kept while this screen is open.")
+    }
+
+    /// The top of a goal's form: what she is making, which engine is making
+    /// it, and the way to every other engine.
+    private func goalHeader(_ g: BoothGoal) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(g.title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
+            Text("\(g.caption) Made with \(Self.engineName(engine)).")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            engineSection
+        }
+    }
+
+    /// A goal picks its engine (the booth's own pick for it, or the engine
+    /// already in use when that one makes this too), shows only that form,
+    /// says so, and hands VoiceOver the form's first field once the sentence
+    /// has been heard (see the announcement hook on `body`).
+    private func chooseGoal(_ g: BoothGoal) {
+        let target = g.engines.contains(engine) ? engine : g.engines[0]
+        guard target == engine || !workspaceBusy else {
+            announce("Finish the current operation or stop the render before switching workspaces.")
+            return
+        }
+        KadeHaptics.press()
+        quietEngineChange = target != engine
+        selectEngine(target)
+        let spoken = "\(g.making). The form is below."
+        focusAfterAnnouncement = spoken
+        Task {
+            // Let the choices leave and VoiceOver settle before speaking.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard goal == g else { focusAfterAnnouncement = nil; return }
+            announce(spoken)
+        }
+    }
+
+    /// The form on screen always belongs to the engine in use, so whatever
+    /// switches the engine (a goal, an Advanced card, Pick one for me, Open in
+    /// the booth, a cover) also settles which goal is showing, and remembers
+    /// it for next time.
+    private func settleGoal(on key: String) {
+        savedGoal = BoothGoal.forEngine(key).rawValue
+        savedEngine = key
+        choosingGoal = false
     }
 
     private var starterSection: some View {
@@ -312,10 +554,33 @@ struct SoundBoothView: View {
         guide?.input?.modes.first { $0.key == inputMode }
     }
 
+    /// B8: every engine, one tap down. The goal already picked one; this is for
+    /// choosing another, and for the side-by-side explanation. Pick one for me
+    /// stays out in the open.
     private var engineSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Engine").font(.headline).accessibilityAddTraits(.isHeader)
+            DisclosureGroup("Advanced: choose the engine", isExpanded: $showEngineChoice) {
+                engineCards.padding(.top, 6)
+            }
+            .accessibilityHint("Shows all five engines, with what each is for, where it runs and what it costs. What you chose to make has already picked one.")
 
+            if guide != nil {
+                Button {
+                    Task { await suggestEngine() }
+                } label: {
+                    HStack {
+                        Label("Pick one for me from what I typed", systemImage: "wand.and.stars")
+                        if isSuggesting { ProgressView().accessibilityHidden(true) }
+                    }
+                }
+                .disabled(isSuggesting || workspaceBusy)
+                .accessibilityHint("Reads what is in the box and says which engine fits, and why. Free.")
+            }
+        }
+    }
+
+    private var engineCards: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if let guide {
                 /* Two DESCRIBED cards instead of a two-word segmented control.
                  * Her ask: "people will not know the difference." Each card
@@ -372,17 +637,6 @@ struct SoundBoothView: View {
                     Text(guide.chooser.question).font(.subheadline.bold())
                 }
                 .accessibilityHint("Opens a short explanation of when to use which engine.")
-
-                Button {
-                    Task { await suggestEngine() }
-                } label: {
-                    HStack {
-                        Label("Pick one for me from what I typed", systemImage: "wand.and.stars")
-                        if isSuggesting { ProgressView().accessibilityHidden(true) }
-                    }
-                }
-                .disabled(isSuggesting || workspaceBusy)
-                .accessibilityHint("Reads what is in the box and says which engine fits, and why. Free.")
             } else {
                 Picker("Engine", selection: Binding(get: { engine }, set: { selectEngine($0) })) {
                     Text("AuK HQ").tag("scenema")
@@ -697,6 +951,8 @@ struct SoundBoothView: View {
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Track title")
                 .accessibilityHint("Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
+                // B8: the first field of every goal's form, where a goal pick lands.
+                .accessibilityFocused($boothFocus, equals: .firstField)
             TextEditor(text: $script)
                 .font(.system(.body, design: usesDirectPrompt ? .default : .monospaced))
                 .frame(minHeight: 160)
@@ -762,15 +1018,22 @@ struct SoundBoothView: View {
             .accessibilityHint("Starts generation immediately using these settings and any imported reference. " + (currentEngine?.cost ?? ""))
             Text(currentEngine?.cost ?? localEstimateSentence(for: script)).font(.footnote)
 
-            if let job = currentJobId {
-                Button(role: .destructive) {
-                    Task { await stopRender(job) }
-                } label: {
-                    Text("Stop this render").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(KadeCardButtonStyle())
-                .accessibilityHint("Cancels the render that is running now.")
+            stopRenderButton
+        }
+    }
+
+    /// In the form under the render button, and on the front door when a render
+    /// was picked back up before any goal was chosen (B8).
+    @ViewBuilder
+    private var stopRenderButton: some View {
+        if let job = currentJobId {
+            Button(role: .destructive) {
+                Task { await stopRender(job) }
+            } label: {
+                Text("Stop this render").frame(maxWidth: .infinity)
             }
+            .buttonStyle(KadeCardButtonStyle())
+            .accessibilityHint("Cancels the render that is running now.")
         }
     }
 
@@ -911,10 +1174,12 @@ struct SoundBoothView: View {
             let scenemaOK = h.engines["scenema"]?.configured ?? false
             let seedOK = h.engines["seed"]?.configured ?? false
             let lyriaOK = h.engines["lyria"]?.configured ?? false
-            /* The first thing the screen says is the one-line answer to the
-             * question she said people would have. */
+            /* B8 (Sep 23 2026): the question she said people would have is now
+             * asked by the front door in plain words, so the chooser's
+             * engine-by-engine answer moved under Advanced, "Which engine should
+             * I use?". Without a guide, this still says what is set up. */
             let fallback = "AuK HQ \(scenemaOK ? "is available" : "is not set up"), Seed Audio \(seedOK ? "is available" : "is not set up"), Lyria \(lyriaOK ? "is available" : "is not set up")."
-            statusLine = "Ready. " + (h.guide?.chooser.answer ?? fallback)
+            statusLine = h.guide == nil ? "Ready. " + fallback : "Ready."
         } catch {
             statusLine = (error as? LocalizedError)?.errorDescription ?? "Couldn't open the Sound Booth."
         }
@@ -927,6 +1192,9 @@ struct SoundBoothView: View {
     private func loadProjects() async {
         do {
             projects = try await service.projects()
+            // C3: a render that ended while the booth was closed still has its
+            // lock-screen card up; the list says how it ended.
+            service.settleRenderCards(with: projects)
             // A render that finished while the app was closed still needs
             // watching if it is somehow still open — pick it back up.
             if currentJobId == nil,
@@ -1226,6 +1494,13 @@ struct SoundBoothView: View {
         if let pid = currentProjectId { body["projectId"] = pid }
         isRendering = true
         defer { isRendering = false }
+        /* C3: a lock-screen card for the render. Lyria and Seed Audio record
+         * inside this one request, so theirs starts now; a queued engine's
+         * starts once the server has the job, below. */
+        let cardName = renderCardName(preview: preview)
+        var cardWords = "Recording"
+        var card = health?.engines[engine]?.queued == false
+            ? service.startRenderCard(kind: cardName.kind, title: cardName.title, status: cardWords) : nil
         do {
             confirmArmed = false
             announce(preview ? "Sending the voice sample…" : "Sending the render…")
@@ -1233,14 +1508,50 @@ struct SoundBoothView: View {
             newVoice = false; currentProjectId = r.projectId ?? currentProjectId
             if r.queued == true, let job = r.jobId {
                 currentJobId = job; Earcons.shared.play(.actionStart)
+                if card == nil {
+                    cardWords = "Waiting its turn"
+                    card = service.startRenderCard(kind: cardName.kind, title: cardName.title, status: cardWords)
+                }
+                // Filed under the project, so a later visit can still move it on.
+                service.fileRenderCard(card, under: currentProjectId ?? job, showing: cardWords)
                 announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + ((engine == "yue2" || isEffects) ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."))
                 startPolling(job)
             } else {
+                service.finishRenderCard(id: card, status: "Ready to play")
                 Earcons.shared.play(.actionDone); KadeHaptics.success()
                 announce("Ready. The recording is in your library below and in My Creations.")
                 await loadProjects()
             }
-        } catch { announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.") }
+        } catch {
+            service.finishRenderCard(id: card, status: SoundBoothService.cardReason((error as? LocalizedError)?.errorDescription ?? error.localizedDescription), failed: true)
+            announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.")
+        }
+    }
+
+    /// C3: what the lock-screen card calls this render. The kind picks the
+    /// card's symbol; the title is the one she gave it, or the first few words
+    /// of what she typed.
+    private func renderCardName(preview: Bool) -> (kind: String, title: String) {
+        let kind: String
+        let lead: String
+        switch engine {
+        case "lyria", "yue2": kind = "song"; lead = "Your song"
+        case "seed": kind = "scene"; lead = "Your scene"
+        case "stable": kind = "sound"; lead = "Your sounds"
+        default:
+            kind = "scene"
+            lead = preview ? "Your voice sample" : (values["auk_task"] == "edit" ? "Your edit" : "Your reading")
+        }
+        let named = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = (usesDirectPrompt || text.isEmpty) ? script : text
+        let firstWords = typed
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\[[^\\]]*\\]", with: " ", options: .regularExpression)
+            .split(whereSeparator: { $0.isWhitespace })
+            .prefix(6)
+            .joined(separator: " ")
+        let name = named.isEmpty ? firstWords : named
+        return (kind, name.isEmpty ? lead : "\(lead): \(name)")
     }
 
     /// Only used when the server has not given us an estimate yet (she edited
@@ -1278,6 +1589,8 @@ struct SoundBoothView: View {
 
     private func startPolling(_ jobId: String) {
         pollTask?.cancel()
+        // C3: the render's lock-screen card is filed under its project (renderTapped).
+        let cardKey = currentProjectId ?? jobId
         pollTask = Task {
             var last = ""
             var ticks = 0
@@ -1293,6 +1606,11 @@ struct SoundBoothView: View {
                     continue
                 }
                 ticks += 1
+                // C3: the service only touches the card on a new stage, or when
+                // known progress moves a tenth or more.
+                if !st.isFinished {
+                    service.updateRenderCard(under: cardKey, status: st.cardStatus, progress: st.cardProgress)
+                }
                 // Part 126: speak on a state CHANGE, on the finish, and every
                 // other poll (30 s) while unfinished — the web's rule since
                 // Part 122. Silence between "queued" and "done" is what a
@@ -1304,9 +1622,11 @@ struct SoundBoothView: View {
                 }
                 if st.isFinished {
                     if st.state == "done" {
+                        service.finishRenderCard(under: cardKey, status: "Ready to play")
                         Earcons.shared.play(.actionDone)
                         KadeHaptics.success()
                     } else {
+                        service.finishRenderCard(under: cardKey, status: st.state == "cancelled" ? "Stopped" : SoundBoothService.cardReason(st.error), failed: true)
                         Earcons.shared.play(.error)
                         if st.state == "failed" {
                             showFailedProjects = true
@@ -1327,6 +1647,7 @@ struct SoundBoothView: View {
             let result = try await service.cancel(jobId: jobId)
             if result.state == "done" { announce(result.spoken ?? "That take just finished. Checking its result."); return }
             pollTask?.cancel(); pollTask = nil
+            service.finishRenderCard(under: currentProjectId ?? jobId, status: "Stopped", failed: true)
             currentJobId = nil
             announce(result.spoken ?? "Stopped. Completed recordings are kept.")
             await loadProjects()
