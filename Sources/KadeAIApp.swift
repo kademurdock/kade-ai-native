@@ -4,6 +4,7 @@ import UserNotifications
 
 @main
 struct KadeAIApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     // Phase 6: bridges the UIKit-only push-notification callbacks (no
     // SwiftUI App-lifecycle equivalent exists for
     // didRegisterForRemoteNotificationsWithDeviceToken or foreground
@@ -122,6 +123,9 @@ struct KadeAIApp: App {
                     default:
                         break
                     }
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { pushService.refreshRegistration() }
                 }
         }
     }

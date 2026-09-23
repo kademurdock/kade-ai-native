@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Registers this device for push notifications with kade-ai-bridge --
 /// Phase 6. Deliberately its OWN tiny client, not routed through
@@ -31,6 +32,12 @@ final class PushService: ObservableObject {
     private var lastSentToken: String?
     private var lastSentUserId: String?
     private var lastSentRingtone: String?
+    private var isSyncing = false
+    private let send: (URLRequest) async throws -> (Data, URLResponse)
+
+    init(send: @escaping (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }) {
+        self.send = send
+    }
     /// Part 75: the Settings agent-call ringtone pick, stored here so the
     /// bridge learns the user's DEFAULT ring on the same register call.
     static let ringtoneDefaultsKey = "kadeCallRingtone"
@@ -50,36 +57,48 @@ final class PushService: ObservableObject {
     }
 
     /// Called whenever sign-in state changes (KadeAIApp watches AuthState).
-    /// `nil` on sign-out -- the token stays registered but reverts to
-    /// "unlinked" server-side on its next natural re-send, same as a device
-    /// that never signed in (still reachable by admin/global broadcasts,
-    /// just not per-user ones).
+    /// `nil` explicitly unregisters the device, including from broadcasts.
     func setUserId(_ id: String?) {
         userId = id
         Task { await syncIfNeeded() }
     }
 
     private func syncIfNeeded() async {
-        guard let token = deviceTokenHex else { return }   // nothing to register yet
-        let ringtone = UserDefaults.standard.string(forKey: Self.ringtoneDefaultsKey)
-        if token == lastSentToken && userId == lastSentUserId && ringtone == lastSentRingtone { return }
-        var req = URLRequest(url: bridgeURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: String] = ["token": token, "platform": "ios"]
-        if let userId { body["userId"] = userId }
-        if let ringtone { body["ringtone"] = ringtone }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                lastSentToken = token
-                lastSentUserId = userId
-                lastSentRingtone = ringtone
+        guard !isSyncing else { return }
+        isSyncing = true
+        defer { isSyncing = false }
+        while let token = deviceTokenHex {
+            let sendingUserId = userId
+            let ringtone = UserDefaults.standard.string(forKey: Self.ringtoneDefaultsKey)
+            if token == lastSentToken && sendingUserId == lastSentUserId && ringtone == lastSentRingtone { return }
+            var req = URLRequest(url: bridgeURL)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var body: [String: Any] = ["token": token, "platform": "ios"]
+            if let sendingUserId { body["userId"] = sendingUserId }
+            else { body["userId"] = NSNull() }
+            if let ringtone { body["ringtone"] = ringtone }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            do {
+                let (_, response) = try await send(req)
+                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                    lastSentToken = token
+                    lastSentUserId = sendingUserId
+                    lastSentRingtone = ringtone
+                } else {
+                    return
+                }
+                // Any other status: fail-soft, next foreground/state-change retries.
+            } catch {
+                // Offline or bridge unreachable: fail-soft, retried on next change.
+                return
             }
-            // Any other status: fail-soft, next foreground/state-change retries.
-        } catch {
-            // Offline or bridge unreachable: fail-soft, retried on next change.
+            // State may have changed during the request. Send its latest value
+            // next; an older login response must never acknowledge a later logout.
         }
+    }
+
+    func refreshRegistration() {
+        Task { await syncIfNeeded() }
     }
 }
