@@ -107,7 +107,10 @@ struct KadeAIApp: App {
                         KadeHapticEngine.shared.prewarm()
                     }
                     await auth.restore()   // restore a saved session at launch
-                    requestPushAuthorization()
+                    // Sep 23 2026 redesign (B13): launch REGISTERS but never
+                    // ASKS. The ask waits for the first reply, with a reason —
+                    // see KadePushPermission.
+                    KadePushPermission.registerAtLaunch()
                 }
                 .onChange(of: auth.state) { _, newState in
                     // Link the device to whoever is actually signed in right
@@ -127,71 +130,6 @@ struct KadeAIApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { pushService.refreshRegistration() }
                 }
-        }
-    }
-
-    /// Ask once at launch. iOS silently no-ops a repeat request if the user
-    /// already answered (allow OR deny) -- safe to call unconditionally
-    /// every launch rather than tracking "have we asked before" ourselves.
-    private func requestPushAuthorization() {
-        // August 1 2026 (the App Store sprint, part 2): every tour frame
-        // from build 174 came back photobombed by this exact permission
-        // alert -- CI has no finger to tap it away, and Apple rejects
-        // store screenshots that show permission dialogs. In tour mode
-        // (debug simulator runs only; Release never sets KADE_TOUR), skip
-        // the ask entirely -- the tour seat has no use for push anyway.
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["KADE_TOUR"] == "1" { return }
-        #endif
-        // Build 193: declare the KADE_BRIEF category BEFORE asking for
-        // authorization — iOS matches a push's category string against
-        // whatever was registered most recently, and registering every
-        // launch is the documented pattern (idempotent, cheap). LISTEN and
-        // READ both open the app (.foreground): the brief speaks through
-        // the app's own voice pipeline, not a sound file in the push, so
-        // there is nothing useful a background action could do. A brief
-        // push on a build that predates this registration just shows no
-        // buttons — nothing breaks.
-        let listen = UNNotificationAction(
-            identifier: "KADE_BRIEF_LISTEN", title: "Listen", options: [.foreground]
-        )
-        let read = UNNotificationAction(
-            identifier: "KADE_BRIEF_READ", title: "Read", options: [.foreground]
-        )
-        let briefCategory = UNNotificationCategory(
-            identifier: "KADE_BRIEF", actions: [listen, read], intentIdentifiers: [], options: []
-        )
-        // Build 195: the doorbell category — no action buttons, a plain tap
-        // routes to Access Requests via AppDelegate.didReceive. Registered
-        // here because iOS only honors categories from the most recent
-        // setNotificationCategories call (it replaces, never merges).
-        let doorbellCategory = UNNotificationCategory(
-            identifier: "KADE_DOORBELL", actions: [], intentIdentifiers: [], options: []
-        )
-        /* Part 75 (Aug 21 2026): the agent-call ring. Answer opens the app
-         * straight into the call (.foreground); "Not now" quietly declines
-         * (no .foreground -- iOS dismisses, and the bridge's missed-call
-         * sweep sends the follow-up note on its own). The ringtone is the
-         * push's sound: bundled KadeRing*.caf files, and a build that
-         * predates them falls back to the default sound by Apple's rule. */
-        let answer = UNNotificationAction(
-            identifier: "KADE_CALL_ANSWER", title: "Answer", options: [.foreground]
-        )
-        let later = UNNotificationAction(
-            identifier: "KADE_CALL_LATER", title: "Not now", options: []
-        )
-        let callCategory = UNNotificationCategory(
-            identifier: "KADE_CALL", actions: [answer, later], intentIdentifiers: [], options: []
-        )
-        UNUserNotificationCenter.current().setNotificationCategories([briefCategory, doorbellCategory, callCategory])
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-            guard granted else { return }
-            // registerForRemoteNotifications() must run on the main thread;
-            // the authorization completion handler fires on an arbitrary
-            // queue, so hop explicitly rather than assume.
-            DispatchQueue.main.async {
-                UIApplication.shared.registerForRemoteNotifications()
-            }
         }
     }
 }

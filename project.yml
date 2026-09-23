@@ -79,7 +79,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
-        MARKETING_VERSION: "2.0.5"
+        MARKETING_VERSION: "2.1.0"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -101,7 +101,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIconName: AppIcon
-        UILaunchScreen: {}
+        # Sep 23 2026 redesign (C4): the launch screen wears the icon's own
+        # warm brown with the K in the middle, instead of a blank white flash.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: LaunchMark
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         # KADE KEYS dictate (July 31 2026): the keyboard bounces here to
@@ -205,7 +209,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.keyboard
-        MARKETING_VERSION: "2.0.5"
+        MARKETING_VERSION: "2.1.0"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -256,7 +260,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
-        MARKETING_VERSION: "2.0.5"
+        MARKETING_VERSION: "2.1.0"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
