@@ -606,8 +606,15 @@ struct ConversationDetailView: View {
                     // "Pick an agent below…" although the character was
                     // usually already picked. It now welcomes you instead.
                     if conversationId == nil {
-                        firstChatWelcome
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // A plain (not lazy) ScrollView: at the largest text
+                        // sizes the welcome is taller than the space above
+                        // the composer, and "Pick up where you left off" was
+                        // pushed out of reach (seen on the Sep 23 tour).
+                        ScrollView {
+                            firstChatWelcome
+                                .frame(maxWidth: .infinity)
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
                     } else {
                         Text("No messages in this conversation.")
                             .foregroundStyle(.secondary)
@@ -2158,6 +2165,9 @@ struct ConversationDetailView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.primary)
                                     .multilineTextAlignment(.leading)
+                                    // Wraps at large text sizes instead of
+                                    // cutting the starter off.
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 0)
                             }
                         }
