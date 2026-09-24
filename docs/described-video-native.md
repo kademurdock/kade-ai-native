@@ -37,7 +37,14 @@ the answer.
 - **Upload**: 8 MB chunks (the server's `chunkBytes`) read from disk one at a
   time, three tries each with a short wait, a progress bar, a lock-screen card,
   and "Stop the upload". Picking the same file again resumes from the server's
-  `uploadedBytes` (the request id is kept per file name, size and date).
+  `uploadedBytes` (the request id is kept per file name, size and date). The
+  upload belongs to the app, not the screen (`DescribedVideoUploads`): a
+  describer screen that replaced the one that started it (the Create tab
+  tapped again, the upload's own card) still shows the bar and Stop under the
+  status line, cannot start a second upload, and opens the video when it ends.
+- **Away from the screen** (another tab, another screen): nothing is spoken,
+  sounded or polled there. What would have been said is said when the screen
+  shows again, which also refreshes the video and restarts polling.
 - **Narration**: voice (a searchable sheet grouped by the catalogue's
   categories; each voice's description is its hint), Play a sample, usual and
   fastest speed, detail, pause mode, volume, closer look, first look, notes,
@@ -121,3 +128,9 @@ free rehearsal.
    have this video…" and it opens.
 10. While a video describes, play an earlier version: no progress is spoken
    over it; the latest line is said when the player closes.
+11. Start a long upload, then tap the Create tab again: the new screen says a
+   video is uploading, shows the bar and Stop, and its choose buttons are
+   dimmed. Go to the Talk tab: no upload percent or "Video checked" is spoken
+   there. Come back: the uploaded video is open and its news is said.
+12. With one video describing and another just finished, tap the "ready" push:
+   the finished one opens (a lock-screen card still opens the one describing).

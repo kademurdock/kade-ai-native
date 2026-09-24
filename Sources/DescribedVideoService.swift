@@ -13,12 +13,17 @@ import Combine
 // after `GET config` has succeeded for this account (DescribedVideoAccess), so
 // an account the server refuses never meets a screen that refuses it.
 
-/// Where the screen opens: a Library video (book + track), the newest finished
-/// video (a push or a lock-screen card), or plainly.
+/// Where the screen opens: a Library video (book + track), a lock-screen card,
+/// the "ready" push, or plainly.
 struct DescribedVideoStart: Hashable {
     var book: String? = nil
     var track: Int? = nil
+    /// A lock-screen card (every card has the same link, so it cannot say
+    /// which video): the video being worked on, else the newest finished.
     var openLatest = false
+    /// The "your described video is ready" push: the newest finished video,
+    /// even while another is still being checked or described.
+    var openFinished = false
 }
 
 /// Whether this account may use the describer. Decided once per sign-in by
@@ -30,18 +35,30 @@ final class DescribedVideoAccess: ObservableObject {
     @Published private(set) var allowed = false
     private var decided = false
     private var checking = false
+    /// Moves on at every sign-out, so an answer asked for by the account
+    /// that signed out is never kept for the next one.
+    private var generation = 0
 
     /// Asks the server once. A network failure, a 401, a 5xx or a 200 that is
-    /// not the describer's config (a proxy's page) leaves it undecided, so the
-    /// next foreground asks again; 403 and 404 decide "no".
+    /// not the describer's config (a proxy's page, or any other JSON) leaves
+    /// it undecided, so the next foreground asks again; 403 and 404 decide
+    /// "no".
     func check(client: KadeAPIClient) async {
         guard !decided, !checking else { return }
+        let asked = generation
         checking = true
-        defer { checking = false }
+        defer {
+            if asked == generation { checking = false }
+        }
         let req = client.request(path: "api/kade/described-video/config", authorized: true, timeout: 30)
         guard let (data, http) = try? await client.send(req) else { return }
+        // Signed out (and perhaps in as someone else) while it was asked.
+        guard asked == generation else { return }
         if http.statusCode == 200 {
-            guard (try? JSONDecoder().decode(DVConfig.self, from: data)) != nil else { return }
+            // Every field is read leniently, so `{}` would decode: it counts
+            // only with a field the describer's config always sends.
+            guard let config = try? JSONDecoder().decode(DVConfig.self, from: data),
+                  config.voices != nil || config.perMinuteUSD != nil || config.maxBytes != nil else { return }
             allowed = true
             decided = true
         } else if http.statusCode == 403 || http.statusCode == 404 {
@@ -56,10 +73,95 @@ final class DescribedVideoAccess: ObservableObject {
         decided = true
     }
 
-    /// Sign-out: the next account is asked afresh.
+    /// Sign-out: the next account is asked afresh, and a check still out for
+    /// the last account is ignored when it answers.
     func reset() {
+        generation += 1
+        checking = false
         allowed = false
         decided = false
+    }
+}
+
+/// The one upload running, whichever describer screen started it. A screen is
+/// easily replaced while an upload runs (the Create tab tapped again, the
+/// Library's "Make a described copy", the upload's own lock-screen card), and
+/// the new screen must still show the progress and the Stop button, must not
+/// start a second upload, and opens the video when the upload ends. How it
+/// ended is said once, by the screen she is on.
+@MainActor
+final class DescribedVideoUploads: ObservableObject {
+    static let shared = DescribedVideoUploads()
+
+    enum Ending {
+        case uploaded(DVJob)
+        case stopped
+        case failed(Error)
+    }
+
+    @Published private(set) var isRunning = false
+    /// 0 to 1 once the file itself is going up; nil while the phone checks it.
+    @Published private(set) var progress: Double?
+    /// Counts the endings, so each is said once.
+    @Published private(set) var endingNumber = 0
+    private var ending: Ending?
+    private var task: Task<Void, Never>?
+    private var card: String?
+    private var cardStep = -1
+
+    /// Runs one upload; false when one is already running.
+    func run(_ work: @escaping @MainActor () async -> Ending?) -> Bool {
+        guard task == nil else { return false }
+        isRunning = true
+        progress = nil
+        task = Task {
+            let result = await work()
+            self.end(result)
+        }
+        return true
+    }
+
+    func stop() {
+        task?.cancel()
+    }
+
+    /// The phone's checks passed and the file itself starts going up.
+    func started(name: String) {
+        progress = 0
+        cardStep = 0
+        card = KadeJobActivity.start(kind: "described-video", title: "Uploading: \(name)", status: "Uploading", progress: 0)
+    }
+
+    /// The bar moves with every chunk; the lock-screen card with every tenth.
+    func moved(_ fraction: Double) {
+        progress = fraction
+        let step = Int(fraction * 10)
+        guard step != cardStep else { return }
+        cardStep = step
+        KadeJobActivity.update(card, status: "Uploading", progress: fraction)
+    }
+
+    private func end(_ result: Ending?) {
+        if case .some(.uploaded) = result {
+            KadeJobActivity.finish(card, status: "Uploaded")
+        } else {
+            KadeJobActivity.finish(card, status: "Upload paused", failed: true)
+        }
+        card = nil
+        task = nil
+        isRunning = false
+        progress = nil
+        guard let result else { return }
+        ending = result
+        endingNumber += 1
+    }
+
+    /// The newest ending, when it came after `seen` and no screen has said
+    /// it yet. The first screen to ask takes it.
+    func take(after seen: Int) -> Ending? {
+        guard endingNumber > seen, let ending else { return nil }
+        self.ending = nil
+        return ending
     }
 }
 
@@ -838,6 +940,9 @@ final class DescribedVideoService: ObservableObject {
 
     // MARK: Choosing a video
 
+    /// The recovery keys of the files uploading now, for every screen.
+    private static var uploadingKeys: Set<String> = []
+
     /// Upload one file in the server's chunk size, straight from disk (one
     /// chunk in memory at a time), then ask the server to check it.
     ///
@@ -854,6 +959,13 @@ final class DescribedVideoService: ObservableObject {
         guard size > 0 else { throw DescribedVideoError(message: "That video could not be read. Try choosing it again.") }
         let defaults = UserDefaults.standard
         let key = "kade.describedVideo.upload." + recoveryKey
+        // One file never uploads twice at once: the saved request id would
+        // send two loops of chunks to the same video.
+        guard !Self.uploadingKeys.contains(key) else {
+            throw DescribedVideoError(message: "That video is already uploading.")
+        }
+        Self.uploadingKeys.insert(key)
+        defer { Self.uploadingKeys.remove(key) }
         var requestId = defaults.string(forKey: key) ?? Self.newRequestId()
         defaults.set(requestId, forKey: key)
         let cleanName = String(name.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ").prefix(240))

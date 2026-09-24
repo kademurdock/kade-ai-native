@@ -43,6 +43,9 @@ struct DescribedVideoView: View {
     @State private var loadFailed = false
     @State private var refused = false
     @State private var statusLine = "Opening the video describer…"
+    /// False once she has left (another tab, another screen): nothing is
+    /// said, sounded or polled until the screen shows again.
+    @State private var onScreen = false
     @State private var pendingFocus: DVPendingFocus?
     /// What would have been said while a sheet was up (the player, the
     /// transcript): said once the sheet closes, never over the film.
@@ -64,8 +67,11 @@ struct DescribedVideoView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var youtubeLink = ""
     @State private var pendingLibrary: DescribedVideoStart?
-    @State private var uploadTask: Task<Void, Never>?
-    @State private var uploadProgress: Double?
+    /// The upload lives outside the screen (DescribedVideoUploads): a screen
+    /// that replaced the one that started it still shows it and its Stop.
+    @ObservedObject private var uploads = DescribedVideoUploads.shared
+    /// Upload endings up to here happened before this screen was made.
+    @State private var seenUploadEnding: Int
     @State private var uploadStep = -1
     @State private var uploadSpokenAt = Date.distantPast
     @State private var isBusy = false
@@ -110,6 +116,9 @@ struct DescribedVideoView: View {
     @State private var libraryFolders: [String] = []
     @State private var shareWithFamily = true
     @State private var savingToLibrary = false
+    /// The downloaded copy in the share sheet, deleted when the sheet closes
+    /// (a film can be a gigabyte or two).
+    @State private var sharedFile: URL?
 
     // Presentations: ONE sheet, one confirmation alert, and the rename alert
     // on a view of its own.
@@ -117,6 +126,8 @@ struct DescribedVideoView: View {
     @State private var confirm: DVConfirm?
     @State private var showRename = false
     @State private var renameText = ""
+    /// The video the Rename alert was opened for.
+    @State private var renameJobId = ""
 
     @AccessibilityFocusState private var focus: DVFocus?
 
@@ -124,6 +135,7 @@ struct DescribedVideoView: View {
         self.apiClient = apiClient
         self.start = start
         _service = StateObject(wrappedValue: DescribedVideoService(client: apiClient))
+        _seenUploadEnding = State(initialValue: DescribedVideoUploads.shared.endingNumber)
     }
 
     // MARK: - Types
@@ -151,15 +163,18 @@ struct DescribedVideoView: View {
         }
     }
 
+    /// A question and the ONE video it is about: the open video can change
+    /// while the alert is up (an upload ending opens its video).
     fileprivate struct DVConfirm: Identifiable {
         enum Kind { case start(preview: Bool), finish, resume, allowMore(Double), redo, cancel, delete, abandon }
         let kind: Kind
         let title: String
         let message: String
         let button: String
+        let jobId: String
         var destructive = false
         var keep = "Not now"
-        var id: String { title }
+        var id: String { "\(jobId)|\(title)" }
     }
 
     fileprivate struct DVOption: Identifiable {
@@ -199,7 +214,7 @@ struct DescribedVideoView: View {
     // MARK: - Body
 
     var body: some View {
-        watchers(lifecycle(presentations(page)))
+        uploadWatchers(watchers(lifecycle(presentations(page))))
     }
 
     private var page: some View {
@@ -208,6 +223,11 @@ struct DescribedVideoView: View {
                 Text("Keep the actors, music and sound. A narrator describes what happens on screen in the pauses. Then watch it here, save the video or the audio, or read it as a described transcript.")
                     .font(.body)
                 statusBlock
+                // Under the status whatever is open, so a screen that did not
+                // start the upload still shows it and can stop it.
+                if uploads.isRunning {
+                    uploadProgressRow
+                }
                 if refused {
                     Text("Described video isn't available on this account.")
                         .font(.body)
@@ -290,15 +310,22 @@ struct DescribedVideoView: View {
 
     private func lifecycle<Content: View>(_ base: Content) -> some View {
         base
+            .onAppear {
+                onScreen = true
+                releaseHeldAnnouncement()
+            }
+            // Coming back refreshes the video, which starts polling again.
             .task { await load() }
             .onDisappear {
+                onScreen = false
                 stopPolling()
                 estimateTask?.cancel()
                 samplePlayer?.stop()
+                removeSharedFile()
             }
             .onChange(of: scenePhase) { _, phase in
                 appActive = phase == .active
-                if phase == .active, let current = job, current.needsWatching {
+                if phase == .active, onScreen, let current = job, current.needsWatching {
                     Task { await refreshJob(current.id) }
                 }
             }
@@ -316,12 +343,25 @@ struct DescribedVideoView: View {
                 // its finish may name it either way.
                 let value = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey]
                 let spoken = (value as? String) ?? (value as? NSAttributedString)?.string
-                guard let waiting = pendingFocus, spoken == waiting.text else { return }
+                guard onScreen, let waiting = pendingFocus, spoken == waiting.text else { return }
                 pendingFocus = nil
                 if activeSheet == nil { focus = waiting.target }
             }
-            .onChange(of: activeSheet?.id) { _, id in
+            .onChange(of: activeSheet?.id) { old, id in
                 if id == nil { releaseHeldAnnouncement() }
+                // The share sheet has closed: its downloaded copy goes.
+                if let old, old.hasPrefix("share-"), old != id { removeSharedFile() }
+            }
+    }
+
+    /// The upload's bar and ending, whichever screen started it.
+    private func uploadWatchers<Content: View>(_ base: Content) -> some View {
+        base
+            .onChange(of: uploads.progress) { _, value in
+                if let value { uploadMoved(value) }
+            }
+            .onChange(of: uploads.endingNumber) { _, _ in
+                takeUploadEnding()
             }
     }
 
@@ -370,7 +410,7 @@ struct DescribedVideoView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(statusLine)
                 .font(.subheadline)
-            if isBusy || loading || uploadProgress != nil {
+            if isBusy || loading || uploads.progress != nil {
                 ProgressView().accessibilityHidden(true)
             }
         }
@@ -386,7 +426,7 @@ struct DescribedVideoView: View {
     // MARK: - Choose a video
 
     private var choosingDisabled: Bool {
-        uploadTask != nil || isBusy || config?.enabled == false
+        uploads.isRunning || isBusy || config?.enabled == false
     }
 
     private var chooseSection: some View {
@@ -447,19 +487,15 @@ struct DescribedVideoView: View {
             .buttonStyle(KadeCardButtonStyle())
             .disabled(choosingDisabled)
             .accessibilityHint("Opens your photo library's videos. The video is uploaded and checked for free.")
-
-            if uploadTask != nil {
-                uploadProgressRow
-            }
         }
     }
 
     private var uploadProgressRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ProgressView(value: min(1, max(0, uploadProgress ?? 0)), total: 1)
+            ProgressView(value: min(1, max(0, uploads.progress ?? 0)), total: 1)
                 .accessibilityLabel("Upload progress")
-                .accessibilityValue("\(Int(((uploadProgress ?? 0) * 100).rounded())) percent")
-            Button("Stop the upload") { uploadTask?.cancel() }
+                .accessibilityValue("\(Int(((uploads.progress ?? 0) * 100).rounded())) percent")
+            Button("Stop the upload") { uploads.stop() }
                 .buttonStyle(.bordered)
                 .accessibilityHint("Choosing the same video again later carries on from where it stopped.")
         }
@@ -549,23 +585,25 @@ struct DescribedVideoView: View {
                 .disabled(isBusy)
                 .accessibilityHint("Sets the stopped remake aside, and version \(last.number) is the current copy again.")
             }
+            // Not while an upload runs: when it ends, its video opens here.
             Button("Rename") {
                 renameText = current.title
+                renameJobId = current.id
                 showRename = true
             }
             .buttonStyle(.bordered)
-            .disabled(isBusy)
+            .disabled(isBusy || uploads.isRunning)
             if ["ready", "uploading", "done", "failed", "cancelled", "deleting"].contains(current.state) {
                 Button(current.state == "deleting" ? "Finish deleting" : "Delete this video and its files", role: .destructive) {
                     confirm = deleteConfirm(current)
                 }
                 .buttonStyle(.bordered)
-                .disabled(isBusy)
+                .disabled(isBusy || uploads.isRunning)
                 .accessibilityHint("Asks first. This cannot be undone.")
             }
             Button("Choose another video") { closeJob() }
                 .buttonStyle(.bordered)
-                .disabled(uploadTask != nil)
+                .disabled(uploads.isRunning)
                 .accessibilityHint("This video stays in Your videos below.")
         }
     }
@@ -872,7 +910,7 @@ struct DescribedVideoView: View {
     private func allowMoreButton(_ current: DVJob) -> some View {
         let quote = estimates["resume"]
         let raise = raiseAmount(quote)
-        let blocked = quote == nil || quote?.isAllowed == false || raise <= 0 || isBusy || uploadTask != nil
+        let blocked = quote == nil || quote?.isAllowed == false || raise <= 0 || isBusy || uploads.isRunning
         return Button {
             askToAllowMore(current)
         } label: {
@@ -886,6 +924,7 @@ struct DescribedVideoView: View {
 
     private func allowMoreHint(_ quote: DVEstimate?) -> String {
         guard let quote, quote.isAllowed else { return spendHint(quote) }
+        guard raiseAmount(quote) > 0 else { return "How much more it would need could not be worked out." }
         return "Asks before spending. It stops again if it would go past that amount."
     }
 
@@ -897,10 +936,13 @@ struct DescribedVideoView: View {
     /// (the resume estimate's approval, which the server works out from how
     /// far over the stopped run went), else the rule an approval is made with
     /// (the price × 1.5 + 10 cents). Never past the limit for one run or what
-    /// today's allowance has left, which the server would refuse.
+    /// today's allowance has left, which the server would refuse. With no
+    /// figure at all there is nothing to agree to: 0, and the button stays
+    /// off.
     private func raiseAmount(_ quote: DVEstimate?) -> Double {
         guard let quote else { return 0 }
-        let wanted = quote.allowUpToUSD ?? quote.approvedUSD ?? ((quote.estimateUSD ?? 0) * 1.5 + 0.1)
+        let byRule: Double? = quote.estimateUSD.map { $0 * 1.5 + 0.1 }
+        guard let wanted = quote.allowUpToUSD ?? quote.approvedUSD ?? byRule else { return 0 }
         var cap = quote.limitUSD ?? config?.limitUSD ?? 5
         if let left = quote.remainingUSD, left > 0 { cap = min(cap, left) }
         return (min(cap, wanted) * 100).rounded(.down) / 100
@@ -924,12 +966,13 @@ struct DescribedVideoView: View {
     }
 
     /// A button that spends. Its label carries the server's price; with no
-    /// price yet (or a refusal) it cannot be pressed, because the price is
-    /// always said before anything is spent.
+    /// price yet, an answer without a readable price, or a refusal, it cannot
+    /// be pressed, because the price is always said before anything is spent.
     private func spendButton(_ action: String, title: String, kind: DVConfirm.Kind) -> some View {
         let quote = estimates[action]
-        let label = quote.map { "\(title), about \(Self.money($0.estimateUSD))" } ?? title
-        let blocked = quote == nil || quote?.isAllowed == false || isBusy || uploadTask != nil
+        let price = quote?.estimateUSD
+        let label = price.map { "\(title), about \(Self.money($0))" } ?? title
+        let blocked = price == nil || quote?.isAllowed == false || isBusy || uploads.isRunning
         return Button {
             askToSpend(action, title: title, kind: kind)
         } label: {
@@ -947,6 +990,9 @@ struct DescribedVideoView: View {
         }
         if !quote.isAllowed {
             return Self.sentence(quote.reason ?? "This is over the limit for one run or today's allowance")
+        }
+        if quote.estimateUSD == nil {
+            return "The price could not be worked out, so this cannot start yet. Change a setting, or open the video again, to ask again."
         }
         var words = "Asks before spending."
         if let aside = quote.setAsideUSD, aside > 0 {
@@ -977,6 +1023,8 @@ struct DescribedVideoView: View {
             words += " Allowing up to \(Self.money(raise)) more lets it carry on."
         } else if estimating {
             words += " Working out how much more it needs…"
+        } else if quote != nil {
+            words += " How much more it would need could not be worked out."
         }
         return words + " " + keptSentence(current)
     }
@@ -993,10 +1041,12 @@ struct DescribedVideoView: View {
         var parts: [String] = []
         for (action, title) in titled {
             guard let quote = estimates[action] else { continue }
-            if quote.isAllowed {
-                parts.append("\(title), about \(Self.money(quote.estimateUSD)).")
-            } else {
+            if !quote.isAllowed {
                 parts.append("\(title): \(Self.sentence(quote.reason ?? "not available right now"))")
+            } else if let usd = quote.estimateUSD {
+                parts.append("\(title), about \(Self.money(usd)).")
+            } else {
+                parts.append("\(title): the price could not be worked out, so it cannot start yet.")
             }
         }
         if let first = estimates.values.first, let left = first.remainingUSD, let daily = first.dailyUSD {
@@ -1286,7 +1336,7 @@ struct DescribedVideoView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(KadeCardButtonStyle())
-        .disabled(uploadTask != nil)
+        .disabled(uploads.isRunning)
         .accessibilityLabel("\(item.title), \(summary)")
         .accessibilityValue(job?.id == item.id ? "Open" : "")
         .accessibilityHint("Opens this video.")
@@ -1307,10 +1357,12 @@ struct DescribedVideoView: View {
     ///
     /// While a sheet is up (the film playing, the transcript being read) the
     /// line is written but held, and only the latest is said once the sheet
-    /// closes: the describer never talks over the described video.
+    /// closes: the describer never talks over the described video. The same
+    /// while she is away from the screen (another tab, another screen): it is
+    /// said when the screen shows again, never over her chat.
     private func announce(_ text: String, thenFocus target: DVFocus? = nil, high: Bool = false) {
         statusLine = text
-        if activeSheet != nil {
+        if activeSheet != nil || !onScreen {
             if let target {
                 pendingFocus = DVPendingFocus(text: text, target: target)
             } else if let waiting = pendingFocus {
@@ -1334,14 +1386,14 @@ struct DescribedVideoView: View {
         announce(text, thenFocus: target, high: true)
     }
 
-    /// The sheet has closed: say the latest held line, after VoiceOver has
-    /// landed back on the screen.
+    /// The sheet has closed, or the screen shows again: say the latest held
+    /// line, after VoiceOver has landed back on the screen.
     private func releaseHeldAnnouncement() {
-        guard let held = heldAnnouncement else { return }
+        guard onScreen, activeSheet == nil, let held = heldAnnouncement else { return }
         heldAnnouncement = nil
         Task {
             try? await Task.sleep(nanoseconds: 700_000_000)
-            guard activeSheet == nil, heldAnnouncement == nil else { return }
+            guard onScreen, activeSheet == nil, heldAnnouncement == nil else { return }
             UIAccessibility.post(notification: .announcement, argument: held)
         }
     }
@@ -1350,14 +1402,25 @@ struct DescribedVideoView: View {
     private func moveFocus(_ target: DVFocus) {
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
-            if activeSheet == nil { focus = target }
+            if onScreen, activeSheet == nil { focus = target }
         }
+    }
+
+    /// Sounds and buzzes belong to this screen: work that ends after she has
+    /// left it is said when she comes back, never sounded over another tab.
+    private func sound(_ earcon: Earcon) {
+        if onScreen { Earcons.shared.play(earcon) }
+    }
+
+    private func buzz(success: Bool) {
+        guard onScreen else { return }
+        if success { KadeHaptics.success() } else { KadeHaptics.error() }
     }
 
     private func fail(_ error: Error, _ fallback: String = "Something went wrong. Try again.", thenFocus target: DVFocus? = nil) {
         if error is CancellationError { return }
-        Earcons.shared.play(.error)
-        KadeHaptics.error()
+        sound(.error)
+        buzz(success: false)
         announce(Self.message(error, fallback), thenFocus: target)
     }
 
@@ -1372,6 +1435,11 @@ struct DescribedVideoView: View {
         if loaded {
             await reloadList()
             if let current = job { await refreshJob(current.id) }
+            // Prices cancelled when she left are asked for again, quietly.
+            if let current = job, estimates.isEmpty, !neededActions(current).isEmpty {
+                scheduleEstimates(speak: false)
+            }
+            takeUploadEnding()
             return
         }
         guard !loading else { return }
@@ -1403,6 +1471,9 @@ struct DescribedVideoView: View {
             libraryFolders = folders
         }
         openStart(fetched)
+        // An upload that ended while this screen was opening.
+        loading = false
+        takeUploadEnding()
     }
 
     private func openStart(_ fetched: DVConfig) {
@@ -1412,11 +1483,29 @@ struct DescribedVideoView: View {
             announce("Library video chosen. Choose Check this Library video to check it for free.", thenFocus: .library)
             return
         }
+        // The "ready" push: the video it was about, even while another works.
+        if start.openFinished, let latest = latestFinished() {
+            open(latest)
+            return
+        }
+        // An upload another screen started (or this one's own lock-screen
+        // card): nothing is opened under it, and its video opens here when
+        // it ends.
+        if uploads.isRunning {
+            let fraction = uploads.progress ?? 0
+            uploadStep = Int(fraction * 10)
+            uploadSpokenAt = Date()
+            let landing: DVFocus? = retrying ? .choose : nil
+            announce("A video is uploading, \(Int((fraction * 100).rounded())) percent. Its progress and Stop button are near the top of this screen; the video opens here when the upload finishes.", thenFocus: landing)
+            return
+        }
         // A video being described or checked, never one being deleted.
         if let working = jobs.first(where: { $0.isWorking }) {
             open(working)
             return
         }
+        // A lock-screen card: every card has the same link, so the video
+        // being worked on comes first, then the newest finished.
         if start.openLatest, let latest = latestFinished() {
             open(latest)
             return
@@ -1633,17 +1722,17 @@ struct DescribedVideoView: View {
             // is never left on a button that has gone.
             switch fresh.state {
             case "ready":
-                Earcons.shared.play(.actionDone)
+                sound(.actionDone)
                 let note = freshNote
                 freshNote = ""
                 announce("Video checked. It is \(Self.lengthWords(fresh.seconds ?? 0)) long. \(note)Choose the narration, then how much to describe.", thenFocus: .voice)
             case "done":
-                Earcons.shared.play(.actionDone)
-                KadeHaptics.success()
+                sound(.actionDone)
+                buzz(success: true)
                 announce(fresh.preview == true ? "Your preview is ready." : "Your described copy is ready.", thenFocus: .results)
             case "failed":
-                Earcons.shared.play(.error)
-                KadeHaptics.error()
+                sound(.error)
+                buzz(success: false)
                 announce(failedSentence(fresh), thenFocus: .jobHeading)
             case "cancelled":
                 announce("Cancelled. Finished sections are kept, so you can continue later.", thenFocus: .jobHeading)
@@ -1691,9 +1780,10 @@ struct DescribedVideoView: View {
     }
 
     /// Every five seconds while the screen is up; every fifteen while the app
-    /// is in the background and iOS still lets it run.
+    /// is in the background and iOS still lets it run. Never while she is
+    /// away from the screen: coming back refreshes the video and starts it.
     private func ensurePolling() {
-        guard pollTask == nil, let current = job, current.needsWatching else { return }
+        guard onScreen, pollTask == nil, let current = job, current.needsWatching else { return }
         let jobId = current.id
         pollTask = Task {
             var misses = 0
@@ -1882,18 +1972,20 @@ struct DescribedVideoView: View {
 
     // MARK: - Spending (asked first, price named)
 
+    /// Never without a readable price: the price is said before anything is
+    /// spent.
     private func askToSpend(_ action: String, title: String, kind: DVConfirm.Kind) {
-        guard let quote = estimates[action], quote.isAllowed else { return }
-        let price = Self.money(quote.estimateUSD)
+        guard let current = job, let quote = estimates[action], quote.isAllowed, let usd = quote.estimateUSD else { return }
+        let price = Self.money(usd)
         var message = "About \(price)."
         if let aside = quote.setAsideUSD, aside > 0 {
             message += " \(Self.money(aside)) is set aside from today's allowance until it finishes."
         }
-        if case .resume = kind, let current = job {
+        if case .resume = kind {
             message += " " + keptSentence(current)
         }
         message += " You can leave this screen. It keeps going on the server, and you'll get a notice when it's done."
-        confirm = DVConfirm(kind: kind, title: "\(title)?", message: message, button: "\(title), about \(price)")
+        confirm = DVConfirm(kind: kind, title: "\(title)?", message: message, button: "\(title), about \(price)", jobId: current.id)
     }
 
     /// The new limit is named in the question and on the button that agrees.
@@ -1911,7 +2003,8 @@ struct DescribedVideoView: View {
             kind: .allowMore(raise),
             title: "Let \(current.title) carry on?",
             message: message,
-            button: allowMoreTitle(raise)
+            button: allowMoreTitle(raise),
+            jobId: current.id
         )
     }
 
@@ -1921,6 +2014,7 @@ struct DescribedVideoView: View {
             title: "Cancel processing?",
             message: "Cancel \(current.title)? Finished sections are kept, so you can continue later. Work already sent to a service may still be charged.",
             button: "Cancel processing",
+            jobId: current.id,
             destructive: true,
             keep: "Keep going"
         )
@@ -1932,6 +2026,7 @@ struct DescribedVideoView: View {
             title: "Delete this video?",
             message: "Delete \(current.title) and all its files? This cannot be undone.",
             button: "Delete",
+            jobId: current.id,
             destructive: true
         )
     }
@@ -1941,12 +2036,18 @@ struct DescribedVideoView: View {
             kind: .abandon,
             title: "Go back to version \(version)?",
             message: "The stopped remake of \(current.title) is set aside, and version \(version) is the current copy again.",
-            button: "Go back to version \(version)"
+            button: "Go back to version \(version)",
+            jobId: current.id
         )
     }
 
+    /// Acts only on the video the question named, and only while it is the
+    /// open one (its prices and settings are the ones on screen).
     private func perform(_ item: DVConfirm) async {
-        guard let current = job else { return }
+        guard let current = job, current.id == item.jobId else {
+            announce("That video is no longer open, so nothing was done.")
+            return
+        }
         let id = current.id
         switch item.kind {
         case .start(let preview):
@@ -1989,7 +2090,7 @@ struct DescribedVideoView: View {
         defer { isBusy = false }
         do {
             let fresh = try await work()
-            if earcon { Earcons.shared.play(.actionStart) }
+            if earcon { sound(.actionStart) }
             confirmAloud(said, thenFocus: .jobHeading)
             apply(fresh, quiet: true)
             await reloadList()
@@ -2018,7 +2119,7 @@ struct DescribedVideoView: View {
             if fresh.keepable != true {
                 words += " That is as long as it can be kept here; save it to Files or put it in the Library to keep it longer."
             }
-            Earcons.shared.play(.actionDone)
+            sound(.actionDone)
             confirmAloud(words, thenFocus: fresh.keepable == true ? nil : .results)
         } catch {
             fail(error)
@@ -2042,7 +2143,10 @@ struct DescribedVideoView: View {
     }
 
     private func rename() async {
-        guard let current = job else { return }
+        guard let current = job, current.id == renameJobId else {
+            announce("That video is no longer open, so it was not renamed.")
+            return
+        }
         let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != current.title else { return }
         do {
@@ -2074,7 +2178,10 @@ struct DescribedVideoView: View {
     }
 
     private func loadPicked(_ item: PhotosPickerItem) async {
-        guard uploadTask == nil else { return }
+        guard !uploads.isRunning else {
+            announce("An upload is already running.")
+            return
+        }
         isBusy = true
         announce("Getting the video from Photos. A long video can take a minute.")
         let movie = try? await item.loadTransferable(type: DescribedVideoMovie.self)
@@ -2089,84 +2196,86 @@ struct DescribedVideoView: View {
     }
 
     private func beginUpload(fileURL: URL, name: String, recoveryKey: String, scoped: Bool, cleanUp: Bool) {
-        guard uploadTask == nil else {
-            announce("An upload is already running.")
-            return
-        }
-        uploadTask = Task {
+        let began = uploads.run {
             await runUpload(fileURL: fileURL, name: name, recoveryKey: recoveryKey, scoped: scoped, cleanUp: cleanUp)
-            uploadTask = nil
+        }
+        if !began {
+            if cleanUp { try? FileManager.default.removeItem(at: fileURL) }
+            announce("An upload is already running.")
         }
     }
 
     /// Checks what the phone can check for free (size, length), then uploads
     /// in the server's chunks. Stopping keeps what has arrived: the same video
-    /// picked again carries on from there.
-    private func runUpload(fileURL: URL, name: String, recoveryKey: String, scoped: Bool, cleanUp: Bool) async {
+    /// picked again carries on from there. How it ended is said by the screen
+    /// she is on when it ends (takeUploadEnding), which may not be this one.
+    private func runUpload(fileURL: URL, name: String, recoveryKey: String, scoped: Bool, cleanUp: Bool) async -> DescribedVideoUploads.Ending? {
         let access = scoped ? fileURL.startAccessingSecurityScopedResource() : false
         defer {
             if access { fileURL.stopAccessingSecurityScopedResource() }
             if cleanUp { try? FileManager.default.removeItem(at: fileURL) }
         }
-        guard let current = config else { return }
+        guard let current = config else { return nil }
         let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         guard size > 0 else {
-            fail(DescribedVideoService.DescribedVideoError(message: "That video could not be read. Try choosing it again."))
-            return
+            return .failed(DescribedVideoService.DescribedVideoError(message: "That video could not be read. Try choosing it again."))
         }
         if let limit = current.maxBytes, size > limit {
-            fail(DescribedVideoService.DescribedVideoError(message: "That video is larger than \(Self.bytesWords(limit)). Choose a smaller file, or trim it first."))
-            return
+            return .failed(DescribedVideoService.DescribedVideoError(message: "That video is larger than \(Self.bytesWords(limit)). Choose a smaller file, or trim it first."))
         }
         let seconds = (try? await AVURLAsset(url: fileURL).load(.duration).seconds) ?? 0
         if let longest = current.maxSourceMinutes, longest > 0, seconds.isFinite, seconds > longest * 60 + 1 {
-            fail(DescribedVideoService.DescribedVideoError(message: "That video is \(Self.lengthWords(seconds)) long. The describer can check videos up to \(Self.lengthWords(longest * 60))."))
-            return
+            return .failed(DescribedVideoService.DescribedVideoError(message: "That video is \(Self.lengthWords(seconds)) long. The describer can check videos up to \(Self.lengthWords(longest * 60))."))
         }
-        uploadProgress = 0
+        if Task.isCancelled { return .stopped }
         uploadStep = 0
         uploadSpokenAt = Date()
-        Earcons.shared.play(.actionStart)
+        DescribedVideoUploads.shared.started(name: name)
+        sound(.actionStart)
         announce("Uploading \(name). Keep Kade-AI open until the upload finishes.")
-        let card = KadeJobActivity.start(kind: "described-video", title: "Uploading: \(name)", status: "Uploading", progress: 0)
         do {
             let fresh = try await service.upload(fileURL: fileURL, name: name, recoveryKey: recoveryKey) { fraction in
-                uploadMoved(fraction, card: card)
+                DescribedVideoUploads.shared.moved(fraction)
             }
-            KadeJobActivity.finish(card, status: "Uploaded")
-            uploadProgress = nil
-            Earcons.shared.play(.actionDone)
-            open(fresh)
-            await reloadList()
+            return .uploaded(fresh)
         } catch {
-            KadeJobActivity.finish(card, status: "Upload paused", failed: true)
-            uploadProgress = nil
-            // The progress row and its Stop button go with the upload.
-            let landing: DVFocus = job == nil ? .choose : .jobHeading
-            if error is CancellationError || Task.isCancelled {
-                announce("Upload stopped. Choose the same video again to carry on from where it stopped.", thenFocus: landing)
-            } else {
-                fail(error, thenFocus: landing)
-            }
-            // A new task: this one may be cancelled, and the half-uploaded
-            // video should still show in the list.
-            Task { await reloadList() }
+            if error is CancellationError || Task.isCancelled { return .stopped }
+            return .failed(error)
         }
     }
 
-    /// The bar moves with every chunk; the card with every tenth; the voice
-    /// at most every thirty seconds.
-    private func uploadMoved(_ fraction: Double, card: String?) {
-        uploadProgress = fraction
+    /// The voice follows the bar at most every thirty seconds, on the screen
+    /// she is on. (The bar and the lock-screen card are DescribedVideoUploads'.)
+    private func uploadMoved(_ fraction: Double) {
         let step = Int(fraction * 10)
-        guard step != uploadStep else { return }
+        guard onScreen, step != uploadStep else { return }
         uploadStep = step
-        KadeJobActivity.update(card, status: "Uploading", progress: fraction)
         let now = Date()
         if step < 10 && now.timeIntervalSince(uploadSpokenAt) >= 30 {
             uploadSpokenAt = now
             announce("Uploading: \(step * 10) percent.")
         }
+    }
+
+    /// How an upload ended, said once by the screen she is on: the screen that
+    /// started it may have been replaced by another since. A hidden screen
+    /// leaves it for when it shows again; a screen made after the upload
+    /// ended leaves it alone.
+    private func takeUploadEnding() {
+        guard onScreen, loaded, !loading, let ending = uploads.take(after: seenUploadEnding) else { return }
+        // The progress row and its Stop button have gone with the upload.
+        let landing: DVFocus = job == nil ? .choose : .jobHeading
+        switch ending {
+        case .uploaded(let fresh):
+            sound(.actionDone)
+            open(fresh)
+        case .stopped:
+            announce("Upload stopped. Choose the same video again to carry on from where it stopped.", thenFocus: landing)
+        case .failed(let error):
+            fail(error, thenFocus: landing)
+        }
+        // A half-uploaded video still shows in the list.
+        Task { await reloadList() }
     }
 
     private func importYouTube() async {
@@ -2178,7 +2287,7 @@ struct DescribedVideoView: View {
         do {
             let fresh = try await service.importYouTube(url: link)
             youtubeLink = ""
-            Earcons.shared.play(.actionStart)
+            sound(.actionStart)
             open(fresh)
             await reloadList()
         } catch {
@@ -2197,11 +2306,11 @@ struct DescribedVideoView: View {
             if fresh.existing == true {
                 // The server found one she already has (unfinished or
                 // finished) instead of starting a second: open that one.
-                Earcons.shared.play(.actionDone)
+                sound(.actionDone)
                 let copies = fresh.finishedCopies.isEmpty ? "." : "; your described copy is below."
                 open(fresh, saying: "You already have this video: \(fresh.title), \(fresh.stateWord). It is open now\(copies)")
             } else {
-                Earcons.shared.play(.actionStart)
+                sound(.actionStart)
                 open(fresh)
             }
             await reloadList()
@@ -2219,6 +2328,8 @@ struct DescribedVideoView: View {
         statusLine = "Making a sample of \(Self.voiceName(voice))."
         do {
             let data = try await service.sample(voice: voice, rate: rate)
+            // Made after she left: not played over another tab.
+            guard onScreen else { return }
             LibraryNowPlaying.shared.pauseForOtherAudio("a voice sample")
             let session = AVAudioSession.sharedInstance()
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -2255,8 +2366,8 @@ struct DescribedVideoView: View {
         defer { fetching = "" }
         do {
             let links = try await currentFiles(current)
-            // She may have opened another video while the links came.
-            guard job?.id == current.id else { return }
+            // She may have opened another video, or left, while the links came.
+            guard job?.id == current.id, onScreen else { return }
             guard let link = video ? links.video : links.audio, let url = URL(string: link) else {
                 announce("That file is not available for this copy.")
                 return
@@ -2275,7 +2386,7 @@ struct DescribedVideoView: View {
         defer { fetching = "" }
         do {
             let text = try await service.text(jobId: current.id, kind: "transcript", version: viewVersion)
-            guard job?.id == current.id else { return }
+            guard job?.id == current.id, onScreen else { return }
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 announce("The transcript is empty for this copy.")
                 return
@@ -2308,13 +2419,27 @@ struct DescribedVideoView: View {
                     fileName: DescribedVideoService.fileName(current.title, label: isVideo ? "described" : "described audio", ext: isVideo ? "mp4" : "m4a")
                 )
             }
-            guard job?.id == current.id else { return }
-            Earcons.shared.play(.actionDone)
-            KadeHaptics.success()
+            // She opened another video, or left, while it came: the copy goes.
+            guard job?.id == current.id, onScreen else {
+                try? FileManager.default.removeItem(at: fileURL)
+                return
+            }
+            sound(.actionDone)
+            buzz(success: true)
+            if let old = sharedFile, old != fileURL { try? FileManager.default.removeItem(at: old) }
+            sharedFile = fileURL
             activeSheet = .share(ShareItem(fileURL: fileURL))
         } catch {
             fail(error)
         }
+    }
+
+    /// The share sheet has closed (or the screen has gone): the downloaded
+    /// copy is deleted rather than left in tmp, one per film.
+    private func removeSharedFile() {
+        guard let url = sharedFile else { return }
+        sharedFile = nil
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func saveToLibrary(_ current: DVJob, version: Int) async {
@@ -2325,8 +2450,8 @@ struct DescribedVideoView: View {
         announce("Saving to your Library.")
         do {
             let saved = try await service.saveToLibrary(jobId: current.id, version: version, path: path, share: shareWithFamily)
-            Earcons.shared.play(.actionDone)
-            KadeHaptics.success()
+            sound(.actionDone)
+            buzz(success: true)
             let place = (saved.path ?? "").isEmpty ? "" : " in \(saved.path ?? "")"
             // The folder form gives way to "saved"; VoiceOver lands on the
             // section's heading instead of nowhere.
