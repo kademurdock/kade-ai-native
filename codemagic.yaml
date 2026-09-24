@@ -478,7 +478,10 @@ workflows:
           xcrun simctl boot "$SIM" || true
           xcrun simctl bootstatus "$SIM" -b
           set +e
-          xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug -destination "id=$SIM" -derivedDataPath "$CM_BUILD_DIR/sim-derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build > "$CM_BUILD_DIR/simulator-build.log" 2>&1
+          # Signed to run locally (CODE_SIGN_IDENTITY=-), not unsigned: an
+          # unsigned simulator app gets no keychain, so the test seat's token
+          # was never kept and every screen after sign-in showed a 401.
+          xcodebuild -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug -destination "id=$SIM" -derivedDataPath "$CM_BUILD_DIR/sim-derived" CODE_SIGN_IDENTITY=- build > "$CM_BUILD_DIR/simulator-build.log" 2>&1
           STATUS=$?
           if [ $STATUS -ne 0 ]; then
             grep -m 20 -E 'error:' "$CM_BUILD_DIR/simulator-build.log" > "$CM_BUILD_DIR/first-errors.txt"

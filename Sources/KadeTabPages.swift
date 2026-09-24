@@ -46,8 +46,10 @@ struct TalkHeader: View {
                 nav.startChat(nil)
             } label: {
                 HStack(spacing: 12) {
+                    // Kiana's own face even before the roster loads (with
+                    // nothing stored, the main character IS Kiana).
                     KadeCharacterFace(
-                        agentID: DefaultAgentStore.resolveId(in: agentsService.agents),
+                        agentID: DefaultAgentStore.resolveId(in: agentsService.agents) ?? CharacterMotion.kianaID,
                         name: DefaultAgentStore.displayName,
                         size: 44
                     )

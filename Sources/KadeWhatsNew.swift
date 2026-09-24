@@ -62,6 +62,8 @@ struct KadeWhatsNewCard: View {
                         .accessibilityHidden(true)
                     Text(KadeWhatsNew.title)
                         .font(.headline)
+                        // Wraps at large text sizes instead of cutting off.
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
                 }
                 Text(KadeWhatsNew.body)
