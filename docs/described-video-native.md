@@ -59,8 +59,42 @@ the answer.
   by default when the original is private or someone else's), Describe the
   rest after a preview, Try again on parts that could not be described.
 
+Round-2 server features, each shown only when the server says so:
+
+- **Keep 7 more days** on a finished copy when `keepable` (`POST jobs/:id/keep`,
+  free; says the new end date, and when it cannot be kept longer).
+- **Over-quote stop**: a run stopped with `overQuote` (it passed the approval,
+  `approvedUSD`) says what was spent and what was quoted, and replaces Continue
+  with "Allow up to $Z more and continue". Z is the resume estimate's
+  `allowUpToUSD` (or `approvedUSD`, else the price × 1.5 + 10 cents), never past
+  the limit for one run. It asks first, naming Z, what is kept and today's
+  allowance, then sends `POST resume {…voice fields, allowUpToUSD: Z}`.
+- **You already have this video**: when `library-imports` answers
+  `existing: true`, that video is opened and its state is said.
+- **Check again** when `recheckable` (`POST jobs/:id/recheck`, free).
+- **Library folder**: the job's `libraryPath` (the Audio mirror of the
+  original's shelf) is the default folder, else the config's.
+- Rehearsal copies made on the website are labelled "rehearsal, test tone";
+  the rehearsal button itself is website only.
+
+Rules the second pass fixed or settled:
+
+- Nothing carries from one video to the next: a new video starts with empty
+  notes, both paid passes off, the whole video, her remembered voice and speeds,
+  and the server's suggested folder. The paid passes are never remembered.
+- Every server field is optional and read leniently (a missing field, a number
+  sent as text, a count where a list was); only a video's id is required.
+- A 401 is refreshed once (one refresh shared by every caller, none again for a
+  minute after one fails); polling stops on 401 or 403 instead of retrying.
+- Nothing is said over the player or the transcript sheet: the latest line is
+  held and said when the sheet closes. The player takes a non-mixing session so
+  the headphone and lock-screen buttons work, and restores the app's session.
+- When an action takes its own button away, VoiceOver lands on the video's
+  heading (or the Library section, or Choose a video) after the confirmation.
+
 Not on the phone yet (use the website): making a new version with different
-narration (revoice), fresh descriptions (reanalyze), and the script editor.
+narration (revoice), fresh descriptions (reanalyze), the script editor, and the
+free rehearsal.
 
 ## What to test on a phone (with VoiceOver on)
 
@@ -79,4 +113,11 @@ narration (revoice), fresh descriptions (reanalyze), and the script editor.
 6. Describe only part of it with a bad time ("5:00" to "4:00"): the problem is
    shown and said, and no price is asked for.
 7. Files: pick a long video, Stop the upload halfway, pick it again: it carries
-   on from where it stopped.
+   on from where it stopped. VoiceOver lands on Choose a video after Stop.
+8. Open a video, turn on Take a closer look and type a note, then Choose another
+   video and pick a new one: notes are empty, both passes are off, and "New
+   video: notes are empty and the extra passes are off" is said with the price.
+9. Library: "Make a described copy" on a video already described: "You already
+   have this video…" and it opens.
+10. While a video describes, play an earlier version: no progress is spoken
+   over it; the latest line is said when the player closes.
