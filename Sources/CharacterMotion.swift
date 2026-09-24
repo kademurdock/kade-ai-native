@@ -22,9 +22,11 @@ enum CharacterMotion {
     static let lillyFile = "agent-agent_JhouuajXMYsfhCTVMQCv_-avatar-1783012583668.png"
     static let harleyID = "agent_d26Mtu8mgOzkVGQECqO1a"
     static let harleyFile = "agent-agent_d26Mtu8mgOzkVGQECqO1a-avatar-1789921519491.png"
+    static let witherspoonID = "agent_o7TKU3lK0Euo0MKgpNpvZ"
+    static let witherspoonFile = "agent-agent_o7TKU3lK0Euo0MKgpNpvZ-avatar-1790252530815.png"
     /// The characters with a full moving face, in the order the picker shows
     /// them. A new rigged character joins the picker's top shelf by joining this.
-    static let animatedIDs = [harleyID, lillyID, kianaID, dellaID]
+    static let animatedIDs = [harleyID, lillyID, kianaID, dellaID, witherspoonID]
     static func blend(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         let n = max(0, min(1, value))
@@ -32,7 +34,7 @@ enum CharacterMotion {
     }
     static func prepared(id: String?, path: String?) -> Bool {
         guard let path, let url = URL(string: path) else { return false }
-        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == harleyID && url.lastPathComponent == harleyFile)
+        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == harleyID && url.lastPathComponent == harleyFile) || (id == witherspoonID && url.lastPathComponent == witherspoonFile)
     }
     /// Mouth shapes without phonemes: a spoken clip has no word timings, so the
     /// shape follows how loud the sound is (how open) with a new pick about every

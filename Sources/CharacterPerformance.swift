@@ -4,6 +4,17 @@ import Foundation
 enum CharacterFace: Int, CaseIterable {
     case neutral = 0, smile, laugh, surprised, skeptical, angry, sad, worried, closed
     case curious, thoughtful, playful, confident, tender, tired, serious, delighted
+
+    /// A character with the original nine poses reuses the closest drawn face.
+    var basicSheetFace: CharacterFace {
+        switch self {
+        case .curious: return .skeptical
+        case .thoughtful, .tired, .serious: return .neutral
+        case .playful, .confident, .tender: return .smile
+        case .delighted: return .laugh
+        default: return self
+        }
+    }
 }
 
 enum CharacterExpression: String, Codable, CaseIterable {

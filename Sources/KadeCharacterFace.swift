@@ -102,9 +102,11 @@ struct KadeCharacterFace: View {
 struct KadeCharacterFaceSheet {
     let faces: String
     let nuance: String
+    var basicOnly = false
 
     static func forAgent(_ id: String?) -> KadeCharacterFaceSheet? {
         switch id {
+        case CharacterMotion.witherspoonID: return KadeCharacterFaceSheet(faces: "CharacterWitherspoonFaces", nuance: "CharacterWitherspoonFaces", basicOnly: true)
         case CharacterMotion.kianaID: return KadeCharacterFaceSheet(faces: "CharacterKianaFaces", nuance: "CharacterKianaNuance")
         case CharacterMotion.dellaID: return KadeCharacterFaceSheet(faces: "CharacterDellaFaces", nuance: "CharacterDellaNuance")
         case CharacterMotion.lillyID: return KadeCharacterFaceSheet(faces: "CharacterLillyFaces", nuance: "CharacterLillyNuance")
@@ -114,7 +116,7 @@ struct KadeCharacterFaceSheet {
     }
 
     func panel(_ face: CharacterFace, side: CGFloat) -> some View {
-        let raw = face.rawValue
+        let raw = (basicOnly ? face.basicSheetFace : face).rawValue
         let image = raw < 9 ? faces : nuance
         let index = raw < 9 ? raw : raw - 8
         let sheetSide = side * 1254.0 / 414.0

@@ -44,6 +44,10 @@ struct ReadingRoomView: View {
     @State private var myCollections: [RRCollectionRow] = []
     @State private var opening = false
     @State private var status: String?
+    @State private var openingLibrarian = false
+    @State private var showLibrarian = false
+    @State private var librarianAgentId: String?
+    @State private var librarianDraft: String?
     @State private var category = ""
     @State private var keepUploadsPrivate = false
     @State private var showBookPicker = false
@@ -138,6 +142,11 @@ struct ReadingRoomView: View {
         .fileImporter(isPresented: $showTrackPicker, allowedContentTypes: [.audio, .movie, .mp3, .mpeg4Audio, .wav, .aiff], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { Task { await uploadTracks(urls) } }
         }
+        .navigationDestination(isPresented: $showLibrarian) {
+            if let agentId = librarianAgentId {
+                ConversationDetailView(conversation: nil, initialAgentId: agentId, initialDraft: librarianDraft)
+            }
+        }
         .sheet(isPresented: $showEdit) {
             if let b = openBook {
                 EditItemSheet(book: b) { fields in
@@ -165,6 +174,15 @@ struct ReadingRoomView: View {
 
     private var shelfScreen: some View {
         List {
+            Section {
+                Button { Task { await talkToLibrarian() } } label: {
+                    Label(openingLibrarian ? "Opening the librarian…" : "Talk to the Librarian", systemImage: "books.vertical")
+                }
+                .disabled(openingLibrarian)
+                .accessibilityHint("Opens Mrs. Witherspoon in the usual chat and voice screen.")
+                Text("Tell Mrs. Witherspoon what you remember, or ask about something in the collection.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
             Image("LibraryAlcove").resizable().scaledToFill().frame(height: 130).clipped()
                 .accessibilityHidden(true).listRowInsets(EdgeInsets())
             continueSection
@@ -487,6 +505,25 @@ struct ReadingRoomView: View {
 
     // MARK: - Player
 
+    private func talkToLibrarian(itemId: String? = nil) async {
+        guard !openingLibrarian else { return }
+        openingLibrarian = true
+        defer { openingLibrarian = false }
+        do {
+            let guide = try await service.librarianGuide()
+            guard guide.agentId.hasPrefix("agent_") else {
+                announce("The librarian is unavailable right now. Please try again.")
+                return
+            }
+            player.pause()
+            librarianAgentId = guide.agentId
+            librarianDraft = itemId.map { "Tell me about the Library item with catalog ID \($0)." }
+            showLibrarian = true
+        } catch {
+            announce("Could not open the librarian. \(error.localizedDescription)")
+        }
+    }
+
     private func playerScreen(_ book: RRBook) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -498,6 +535,13 @@ struct ReadingRoomView: View {
                     Text(bookMeta(book)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
+
+                Button { Task { await talkToLibrarian(itemId: book.id) } } label: {
+                    Label("Ask Mrs. Witherspoon about this item", systemImage: "bubble.left.and.bubble.right")
+                }
+                .buttonStyle(.bordered)
+                .disabled(openingLibrarian)
+                .accessibilityHint("Opens her chat with a question ready to send. Pauses library playback.")
 
                 if book.isAudio {
                     VideoPane(player: player, service: service, book: book, announce: { announce($0) })

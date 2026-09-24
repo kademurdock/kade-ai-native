@@ -218,6 +218,15 @@ final class ReadingRoomService: ObservableObject {
 
     init(client: KadeAPIClient) { self.client = client }
 
+    struct LibrarianGuide: Decodable {
+        let agentId: String
+        let name: String
+    }
+
+    func librarianGuide() async throws -> LibrarianGuide {
+        try await json(client.request(path: "api/kade/reading-room/guide", authorized: true), as: LibrarianGuide.self)
+    }
+
     private struct ErrBody: Decodable { let error: String? }
 
     private func json<T: Decodable>(_ req: URLRequest, as type: T.Type) async throws -> T {

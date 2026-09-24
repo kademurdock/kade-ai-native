@@ -85,6 +85,10 @@ struct CharacterPortraitView: View {
     }
     private var sheet: Sheet? {
         guard prepared else { return nil }
+        if agentID == CharacterMotion.witherspoonID {
+            return Sheet(faces: "CharacterWitherspoonFaces", mouths: "CharacterWitherspoonMouths",
+                face: CGRect(x: 0.29, y: 0.23, width: 0.44, height: 0.49), mouth: CGRect(x: 0.38, y: 0.50, width: 0.26, height: 0.19), eyes: CGRect(x: 0.30, y: 0.32, width: 0.41, height: 0.15))
+        }
         if agentID == CharacterMotion.kianaID {
             return Sheet(faces: "CharacterKianaFaces", mouths: "CharacterKianaMouths",
                 face: CGRect(x: 0.34, y: 0.17, width: 0.5, height: 0.56), mouth: CGRect(x: 0.43, y: 0.46, width: 0.31, height: 0.2), eyes: CGRect(x: 0.36, y: 0.27, width: 0.44, height: 0.15))
@@ -107,17 +111,19 @@ struct CharacterPortraitView: View {
     }
     @ViewBuilder private func portrait(_ pose: CharacterPose, face: CharacterFace) -> some View {
         if let sheet {
+            let basicOnly = agentID == CharacterMotion.witherspoonID
+            let shownFace = basicOnly ? face.basicSheetFace : face
             ZStack(alignment: .topLeading) {
                 panel(sheet.faces, CharacterFace.neutral.rawValue)
                 // Every drawn face sits ready at zero opacity so a change is a dissolve.
-                ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed }, id: \.rawValue) { drawnFace in
+                ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed && (!basicOnly || $0.rawValue < 9) }, id: \.rawValue) { drawnFace in
                     let index = drawnFace.rawValue
                     feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
-                        .opacity(face.rawValue == index ? 1 : 0)
+                        .opacity(shownFace.rawValue == index ? 1 : 0)
                 }
                 .animation(active ? .easeInOut(duration: 0.45) : nil, value: face)
                 // A laugh keeps its own open mouth; every other face talks with shapes.
-                if pose.viseme > 0 && pose.viseme < 9 && face != .laugh {
+                if pose.viseme > 0 && pose.viseme < 9 && shownFace != .laugh {
                     feathered(panel(sheet.mouths, pose.viseme), region: sheet.mouth, inner: 0.5)
                 }
                 feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes, inner: 0.6)
