@@ -156,6 +156,10 @@ struct VideoPane: View {
     @State private var question = ""
     @State private var answer = ""
     @State private var polling = false
+    @Environment(\.kadeNavigation) private var nav
+    /// Sep 24 2026: Make a described copy shows only for an account the
+    /// server lets into the described-video trial.
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
 
     private var track: RRTrack? { book.tracks.indices.contains(player.s) ? book.tracks[player.s] : nil }
     private var isVideo: Bool { (track?.mime ?? "").hasPrefix("video/") }
@@ -172,6 +176,16 @@ struct VideoPane: View {
                     Text("AirPlay").font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                 }
+            }
+            if isVideo && describedVideo.allowed {
+                Button {
+                    player.pause()
+                    nav.open(.describedVideo(DescribedVideoStart(book: book.id, track: player.s)))
+                } label: {
+                    Label("Make a described copy", systemImage: "film")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Opens Make a described video with this video chosen. A narrator describes what happens on screen in the pauses. Checking it is free, and the price is said before anything is spent.")
             }
             if isVideo {
                 DisclosureGroup("Video description" + ((desc?.scenes?.count).map { " (\($0) scenes)" } ?? "")) {
