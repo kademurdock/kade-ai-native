@@ -24,4 +24,20 @@ enum KadeUITestMode {
         return false
         #endif
     }
+
+    /// Sep 23 2026: the ios-redesign-tour workflow runs on the same Codemagic
+    /// simulator. That Mac has no audio hardware, so each CoreAudio call on
+    /// the earcon and haptic warm-up waited thirty seconds on the main thread;
+    /// the first screen never drew inside the tour's minute, and it
+    /// photographed only the launch screen. DEBUG-only, like the audit.
+    static var isTouring: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["KADE_TOUR"] == "1"
+        #else
+        return false
+        #endif
+    }
+
+    /// Either CI run: skip the audio and haptic warm-up.
+    static var skipsAudioWarmup: Bool { isAuditing || isTouring }
 }

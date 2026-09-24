@@ -102,7 +102,7 @@ struct KadeAIApp: App {
                     // earcons, so skipping them costs the audit nothing and buys
                     // it the only thing it needs: an app that stops moving.
                     // Release builds never contain this branch.
-                    if !KadeUITestMode.isAuditing {
+                    if !KadeUITestMode.skipsAudioWarmup {
                         Earcons.shared.prewarm()
                         KadeHapticEngine.shared.prewarm()
                     }

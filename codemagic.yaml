@@ -500,7 +500,8 @@ workflows:
             DATA=$(xcrun simctl get_app_container "$SIM" com.kademurdock.kadeai data)
             echo "data container: $DATA"
             for i in $(seq 0 12); do
-              for t in $(seq 1 60); do [ -f "$DATA/Documents/tour-stop-$i.txt" ] && break; sleep 1; done
+              WAIT=90; [ $i -eq 0 ] && WAIT=150
+              for t in $(seq 1 $WAIT); do [ -f "$DATA/Documents/tour-stop-$i.txt" ] && break; sleep 1; done
               if [ ! -f "$DATA/Documents/tour-stop-$i.txt" ]; then
                 echo "stop $i never arrived in pass $PASS"
                 ls -la "$DATA/Documents" || true
