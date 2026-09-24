@@ -24,6 +24,21 @@ struct HelpView: View {
     var apiClient: KadeAPIClient? = nil
     @State private var showingReport = false
     @Environment(\.kadeNavigation) private var nav
+    /// Sep 24 2026: the described-video help shows only for an account the
+    /// server lets in (the owner trial).
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
+
+    private var places: [HelpPlace] {
+        HelpPlace.all.filter { !$0.ownerTrial || describedVideo.allowed }
+    }
+
+    private var sections: [HelpSection] {
+        HelpSection.all.filter { !$0.ownerTrial || describedVideo.allowed }
+    }
+
+    private func entries(_ section: HelpSection) -> [HelpEntry] {
+        section.entries.filter { !$0.ownerTrial || describedVideo.allowed }
+    }
 
     var body: some View {
         ScrollView {
@@ -40,7 +55,7 @@ struct HelpView: View {
                         Text("Where is…?")
                             .font(.title3.bold())
                             .accessibilityAddTraits(.isHeader)
-                        ForEach(HelpPlace.all) { place in
+                        ForEach(places) { place in
                             Button {
                                 nav.open(place.route)
                             } label: {
@@ -76,13 +91,13 @@ struct HelpView: View {
                     .accessibilityHint("Opens a short form that goes straight to Kade with your name on it.")
                 }
 
-                ForEach(HelpSection.all) { section in
+                ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 14) {
                         Text(section.title)
                             .font(.title3.bold())
                             .accessibilityAddTraits(.isHeader)
 
-                        ForEach(section.entries) { entry in
+                        ForEach(entries(section)) { entry in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.title)
                                     .font(.headline)
@@ -125,10 +140,17 @@ struct HelpPlace: Identifiable {
     let route: HomeRoute
     var id: String { thing }
 
+    /// Make a described video: listed only for an account the server lets in.
+    var ownerTrial: Bool {
+        if case .describedVideo = route { return true }
+        return false
+    }
+
     static let all: [HelpPlace] = [
         HelpPlace(thing: "Your conversations", whereItIs: "Talk tab, under Call your Spotter", route: .conversations),
         HelpPlace(thing: "Your books, tapes and radio", whereItIs: "Library tab", route: .readingRoom),
         HelpPlace(thing: "Making a song or a scene", whereItIs: "Create tab, Sound Booth", route: .soundBooth),
+        HelpPlace(thing: "Making a described video", whereItIs: "Create tab, Described video", route: .describedVideo(DescribedVideoStart())),
         HelpPlace(thing: "Things you've made", whereItIs: "Create tab, My Creations", route: .myCreations),
         HelpPlace(thing: "Games", whereItIs: "Play tab, The Parlor", route: .parlor),
         HelpPlace(thing: "Family voice rooms", whereItIs: "Play tab, Kade's Clubhouse", route: .lounge),
@@ -143,12 +165,17 @@ struct HelpPlace: Identifiable {
 struct HelpEntry: Identifiable {
     let title: String
     let body: String
+    /// Sep 24 2026: shown only for an account the server lets into an owner
+    /// trial (Make a described video), so App Review never reads about a
+    /// screen it cannot open.
+    var ownerTrial = false
     var id: String { title }
 }
 
 struct HelpSection: Identifiable {
     let title: String
     let entries: [HelpEntry]
+    var ownerTrial = false
     var id: String { title }
 
     static let all: [HelpSection] = [
@@ -163,6 +190,11 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Newest build: an easier layout",
                 body: "Everything now lives in five tabs along the bottom of the screen: Talk, Library, Create, Play and More. Each tab keeps your place, so going to Talk and back to Library lands you right where you were, and tapping the tab you're already on takes you back to its start. The app still opens into a chat with your main character, Call your Spotter is still the first button on the Talk tab, and backing out of a chat still lands on your conversations, now grouped by day with each character's face beside them. Your book keeps playing while you move around the app, with a small Now Playing bar above the tabs, and it pauses by itself for a voice message or a call. New too: Search everything, a Where is list at the top of Help, little new badges on Alerts and Announcements, a friendlier first chat with starter lines, a Sound Booth that asks what you want to make, and in Settings, your pick of app icon: Kiana, Harley, Della or Lilly's face."
+            ),
+            HelpEntry(
+                title: "New for you: Make a described video",
+                body: "On the Create tab, and on any video in the Library as Make a described copy. Choose a video from Files, Photos, a YouTube link or the Library, pick the narrator and how much to describe, hear the price, then try the first 3 minutes or describe the whole thing. Watch it here, read it as a described transcript, save it to Files, or put it in the Library. Only accounts in the trial see this.",
+                ownerTrial: true
             ),
             HelpEntry(
                 title: "Recently",
@@ -339,6 +371,28 @@ struct HelpSection: Identifiable {
                 body: "If a document or photo has a future date on it (an appointment, a due date, an event) it shows up under Dates found with its own Save reminder button."
             ),
         ]),
+        HelpSection(title: "Described video", entries: [
+            HelpEntry(
+                title: "What it makes",
+                body: "A copy of a whole video with a narrator describing what happens on screen in the pauses, keeping the actors, music and sound. It's on the Create tab as Described video, and on any video in the Library as Make a described copy."
+            ),
+            HelpEntry(
+                title: "Choosing a video",
+                body: "Choose a video from Files or from Photos, paste a YouTube link, or start from a Library video. Checking a video is free. A long upload keeps going while Kade-AI is open; if it stops, choose the same video again and it carries on where it stopped."
+            ),
+            HelpEntry(
+                title: "The narration",
+                body: "Narrator voice opens a list of every voice, grouped and searchable, and Play a sample lets you hear it first. Then the usual speed and the fastest it may go, how much to describe, whether to pause the picture when a description will not fit, the narrator's volume, a closer look at fast scenes and logos, a first pass to learn who is who, notes for the describer, and Describe only part of it, with From and To times."
+            ),
+            HelpEntry(
+                title: "The price",
+                body: "Nothing is spent until you choose. Each button says its price, like Try the first 3 minutes, about 12 cents, or Create described copy, about a dollar forty, and asks once more before it starts. While it works you hear the stage and the percent now and then, the Lock Screen shows its progress, and a notification says when it's done."
+            ),
+            HelpEntry(
+                title: "When it's done",
+                body: "Play the described video, listen to the described audio, or read the described transcript one line at a time. Save or share sends the video, audio or transcript to Files or anywhere else. Keep it in your Library files it with the family or just for you. After a preview, Describe the rest finishes the video, and parts that could not be described can be tried again. Finished copies are kept for seven days."
+            ),
+        ], ownerTrial: true),
         HelpSection(title: "My Creations and the Wall of Fame", entries: [
             HelpEntry(
                 title: "My Creations",

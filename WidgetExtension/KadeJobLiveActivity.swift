@@ -68,6 +68,7 @@ struct KadeJobSummary {
         case "scene": return "theatermasks"
         case "sound": return "waveform"
         case "upload": return "arrow.up.circle"
+        case "described-video": return "film"
         default: return "hourglass"
         }
     }

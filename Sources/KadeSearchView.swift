@@ -22,6 +22,7 @@ struct KadeSearchView: View {
     @State private var libraryError: String?
     @State private var libraryTask: Task<Void, Never>?
     @State private var announceTask: Task<Void, Never>?
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -232,7 +233,9 @@ struct KadeSearchView: View {
     private var placeMatches: [KadeSearchPlace] {
         let terms = words(trimmed)
         guard !terms.isEmpty else { return [] }
+        let describedVideoAllowed = describedVideo.allowed
         return KadeSearchPlace.all.filter { place in
+            if place.ownerTrial && !describedVideoAllowed { return false }
             let hay = "\(place.title) \(place.caption) \(place.keywords)".lowercased()
             return terms.allSatisfy { hay.contains($0) }
         }
@@ -332,6 +335,13 @@ struct KadeSearchPlace: Identifiable {
     let keywords: String
     var id: String { title }
 
+    /// Sep 24 2026: Make a described video is an owner trial, listed only for
+    /// an account the server lets in (DescribedVideoAccess).
+    var ownerTrial: Bool {
+        if case .describedVideo = route { return true }
+        return false
+    }
+
     static let all: [KadeSearchPlace] = [
         KadeSearchPlace(title: "Your conversations", caption: "Talk tab", symbol: "bubble.left.and.bubble.right", tint: .blue, route: .conversations, keywords: "chats chat messages history talk list"),
         KadeSearchPlace(title: "Describe", caption: "Photos, videos and papers read to you", symbol: "plus.viewfinder", tint: .teal, route: .describe, keywords: "camera picture photo image document letter mail menu read describe see video"),
@@ -339,6 +349,7 @@ struct KadeSearchPlace: Identifiable {
         KadeSearchPlace(title: "Quick Dictate", caption: "Talk, and the words land on your clipboard", symbol: "mic.badge.plus", tint: .purple, route: .quickDictate, keywords: "dictate clipboard quick voice type"),
         KadeSearchPlace(title: "The Library", caption: "Books read aloud, tapes, radio and TV", symbol: "books.vertical", tint: .brown, route: .readingRoom, keywords: "books book audiobook read reading listen radio tape cassette commercials movies tv video archive donate library"),
         KadeSearchPlace(title: "The Sound Booth", caption: "Songs, scenes with voices, sound effects", symbol: "mic.square", tint: .indigo, route: .soundBooth, keywords: "song songs music sing singing make create record voice scene story sound effects audio booth"),
+        KadeSearchPlace(title: "Make a described video", caption: "A narrator describes what happens on screen", symbol: "film", tint: .teal, route: .describedVideo(DescribedVideoStart()), keywords: "described video audio description narrate narration narrator movie film tv show commercial vhs youtube accessible blind"),
         KadeSearchPlace(title: "My Creations", caption: "Everything you've made", symbol: "photo.stack", tint: .yellow, route: .myCreations, keywords: "creations made pictures images songs videos mine save"),
         KadeSearchPlace(title: "Wall of Fame", caption: "What the family shared", symbol: "trophy", tint: .brown, route: .wallOfFame, keywords: "wall fame family shared share creations"),
         KadeSearchPlace(title: "Agent Builder", caption: "Make your own character", symbol: "person.crop.circle.badge.plus", tint: .cyan, route: .agentBuilder, keywords: "build make create character agent persona new edit"),

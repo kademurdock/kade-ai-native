@@ -138,6 +138,9 @@ struct ContentView: View {
             if isSignedIn {
                 Task { await KadeUnread.shared.refresh(client: apiClient) }
                 Task { await KadeUpdateCheck.shared.check(client: apiClient) }
+                // Settled once per sign-in; this only asks again after a
+                // network failure left it undecided.
+                Task { await DescribedVideoAccess.shared.check(client: apiClient) }
             }
         }
         .onAppear {
@@ -416,7 +419,7 @@ struct ContentView: View {
         case .readingRoom:
             tab = .library
             libraryPath = []
-        case .soundBooth, .myCreations, .wallOfFame, .agentBuilder, .prompts:
+        case .soundBooth, .myCreations, .wallOfFame, .agentBuilder, .prompts, .describedVideo:
             tab = .create
             createPath = [destination]
         case .parlor, .lounge, .gameRoom, .debateRoom, .matchmaker, .marketplace:
@@ -515,6 +518,11 @@ struct ContentView: View {
             AnnouncementsView(apiClient: apiClient)
         case .soundBooth:
             SoundBoothView(apiClient: apiClient)
+        case .describedVideo(let start):
+            // Sep 24 2026: make a described video (owner trial; the Create
+            // tile, search entry and Library button appear only for an
+            // account the server lets in — DescribedVideoAccess).
+            DescribedVideoView(apiClient: apiClient, start: start)
         case .readingRoom:
             // Never pushed (the Library tab's root is the Library).
             ReadingRoomView(apiClient: apiClient)
@@ -861,10 +869,15 @@ struct ContentView: View {
             go(.search)
         case "jobs":
             // The lock-screen progress card (KadeWidgets): an upload opens
-            // the Library, a song or scene the Sound Booth.
+            // the Library, a described video its own screen, a song or scene
+            // the Sound Booth.
             let kind = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "kind" })?.value ?? ""
-            go(kind == "upload" ? .readingRoom : .soundBooth)
+            if kind == "described-video" {
+                go(.describedVideo(DescribedVideoStart(openLatest: true)))
+            } else {
+                go(kind == "upload" ? .readingRoom : .soundBooth)
+            }
         default:
             break
         }
@@ -995,6 +1008,10 @@ struct ContentView: View {
             go(.readingRoom)
         case .soundBooth:
             go(.soundBooth)
+        case .describedVideo:
+            // The "your described video is ready" push (bridge agentId
+            // described-video, route "described-video").
+            go(.describedVideo(DescribedVideoStart(openLatest: true)))
         }
     }
 
@@ -1079,6 +1096,13 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 await KadeUpdateCheck.shared.check(client: apiClient)
             }
+            // Sep 24 2026: may this account make described videos? Asked once
+            // per sign-in, after the launch chat has settled. A refusal hides
+            // the feature silently (the owner trial; App Review never sees it).
+            Task {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                await DescribedVideoAccess.shared.check(client: apiClient)
+            }
             // Session 26 chat-first launch: the moment a session lands
             // (cold-start restore or a fresh sign-in), open the main-agent
             // chat on the Talk tab — unless a Siri intent is already waiting
@@ -1100,6 +1124,7 @@ struct ContentView: View {
             voiceService.reset()
             LibraryNowPlaying.shared.stop()
             KadeUnread.shared.reset()
+            DescribedVideoAccess.shared.reset()
             talkPath = []
             libraryPath = []
             createPath = []
@@ -1251,6 +1276,9 @@ enum HomeRoute: Identifiable, Hashable {
     case alerts
     /// Part 120 (Sep 3 2026) — the Sound Booth.
     case soundBooth
+    /// Sep 24 2026 — make a described video: plainly, from a Library video
+    /// (book + track), or on the newest finished one (a push or a card).
+    case describedVideo(DescribedVideoStart)
     /// Part 181 (Sep 11 2026) — the Library (born the Reading Room). Its own
     /// tab since the redesign.
     case readingRoom
@@ -1291,6 +1319,8 @@ enum HomeRoute: Identifiable, Hashable {
         case .search: return "search"
         case .alerts: return "alerts"
         case .soundBooth: return "soundBooth"
+        case .describedVideo(let start):
+            return "describedVideo-\(start.book ?? "")-\(start.track ?? 0)-\(start.openLatest)"
         case .readingRoom: return "readingRoom"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"

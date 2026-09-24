@@ -87,6 +87,9 @@ final class IntentRouter: ObservableObject {
         // Part 181: the Reading Room, by name ("open the reading room").
         case readingRoom
         case soundBooth
+        // Sep 24 2026: the "your described video is ready" push (route
+        // "described-video") opens Make a described video.
+        case describedVideo
         // Part 83 (Aug 21 2026, her report: tapping the bug-report push
         // landed in a NEW CONVERSATION -- the app's launch default -- instead
         // of the bug window): pushes now carry a route home. The bridge

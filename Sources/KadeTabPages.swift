@@ -104,6 +104,9 @@ struct TalkHeader: View {
 
 struct CreateHomeView: View {
     @Environment(\.kadeNavigation) private var nav
+    /// Sep 24 2026: Make a described video shows only for an account the
+    /// server lets in (the owner trial).
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
 
     var body: some View {
         ScrollView {
@@ -127,6 +130,11 @@ struct CreateHomeView: View {
                 KadeToolRow {
                     kadeTile("Agent Builder", caption: "Make your own character", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own characters.", route: .agentBuilder)
                     kadeTile("Prompts", caption: "Saved things to say", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", route: .prompts)
+                }
+                if describedVideo.allowed {
+                    KadeToolRow {
+                        kadeTile("Described video", caption: "Narration for any video", spoken: "Make a described video", icon: "film", tint: .teal, hint: "A narrator describes what happens on screen in the pauses, keeping the actors, music and sound. The price is said before anything is spent.", route: .describedVideo(DescribedVideoStart()))
+                    }
                 }
             }
             .padding()
