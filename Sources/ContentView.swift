@@ -1010,8 +1010,9 @@ struct ContentView: View {
             go(.soundBooth)
         case .describedVideo:
             // The "your described video is ready" push (bridge agentId
-            // described-video, route "described-video").
-            go(.describedVideo(DescribedVideoStart(openLatest: true)))
+            // described-video, route "described-video"): the finished video,
+            // even while another is still working.
+            go(.describedVideo(DescribedVideoStart(openFinished: true)))
         }
     }
 
@@ -1320,7 +1321,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .alerts: return "alerts"
         case .soundBooth: return "soundBooth"
         case .describedVideo(let start):
-            return "describedVideo-\(start.book ?? "")-\(start.track ?? 0)-\(start.openLatest)"
+            return "describedVideo-\(start.book ?? "")-\(start.track ?? 0)-\(start.openLatest)-\(start.openFinished)"
         case .readingRoom: return "readingRoom"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
