@@ -18,15 +18,21 @@ sound.
   book and track), the lock-screen card (`kadeai://jobs?kind=described-video`),
   and a push with `kadeRoute` = `described-video`.
 
-## The gate (App Review)
+## Account access
 
-The server answers 403 "Described video is currently a private owner trial."
-for everyone but admins, including the App Review demo account. The app asks
+Adult accounts, including beta testers and the App Review demo account, can
+use the describer. Private family shelves have separate access controls. The app asks
 `GET config` once per sign-in (6 s after sign-in, again on a foreground only if
 the first ask failed on the network). Until that succeeds for this account,
 nothing shows: no Create tile, no search entry, no Library button, no Help
 section, no What's New entry. A 403 or 404 hides it silently. Sign-out forgets
 the answer.
+
+The September 24 recovery replaces the describer's fixed dollar/day caps with
+account balances. Narration and samples are included. Confirmation states the
+estimated metered analysis cost and maximum charge. That maximum is reserved;
+unused money is refunded when the run ends. Administrators are platform-paid.
+The server absorbs provider overruns above the approved maximum.
 
 ## What it does
 
@@ -74,8 +80,8 @@ Round-2 server features, each shown only when the server says so:
   `approvedUSD`) says what was spent and what was quoted, and replaces Continue
   with "Allow up to $Z more and continue". Z is the resume estimate's
   `allowUpToUSD` (or `approvedUSD`, else the price × 1.5 + 10 cents), never past
-  the limit for one run. It asks first, naming Z, what is kept and today's
-  allowance, then sends `POST resume {…voice fields, allowUpToUSD: Z}`.
+  the available account balance. It asks first, naming Z and what is kept,
+  then sends `POST resume {…voice fields, allowUpToUSD: Z}`.
 - **You already have this video**: when `library-imports` answers
   `existing: true`, that video is opened and its state is said.
 - **Check again** when `recheckable` (`POST jobs/:id/recheck`, free).
