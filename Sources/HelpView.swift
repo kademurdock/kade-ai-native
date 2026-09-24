@@ -165,9 +165,7 @@ struct HelpPlace: Identifiable {
 struct HelpEntry: Identifiable {
     let title: String
     let body: String
-    /// Sep 24 2026: shown only for an account the server lets into an owner
-    /// trial (Make a described video), so App Review never reads about a
-    /// screen it cannot open.
+    /// Shown when this account can open the describer, including adult review accounts.
     var ownerTrial = false
     var id: String { title }
 }
@@ -193,7 +191,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "New for you: Make a described video",
-                body: "On the Create tab, and on any video in the Library as Make a described copy. Choose a video from Files, Photos, a YouTube link or the Library, pick the narrator and how much to describe, hear the price, then try the first 3 minutes or describe the whole thing. Watch it here, read it as a described transcript, save it to Files, or put it in the Library. Only accounts in the trial see this.",
+                body: "On the Create tab, and on videos you can access in the Library as Make a described copy. Choose a video from Files, Photos, a YouTube link or the Library, pick the narrator and how much to describe, hear the price, then try a preview or describe the whole thing. Watch it here, read it as a described transcript, save it to Files, or put it in the Library. Adult accounts can use it. Narration is included; metered analysis uses your balance after you approve the maximum charge.",
                 ownerTrial: true
             ),
             HelpEntry(
@@ -386,7 +384,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "The price",
-                body: "Nothing is spent until you choose. Each button says its price, like Try the first 3 minutes, about 12 cents, or Create described copy, about a dollar forty, and asks once more before it starts. While it works you hear the stage and the percent now and then, the Lock Screen shows its progress, and a notification says when it's done."
+                body: "Nothing is spent until you choose. The confirmation gives an estimate and the maximum charge you approve. Metered analysis uses your account balance, with unused reserved money returned when it stops or finishes. Narration and voice samples are included. Admin processing is paid by the platform. While it works you hear the stage and the percent now and then, the Lock Screen shows its progress, and a notification says when it's done."
             ),
             HelpEntry(
                 title: "When it's done",

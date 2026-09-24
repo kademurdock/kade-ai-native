@@ -8,7 +8,7 @@ import Combine
 // screen in the pauses. Every call is an ordinary user JWT against the fork's
 // /api/kade/described-video/*; the fork owns the model, voice and storage keys.
 //
-// Owner-only trial today: the server answers 403 for everyone but admins. The
+// Adult beta and review accounts can use their own uploads. The
 // app shows the feature (Create tile, search entry, Library button, Help) only
 // after `GET config` has succeeded for this account (DescribedVideoAccess), so
 // an account the server refuses never meets a screen that refuses it.
@@ -343,6 +343,7 @@ struct DVConfig: Decodable {
     let maxSourceMinutes: Double?
     let limitUSD: Double?
     let dailyUSD: Double?
+    let billingMode: String?
     let remainingUSD: Double?
     let perMinuteUSD: [String: Double]?
     let extrasPerMinuteUSD: Extras?
@@ -357,7 +358,7 @@ struct DVConfig: Decodable {
     let categories: [VoiceCategory]?
 
     enum CodingKeys: String, CodingKey {
-        case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD
+        case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
         case remainingUSD, perMinuteUSD, extrasPerMinuteUSD, setAside, previewSeconds, library
         case defaultLibraryPath, defaultVoice, voicesAvailable, voices, describe, categories
     }
@@ -397,6 +398,7 @@ extension DVConfig {
         maxSourceMinutes = c.dvNumber(.maxSourceMinutes)
         limitUSD = c.dvNumber(.limitUSD)
         dailyUSD = c.dvNumber(.dailyUSD)
+        billingMode = c.dvString(.billingMode)
         remainingUSD = c.dvNumber(.remainingUSD)
         perMinuteUSD = c.dvValue(.perMinuteUSD)
         extrasPerMinuteUSD = c.dvValue(.extrasPerMinuteUSD)
@@ -671,6 +673,7 @@ struct DVEstimate: Decodable, Equatable {
     let setAsideUSD: Double?
     let remainingUSD: Double?
     let dailyUSD: Double?
+    let billingMode: String?
     let limitUSD: Double?
     let allowed: Bool?
     let reason: String?
@@ -682,7 +685,7 @@ struct DVEstimate: Decodable, Equatable {
     let approvedUSD: Double?
 
     enum CodingKeys: String, CodingKey {
-        case estimateUSD, setAsideUSD, remainingUSD, dailyUSD, limitUSD, allowed, reason
+        case estimateUSD, setAsideUSD, remainingUSD, dailyUSD, limitUSD, allowed, reason, billingMode
         case seconds, breakdown, allowUpToUSD, approvedUSD
     }
 
@@ -707,6 +710,7 @@ extension DVEstimate {
         setAsideUSD = c.dvNumber(.setAsideUSD)
         remainingUSD = c.dvNumber(.remainingUSD)
         dailyUSD = c.dvNumber(.dailyUSD)
+        billingMode = c.dvString(.billingMode)
         limitUSD = c.dvNumber(.limitUSD)
         allowed = c.dvBool(.allowed)
         reason = c.dvString(.reason)
@@ -1163,7 +1167,7 @@ final class DescribedVideoService: ObservableObject {
         )
     }
 
-    /// A few seconds of the narrator, as WAV bytes. Counted in the allowance.
+    /// A few seconds of the narrator, as WAV bytes. Included with narration.
     func sample(voice: String, rate: Double, text: String? = nil) async throws -> Data {
         var body: [String: Any] = ["voice": voice, "rate": rate]
         if let text, !text.isEmpty { body["text"] = String(text.prefix(200)) }

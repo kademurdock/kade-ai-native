@@ -748,7 +748,7 @@ struct DescribedVideoView: View {
             }
             .buttonStyle(.bordered)
             .disabled(sampling || voice.isEmpty)
-            .accessibilityHint("Plays a few seconds of this narrator at your usual speed. Counted in today's allowance.")
+            .accessibilityHint("Plays a few seconds of this narrator at your usual speed. Narration samples are included.")
             if config?.voicesAvailable == false {
                 Text("The voice list could not be loaded just now. Playback and downloads still work; open this screen again later to change the voice.")
                     .font(.footnote)
@@ -936,14 +936,14 @@ struct DescribedVideoView: View {
     /// (the resume estimate's approval, which the server works out from how
     /// far over the stopped run went), else the rule an approval is made with
     /// (the price × 1.5 + 10 cents). Never past the limit for one run or what
-    /// today's allowance has left, which the server would refuse. With no
+    /// the account balance has left, which the server would refuse. With no
     /// figure at all there is nothing to agree to: 0, and the button stays
     /// off.
     private func raiseAmount(_ quote: DVEstimate?) -> Double {
         guard let quote else { return 0 }
         let byRule: Double? = quote.estimateUSD.map { $0 * 1.5 + 0.1 }
         guard let wanted = quote.allowUpToUSD ?? quote.approvedUSD ?? byRule else { return 0 }
-        var cap = quote.limitUSD ?? config?.limitUSD ?? 5
+        var cap = quote.limitUSD ?? config?.limitUSD ?? Double.greatestFiniteMagnitude
         if let left = quote.remainingUSD, left > 0 { cap = min(cap, left) }
         return (min(cap, wanted) * 100).rounded(.down) / 100
     }
@@ -984,23 +984,34 @@ struct DescribedVideoView: View {
         .accessibilityHint(spendHint(quote))
     }
 
+    private func accountPrice(_ quote: DVEstimate) -> String {
+        let mode = quote.billingMode ?? config?.billingMode
+        if mode == "platform" { return "Admin processing is paid by the platform. Narration is included." }
+        if mode == "balance" {
+            if let left = quote.remainingUSD { return "\(Self.money(left)) is available in your account. Narration is included." }
+            return "Narration is included."
+        }
+        if let left = quote.remainingUSD, let daily = quote.dailyUSD {
+            return "\(Self.money(left)) of \(Self.money(daily)) is left today."
+        }
+        return ""
+    }
+
     private func spendHint(_ quote: DVEstimate?) -> String {
         guard let quote else {
             return estimating ? "Working out the price." : "The price is not ready yet."
         }
         if !quote.isAllowed {
-            return Self.sentence(quote.reason ?? "This is over the limit for one run or today's allowance")
+            return Self.sentence(quote.reason ?? "This run needs more available account balance")
         }
         if quote.estimateUSD == nil {
             return "The price could not be worked out, so this cannot start yet. Change a setting, or open the video again, to ask again."
         }
         var words = "Asks before spending."
         if let aside = quote.setAsideUSD, aside > 0 {
-            words += " \(Self.money(aside)) is set aside from today's allowance until it finishes."
+            words += " \(Self.money(aside)) is reserved until it finishes; unused money is returned."
         }
-        if let left = quote.remainingUSD, let daily = quote.dailyUSD {
-            words += " \(Self.money(left)) of \(Self.money(daily)) left today."
-        }
+        words += " " + accountPrice(quote)
         return words
     }
 
@@ -1049,9 +1060,7 @@ struct DescribedVideoView: View {
                 parts.append("\(title): the price could not be worked out, so it cannot start yet.")
             }
         }
-        if let first = estimates.values.first, let left = first.remainingUSD, let daily = first.dailyUSD {
-            parts.append("Today's allowance has \(Self.money(left)) of \(Self.money(daily)) left.")
-        }
+        if let first = estimates.values.first { parts.append(accountPrice(first)) }
         return parts.joined(separator: " ")
     }
 
@@ -1978,8 +1987,10 @@ struct DescribedVideoView: View {
         guard let current = job, let quote = estimates[action], quote.isAllowed, let usd = quote.estimateUSD else { return }
         let price = Self.money(usd)
         var message = "About \(price)."
+        if let maximum = quote.approvedUSD { message += " Maximum charge: \(Self.money(maximum))." }
+        message += " " + accountPrice(quote)
         if let aside = quote.setAsideUSD, aside > 0 {
-            message += " \(Self.money(aside)) is set aside from today's allowance until it finishes."
+            message += " \(Self.money(aside)) is reserved until it finishes; unused money is returned."
         }
         if case .resume = kind {
             message += " " + keptSentence(current)
@@ -1996,9 +2007,7 @@ struct DescribedVideoView: View {
         var message = overQuoteSentence(current)
         message += " Carrying on may spend up to \(Self.money(raise)) more, and it stops again if it would go past that."
         message += " " + keptSentence(current)
-        if let left = quote.remainingUSD, let daily = quote.dailyUSD {
-            message += " Today's allowance has \(Self.money(left)) of \(Self.money(daily)) left."
-        }
+        message += " " + accountPrice(quote)
         confirm = DVConfirm(
             kind: .allowMore(raise),
             title: "Let \(current.title) carry on?",
