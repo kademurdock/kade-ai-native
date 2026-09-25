@@ -238,6 +238,9 @@ struct DescribedVideoView: View {
     private var page: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                // Part 292: the projection booth. Its words are the last thing
+                // on this screen for VoiceOver, after Your videos.
+                KadePaintedHeader(imageName: "ArtDescriberBooth", symbol: "film", tint: .teal, height: 120, described: true)
                 Text("Keep the actors, music and sound. A narrator describes what happens on screen in the pauses. Then watch it here, save the video or the audio, or read it as a described transcript.")
                     .font(.body)
                 statusBlock
@@ -264,6 +267,9 @@ struct DescribedVideoView: View {
             .padding()
             .frame(maxWidth: 680)
             .frame(maxWidth: .infinity)
+            // One container, so the booth's words (sorted last) never come
+            // ahead of the intro, the status or any control.
+            .accessibilityElement(children: .contain)
         }
         .navigationTitle("Described video")
         .navigationBarTitleDisplayMode(.inline)
