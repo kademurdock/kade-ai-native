@@ -287,12 +287,20 @@ func adminCount(_ value: Double?) -> String {
 
 struct AdminView: View {
     let apiClient: KadeAPIClient
+    /// Sep 25 2026 (Part 292): the Funding row checks the seat itself, the
+    /// same test the More tab uses to show the Admin section at all.
+    @EnvironmentObject private var auth: AuthService
 
     enum Route: String, Identifiable, Hashable {
-        case usage, feedback, logs, world, accessRequests, frontDesk, appCrashes
+        case usage, funding, feedback, logs, world, accessRequests, frontDesk, appCrashes
         var id: String { rawValue }
     }
     @State private var route: Route?
+
+    private var isAdminSeat: Bool {
+        if case .signedIn(let user) = auth.state { return user.role == "ADMIN" }
+        return false
+    }
 
     var body: some View {
         List {
@@ -301,6 +309,17 @@ struct AdminView: View {
                     Label("Usage dashboard", systemImage: "chart.bar")
                 }
                 .accessibilityHint("Spending, balances, the voice pool, and a card for every person.")
+
+                // Sep 25 2026 (Part 292): the website's Funding card, native.
+                // Real provider cost is Kade's alone, so the row exists only
+                // for the admin seat, never for anyone else (App Review
+                // included).
+                if isAdminSeat {
+                    Button { route = .funding } label: {
+                        Label("Funding", systemImage: "dollarsign.circle")
+                    }
+                    .accessibilityHint("What each person's use really cost you, what they have paid you back, and the difference. You can record a repayment there.")
+                }
 
                 Button { route = .feedback } label: {
                     Label("Feedback reports", systemImage: "exclamationmark.bubble")
@@ -355,6 +374,7 @@ struct AdminView: View {
         .navigationDestination(item: $route) { destination in
             switch destination {
             case .usage: AdminUsageView(service: AdminService(client: apiClient))
+            case .funding: AdminFundingView(apiClient: apiClient)
             case .feedback: AdminFeedbackView(service: AdminService(client: apiClient))
             case .logs: AdminLogsUsersView(service: AdminService(client: apiClient))
             case .world: WorldView(apiClient: apiClient)
