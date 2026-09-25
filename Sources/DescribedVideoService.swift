@@ -376,6 +376,8 @@ struct DVConfig: Decodable {
     /// True for the administrator, who curates Good for describing on the
     /// website. The phone offers no curating; it is read so the answer is whole.
     let curate: Bool?
+    /// Her speeds, kept for her account (Sep 25 2026; absent on older servers).
+    let speeds: DVSpeeds?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
@@ -383,6 +385,7 @@ struct DVConfig: Decodable {
         case defaultLibraryPath, defaultVoice, voicesAvailable, voices, describe, categories
         case dialogueIncluded
         case myDefaultVoice, houseVoice, favorites, recent, maxFavorites, suggested, fish, fishNote, curate
+        case speeds
     }
 }
 
@@ -443,6 +446,28 @@ extension DVConfig {
         fish = c.dvValue(.fish)
         fishNote = c.dvString(.fishNote)
         curate = c.dvBool(.curate)
+        speeds = c.dvValue(.speeds)
+    }
+}
+
+/// Sep 25 2026, Kade: "people should be able to have it remember the speeds
+/// they like." Her usual narration speed, the fastest it may go to fit a gap,
+/// and how fast finished videos play, kept for her account so the website
+/// and every phone agree. Each is nil until she chooses.
+struct DVSpeeds: Decodable, Equatable {
+    var rate: Double?
+    var maxRate: Double?
+    var playbackRate: Double?
+
+    enum CodingKeys: String, CodingKey { case rate, maxRate, playbackRate }
+}
+
+extension DVSpeeds {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rate = c.dvNumber(.rate)
+        maxRate = c.dvNumber(.maxRate)
+        playbackRate = c.dvNumber(.playbackRate)
     }
 }
 
@@ -458,8 +483,10 @@ struct DVPrefs: Decodable {
     var houseVoice: String?
     var favorites: [String] = []
     var recent: [String] = []
+    /// Her speeds as saved for her account; nil on servers before Sep 25 2026.
+    var speeds: DVSpeeds?
 
-    enum CodingKeys: String, CodingKey { case defaultVoice, myDefaultVoice, houseVoice, favorites, recent }
+    enum CodingKeys: String, CodingKey { case defaultVoice, myDefaultVoice, houseVoice, favorites, recent, speeds }
 }
 
 extension DVPrefs {
@@ -469,6 +496,7 @@ extension DVPrefs {
         houseVoice = config.houseVoice
         favorites = config.favorites ?? []
         recent = config.recent ?? []
+        speeds = config.speeds
     }
 
     init(from decoder: Decoder) throws {
@@ -478,6 +506,7 @@ extension DVPrefs {
         houseVoice = c.dvString(.houseVoice)
         favorites = c.dvValue(.favorites) ?? []
         recent = c.dvValue(.recent) ?? []
+        speeds = c.dvValue(.speeds)
     }
 
     /// A run just started with this voice: it leads Recently used, as the
@@ -1002,6 +1031,15 @@ final class DescribedVideoService: ObservableObject {
     /// with the server's own words ("Remove one first").
     func setFavorite(_ voice: String, on: Bool) async throws -> DVPrefs {
         try await post("prefs/favorites", body: ["voice": voice, "favorite": on], fallback: "Couldn't change your favourite narrators. Try again.")
+    }
+
+    /// Her speeds, saved for her account. Only the ones passed change.
+    func setSpeeds(rate: Double? = nil, maxRate: Double? = nil, playbackRate: Double? = nil) async throws -> DVPrefs {
+        var body: [String: Any] = [:]
+        if let rate { body["rate"] = rate }
+        if let maxRate { body["maxRate"] = maxRate }
+        if let playbackRate { body["playbackRate"] = playbackRate }
+        return try await post("prefs/speeds", body: body, fallback: "Couldn't save your speeds. Try again.")
     }
 
     func libraryFolders() async throws -> [String] {

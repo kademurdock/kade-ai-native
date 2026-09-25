@@ -100,6 +100,8 @@ struct DescribedVideoView: View {
     /// the server (Sep 25 2026) so the website and the phone agree.
     @State private var prefs = DVPrefs()
     @State private var savingPrefs = false
+    /// The pending save of her speeds (see saveSpeedsSoon).
+    @State private var speedSave: Task<Void, Never>?
 
     // Cost
     @State private var estimates: [String: DVEstimate] = [:]
@@ -417,7 +419,8 @@ struct DescribedVideoView: View {
         case .voices:
             voiceSheet
         case .player(let item):
-            DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions)
+            DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions,
+                                      playbackRate: rememberedPlaybackRate, onPlaybackRate: { value in keepPlaybackRate(value) })
         case .transcript(let text, let title):
             DescribedTranscriptSheet(text: text, title: title)
         case .share(let item):
@@ -722,8 +725,8 @@ struct DescribedVideoView: View {
                     .foregroundStyle(.secondary)
             }
             voiceRow
-            speedRow("Usual narration speed", hint: "Only the narrator speeds up. Dialogue keeps its own pace, and the voice keeps its pitch.", selection: $rate)
-            speedRow("Fastest it may go to fit a gap", hint: "Used only when a description would not fit at the usual speed.", selection: $maxRate)
+            speedRow("Usual narration speed", hint: "Only the narrator speeds up. Dialogue keeps its own pace, and the voice keeps its pitch. Remembered for your account.", selection: usualSpeedChoice)
+            speedRow("Fastest it may go to fit a gap", hint: "Used only when a description would not fit at the usual speed. Remembered for your account.", selection: fastestSpeedChoice)
             if !voiceOnly {
                 choiceRow("How much to describe", hint: "Rich detail suits commercials, logos and VHS openings. Essentials suit dialogue-heavy shows.", options: Self.detailOptions, selection: $detail)
             }
@@ -1689,6 +1692,7 @@ struct DescribedVideoView: View {
         }
         prefs = DVPrefs(config: fetched)
         await carryOldVoiceOver(fetched)
+        await carryOldSpeedsOver(fetched)
         config = fetched
         loaded = true
         DescribedVideoAccess.shared.record(allowed: true)
@@ -1768,9 +1772,11 @@ struct DescribedVideoView: View {
         } else {
             voice = voices.first ?? prefs.defaultVoice ?? ""
         }
-        let usual = Self.nearestSpeed((saved["rate"] as? Double) ?? 1.5)
+        // Her account's speeds first (the same on the website), then this
+        // phone's memory, then the usual ones.
+        let usual = Self.nearestSpeed(prefs.speeds?.rate ?? (saved["rate"] as? Double) ?? 1.5)
         rate = usual
-        maxRate = max(usual, Self.nearestSpeed((saved["maxRate"] as? Double) ?? 2.25))
+        maxRate = max(usual, Self.nearestSpeed(prefs.speeds?.maxRate ?? (saved["maxRate"] as? Double) ?? 2.25))
         let savedMode = saved["mode"] as? String ?? ""
         mode = Self.modeOptions.contains(where: { $0.value == savedMode }) ? savedMode : "extended"
         let savedDetail = saved["detail"] as? String ?? ""
@@ -1788,6 +1794,86 @@ struct DescribedVideoView: View {
             "detail": detail, "volume": volume,
         ]
         UserDefaults.standard.set(saved, forKey: Self.settingsKey)
+    }
+
+    // MARK: Speeds kept for her account (Sep 25 2026)
+
+    /// The two narration speed pickers write through these, so only HER
+    /// choice is saved (a video's own settings filling the form are not).
+    private var usualSpeedChoice: Binding<Double> {
+        Binding(get: { rate }, set: { value in
+            rate = value
+            saveSpeedsSoon()
+        })
+    }
+
+    private var fastestSpeedChoice: Binding<Double> {
+        Binding(get: { maxRate }, set: { value in
+            maxRate = value
+            saveSpeedsSoon()
+        })
+    }
+
+    /// Servers from Sep 25 2026 keep her speeds; older ones send none.
+    private var speedsOnServer: Bool { config?.speeds != nil }
+
+    /// Saved a moment after she stops changing them, quietly: this phone keeps
+    /// them too, and a failed save is tried again with her next change.
+    private func saveSpeedsSoon() {
+        remember()
+        guard speedsOnServer else { return }
+        speedSave?.cancel()
+        speedSave = Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            if let answer = try? await service.setSpeeds(rate: rate, maxRate: maxRate) {
+                prefs.speeds = answer.speeds
+            }
+        }
+    }
+
+    private static let playbackRateKey = "kade.describedVideo.playbackRate"
+
+    /// How fast finished videos play: her account's choice, else this phone's.
+    private var rememberedPlaybackRate: Double {
+        if let kept = prefs.speeds?.playbackRate { return kept }
+        let local = UserDefaults.standard.double(forKey: Self.playbackRateKey)
+        return local > 0 ? local : 1
+    }
+
+    private func keepPlaybackRate(_ value: Double) {
+        UserDefaults.standard.set(value, forKey: Self.playbackRateKey)
+        guard speedsOnServer else { return }
+        Task {
+            if let answer = try? await service.setSpeeds(playbackRate: value) {
+                prefs.speeds = answer.speeds
+            }
+        }
+    }
+
+    private static let speedsCarriedKey = "kade.describedVideo.speedsCarried"
+
+    /// Once per phone, like the narrator: speeds this phone remembered become
+    /// her account's, unless her account already has some.
+    private func carryOldSpeedsOver(_ fetched: DVConfig) async {
+        let store = UserDefaults.standard
+        guard let kept = fetched.speeds, kept.rate == nil, kept.maxRate == nil,
+              !store.bool(forKey: Self.speedsCarriedKey) else { return }
+        let saved = store.dictionary(forKey: Self.settingsKey) ?? [:]
+        let oldRate = saved["rate"] as? Double
+        let oldMax = saved["maxRate"] as? Double
+        let oldPlayback = store.double(forKey: Self.playbackRateKey)
+        guard oldRate != nil || oldMax != nil || oldPlayback > 0 else {
+            store.set(true, forKey: Self.speedsCarriedKey)
+            return
+        }
+        guard let answer = try? await service.setSpeeds(
+            rate: oldRate.map { Self.nearestSpeed($0) },
+            maxRate: oldMax.map { Self.nearestSpeed($0) },
+            playbackRate: oldPlayback > 0 ? oldPlayback : nil
+        ) else { return }
+        prefs.speeds = answer.speeds
+        store.set(true, forKey: Self.speedsCarriedKey)
     }
 
     private static let carriedKey = "kade.describedVideo.defaultCarried"

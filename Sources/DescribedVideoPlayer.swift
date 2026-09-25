@@ -195,6 +195,16 @@ final class DescribedVideoPlayback: ObservableObject {
         if player.rate == 0 { play() } else { pause() }
     }
 
+    /// How fast the whole video plays (Sep 25 2026, remembered for her
+    /// account). Play uses it from then on; a playing film changes at once.
+    /// AVPlayer keeps voices at their own pitch when sped up.
+    func setSpeed(_ value: Double) {
+        let speed = Float(min(3, max(0.5, value)))
+        player.defaultRate = speed
+        if player.rate != 0 { player.rate = speed }
+        updateNowPlaying()
+    }
+
     func skip(_ delta: Double) {
         let now = player.currentTime().seconds
         guard now.isFinite else { return }
@@ -288,6 +298,13 @@ struct DescribedVideoPlayerSheet: View {
     let title: String
     let isVideo: Bool
     let captionsURL: URL?
+    /// The speed she last chose for finished videos, and where a new choice
+    /// goes to be kept (her account, via the describer screen).
+    var playbackRate: Double = 1
+    var onPlaybackRate: ((Double) -> Void)? = nil
+    @State private var speed: Double = 1
+    @State private var keptSpeed: Double = 1
+    static let playbackSpeeds: [Double] = [0.75, 1, 1.25, 1.5, 1.75, 2]
     @StateObject private var playback = DescribedVideoPlayback()
     @AppStorage("kade.describedVideo.readCaptions") private var readCaptions = false
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
@@ -302,6 +319,10 @@ struct DescribedVideoPlayerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             // `.task` can start before onAppear, so the player opens here.
             .task {
+                let start = Self.playbackSpeeds.min(by: { abs($0 - playbackRate) < abs($1 - playbackRate) }) ?? 1
+                keptSpeed = start
+                speed = start
+                playback.setSpeed(start)
                 playback.open(url: url, title: title, isVideo: isVideo)
                 await playback.loadCaptions(from: captionsURL)
                 await playback.setCaptionChoice(voiceOver: voiceOverOn, readAloud: readCaptions)
@@ -312,11 +333,20 @@ struct DescribedVideoPlayerSheet: View {
             .onChange(of: readCaptions) { _, read in
                 Task { await playback.setCaptionChoice(voiceOver: voiceOverOn, readAloud: read) }
             }
+            .onChange(of: speed) { _, value in
+                playback.setSpeed(value)
+                guard value != keptSpeed else { return }
+                keptSpeed = value
+                onPlaybackRate?(value)
+            }
             .onDisappear { playback.close() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityHint("Stops playing and goes back.")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    speedMenu
                 }
                 ToolbarItem(placement: .primaryAction) {
                     if isVideo && voiceOverOn {
@@ -331,6 +361,28 @@ struct DescribedVideoPlayerSheet: View {
             }
             .accessibilityAction(.escape) { dismiss() }
         }
+    }
+
+    /// Playback speed for the whole video, one menu (a real control, said
+    /// with its value). The choice is kept for her account.
+    private var speedMenu: some View {
+        Menu {
+            Picker("Playback speed", selection: $speed) {
+                ForEach(Self.playbackSpeeds, id: \.self) { value in
+                    Text(Self.speedName(value)).tag(value)
+                }
+            }
+        } label: {
+            Label("Playback speed", systemImage: "speedometer")
+        }
+        .accessibilityLabel("Playback speed")
+        .accessibilityValue(Self.speedName(speed))
+        .accessibilityHint("How fast the whole video plays, dialogue and narration together. Remembered for your account.")
+    }
+
+    static func speedName(_ value: Double) -> String {
+        let number = value == value.rounded() ? String(Int(value)) : String(value)
+        return value == 1 ? "\(number)×, normal" : "\(number)×"
     }
 
     /// Drawn only while the system captions are off. Hidden from VoiceOver on
