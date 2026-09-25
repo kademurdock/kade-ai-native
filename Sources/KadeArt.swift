@@ -116,7 +116,8 @@ enum KadeArt {
         KadeArtStop(place: "Library radio on the lock screen", pictures: [("The glowing radio", "ArtNowPlayingRadio")]),
         KadeArtStop(place: "Making a described video", pictures: [("The projection booth", "ArtDescriberBooth")]),
         KadeArtStop(place: "Kade's Clubhouse", pictures: [
-            ("Choosing a room", "ArtClubhouseLounge"), ("In a room", "ArtClubhouseMusicNight"),
+            ("Choosing a room", "ArtClubhouseLounge"), ("The Porch", "ArtClubhousePorch"),
+            ("Game Night", "ArtClubhouseGameNight"), ("Music Night", "ArtClubhouseMusicNight"),
             ("Hotel rooms", "ArtClubhouseHotel"), ("When no rooms are open", "ArtEmptyFireside"),
         ]),
         KadeArtStop(place: "The Parlor", pictures: [("Game night", "ArtClubhouseGameNight")]),

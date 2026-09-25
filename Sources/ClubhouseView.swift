@@ -175,11 +175,22 @@ struct ClubhouseView: View {
     }
 
     // ── the room ──
+    /// The Porch, Game Night and Music Night have their own paintings; a
+    /// Hotel room or a game table's room gets the hotel's front desk.
+    private var roomPicture: String {
+        let name = service.roomLabel.lowercased()
+        if name.contains("porch") { return "ArtClubhousePorch" }
+        if name.contains("music") { return "ArtClubhouseMusicNight" }
+        if name.contains("game") || name.contains("table") || name.contains("parlor") { return "ArtClubhouseGameNight" }
+        return "ArtClubhouseHotel"
+    }
+
     private var roomScreen: some View {
         List {
-            // Part 292: music night on the lawn (silent).
+            // Part 292: the room's own painting (silent). The family rooms are
+            // named for the pictures: The Porch, Game Night, Music Night.
             Section {
-                KadePaintedHeader(imageName: "ArtClubhouseMusicNight", symbol: "music.note.house", tint: .pink, height: 90)
+                KadePaintedHeader(imageName: roomPicture, symbol: "music.note.house", tint: .pink, height: 90)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             }

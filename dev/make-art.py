@@ -42,6 +42,7 @@ PICTURES = [
     ("ArtSettingsMudroom", "room-settings-mudroom.png", "wide", 2.4, 0.45),
     ("ArtHelpPorch", "room-help-porch.png", "wide", 2.4, 0.50),
     ("ArtTalkKitchen", "room-talk-kitchen-table.png", "wide", 2.2, 0.50),
+    ("ArtClubhousePorch", "clubhouse-porch.png", "wide", 2.4, 0.50),
     ("ArtClubhouseMusicNight", "clubhouse-music-night.png", "wide", 2.4, 0.48),
     ("ArtClubhouseGameNight", "clubhouse-game-night.png", "wide", 2.4, 0.55),
     ("ArtClubhouseHotel", "room-clubhouse-hotel.png", "wide", 2.4, 0.45),
