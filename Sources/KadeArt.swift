@@ -47,6 +47,32 @@ enum KadeArt {
         }
     }
 
+    /// A character's own room, for the first-chat welcome (silent there).
+    /// Skylee's Lilly shares the public Lilly's room.
+    static func home(for agentID: String?) -> String? {
+        switch CharacterMotion.rigID(agentID) {
+        case CharacterMotion.kianaID: return "ArtHomeKiana"
+        case CharacterMotion.harleyID: return "ArtHomeHarley"
+        case CharacterMotion.dellaID: return "ArtHomeDella"
+        case CharacterMotion.lillyID: return "ArtHomeLilly"
+        case CharacterMotion.witherspoonID: return "ArtHomeWitherspoon"
+        default: return nil
+        }
+    }
+
+    /// The small card beside some of Help's section headings (silent).
+    static func helpCard(for section: String) -> String? {
+        switch section {
+        case "Chatting": return "ArtCardTalk"
+        case "The Library": return "ArtCardLibrary"
+        case "Described video": return "ArtCardWatch"
+        case "My Creations and the Wall of Fame": return "ArtCardBooth"
+        case "Games, Matchmaker, and Game Room": return "ArtCardReverie"
+        case "Kade's Clubhouse": return "ArtCardClubhouse"
+        default: return nil
+        }
+    }
+
     /// Where each picture appears, in the order Help reads them out ("What
     /// the app looks like"), each with a short name. Every name here has words.
     static let tour: [KadeArtStop] = [
@@ -56,6 +82,15 @@ enum KadeArt {
         ]),
         KadeArtStop(place: "The What's new card", pictures: [("The house at dusk", "ArtHouseAtDusk")]),
         KadeArtStop(place: "Talk, before your first conversation", pictures: [("The kitchen table", "ArtTalkKitchen")]),
+        KadeArtStop(place: "A new chat, above Say hello: each character's own room", pictures: [
+            ("Kiana", "ArtHomeKiana"), ("Harley", "ArtHomeHarley"), ("Della", "ArtHomeDella"),
+            ("Lilly", "ArtHomeLilly"), ("Mrs. Witherspoon", "ArtHomeWitherspoon"),
+        ]),
+        KadeArtStop(place: "Choosing a character, above Characters with moving faces", pictures: [("The house of five lit windows", "ArtCastWindows")]),
+        KadeArtStop(place: "Help, beside some section headings", pictures: [
+            ("Chatting", "ArtCardTalk"), ("The Library", "ArtCardLibrary"), ("Described video", "ArtCardWatch"),
+            ("My Creations", "ArtCardBooth"), ("Games", "ArtCardReverie"), ("Kade's Clubhouse", "ArtCardClubhouse"),
+        ]),
         KadeArtStop(place: "Making a described video", pictures: [("The projection booth", "ArtDescriberBooth")]),
         KadeArtStop(place: "Kade's Clubhouse", pictures: [
             ("Choosing a room", "ArtClubhouseLounge"), ("In a room", "ArtClubhouseMusicNight"),
@@ -84,7 +119,8 @@ struct KadeArtStop: Identifiable {
 /// size.
 struct KadeArtSpot: View {
     let imageName: String
-    let fallbackSymbol: String
+    /// nil: nothing at all when the picture steps aside.
+    let fallbackSymbol: String?
     var width: CGFloat = 140
     var height: CGFloat = 140
     var rounded: Bool = false
@@ -119,7 +155,7 @@ struct KadeArtSpot: View {
                         .frame(width: width, height: height)
                         .accessibilityIgnoresInvertColors(true)
                 }
-            } else {
+            } else if let fallbackSymbol {
                 Image(systemName: fallbackSymbol)
                     .font(.system(size: fallbackSize))
                     .foregroundStyle(.tertiary)

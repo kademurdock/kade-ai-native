@@ -261,6 +261,10 @@ struct AgentPickerView: View {
             } else {
                 if !animatedAgents.isEmpty {
                     Section {
+                        // Part 292: the house of five lit windows (silent).
+                        KadePaintedHeader(imageName: "ArtCastWindows", symbol: "person.3.fill", tint: .orange, height: 90)
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
                         ForEach(animatedAgents) { agent in
                             rowButton(for: agent)
                         }

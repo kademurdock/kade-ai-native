@@ -72,7 +72,8 @@ PICTURES = [
     ("ArtHomeDella", "della-home-banner.png", "wide", 2.4, 0.50),
     ("ArtHomeLilly", "lilly-home-banner.png", "wide", 2.4, 0.55),
     ("ArtHomeWitherspoon", "witherspoon-home-banner.png", "wide", 2.4, 0.50),
-    # Squares.
+    # Squares. (The nine Sound Booth sleeves wait until the booth knows a
+    # song's style on the phone; they are in art_ready.)
     ("ArtCardTalk", "card-talk-telephone.png", "square600", None, None),
     ("ArtCardLibrary", "card-library-books.png", "square600", None, None),
     ("ArtCardBooth", "card-booth-microphone.png", "square600", None, None),
@@ -80,15 +81,6 @@ PICTURES = [
     ("ArtCardClubhouse", "card-clubhouse-record.png", "square600", None, None),
     ("ArtCardReverie", "card-reverie-globe.png", "square600", None, None),
     ("ArtNowPlayingRadio", "nowplaying-radio.png", "square800", None, None),
-    ("ArtSleeveSoul", "sleeve-soul-rnb.png", "square600", None, None),
-    ("ArtSleeveHipHop", "sleeve-hip-hop.png", "square600", None, None),
-    ("ArtSleeveCountry", "sleeve-country-folk.png", "square600", None, None),
-    ("ArtSleeveBlues", "sleeve-blues.png", "square600", None, None),
-    ("ArtSleeveRock", "sleeve-rock-metal.png", "square600", None, None),
-    ("ArtSleeveJazz", "sleeve-jazz-swing.png", "square600", None, None),
-    ("ArtSleeveDance", "sleeve-dance-funk.png", "square600", None, None),
-    ("ArtSleeveKids", "sleeve-kids.png", "square600", None, None),
-    ("ArtSleeveLullaby", "sleeve-lullaby.png", "square600", None, None),
     # Jackets: an item's kind when it has no picture of its own.
     ("ArtJacketAudiobook", "jacket-audiobook.png", "jacket", None, None),
     ("ArtJacketBook", "jacket-book.png", "jacket", None, None),

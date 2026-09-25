@@ -2147,6 +2147,12 @@ struct ConversationDetailView: View {
     /// keyboard.
     private var firstChatWelcome: some View {
         VStack(spacing: 14) {
+            // Part 292: the character's own room, silent (the heading says
+            // who this is). Gone with the keyboard, like the starters, and
+            // left off the smallest phones, where the face stage needs the room.
+            if !keyboardUp, UIScreen.main.bounds.height >= 700, let room = KadeArt.home(for: selectedAgentId) {
+                KadePaintedHeader(imageName: room, symbol: "house.fill", tint: .indigo, height: 90)
+            }
             Text(welcomeHeading)
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)

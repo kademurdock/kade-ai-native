@@ -97,9 +97,15 @@ struct HelpView: View {
 
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 14) {
-                        Text(section.title)
-                            .font(.title3.bold())
-                            .accessibilityAddTraits(.isHeader)
+                        HStack(spacing: 12) {
+                            // Part 292: a small painted card (silent).
+                            if let card = KadeArt.helpCard(for: section.title) {
+                                KadeArtSpot(imageName: card, fallbackSymbol: nil, width: 44, height: 44, rounded: true)
+                            }
+                            Text(section.title)
+                                .font(.title3.bold())
+                                .accessibilityAddTraits(.isHeader)
+                        }
 
                         ForEach(entries(section)) { entry in
                             VStack(alignment: .leading, spacing: 4) {
