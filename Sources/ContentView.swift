@@ -931,6 +931,10 @@ struct ContentView: View {
                 ("sound-booth", { go(.soundBooth) }),
                 ("help", { go(.help) }),
                 ("marketplace", { go(.marketplace) }),
+                // Part 292: the screens that gained pictures.
+                ("clubhouse", { go(.lounge) }),
+                ("parlor", { go(.parlor) }),
+                ("described-video", { go(.describedVideo(DescribedVideoStart())) }),
                 ("saved-chat", {
                     if let convo = conversationsService.conversations.first {
                         go(.savedChat(convo))
