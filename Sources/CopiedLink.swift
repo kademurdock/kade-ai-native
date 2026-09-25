@@ -7,11 +7,14 @@ import UIKit
 /// Asking whether the clipboard holds a link (hasURLs, detectPatterns) shows
 /// nothing. Reading it shows iOS's paste notice, or its Allow Paste question,
 /// until Settings › Kade-AI › Paste from Other Apps is set to Allow. So the
-/// clipboard is only read when a link is really there, and only once for each
-/// copy (changeCount), per box.
+/// clipboard is only read when the silent check finds a web link, and each
+/// copy (changeCount) is read at most once for the whole app; every box then
+/// fills from that one read, once per copy.
 @MainActor
 enum CopiedLink {
     private static var seen: [String: Int] = [:]
+    /// The one read of the latest copy: its changeCount and the first web link in it.
+    private static var lastRead: (count: Int, link: String?)?
 
     /// The link copied since `box` last looked, when `accept` likes it; nil otherwise.
     static func take(_ box: String, where accept: (URL) -> Bool) async -> String? {
@@ -19,16 +22,26 @@ enum CopiedLink {
         let count = board.changeCount
         guard seen[box] != count else { return nil }
         seen[box] = count
-        guard await holdsLink(board) else { return nil }
-        let text = board.url?.absoluteString ?? board.string ?? ""
-        guard let link = text.split(whereSeparator: { $0.isWhitespace }).map(String.init).first(where: { $0.lowercased().hasPrefix("http") }),
+        guard let link = await copiedLink(board, count: count),
               let url = URL(string: link), accept(url) else { return nil }
         return link
     }
 
-    private static func holdsLink(_ board: UIPasteboard) async -> Bool {
-        if board.hasURLs { return true }
-        guard board.hasStrings else { return false }
+    /// The first web link in copy `count`, reading the clipboard at most once per copy.
+    private static func copiedLink(_ board: UIPasteboard, count: Int) async -> String? {
+        if let last = lastRead, last.count == count { return last.link }
+        guard board.hasURLs || board.hasStrings, await holdsWebLink(board) else { return nil }
+        // Another box may have read this copy during the check; a newer copy waits for its own check.
+        if let last = lastRead, last.count == count { return last.link }
+        guard board.changeCount == count else { return nil }
+        let text = (board.hasURLs ? board.url?.absoluteString : nil) ?? board.string ?? ""
+        let link = text.split(whereSeparator: { $0.isWhitespace }).map(String.init).first(where: { $0.lowercased().hasPrefix("http") })
+        lastRead = (count: count, link: link)
+        return link
+    }
+
+    /// Whether the copy looks like a web link, asked without iOS showing anything.
+    private static func holdsWebLink(_ board: UIPasteboard) async -> Bool {
         return await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
             board.detectPatterns(for: [.probableWebURL]) { result in
                 if case .success(let found) = result {

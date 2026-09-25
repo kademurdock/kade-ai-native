@@ -514,6 +514,9 @@ struct ConversationDetailView: View {
     /// conversation list; `.task` fetches it at most once per instance when
     /// this chat opened over an empty one.
     @State private var pickUpListRequested = false
+    /// The main character the launch chat was seeded with, until
+    /// `followNewMainCharacter()` has checked it once.
+    @State private var launchSeedAgentId: String?
     /// Sep 23 2026 redesign (B13): the notification card's one-time life on
     /// this screen -- see `offerPushCardAfterReply()`. `chatOnScreen` follows
     /// onAppear/onDisappear so the card's one announcement never plays while
@@ -856,6 +859,7 @@ struct ConversationDetailView: View {
             // composer has nobody to send to otherwise.
             if selectedAgentId == nil {
                 selectedAgentId = conversation?.agentId ?? initialAgentId
+                if conversation == nil, showSpotterShortcut { launchSeedAgentId = selectedAgentId }
             }
             if conversationId == nil {
                 conversationId = conversation?.conversationId
@@ -898,6 +902,7 @@ struct ConversationDetailView: View {
                 pickUpListRequested = true
                 await conversationsService.loadFirstPage()
             }
+            await followNewMainCharacter()
         }
         // Phase 7 (accessibility polish -- haptics, KADE_AI_iOS_ROADMAP_2026-
         // 07-15.md Phase B item 6: "a light haptic on key moments -- send,
@@ -2227,6 +2232,27 @@ struct ConversationDetailView: View {
             return same
         }
         return earlier.first
+    }
+
+    /// Part 232's known gap: a main character assigned on the server is
+    /// stored by the first roster load, which lands after the launch chat was
+    /// seeded with the previous one. Checked once, after that load: the launch
+    /// chat follows the new main character only while nothing has been sent
+    /// and who answers is still the seed. A chat with any message, or a
+    /// character picked here, is never switched.
+    private func followNewMainCharacter() async {
+        guard conversation == nil, showSpotterShortcut, let seed = launchSeedAgentId else { return }
+        var waits = 0
+        while agentsService.isLoading, waits < 40, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            waits += 1
+        }
+        guard !Task.isCancelled else { return }
+        launchSeedAgentId = nil
+        guard conversationId == nil, messages.isEmpty, sendState == .idle, selectedAgentId == seed,
+              let main = DefaultAgentStore.storedId, main != seed,
+              agentsService.agents.contains(where: { $0.id == main }) else { return }
+        selectedAgentId = main
     }
 
     // MARK: - Sep 23 2026 redesign: the notification card (B13)

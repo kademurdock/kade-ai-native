@@ -232,6 +232,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     private static let checkInStampKey = "kade.diag.lastCheckIn"
 
     private func sendBuildCheckIn() {
+        guard !KadeUITestMode.skipsDiagnosticsUpload else { return }
         DispatchQueue.global(qos: .utility).async {
             let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -375,6 +376,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     }
 
     private func uploadPendingReports() {
+        guard !KadeUITestMode.skipsDiagnosticsUpload else { return }
         DispatchQueue.global(qos: .utility).async {
             let dir = KadeBreadcrumbs.directory
             guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
@@ -403,8 +405,15 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
                 // dropped. The bridge accepts 600KB now; send whole payloads
                 // up to 400KB and truncate the rare monster instead of
                 // dropping it (a cut-off stack beats no stack).
-                if payload.count > 400_000 {
-                    payload = String(payload.prefix(400_000)) + "…[truncated at 400KB of \(payload.count)]"
+                // Sep 25 2026: MetricKit writes each diagnostic's metadata (hang
+                // duration, exception type, termination reason) AFTER its call
+                // stacks, so cutting the tail lost exactly that part. Keep the
+                // first and last 200K and cut the middle instead.
+                let total = payload.count
+                if total > 400_000 {
+                    payload = String(payload.prefix(200_000))
+                        + "\n…[\(total - 400_000) characters cut from the middle of \(total)]…\n"
+                        + String(payload.suffix(200_000))
                 }
                 var req = URLRequest(url: Self.sinkURL)
                 req.httpMethod = "POST"

@@ -1337,7 +1337,8 @@ struct SoundBoothView: View {
         guard !workspaceBusy else { return }
         let sourceEngine = engine
         let sourceVersion = quoteVersion
-        let t = (engine == "lyria" ? script : text).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Lyria, YuE2 and Stable Audio show only the script box; the brief box is Scenema and Seed's.
+        let t = (usesDirectPrompt ? script : text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count >= 3 else { announce("Type something in the box first, then I can suggest."); return }
         isSuggesting = true
         defer { isSuggesting = false }
@@ -1347,7 +1348,7 @@ struct SoundBoothView: View {
             let hasDraft = drafts[r.engine] != nil || r.engine == engine
             selectEngine(r.engine)
             if !hasDraft {
-                if engine == "lyria" { script = t } else { text = t; inputMode = "brief" }
+                if usesDirectPrompt { script = t } else { text = t; inputMode = "brief" }
             }
             // The engine change announces its own card; the reason follows.
             try? await Task.sleep(nanoseconds: 900_000_000)
