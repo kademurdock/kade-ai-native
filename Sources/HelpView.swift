@@ -186,7 +186,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build: an easier layout",
+                title: "Newest build: Library actions and requests",
+                body: "In the Library, what you can do with an item is in the VoiceOver Actions rotor as you pass it: Ask the librarian about this, Make a described copy on videos, Add to a collection, and for your own uploads Move or Delete. Swipe up or down on the item to hear them; a long press shows the same list. In the player those buttons moved into the rotor on the title and on Play, with What just happened? for videos, so there are fewer stops before Play. New under Add: ask the library for a book, recording or video, even if you only remember a little, and hear when it's filled. And a book that is already in the library with exactly the same text is no longer added twice."
+            ),
+            HelpEntry(
+                title: "Before that: an easier layout",
                 body: "Everything now lives in five tabs along the bottom of the screen: Talk, Library, Create, Play and More. Each tab keeps your place, so going to Talk and back to Library lands you right where you were, and tapping the tab you're already on takes you back to its start. The app still opens into a chat with your main character, Call your Spotter is still the first button on the Talk tab, and backing out of a chat still lands on your conversations, now grouped by day with each character's face beside them. Your book keeps playing while you move around the app, with a small Now Playing bar above the tabs, and it pauses by itself for a voice message or a call. New too: Search everything, a Where is list at the top of Help, little new badges on Alerts and Announcements, a friendlier first chat with starter lines, a Sound Booth that asks what you want to make, and in Settings, your pick of app icon: Kiana, Harley, Della or Lilly's face."
             ),
             HelpEntry(
@@ -319,6 +323,14 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Three parts",
                 body: "The Library tab is split three ways by a switch near the top. Listen holds what you're reading or hearing now, your shelf and your collections. Browse holds search, the archive's folders and loose donations. Add holds every way to donate a book or a recording. Continue, at the very top, picks up the book you were last in."
+            ),
+            HelpEntry(
+                title: "Actions on every item",
+                body: "Every item in the Library has its actions in the VoiceOver Actions rotor: Ask the librarian about this, Make a described copy on videos, Add to a collection, and on your own uploads Move to another folder or Delete, which asks first. You don't have to open an item to ask about it. In the player, the same actions are on the title and on Play, plus What just happened? on a video, which pauses and describes the last few minutes. Without VoiceOver the buttons are on screen, and a long press on an item shows the list."
+            ),
+            HelpEntry(
+                title: "Asking for something",
+                body: "Under Add, Ask the library for something takes a title or a few words, the kind of thing it is, and whatever you remember. The library owner sees every request, and you get an alert when yours is filled; then it says so at the top of the Library, and Open plays it. Each request's actions are Hear the details, Add details and Cancel this request. You can also just tell the librarian."
             ),
             HelpEntry(
                 title: "It keeps playing",

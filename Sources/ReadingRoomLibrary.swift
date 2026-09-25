@@ -104,6 +104,17 @@ extension ReadingRoomService {
     func reportShelf(book: String, path: String, note: String) async throws -> Bool { try await postJSON("api/kade/reading-room/book/\(book)/report", ["path": path, "note": note], as: Applied.self).applied ?? false }
     func withdrawSubmission(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/submissions/\(id)", method: "DELETE", authorized: true)) }
 
+    /// Library requests (Part 289's route): GET lists, POST runs one action
+    /// (create, details, note, cancel).
+    func libraryRequests(scope: String, before: String? = nil) async throws -> RRRequestList {
+        var items = [URLQueryItem(name: "scope", value: scope)]
+        if let before { items.append(URLQueryItem(name: "before", value: before)) }
+        return try await get("api/kade/reading-room/requests", items, as: RRRequestList.self)
+    }
+    func libraryRequest(_ body: [String: Any]) async throws -> RRRequestResult {
+        try await postJSON("api/kade/reading-room/requests", body, as: RRRequestResult.self)
+    }
+
     struct ItemWrap: Decodable { let item: RRItem }
     func editItem(_ id: String, fields: [String: Any]) async throws -> RRItem { try await postJSON("api/kade/reading-room/book/\(id)/edit", fields, as: ItemWrap.self).item }
     struct Moved: Decodable { let moved: Int?; let to: String? }
@@ -148,6 +159,9 @@ struct VideoPane: View {
     let service: ReadingRoomService
     let book: RRBook
     let announce: (String) -> Void
+    /// Sep 25 2026: "What just happened?" from the Actions rotor on the
+    /// title and on Play. Each new value asks for a recap.
+    var recapRequest: Int = 0
     @State private var desc: RRDescription?
     @State private var descStatus = ""
     @State private var recap: RRRecap?
@@ -160,6 +174,7 @@ struct VideoPane: View {
     /// Sep 24 2026: Make a described copy shows only for an account the
     /// server lets into the described-video trial.
     @ObservedObject private var describedVideo = DescribedVideoAccess.shared
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     private var track: RRTrack? { book.tracks.indices.contains(player.s) ? book.tracks[player.s] : nil }
     private var isVideo: Bool { (track?.mime ?? "").hasPrefix("video/") }
@@ -186,6 +201,9 @@ struct VideoPane: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityHint("Opens Make a described video with this video chosen. A narrator describes what happens on screen in the pauses. Checking it is free, and the price is said before anything is spent.")
+                // Sep 25 2026, her word: under VoiceOver this is an action on
+                // the title and on Play, not another stop in the swipe order.
+                .accessibilityHidden(voiceOverOn)
             }
             if isVideo {
                 DisclosureGroup("Video description" + ((desc?.scenes?.count).map { " (\($0) scenes)" } ?? "")) {
@@ -231,6 +249,7 @@ struct VideoPane: View {
         .onAppear { desc = track?.description; recap = track?.recaps?.last }
         .onChange(of: player.s) { _, _ in desc = track?.description; recap = track?.recaps?.last; player.scenes = desc?.scenes ?? [] }
         .onChange(of: desc) { _, d in player.scenes = d?.scenes ?? [] }
+        .onChange(of: recapRequest) { _, _ in if isVideo { Task { await startRecap() } } }
     }
 
     private func startDescribe() async {
@@ -353,6 +372,14 @@ struct ArchiveSection: View {
     let open: (RRItem) -> Void
     var me: String = ""
     var librarian: Bool = false
+    /// Sep 25 2026, her word: what you can do with an item rides the
+    /// VoiceOver Actions rotor as you pass it, so asking the librarian about
+    /// it, making a described copy or collecting it needs no trip inside.
+    var askLibrarian: (RRItem) -> Void = { _ in }
+    var collect: (RRItem) -> Void = { _ in }
+    @Environment(\.kadeNavigation) private var nav
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
+    @State private var deleting: RRItem?
     @State private var moving: RRItem?
     @State private var moveTo = ""
     @State private var folderMoveTo = ""
@@ -401,16 +428,7 @@ struct ArchiveSection: View {
                     .accessibilityLabel("Folder \(f.name), \(f.count) item\(f.count == 1 ? "" : "s")")
                     .accessibilityHint("Opens the folder.")
                 }
-                ForEach(p.items) { item in
-                    itemRow(item)
-                        .contextMenu {
-                            if canManage(item) {
-                                Button("Move to another folder") { moving = item; moveTo = item.path ?? path }
-                                Button("Delete from the library", role: .destructive) { Task { await deleteItem(item) } }
-                            }
-                        }
-                        .accessibilityAction(named: canManage(item) ? "Move to another folder" : "Open") { if canManage(item) { moving = item; moveTo = item.path ?? path } else { open(item) } }
-                }
+                ForEach(p.items) { item in itemRow(item) }
                 if !path.isEmpty, librarian || p.items.contains(where: canManage) {
                     Button("Move or rename this folder") { folderMoveTo = path; showFolderMove = true }
                 }
@@ -436,6 +454,26 @@ struct ArchiveSection: View {
             Button("Move") { Task { if let r = try? await service.moveFolder(from: path, to: folderMoveTo) { UIAccessibility.post(notification: .announcement, argument: "Moved \(r.moved ?? 0) items."); await load(r.to ?? folderMoveTo, 0) } } }
             Button("Cancel", role: .cancel) {}
         }
+        // Delete is one flick away in the rotor now, so it asks first.
+        .confirmationDialog("Delete \(deleting?.title ?? "this") from the library?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
+            Button("Delete it", role: .destructive) { if let d = deleting { deleting = nil; Task { await deleteItem(d) } } }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: { Text("It is removed for everyone, and this cannot be undone.") }
+    }
+
+    /// Everything you can do with an item besides opening it: the Actions
+    /// rotor and a long press offer the same list.
+    @ViewBuilder
+    private func itemActions(_ item: RRItem) -> some View {
+        Button("Ask the librarian about this") { askLibrarian(item) }
+        if item.kind == "video" && describedVideo.allowed {
+            Button("Make a described copy") { nav.open(.describedVideo(DescribedVideoStart(book: item.id, track: 0))) }
+        }
+        Button("Add to a collection") { collect(item) }
+        if canManage(item) {
+            Button("Move to another folder") { moving = item; moveTo = item.path ?? path }
+            Button("Delete from the library", role: .destructive) { deleting = item }
+        }
     }
 
     private func deleteItem(_ item: RRItem) async {
@@ -457,6 +495,8 @@ struct ArchiveSection: View {
         }
         .accessibilityLabel(item.spokenRow(where: "archive") + (item.described == true ? ", described" : ""))
         .accessibilityHint("Opens it.")
+        .contextMenu { itemActions(item) }
+        .accessibilityActions { itemActions(item) }
     }
     private func detail(_ item: RRItem) -> String {
         var bits: [String] = [item.categoryName]
@@ -535,8 +575,10 @@ struct CollectionScreen: View {
     let row: RRCollectionRow
     let play: (RRCollectionItem, [RRCollectionItem]) -> Void
     let back: () -> Void
+    var askLibrarian: (RRItem) -> Void = { _ in }
     @State private var detail: RRCollectionDetail?
     @State private var status = ""
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     var body: some View {
         List {
@@ -563,9 +605,15 @@ struct CollectionScreen: View {
                                 }
                             }
                             .accessibilityHint("Plays it, then the rest of the collection.")
+                            .accessibilityActions {
+                                Button("Ask the librarian about this") { askLibrarian(it.book) }
+                                if d.mine { Button("Remove from this collection") { Task { await remove(it) } } }
+                            }
                             if d.mine {
                                 Spacer()
-                                Button("Remove") { Task { try? await service.editCollection(row.id, remove: it.n); await load() } }.foregroundStyle(.red).accessibilityLabel("Remove \(it.title)")
+                                // Under VoiceOver, Remove is an action on the item (Sep 25 2026).
+                                Button("Remove") { Task { await remove(it) } }.foregroundStyle(.red).accessibilityLabel("Remove \(it.title)")
+                                    .accessibilityHidden(voiceOverOn)
                             }
                         }
                     }
@@ -576,6 +624,13 @@ struct CollectionScreen: View {
         .task { await load() }
     }
     private func load() async { do { detail = try await service.collection(row.id) } catch { status = error.localizedDescription } }
+    private func remove(_ it: RRCollectionItem) async {
+        do {
+            try await service.editCollection(row.id, remove: it.n)
+            UIAccessibility.post(notification: .announcement, argument: "Removed \(it.title).")
+            await load()
+        } catch { UIAccessibility.post(notification: .announcement, argument: error.localizedDescription) }
+    }
 }
 
 

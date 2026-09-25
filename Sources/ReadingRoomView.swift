@@ -48,6 +48,18 @@ struct ReadingRoomView: View {
     @State private var showLibrarian = false
     @State private var librarianAgentId: String?
     @State private var librarianDraft: String?
+    /* Sep 25 2026, her word: an item's actions (ask the librarian, make a
+     * described copy, add to a collection…) ride the VoiceOver Actions rotor
+     * on each row and on the player's title and Play button. Under VoiceOver
+     * the player's own buttons for them leave the swipe order; they stay on
+     * screen for sight, Voice Control and Switch Control. */
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+    @Environment(\.kadeNavigation) private var nav
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
+    @State private var collectingItem: RRItem?
+    @State private var showRowCollectionPicker = false
+    @State private var recapRequest = 0
+    @StateObject private var requests = LibraryRequestsModel()
     @State private var category = ""
     @State private var keepUploadsPrivate = false
     @State private var showBookPicker = false
@@ -98,7 +110,7 @@ struct ReadingRoomView: View {
                     player.queue = rest.map { $0.book.id }
                     autoplayNext = true
                     Task { await open(item.book, track: item.track) }
-                }, back: { openCollectionRow = nil })
+                }, back: { openCollectionRow = nil }, askLibrarian: { item in Task { await talkToLibrarian(itemId: item.id) } })
             } else {
                 shelfScreen
             }
@@ -135,6 +147,7 @@ struct ReadingRoomView: View {
                 routedIncoming = true
                 routeIncoming(f)
             }
+            await requests.reload(service)
         }
         .fileImporter(isPresented: $showBookPicker, allowedContentTypes: bookTypes, allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let u = urls.first { Task { await uploadBook(u) } }
@@ -186,6 +199,15 @@ struct ReadingRoomView: View {
             Image("LibraryAlcove").resizable().scaledToFill().frame(height: 130).clipped()
                 .accessibilityHidden(true).listRowInsets(EdgeInsets())
             continueSection
+            // A filled request's push opens this tab; say so first and go to it in one tap.
+            if requests.unread > 0 {
+                Section {
+                    Button { sectionOverride = "add" } label: {
+                        Label(requests.unread == 1 ? "One of your library requests has news" : "\(requests.unread) of your library requests have news", systemImage: "bell.badge")
+                    }
+                    .accessibilityHint("Shows your requests, under Add.")
+                }
+            }
             if let status {
                 Section {
                     Text(status).foregroundStyle(.secondary).accessibilityFocused($focus, equals: .status)
@@ -218,18 +240,27 @@ struct ReadingRoomView: View {
             switch section {
             case "browse":
                 ArchiveSection(service: service, open: { item in Task { await open(item) } }, me: service.shelf?.me ?? "", librarian: service.shelf?.librarian ?? false,
+                               askLibrarian: { item in Task { await talkToLibrarian(itemId: item.id) } },
+                               collect: { item in Task { await pickCollection(for: item) } },
                                page: $archivePage, path: $archivePath, pageNo: $archivePageNo, scope: $archiveScope, query: $archiveQuery, results: $archiveResults)
                 looseDonations
             case "add":
                 addSection
+                LibraryRequestsSection(service: service, model: requests, announce: { announce($0) }, open: { id in Task { await openRequested(id) } })
                 SubmissionsSection(service: service, announce: { announce($0) }, incomingLink: incomingLink, open: { id in Task { if let b = try? await service.openBook(id) { player.open(b); openBook = b } } })
             default:
                 shelfFolders
                 CollectionsSection(service: service, openCollection: { row in openCollectionRow = row })
             }
         }
-        .refreshable { await service.loadShelf() }
+        .refreshable { await service.loadShelf(); await requests.reload(service) }
         .overlay { if service.isLoading && service.shelf == nil { ProgressView("Loading the shelf…") } }
+        .confirmationDialog("Add \(collectingItem?.title ?? "it") to which collection?", isPresented: $showRowCollectionPicker, titleVisibility: .visible) {
+            ForEach(myCollections) { c in
+                Button(c.title) { if let item = collectingItem { Task { await addItem(item, to: c) } } }
+            }
+            Button("Cancel", role: .cancel) { collectingItem = nil }
+        }
     }
 
     /// Which part of the shelf is showing: this visit's jump (a shared link
@@ -382,13 +413,21 @@ struct ReadingRoomView: View {
         }
         .accessibilityLabel(item.spokenRow(where: place))
         .accessibilityHint(place == "library" ? "Checks it out and opens it." : (item.state == "pending" ? "Opens it; add recordings from its page." : "Opens it where you left off."))
-        .contextMenu {
-            if place == "mine", item.isAudio {
-                Button("Add recordings") { uploadingItem = item; showTrackPicker = true }
-            }
+        .contextMenu { rowActions(item, place: place) }
+        .accessibilityActions { rowActions(item, place: place) }
+    }
+
+    /// What a shelf row offers besides opening it, in the Actions rotor and
+    /// on a long press alike.
+    @ViewBuilder
+    private func rowActions(_ item: RRItem, place: String) -> some View {
+        Button("Ask the librarian about this") { Task { await talkToLibrarian(itemId: item.id) } }
+        if item.kind == "video" && describedVideo.allowed {
+            Button("Make a described copy") { nav.open(.describedVideo(DescribedVideoStart(book: item.id, track: 0))) }
         }
-        .accessibilityAction(named: place == "mine" && item.isAudio ? "Add recordings" : "Open") {
-            if place == "mine", item.isAudio { uploadingItem = item; showTrackPicker = true } else { Task { await open(item) } }
+        Button("Add to a collection") { Task { await pickCollection(for: item) } }
+        if place == "mine", item.isAudio {
+            Button("Add recordings") { uploadingItem = item; showTrackPicker = true }
         }
     }
 
@@ -451,7 +490,11 @@ struct ReadingRoomView: View {
             let r = try await service.uploadBook(fileURL: url, grownUpsOnly: grownUpsForBook, keepPrivate: keepUploadsPrivate, onProgress: { p in card.progress(p) })
             card.finish(failed: false)
             let skipped = r.skipped?.count ?? 0
-            announce("Added \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). \(r.book.sections ?? 0) sections, about \(r.book.listen ?? "") of listening." + (skipped > 0 ? " \(skipped) front-matter parts skipped." : ""))
+            if r.duplicate == true {
+                announce("Already in the library: \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). It has exactly the same text, so nothing new was added.")
+            } else {
+                announce("Added \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). \(r.book.sections ?? 0) sections, about \(r.book.listen ?? "") of listening." + (skipped > 0 ? " \(skipped) front-matter parts skipped." : ""))
+            }
             await service.loadShelf()
             try? FileManager.default.removeItem(at: url)
         } catch {
@@ -535,37 +578,31 @@ struct ReadingRoomView: View {
                     Text(bookMeta(book)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
+                .accessibilityActions { bookActions(book) }
 
                 Button { Task { await talkToLibrarian(itemId: book.id) } } label: {
-                    Label("Ask Mrs. Witherspoon about this item", systemImage: "bubble.left.and.bubble.right")
+                    Label("Ask the librarian about this", systemImage: "bubble.left.and.bubble.right")
                 }
                 .buttonStyle(.bordered)
                 .disabled(openingLibrarian)
-                .accessibilityHint("Opens her chat with a question ready to send. Pauses library playback.")
+                .accessibilityHint("Opens Mrs. Witherspoon's chat with a question about this ready to send. Pauses library playback.")
+                .accessibilityHidden(voiceOverOn)
 
                 if book.isAudio {
-                    VideoPane(player: player, service: service, book: book, announce: { announce($0) })
+                    VideoPane(player: player, service: service, book: book, announce: { announce($0) }, recapRequest: recapRequest)
                 }
                 HStack {
                     Button { Task { await pickCollection() } } label: { Label("Add to a collection", systemImage: "text.badge.plus") }
                         .buttonStyle(.bordered)
-                    Button { reportPath = book.path ?? ""; reportNote = ""; showReport = true } label: { Label("Suggest a different shelf", systemImage: "arrowshape.turn.up.right") }
+                    Button { suggestShelf(book) } label: { Label("Suggest a different shelf", systemImage: "arrowshape.turn.up.right") }
                         .buttonStyle(.bordered)
                         .accessibilityHint("Tells the librarian this is on the wrong shelf and where it belongs.")
                 }
-                .alert("Where does it belong?", isPresented: $showReport) {
-                    TextField("Folder, like Books/Fiction — Romance", text: $reportPath)
-                    TextField("Note (optional)", text: $reportNote)
-                    Button("Send") { Task { do { let applied = try await service.reportShelf(book: book.id, path: reportPath, note: reportNote); announce(applied ? "Moved." : "Sent to the librarian. You will be told when it is moved.") } catch { announce(error.localizedDescription) } } }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .confirmationDialog("Add \(book.title) to which collection?", isPresented: $showCollectionPicker, titleVisibility: .visible) {
-                    ForEach(myCollections) { c in Button(c.title) { Task { await addTo(c, book: book) } } }
-                    Button("Cancel", role: .cancel) {}
-                }
+                .accessibilityHidden(voiceOverOn)
                 LibrarianPane(service: service, bookId: book.id, announce: { announce($0) }, speak: { text in await player.speak(text) }, note: book.librarian)
-                if book.mine || (service.shelf?.librarian ?? false) {
+                if canEdit(book) {
                     Button { showEdit = true } label: { Label("Edit this item", systemImage: "pencil") }.buttonStyle(.bordered)
+                        .accessibilityHidden(voiceOverOn)
                 }
 
                 Text(player.nowText.isEmpty ? (book.isAudio ? player.partTitle : "Press Play.") : player.nowText)
@@ -603,6 +640,48 @@ struct ReadingRoomView: View {
         .safeAreaInset(edge: .bottom) {
             transport.padding().background(.regularMaterial)
         }
+        // On the screen, not on the buttons: under VoiceOver those buttons are hidden.
+        .alert("Where does it belong?", isPresented: $showReport) {
+            TextField("Folder, like Books/Fiction — Romance", text: $reportPath)
+            TextField("Note (optional)", text: $reportNote)
+            Button("Send") { Task { do { let applied = try await service.reportShelf(book: book.id, path: reportPath, note: reportNote); announce(applied ? "Moved." : "Sent to the librarian. You will be told when it is moved.") } catch { announce(error.localizedDescription) } } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Add \(book.title) to which collection?", isPresented: $showCollectionPicker, titleVisibility: .visible) {
+            ForEach(myCollections) { c in Button(c.title) { Task { await addTo(c, book: book) } } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// The open item's actions for the Actions rotor, on the title and on
+    /// Play (where VoiceOver lands when something opens).
+    @ViewBuilder
+    private func bookActions(_ book: RRBook) -> some View {
+        Button("Ask the librarian about this") { Task { await talkToLibrarian(itemId: book.id) } }
+        if isVideoTrack(book) {
+            Button("What just happened?") { recapRequest += 1 }
+            if describedVideo.allowed {
+                Button("Make a described copy") {
+                    player.pause()
+                    nav.open(.describedVideo(DescribedVideoStart(book: book.id, track: player.s)))
+                }
+            }
+        }
+        Button("Add to a collection") { Task { await pickCollection() } }
+        Button("Suggest a different shelf") { suggestShelf(book) }
+        if canEdit(book) {
+            Button("Edit this item") { showEdit = true }
+        }
+    }
+
+    private func isVideoTrack(_ book: RRBook) -> Bool {
+        book.tracks.indices.contains(player.s) && (book.tracks[player.s].mime ?? "").hasPrefix("video/")
+    }
+    private func canEdit(_ book: RRBook) -> Bool { book.mine || (service.shelf?.librarian ?? false) }
+    private func suggestShelf(_ book: RRBook) {
+        reportPath = book.path ?? ""
+        reportNote = ""
+        showReport = true
     }
 
     private var speeds: [(Double, String)] { [(0.8, "Slower"), (0.9, "A little slower"), (1.0, "Normal"), (1.15, "A little faster"), (1.3, "Faster"), (1.5, "Fastest")] }
@@ -642,6 +721,7 @@ struct ReadingRoomView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 .accessibilityFocused($focus, equals: .play)
+                .accessibilityActions { if let book = openBook { bookActions(book) } }
                 seekButton(backward: false)
             }
         }
@@ -788,6 +868,33 @@ struct ReadingRoomView: View {
     }
     private func addTo(_ c: RRCollectionRow, book: RRBook) async {
         do { try await service.addToCollection(c.id, book: book.id, track: player.s); announce("Added to \(c.title).") } catch { announce(error.localizedDescription) }
+    }
+    /// "Add to a collection" from a row's actions, without opening the item.
+    private func pickCollection(for item: RRItem) async {
+        do {
+            let c = try await service.collections()
+            myCollections = c.mine
+            if myCollections.isEmpty {
+                let made = try await service.newCollection("My collection")
+                myCollections = [made]
+            }
+            collectingItem = item
+            showRowCollectionPicker = true
+        } catch { announce(error.localizedDescription) }
+    }
+    private func addItem(_ item: RRItem, to c: RRCollectionRow) async {
+        collectingItem = nil
+        do { try await service.addToCollection(c.id, book: item.id, track: 0); announce("Added \(item.title) to \(c.title).") } catch { announce(error.localizedDescription) }
+    }
+    /// Opens the item that filled a library request.
+    private func openRequested(_ id: String) async {
+        do {
+            let b = try await service.openBook(id)
+            player.open(b)
+            openBook = b
+            announce("Opened \(b.title). Press Play.")
+            focus = .play
+        } catch { announce(error.localizedDescription) }
     }
 
     private func submitItem(_ book: RRBook) async {

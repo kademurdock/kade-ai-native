@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: an easier layout"
-    static let body = "Everything now lives in five tabs along the bottom: Talk, Library, Create, Play and More. Your book keeps playing while you move around the app, faces show who you're talking to, and More has a search that finds anything."
+    static let title = "What's new: Library actions and requests"
+    static let body = "In the Library, Ask the librarian, Make a described copy and Add to a collection are in the VoiceOver Actions rotor on every item, and on the player's title and Play button. Under Add you can now ask the library for something and hear when it's filled."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

@@ -316,7 +316,8 @@ final class ReadingRoomService: ObservableObject {
 
     // MARK: uploads
 
-    struct UploadedBook: Decodable { let book: RRItem; let skipped: [RRSkippedSummary]?; let jacket: String? }
+    /// `duplicate`: the server already had this exact text where you can open it (Sep 25 2026), so nothing new was saved.
+    struct UploadedBook: Decodable { let book: RRItem; let skipped: [RRSkippedSummary]?; let jacket: String?; let duplicate: Bool? }
     struct RRSkippedSummary: Decodable { let title: String?; let reason: String? }
 
     /// Upload bytes to storage, then check a durable import job using short requests.
