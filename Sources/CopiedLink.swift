@@ -48,4 +48,16 @@ enum CopiedLink {
     nonisolated static func isWebLink(_ url: URL) -> Bool {
         ["http", "https"].contains(url.scheme?.lowercased() ?? "")
     }
+
+    /// A link the Clubhouse jukebox can pull a song from: YouTube, a Spotify
+    /// song, SoundCloud, Bandcamp, Mixcloud, archive.org, or an audio file.
+    nonisolated static func isSongLink(_ url: URL) -> Bool {
+        guard isWebLink(url), let host = url.host?.lowercased() else { return false }
+        if isYouTube(url) { return true }
+        if host == "open.spotify.com" { return url.path.contains("/track/") }
+        let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        if ["soundcloud.com", "m.soundcloud.com", "on.soundcloud.com", "mixcloud.com", "archive.org"].contains(bare)
+            || bare.hasSuffix(".bandcamp.com") { return true }
+        return ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "aiff", "aif"].contains(url.pathExtension.lowercased())
+    }
 }

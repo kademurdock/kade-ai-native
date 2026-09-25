@@ -218,6 +218,9 @@ final class ClubhouseService: NSObject, ObservableObject {
         UIAccessibility.post(notification: .announcement, argument: text)
     }
 
+    /// For the view's own notices (the autopaste), same path as announce.
+    func say(_ text: String) { announce(text) }
+
     /// Room-wide events go through the house PA when it's on (host clone
     /// voices, real audio for everybody, no screen reader needed) — and the
     /// text lands quietly on screen WITHOUT a VoiceOver announcement, so
@@ -1369,17 +1372,19 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
-    /// The link lane (round 7, narrowed for App Review in build 206):
-    /// a pasted DIRECT audio-file link becomes ordinary jukebox bytes and
-    /// from there a normal entry: queue, cut in, radio-fight over it.
-    /// Build 206 (Aug 15 2026): the native client accepts direct audio
-    /// links ONLY — enforced in addSong(fromLink:), not just in wording.
-    /// The old field invited video/streaming-site links and the server
-    /// ripped the audio, which is App Store guideline 5.2.3 territory; the
-    /// full any-link lane lives on in the web Lounge, which Apple does not
-    /// review. THE KNOCKER stays for a walled fetch: quiet retries every
-    /// three minutes for up to an hour, a holler through the PA when it
-    /// lands, a Stop button for changed minds.
+    /// The link lane (round 7): a pasted song link becomes ordinary jukebox
+    /// bytes and from there a normal entry: queue, cut in, radio-fight over it.
+    /// Build 206 (Aug 15 2026) narrowed the phone to direct audio-file links
+    /// for App Review. Sep 2026, at her ask, it is wide again: YouTube, a
+    /// Spotify song (matched on YouTube), SoundCloud, Bandcamp and audio
+    /// files all go to the same server route the web Lounge uses. The
+    /// server refuses private addresses, livestreams, channels and
+    /// playlists, and anything over 15 minutes or 60 MB, in plain words.
+    /// Every account sees the same field, App Review included, and it is
+    /// disclosed in the review notes: hiding it from the review seat would
+    /// be guideline 2.3.1 concealment. THE KNOCKER is unchanged for a walled
+    /// fetch: quiet retries every three minutes for up to an hour, a holler
+    /// through the PA when it lands, a Stop button for changed minds.
     private enum LinkFetch {
         case ok(Data, String)
         case walled(String)
@@ -1389,7 +1394,8 @@ final class ClubhouseService: NSObject, ObservableObject {
     private func fetchLink(_ urlStr: String) async -> LinkFetch {
         var req = client.request(path: "api/kade/lounge/fetch-track", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 150
+        // The server climbs up to eight YouTube clients before it answers.
+        req.timeoutInterval = 300
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["url": urlStr])
         guard let (data, http) = try? await client.send(req) else {
             return .failed("That link would not fetch — try another.")
@@ -1422,35 +1428,30 @@ final class ClubhouseService: NSObject, ObservableObject {
         }
     }
 
-    /// Build 206: a link is a song only when its path names an audio FILE.
-    /// Everything else — video sites, streaming services, playlist pages —
-    /// is refused on the client, spoken plainly, before any network call.
-    private static let directAudioExtensions: Set<String> = [
-        "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "aiff", "aif",
-    ]
-
+    /// Sep 2026: any web link goes to the server, which says plainly what it
+    /// cannot fetch. The phone only checks that it is a web link.
     func addSong(fromLink raw: String, interrupt: Bool) {
         let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !urlStr.isEmpty else { return }
-        guard let comps = URLComponents(string: urlStr),
-              let scheme = comps.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              Self.directAudioExtensions.contains((comps.path as NSString).pathExtension.lowercased())
-        else {
-            announce("Direct audio links only — the link needs to end in the audio file itself, like an MP3 or M4A.")
+        guard let url = URL(string: urlStr), CopiedLink.isWebLink(url),
+              let host = url.host?.lowercased(), !host.isEmpty else {
+            announce("That doesn't look like a web link. Paste a YouTube, Spotify or SoundCloud song link, or a link to an audio file.")
             return
         }
         stopKnocking(quiet: true) // a fresh paste replaces any old knock
-        announce("Fetching that link — give it a few seconds…")
+        if CopiedLink.isYouTube(url) {
+            announce("Fetching that from YouTube. It can take up to a minute.")
+        } else if host == "open.spotify.com" {
+            announce("Looking that Spotify song up on YouTube. It can take up to a minute.")
+        } else {
+            announce("Fetching that link. Give it a few seconds.")
+        }
         Task { [weak self] in
             guard let self else { return }
             switch await self.fetchLink(urlStr) {
-            case let .ok(data, title):
-                self.landFetched(data, title, interrupt: interrupt)
-            case .walled:
-                self.startKnocking(url: urlStr, interrupt: interrupt)
-            case let .failed(msg):
-                self.announce(msg)
+            case let .ok(data, title): self.landFetched(data, title, interrupt: interrupt)
+            case .walled: self.startKnocking(url: urlStr, interrupt: interrupt)
+            case let .failed(msg): self.announce(msg)
             }
         }
     }
@@ -1465,8 +1466,8 @@ final class ClubhouseService: NSObject, ObservableObject {
 
     private func startKnocking(url: String, interrupt: Bool) {
         stopKnocking(quiet: true)
-        announce("That source's gate is closed — I'll keep knocking every few minutes and holler when it opens.")
-        knockLine = "Knocking for that link — the gate is closed. Retrying every three minutes."
+        announce("YouTube is blocking the server right now. I'll quietly try again every three minutes for up to an hour and tell you when it lands. Stop knocking cancels it.")
+        knockLine = "Waiting on YouTube. Trying again every three minutes, up to 20 times."
         knockTask = Task { [weak self] in
             for attempt in 1...20 {
                 try? await Task.sleep(nanoseconds: 180_000_000_000)
@@ -1477,10 +1478,10 @@ final class ClubhouseService: NSObject, ObservableObject {
                     self.landFetched(data, title, interrupt: interrupt)
                     self.knockLine = ""
                     self.knockTask = nil
-                    self.announceRoom("That link finally cleared the gate — \(title) just landed.", lane: .booth)
+                    self.announceRoom("YouTube let it through. \(title) just landed.", lane: .booth)
                     return
                 case .walled:
-                    self.knockLine = "Still knocking — try \(attempt) of 20. The gate stays moody."
+                    self.knockLine = "Still waiting on YouTube. Try \(attempt) of 20."
                 case let .failed(msg):
                     self.knockLine = ""
                     self.knockTask = nil
@@ -1491,7 +1492,7 @@ final class ClubhouseService: NSObject, ObservableObject {
             guard let self, !Task.isCancelled else { return }
             self.knockLine = ""
             self.knockTask = nil
-            self.announce("The gate never opened for that one — try it fresh later.")
+            self.announce("YouTube never let that one through in an hour. Try it again later.")
         }
     }
 

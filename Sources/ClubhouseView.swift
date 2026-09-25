@@ -29,6 +29,7 @@ struct ClubhouseView: View {
     @State private var songLink = ""
     @State private var showLinkChoice = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: ClubhouseService(client: apiClient))
@@ -51,6 +52,14 @@ struct ClubhouseView: View {
                 .accessibilityHidden(true)
         )
         .task { await service.loadConfig() }
+        // A song link copied in another app fills the jukebox box once per
+        // copy. The 2 s wait lets the join announcements finish first.
+        .onChange(of: service.phase) { _, phase in
+            if phase == .inRoom { fillCopiedSongLink(after: 2) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, service.phase == .inRoom { fillCopiedSongLink(after: 0.5) }
+        }
         .onDisappear { service.leave() }
     }
 
@@ -260,13 +269,15 @@ struct ClubhouseView: View {
                 }
                 Button("Add a song") { showFilePicker = true }
                     .accessibilityHint("Pick an audio file, then choose to cut in or queue it politely.")
-                TextField("Or paste a direct audio link — an MP3, M4A, WAV, or similar…", text: $songLink)
+                TextField("Or paste a song link: YouTube, Spotify, SoundCloud, or an audio file", text: $songLink)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .accessibilityLabel("Song link")
+                    .accessibilityHint("A YouTube or Spotify song, SoundCloud, Bandcamp, or a link to an audio file. A song link you copied fills in by itself.")
                 Button("Fetch from the link") { showLinkChoice = true }
                     .disabled(songLink.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityHint("Pulls the song from a direct audio file link, then choose to cut in or queue it.")
+                    .accessibilityHint("The server pulls the song, up to 15 minutes long, then you choose to cut in or queue it.")
                 if !service.knockLine.isEmpty {
                     Text(service.knockLine)
                         .font(.footnote)
@@ -441,6 +452,18 @@ struct ClubhouseView: View {
     private func timeString(_ t: Double) -> String {
         let secs = max(0, Int(t.rounded()))
         return "\(secs / 60):" + String(format: "%02d", secs % 60)
+    }
+
+    /// A song link copied in another app, once per copy. Says so; fetches nothing by itself.
+    private func fillCopiedSongLink(after seconds: Double) {
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard songLink.isEmpty, service.phase == .inRoom,
+                  let link = await CopiedLink.take("clubhouse-song-link", where: CopiedLink.isSongLink),
+                  songLink.isEmpty else { return }
+            songLink = link
+            service.say("Filled in the song link you copied. Choose Fetch from the link to play it or queue it.")
+        }
     }
 
     private func clock(_ t: TimeInterval) -> String {
