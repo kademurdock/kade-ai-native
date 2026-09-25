@@ -195,7 +195,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "New for you: Make a described video",
-                body: "On the Create tab, and on videos you can access in the Library as Make a described copy. Choose a video from Files, Photos, a YouTube link or the Library, pick the narrator and how much to describe, hear the price, then try a preview or describe the whole thing. Watch it here, read it as a described transcript, save it to Files, or put it in the Library. Adult accounts can use it. Narration is included; metered analysis uses your balance after you approve the maximum charge.",
+                body: "On the Create tab, and on videos you can access in the Library as Make a described copy. Choose a video from Files, Photos, a YouTube link or the Library, pick the narrator and how much to describe, hear the price, then try a preview or describe the whole thing. Watch it here, read it as a described transcript, save it to Files, or put it in the Library. It keeps playing when you leave the app or lock the phone, and with VoiceOver on the captions stay on screen without being read over the film. Adult accounts can use it. Narration is included; metered analysis uses your balance after you approve the maximum charge.",
                 ownerTrial: true
             ),
             HelpEntry(
@@ -401,6 +401,10 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "When it's done",
                 body: "Play the described video, listen to the described audio, or read the described transcript one line at a time. Save or share sends the video, audio or transcript to Files or anywhere else. Keep it in your Library files it with the family or just for you. After a preview, Describe the rest finishes the video, and parts that could not be described can be tried again. Finished copies are kept for seven days."
+            ),
+            HelpEntry(
+                title: "Watching with the screen locked, and captions",
+                body: "The described video keeps playing when you switch apps or lock the phone, and play, pause, and back or forward 10 seconds work from the Lock Screen and your headphones. Captions show on the picture for anyone watching with you. With VoiceOver on, they are not read over the film. To have VoiceOver read them, turn on Read captions with VoiceOver, under Listen to the described audio or at the top of the player. VoiceOver then follows Media Descriptions in Settings, Accessibility, VoiceOver, Verbosity: Speech reads them aloud, Braille shows them on a braille display."
             ),
         ], ownerTrial: true),
         HelpSection(title: "My Creations and the Wall of Fame", entries: [

@@ -35,6 +35,11 @@ struct DescribedVideoView: View {
 
     @StateObject private var service: DescribedVideoService
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+    /// Part 291: off by default. With VoiceOver on, the player keeps the
+    /// system captions off (VoiceOver would read them over the film) and
+    /// draws them itself for anyone watching with her.
+    @AppStorage("kade.describedVideo.readCaptions") private var readCaptions = false
 
     // Opening
     @State private var config: DVConfig?
@@ -147,16 +152,25 @@ struct DescribedVideoView: View {
         let target: DVFocus
     }
 
+    fileprivate struct DVPlayerItem {
+        let url: URL
+        let title: String
+        let isVideo: Bool
+        /// The captions file's signed link (video only), for the captions
+        /// the player draws itself while VoiceOver is on.
+        let captions: URL?
+    }
+
     fileprivate enum DVSheet: Identifiable {
         case voices
-        case player(URL, String)
+        case player(DVPlayerItem)
         case transcript(String, String)
         case share(ShareItem)
 
         var id: String {
             switch self {
             case .voices: return "voices"
-            case .player(let url, _): return "player-\(url.absoluteString)"
+            case .player(let item): return "player-\(item.url.absoluteString)"
             case .transcript(_, let title): return "transcript-\(title)"
             case .share(let item): return "share-\(item.id.uuidString)"
             }
@@ -397,8 +411,8 @@ struct DescribedVideoView: View {
                 describe: config?.describe ?? [:],
                 selection: $voice
             )
-        case .player(let url, let title):
-            DescribedVideoPlayerSheet(url: url, title: title)
+        case .player(let item):
+            DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions)
         case .transcript(let text, let title):
             DescribedTranscriptSheet(text: text, title: title)
         case .share(let item):
@@ -1205,6 +1219,10 @@ struct DescribedVideoView: View {
             }
             actionButton("Listen to the described audio", icon: "headphones", key: "play-audio", hint: "The soundtrack with the narration, without the picture.") {
                 Task { await play(video: false) }
+            }
+            if voiceOverOn {
+                Toggle("Read captions with VoiceOver", isOn: $readCaptions)
+                    .accessibilityHint("Off, the captions stay on screen for anyone watching with you, and VoiceOver does not read them over the film. On, VoiceOver reads them, the way Media Descriptions in VoiceOver's Verbosity settings says.")
             }
             actionButton("Read the described transcript", icon: "text.alignleft", key: "read", hint: "Dialogue and descriptions in order, one line at a time.") {
                 Task { await readTranscript() }
@@ -2398,7 +2416,13 @@ struct DescribedVideoView: View {
             }
             samplePlayer?.stop()
             LibraryNowPlaying.shared.pauseForOtherAudio("a described video")
-            activeSheet = .player(url, video ? "\(current.title), described" : "\(current.title), described audio")
+            let captions: URL? = video ? links.captions.flatMap { URL(string: $0) } : nil
+            activeSheet = .player(DVPlayerItem(
+                url: url,
+                title: video ? "\(current.title), described" : "\(current.title), described audio",
+                isVideo: video,
+                captions: captions
+            ))
         } catch {
             fail(error)
         }
@@ -2672,47 +2696,10 @@ private struct DescribedVoicePicker: View {
 }
 
 // MARK: - The player
-
-/// AVKit's own player (its controls are VoiceOver-labelled by Apple), with a
-/// Done button and the escape gesture, the Sound Booth's player rule.
-private struct DescribedVideoPlayerSheet: View {
-    let url: URL
-    let title: String
-    @State private var player = AVPlayer()
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VideoPlayer(player: player)
-                .navigationTitle(title)
-                .navigationBarTitleDisplayMode(.inline)
-                .onAppear {
-                    // Not mixing: a mixing session is never the Now Playing
-                    // app, so the headphone and lock-screen buttons would do
-                    // nothing (the Library's lesson). Back to the app's usual
-                    // mixing session when the player closes.
-                    let session = AVAudioSession.sharedInstance()
-                    try? session.setCategory(.playback, mode: .moviePlayback, options: [])
-                    try? session.setActive(true)
-                    if player.currentItem == nil {
-                        player.replaceCurrentItem(with: AVPlayerItem(url: url))
-                    }
-                    player.play()
-                }
-                .onDisappear {
-                    player.pause()
-                    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                }
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { dismiss() }
-                            .accessibilityHint("Stops playing and goes back.")
-                    }
-                }
-                .accessibilityAction(.escape) { dismiss() }
-        }
-    }
-}
+//
+// DescribedVideoPlayerSheet lives in DescribedVideoPlayer.swift (Part 291):
+// it keeps playing outside the app, has Lock Screen controls, and keeps
+// VoiceOver from reading the captions over the film unless she asks.
 
 // MARK: - The transcript
 

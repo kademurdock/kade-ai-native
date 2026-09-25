@@ -160,8 +160,10 @@ final class LibraryNowPlaying: ObservableObject {
         // A call also takes the lock-screen and headphone buttons, and its own
         // wiring removes EVERY target on play/pause when it hangs up. So the
         // book lets go of them now (the headphone button belongs to the call)
-        // and takes them back the next time it plays.
-        if reason == "a call" { player.yieldRemoteControls() }
+        // and takes them back the next time it plays. Part 291: the described
+        // video player wires the same buttons while it plays outside the app,
+        // so the book lets go for it too (two targets would both fire).
+        if reason == "a call" || reason == "a described video" { player.yieldRemoteControls() }
     }
 
     // MARK: - The bar's buttons
