@@ -232,6 +232,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     private static let checkInStampKey = "kade.diag.lastCheckIn"
 
     private func sendBuildCheckIn() {
+        guard !KadeUITestMode.skipsDiagnosticsUpload else { return }
         DispatchQueue.global(qos: .utility).async {
             let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -375,6 +376,7 @@ final class KadeCrashWatch: NSObject, MXMetricManagerSubscriber {
     }
 
     private func uploadPendingReports() {
+        guard !KadeUITestMode.skipsDiagnosticsUpload else { return }
         DispatchQueue.global(qos: .utility).async {
             let dir = KadeBreadcrumbs.directory
             guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }

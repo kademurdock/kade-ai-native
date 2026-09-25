@@ -40,4 +40,8 @@ enum KadeUITestMode {
 
     /// Either CI run: skip the audio and haptic warm-up.
     static var skipsAudioWarmup: Bool { isAuditing || isTouring }
+
+    /// Sep 25 2026: either CI run keeps its check-ins and crash reports on the
+    /// simulator. Ten of the bridge's forty crash-ring slots were tour noise.
+    static var skipsDiagnosticsUpload: Bool { isAuditing || isTouring }
 }
