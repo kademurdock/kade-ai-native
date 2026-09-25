@@ -42,7 +42,8 @@ enum CharacterChoice: String, AppEnum {
         case .kiana: return "agent_6llV0eMu4fmIaj8f2x1Sb"
         case .harley: return "agent_d26Mtu8mgOzkVGQECqO1a"
         case .della: return "agent_BSOLa3eNEZyjs-7abCjMt"
-        case .lilly: return "agent_JhouuajXMYsfhCTVMQCv_"
+        // Sep 25 2026: the public Lilly (Skylee's own stays private to her).
+        case .lilly: return "agent_TOdYS8v-bRxeNw0dia_Md"
         }
     }
 

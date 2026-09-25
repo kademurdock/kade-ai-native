@@ -18,15 +18,25 @@ enum CharacterMotion {
     static let kianaFile = "agent-agent_6llV0eMu4fmIaj8f2x1Sb-avatar-1789863013865.png"
     static let dellaID = "agent_BSOLa3eNEZyjs-7abCjMt"
     static let dellaFile = "agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png"
-    static let lillyID = "agent_JhouuajXMYsfhCTVMQCv_"
-    static let lillyFile = "agent-agent_JhouuajXMYsfhCTVMQCv_-avatar-1783012583668.png"
+    /// Sep 25 2026 (Parts 291-292): the moving-faces Lilly everyone can talk
+    /// to is the public agent; Skylee's private Lilly wears the same face and
+    /// still moves for her. Each id matches only its own portrait file.
+    static let lillyID = "agent_TOdYS8v-bRxeNw0dia_Md"
+    static let lillyFile = "agent-agent_TOdYS8v-bRxeNw0dia_Md-avatar-1790323412634.png"
+    static let skyleeLillyID = "agent_JhouuajXMYsfhCTVMQCv_"
+    static let skyleeLillyFile = "agent-agent_JhouuajXMYsfhCTVMQCv_-avatar-1783012583668.png"
     static let harleyID = "agent_d26Mtu8mgOzkVGQECqO1a"
     static let harleyFile = "agent-agent_d26Mtu8mgOzkVGQECqO1a-avatar-1789921519491.png"
     static let witherspoonID = "agent_o7TKU3lK0Euo0MKgpNpvZ"
     static let witherspoonFile = "agent-agent_o7TKU3lK0Euo0MKgpNpvZ-avatar-1790252530815.png"
     /// The characters with a full moving face, in the order the picker shows
     /// them. A new rigged character joins the picker's top shelf by joining this.
-    static let animatedIDs = [harleyID, lillyID, kianaID, dellaID, witherspoonID]
+    static let animatedIDs = [harleyID, lillyID, skyleeLillyID, kianaID, dellaID, witherspoonID]
+    /// Which drawn rig a character wears: Skylee's Lilly uses the public
+    /// Lilly's sheets and timing; everyone else is their own.
+    static func rigID(_ id: String?) -> String? {
+        id == skyleeLillyID ? lillyID : id
+    }
     static func blend(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         let n = max(0, min(1, value))
@@ -34,7 +44,7 @@ enum CharacterMotion {
     }
     static func prepared(id: String?, path: String?) -> Bool {
         guard let path, let url = URL(string: path) else { return false }
-        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == harleyID && url.lastPathComponent == harleyFile) || (id == witherspoonID && url.lastPathComponent == witherspoonFile)
+        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == skyleeLillyID && url.lastPathComponent == skyleeLillyFile) || (id == harleyID && url.lastPathComponent == harleyFile) || (id == witherspoonID && url.lastPathComponent == witherspoonFile)
     }
     /// Mouth shapes without phonemes: a spoken clip has no word timings, so the
     /// shape follows how loud the sound is (how open) with a new pick about every
@@ -62,7 +72,8 @@ enum CharacterMotion {
         let secondBlink = floor(t / period).truncatingRemainder(dividingBy: 3) == 1 && blinkPhase > period - 0.52 && blinkPhase < period - 0.36
         let blink = secondBlink ? sin((blinkPhase - period + 0.52) / 0.16 * .pi) : (blinkPhase > period - 0.2 ? sin((blinkPhase - period + 0.2) / 0.2 * .pi) : 0)
         let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
-        let tempo = id == dellaID ? 0.72 : (id == harleyID ? 0.83 : (id == lillyID ? 1.18 : 1.0))
+        let rig = rigID(id)
+        let tempo = rig == dellaID ? 0.72 : (rig == harleyID ? 0.83 : (rig == lillyID ? 1.18 : 1.0))
         var tilt = sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32
         var lift = sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4)
         if presentation.activity == .listening {
@@ -74,7 +85,7 @@ enum CharacterMotion {
         if presentation.expression == .amused { lift += gesture * 0.75 }
         if presentation.expression == .skeptical { tilt += gesture * 0.8 }
         if presentation.expression == .concerned { tilt -= gesture * 0.5 }
-        let energy = id == dellaID ? 0.72 : (id == harleyID ? 0.82 : (id == lillyID ? 1.15 : 1.0))
+        let energy = rig == dellaID ? 0.72 : (rig == harleyID ? 0.82 : (rig == lillyID ? 1.15 : 1.0))
         let quiet: Double = [.sad, .tired, .serious, .concerned, .afraid].contains(presentation.expression) ? 0.45 : 1
         let beat = (t * tempo).truncatingRemainder(dividingBy: 8.6)
         let nod = beat > 6.7 ? pow(sin((beat - 6.7) / 1.9 * .pi), 2) : 0

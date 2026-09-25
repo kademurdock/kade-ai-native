@@ -105,7 +105,7 @@ struct KadeCharacterFaceSheet {
     var basicOnly = false
 
     static func forAgent(_ id: String?) -> KadeCharacterFaceSheet? {
-        switch id {
+        switch CharacterMotion.rigID(id) {
         case CharacterMotion.witherspoonID: return KadeCharacterFaceSheet(faces: "CharacterWitherspoonFaces", nuance: "CharacterWitherspoonFaces", basicOnly: true)
         case CharacterMotion.kianaID: return KadeCharacterFaceSheet(faces: "CharacterKianaFaces", nuance: "CharacterKianaNuance")
         case CharacterMotion.dellaID: return KadeCharacterFaceSheet(faces: "CharacterDellaFaces", nuance: "CharacterDellaNuance")

@@ -75,8 +75,10 @@ struct CharacterPortraitView: View {
         let faces: String, mouths: String
         let face: CGRect, mouth: CGRect, eyes: CGRect
     }
+    /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
+    private var rig: String? { CharacterMotion.rigID(agentID) }
     private var nuanceAsset: String {
-        switch agentID {
+        switch rig {
         case CharacterMotion.kianaID: return "CharacterKianaNuance"
         case CharacterMotion.dellaID: return "CharacterDellaNuance"
         case CharacterMotion.lillyID: return "CharacterLillyNuance"
@@ -103,7 +105,7 @@ struct CharacterPortraitView: View {
             return Sheet(faces: "CharacterHarleyFaces", mouths: "CharacterHarleyMouths",
                 face: CGRect(x: 0.28, y: 0.24, width: 0.52, height: 0.5), mouth: CGRect(x: 0.41, y: 0.47, width: 0.27, height: 0.22), eyes: CGRect(x: 0.34, y: 0.31, width: 0.42, height: 0.13))
         }
-        if agentID == CharacterMotion.lillyID {
+        if rig == CharacterMotion.lillyID {
             return Sheet(faces: "CharacterLillyFaces", mouths: "CharacterLillyMouths",
                 face: CGRect(x: 0.38, y: 0.2, width: 0.46, height: 0.5), mouth: CGRect(x: 0.48, y: 0.48, width: 0.28, height: 0.2), eyes: CGRect(x: 0.4, y: 0.3, width: 0.42, height: 0.18))
         }
