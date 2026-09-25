@@ -187,7 +187,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "What's new", entries: [
             HelpEntry(
                 title: "Newest build: Library actions and requests",
-                body: "In the Library, what you can do with an item is in the VoiceOver Actions rotor as you pass it: Ask the librarian about this, Make a described copy on videos, Add to a collection, and for your own uploads Move or Delete. Swipe up or down on the item to hear them; a long press shows the same list. In the player those buttons moved into the rotor on the title and on Play, with What just happened? for videos, so there are fewer stops before Play. New under Add: ask the library for a book, recording or video, even if you only remember a little, and hear when it's filled. And a book that is already in the library with exactly the same text is no longer added twice."
+                body: "In the Library, what you can do with an item is in the VoiceOver Actions rotor as you pass it: Ask the librarian about this, Make a described copy on videos, Add to a collection, and for your own uploads Move or Delete. Swipe up or down on the item to hear them; a long press shows the same list. In the player those buttons moved into the rotor on the title and on Play, with What just happened? for videos, so there are fewer stops before Play. New under Add: ask the library for a book, recording or video, even if you only remember a little, and hear when it's filled. A YouTube link you copied fills in the described video link box by itself, and any link fills the Library's submit box. And a book that is already in the library with exactly the same text is no longer added twice."
             ),
             HelpEntry(
                 title: "Before that: an easier layout",
@@ -388,7 +388,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Choosing a video",
-                body: "Choose a video from Files or from Photos, paste a YouTube link, or start from a Library video. Checking a video is free. A long upload keeps going while Kade-AI is open; if it stops, choose the same video again and it carries on where it stopped."
+                body: "Choose a video from Files or from Photos, paste a YouTube link, or start from a Library video. A YouTube link you copied in another app fills in by itself when you open the screen; iOS asks once whether Kade-AI may paste, and Settings, Kade-AI, Paste from Other Apps, Allow stops it asking. Checking a video is free. A long upload keeps going while Kade-AI is open; if it stops, choose the same video again and it carries on where it stopped."
             ),
             HelpEntry(
                 title: "The narration",

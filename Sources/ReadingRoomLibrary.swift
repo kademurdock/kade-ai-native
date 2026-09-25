@@ -674,7 +674,15 @@ struct SubmissionsSection: View {
             } header: { Text("Waiting for the librarian").accessibilityAddTraits(.isHeader) }
         }
         }
-        .task { if let l = incomingLink, url.isEmpty { url = l }; await reload() }
+        .task {
+            if let l = incomingLink, url.isEmpty { url = l }
+            // Sep 25 2026: a link copied in another app fills the box by itself, once per copy.
+            if url.isEmpty, let copied = await CopiedLink.take("library-submission", where: CopiedLink.isWebLink), url.isEmpty {
+                url = copied
+                announce("Filled in the link you copied. Add what it is, then choose Submit for consideration.")
+            }
+            await reload()
+        }
         .alert(decisionApprove ? "Approve it?" : "Decline it?", isPresented: Binding(get: { deciding != nil }, set: { if !$0 { deciding = nil } })) {
             TextField(decisionApprove ? "A word for them (optional)" : "Tell them why (optional)", text: $decisionNote)
             Button(decisionApprove ? "Approve" : "Decline") { Task { await decide() } }

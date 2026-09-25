@@ -313,6 +313,7 @@ struct DescribedVideoView: View {
             .onAppear {
                 onScreen = true
                 releaseHeldAnnouncement()
+                fillCopiedYouTubeLink()
             }
             // Coming back refreshes the video, which starts polling again.
             .task { await load() }
@@ -328,6 +329,7 @@ struct DescribedVideoView: View {
                 if phase == .active, onScreen, let current = job, current.needsWatching {
                     Task { await refreshJob(current.id) }
                 }
+                if phase == .active, onScreen { fillCopiedYouTubeLink() }
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }
@@ -2285,6 +2287,19 @@ struct DescribedVideoView: View {
         }
         // A half-uploaded video still shows in the list.
         Task { await reloadList() }
+    }
+
+    /// Sep 25 2026, her ask: a YouTube link copied in another app fills the
+    /// link box by itself (once per copy), and says so. Importing still waits
+    /// for her to choose Import from YouTube.
+    private func fillCopiedYouTubeLink() {
+        Task {
+            guard youtubeLink.isEmpty, !choosingDisabled,
+                  let link = await CopiedLink.take("described-video-youtube", where: CopiedLink.isYouTube),
+                  youtubeLink.isEmpty else { return }
+            youtubeLink = link
+            announce("Filled in the YouTube link you copied. Choose Import from YouTube to check it.")
+        }
     }
 
     private func importYouTube() async {
