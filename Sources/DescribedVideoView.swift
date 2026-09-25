@@ -27,7 +27,7 @@ import UIKit
 // NO LAZY CONTAINER on this screen: it changes state on a timer while
 // VoiceOver may be reading it (the Part-87 freeze law). Every list is a plain
 // VStack over a bounded set; the long voice and transcript lists live in
-// sheets that never change while they are open.
+// sheets that change only at her hand (a voice starred in the voice sheet).
 
 struct DescribedVideoView: View {
     let apiClient: KadeAPIClient
@@ -96,6 +96,10 @@ struct DescribedVideoView: View {
     @State private var partTo = ""
     @State private var samplePlayer: AVAudioPlayer?
     @State private var sampling = false
+    /// Her default narrator, favourites and recently used voices, kept on
+    /// the server (Sep 25 2026) so the website and the phone agree.
+    @State private var prefs = DVPrefs()
+    @State private var savingPrefs = false
 
     // Cost
     @State private var estimates: [String: DVEstimate] = [:]
@@ -405,12 +409,7 @@ struct DescribedVideoView: View {
     private func sheetView(_ sheet: DVSheet) -> some View {
         switch sheet {
         case .voices:
-            DescribedVoicePicker(
-                voices: config?.voices ?? [],
-                categories: config?.categories ?? [],
-                describe: config?.describe ?? [:],
-                selection: $voice
-            )
+            voiceSheet
         case .player(let item):
             DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions)
         case .transcript(let text, let title):
@@ -734,29 +733,21 @@ struct DescribedVideoView: View {
 
     private var voiceRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                activeSheet = .voices
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Narrator voice")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(Self.voiceName(voice))
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(KadeCardButtonStyle())
-            .disabled((config?.voices ?? []).isEmpty)
-            .accessibilityLabel("Narrator voice")
-            .accessibilityValue(Self.voiceName(voice))
-            .accessibilityHint(voiceDescription(voice) + " Double tap to choose another voice.")
-            .accessibilityFocused($focus, equals: .voice)
+            voiceButton
             Text(voiceDescription(voice))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
+            // Said in the voice button's hint, so it adds no VoiceOver stop.
+            if !voiceNote(voice).isEmpty {
+                Text(voiceNote(voice))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            if offersMakeDefault {
+                makeDefaultButton
+            }
             Button {
                 Task { await playSample() }
             } label: {
@@ -775,6 +766,200 @@ struct DescribedVideoView: View {
     private func voiceDescription(_ name: String) -> String {
         let about = (config?.describe?[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return about.isEmpty ? "One of your platform voices." : Self.sentence(about)
+    }
+
+    private var voiceButton: some View {
+        Button {
+            activeSheet = .voices
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Narrator voice")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(Self.voiceName(voice))
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(KadeCardButtonStyle())
+        .disabled((config?.voices ?? []).isEmpty)
+        .accessibilityLabel("Narrator voice")
+        .accessibilityValue(Self.voiceName(voice))
+        .accessibilityHint(voiceHint)
+        .accessibilityFocused($focus, equals: .voice)
+        .accessibilityActions {
+            if offersMakeDefault {
+                Button("Use this voice for new videos") {
+                    Task { await makeDefault(voice) }
+                }
+            }
+        }
+    }
+
+    /// The voice's description, what it is to her, then what a double tap does.
+    private var voiceHint: String {
+        let note = voiceNote(voice)
+        let about = note.isEmpty ? voiceDescription(voice) : voiceDescription(voice) + " " + note
+        return about + " Double tap to choose another voice."
+    }
+
+    /// For sight and Voice Control. VoiceOver has the same action in the
+    /// voice button's Actions rotor, so this adds no stop there.
+    private var makeDefaultButton: some View {
+        Button {
+            Task { await makeDefault(voice) }
+        } label: {
+            Label("Use this voice for new videos", systemImage: "checkmark.seal")
+        }
+        .buttonStyle(.bordered)
+        .disabled(savingPrefs)
+        .accessibilityHidden(voiceOverOn)
+    }
+
+    /// Servers from Sep 25 2026 keep her narrator choices; older ones send none.
+    private var prefsOnServer: Bool {
+        config?.favorites != nil
+    }
+
+    /// The narrator on screen is a listed voice her new videos do not start with yet.
+    private var offersMakeDefault: Bool {
+        guard prefsOnServer, !voice.isEmpty, voice != prefs.myDefaultVoice else { return false }
+        return (config?.voices ?? []).contains(voice)
+    }
+
+    /// What the narrator is to her, in the website's words: her default, or
+    /// the describer's own narrator until she chooses one; then the Fish note
+    /// when the voice speaks through Fish. Empty when none applies.
+    private func voiceNote(_ name: String) -> String {
+        guard !name.isEmpty else { return "" }
+        var notes: [String] = []
+        if name == prefs.myDefaultVoice {
+            notes.append("Your new videos start with this voice.")
+        } else if prefs.myDefaultVoice == nil, name == prefs.houseVoice {
+            notes.append("The describer's own narrator, used until you choose a default.")
+        }
+        if let fishNote = config?.fishNote, !fishNote.isEmpty, (config?.fish ?? []).contains(name) {
+            notes.append(fishNote)
+        }
+        return notes.joined(separator: " ")
+    }
+
+    /// The website's marks after a voice's name in the picker's wheel and search list.
+    private func voiceMark(_ name: String) -> String? {
+        var marks: [String] = []
+        if name == prefs.myDefaultVoice {
+            marks.append("your default")
+        } else if prefs.myDefaultVoice == nil, name == prefs.houseVoice {
+            marks.append("used until you choose a default")
+        }
+        if prefs.favorites.contains(name) { marks.append("favourite") }
+        return marks.isEmpty ? nil : marks.joined(separator: ", ")
+    }
+
+    // MARK: - The voice sheet
+
+    /// What each voice reads in the picker: lines of description, like the
+    /// website's samples, so a narrator is heard doing the job.
+    static let auditionLines = [
+        "A woman in a yellow raincoat hurries across the wet street, glances back once, and ducks into a small bookshop.",
+        "Text on screen: Channel 27 News at Ten. A man in a gray suit straightens his papers.",
+        "The camera pulls back from the scoreboard. The crowd is on its feet, waving orange towels.",
+    ]
+
+    /// The shared voice picker (the agent builder's wheels and search) with
+    /// her narrator shelves, the Fish note, and favourite and default
+    /// actions. Auditions play at her usual speed, up to 1.5×, and Steady.
+    private var voiceSheet: some View {
+        VoicePickerView(
+            apiClient: apiClient,
+            selection: $voice,
+            agentLines: Self.auditionLines,
+            voiceList: config?.voices,
+            shelves: narratorShelves,
+            previewSpeed: rate,
+            previewDelivery: "STABLE",
+            noteFor: { (name: String) -> String? in voiceNote(name) },
+            markFor: { (name: String) -> String? in voiceMark(name) },
+            favorites: Set(prefs.favorites),
+            onToggleFavorite: favoriteAction,
+            defaultVoice: prefs.myDefaultVoice,
+            onMakeDefault: defaultAction
+        )
+    }
+
+    /// Shown before the four groups; an empty one is left out.
+    private var narratorShelves: [VoicePickerView.Shelf] {
+        let all = [
+            VoicePickerView.Shelf(name: "My favourites", voices: prefs.favorites),
+            VoicePickerView.Shelf(name: "Recently used", voices: prefs.recent),
+            VoicePickerView.Shelf(name: "Good for describing", voices: config?.suggested ?? []),
+        ]
+        return all.filter { !$0.voices.isEmpty }
+    }
+
+    private var favoriteAction: ((String) async -> Void)? {
+        guard prefsOnServer else { return nil }
+        return { name in await toggleFavorite(name) }
+    }
+
+    private var defaultAction: ((String) async -> Void)? {
+        guard prefsOnServer else { return nil }
+        return { name in await makeDefault(name) }
+    }
+
+    /// "Use this voice for new videos" here, "Make default" in the picker.
+    /// Saved on the server, so the website starts new videos with it too.
+    private func makeDefault(_ name: String) async {
+        guard !name.isEmpty, !savingPrefs else { return }
+        savingPrefs = true
+        defer { savingPrefs = false }
+        do {
+            prefs = try await service.setDefaultVoice(name)
+            sayVoiceNews("New videos will start with \(Self.voiceName(name)). You can still change the voice for any one video.")
+        } catch {
+            voiceChoiceFailed(error, "Couldn't save your default narrator. Try again.")
+        }
+    }
+
+    private func toggleFavorite(_ name: String) async {
+        guard !name.isEmpty, !savingPrefs else { return }
+        let adding = !prefs.favorites.contains(name)
+        savingPrefs = true
+        defer { savingPrefs = false }
+        do {
+            prefs = try await service.setFavorite(name, on: adding)
+            let change = adding ? "added to" : "removed from"
+            sayVoiceNews("\(Self.voiceName(name)) \(change) My favourites.")
+        } catch {
+            voiceChoiceFailed(error, "Couldn't change your favourite narrators. Try again.")
+        }
+    }
+
+    /// Said at once, also while the voice sheet is up: that sheet is hers to
+    /// hear, not a film, so nothing is held for later. Anywhere else it is a
+    /// confirmation through the live region, as usual.
+    private func sayVoiceNews(_ text: String) {
+        guard activeSheet != nil else {
+            confirmAloud(text)
+            return
+        }
+        statusLine = text
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
+    /// A narrator choice that did not save: the screen's error sound, and the
+    /// server's own words ("You can keep up to 12 favourite narrators. Remove
+    /// one first."), said at once while the voice sheet is up.
+    private func voiceChoiceFailed(_ error: Error, _ fallback: String) {
+        guard activeSheet != nil else {
+            fail(error, fallback)
+            return
+        }
+        if error is CancellationError { return }
+        sound(.error)
+        buzz(success: false)
+        sayVoiceNews(Self.message(error, fallback))
     }
 
     private func speedRow(_ title: String, hint: String, selection: Binding<Double>) -> some View {
@@ -1496,6 +1681,8 @@ struct DescribedVideoView: View {
             }
             return
         }
+        prefs = DVPrefs(config: fetched)
+        await carryOldVoiceOver(fetched)
         config = fetched
         loaded = true
         DescribedVideoAccess.shared.record(allowed: true)
@@ -1557,21 +1744,23 @@ struct DescribedVideoView: View {
     private static let fallbackFolder = "Audio/Described Movies & TV/Described by Kade-AI"
 
     /// Her last narration choices (never the notes, the part or the paid
-    /// passes: those belong to one video), else the server's default voice.
+    /// passes: those belong to one video) and her default narrator.
     private func seedDefaults(_ fetched: DVConfig) {
         applyRememberedNarration(fetched)
         libraryFolder = fetched.defaultLibraryPath ?? Self.fallbackFolder
     }
 
-    /// Voice, speeds, pauses, detail and volume as she last chose them, or
-    /// the usual ones. Nothing here costs extra.
+    /// Speeds, pauses, detail and volume as she last chose them on this
+    /// phone, or the usual ones. The voice is the one her new videos start
+    /// with, kept on the server: hers, else the describer's own narrator.
+    /// Nothing here costs extra.
     private func applyRememberedNarration(_ fetched: DVConfig?) {
         let saved = UserDefaults.standard.dictionary(forKey: Self.settingsKey) ?? [:]
         let voices = fetched?.voices ?? []
-        if let remembered = saved["voice"] as? String, voices.contains(remembered) {
-            voice = remembered
+        if let preferred = prefs.defaultVoice, voices.contains(preferred) {
+            voice = preferred
         } else {
-            voice = fetched?.defaultVoice ?? voices.first ?? ""
+            voice = voices.first ?? prefs.defaultVoice ?? ""
         }
         let usual = Self.nearestSpeed((saved["rate"] as? Double) ?? 1.5)
         rate = usual
@@ -1585,13 +1774,33 @@ struct DescribedVideoView: View {
     }
 
     /// The paid passes (closer look, first look) are never remembered: each
-    /// video asks for them afresh.
+    /// video asks for them afresh. Nor is the voice (Sep 25 2026): her
+    /// default narrator lives on the server, the same on every device.
     private func remember() {
         let saved: [String: Any] = [
-            "voice": voice, "rate": rate, "maxRate": maxRate, "mode": mode,
+            "rate": rate, "maxRate": maxRate, "mode": mode,
             "detail": detail, "volume": volume,
         ]
         UserDefaults.standard.set(saved, forKey: Self.settingsKey)
+    }
+
+    private static let carriedKey = "kade.describedVideo.defaultCarried"
+    /// The describer's old fallback: never carried over, since it was only
+    /// ever the voice nobody chose.
+    private static let oldFallbackVoice = "clear woman · flint"
+
+    /// Once per phone, as the website does: the voice this phone remembered
+    /// becomes her default on the server, unless she already has one there.
+    /// A failure is quiet and tried again next time.
+    private func carryOldVoiceOver(_ fetched: DVConfig) async {
+        let store = UserDefaults.standard
+        guard fetched.favorites != nil, fetched.myDefaultVoice == nil, !store.bool(forKey: Self.carriedKey) else { return }
+        let saved = store.dictionary(forKey: Self.settingsKey) ?? [:]
+        guard let old = saved["voice"] as? String, old != Self.oldFallbackVoice,
+              (fetched.voices ?? []).contains(old) else { return }
+        guard let answer = try? await service.setDefaultVoice(old) else { return }
+        prefs = answer
+        store.set(true, forKey: Self.carriedKey)
     }
 
     /// A video's own choices, when it has them. A new video starts from her
@@ -2086,6 +2295,8 @@ struct DescribedVideoView: View {
         switch item.kind {
         case .start(let preview):
             remember()
+            // The server records it too; this keeps Recently used current until the next load.
+            prefs.noteRecent(voice)
             let body = settingsBody(current)
             let said = preview
                 ? "Started the preview. You can leave this screen; you'll get a notice when it's ready."
@@ -2095,10 +2306,12 @@ struct DescribedVideoView: View {
             await act("Describing the rest. You'll get a notice when it's done.") { try await service.finish(jobId: id) }
         case .resume:
             remember()
+            prefs.noteRecent(voice)
             let fields = voiceFields
             await act("Carrying on from where it stopped.") { try await service.resume(jobId: id, voiceFields: fields) }
         case .allowMore(let raise):
             remember()
+            prefs.noteRecent(voice)
             let fields = voiceFields
             await act("Carrying on, up to \(Self.money(raise)) more.") {
                 try await service.resume(jobId: id, voiceFields: fields, allowUpToUSD: raise)
@@ -2593,110 +2806,6 @@ struct DescribedVideoView: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let last = trimmed.last else { return "" }
         return ".!?".contains(last) ? trimmed : trimmed + "."
-    }
-}
-
-// MARK: - The voice sheet
-
-/// Every narrator, grouped the way the platform's catalogue groups them, with
-/// a search field. Each voice's own description is its hint.
-private struct DescribedVoicePicker: View {
-    struct VoiceGroup: Identifiable {
-        let id: Int
-        let name: String
-        let voices: [String]
-    }
-
-    let groups: [VoiceGroup]
-    let describe: [String: String]
-    @Binding var selection: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-
-    init(voices: [String], categories: [DVConfig.VoiceCategory], describe: [String: String], selection: Binding<String>) {
-        let known = Set(voices)
-        var placed = Set<String>()
-        var built: [VoiceGroup] = []
-        for category in categories {
-            var members: [String] = []
-            for voice in category.voices where known.contains(voice) && !placed.contains(voice) {
-                members.append(voice)
-                placed.insert(voice)
-            }
-            if !members.isEmpty {
-                built.append(VoiceGroup(id: built.count, name: category.name, voices: members))
-            }
-        }
-        let rest = voices.filter { !placed.contains($0) }
-        if !rest.isEmpty {
-            built.append(VoiceGroup(id: built.count, name: built.isEmpty ? "Voices" : "Other voices", voices: rest))
-        }
-        self.groups = built
-        self.describe = describe
-        self._selection = selection
-    }
-
-    private var shown: [VoiceGroup] {
-        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !wanted.isEmpty else { return groups }
-        return groups.compactMap { group in
-            let hits = group.voices.filter { voice in
-                voice.lowercased().contains(wanted) || (describe[voice] ?? "").lowercased().contains(wanted)
-            }
-            return hits.isEmpty ? nil : VoiceGroup(id: group.id, name: group.name, voices: hits)
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(shown) { group in
-                    Section(group.name) {
-                        ForEach(group.voices, id: \.self) { voice in
-                            row(voice)
-                        }
-                    }
-                }
-            }
-            .searchable(text: $query, prompt: "Search voices, like warm or British")
-            .navigationTitle("Narrator voice")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .accessibilityHint("Keeps the voice you had.")
-                }
-            }
-            .accessibilityAction(.escape) { dismiss() }
-        }
-    }
-
-    private func row(_ voice: String) -> some View {
-        let about = (describe[voice] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return Button {
-            selection = voice
-            dismiss()
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(DescribedVideoView.voiceName(voice))
-                        .foregroundStyle(.primary)
-                    if !about.isEmpty {
-                        Text(about)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
-                if voice == selection {
-                    Image(systemName: "checkmark")
-                        .accessibilityHidden(true)
-                }
-            }
-        }
-        .accessibilityLabel(DescribedVideoView.voiceName(voice))
-        .accessibilityValue(voice == selection ? "Selected" : "")
-        .accessibilityHint(about.isEmpty ? "One of your platform voices." : about)
     }
 }
 

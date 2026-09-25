@@ -785,10 +785,14 @@ final class VoiceService: NSObject, ObservableObject {
         await previewVoice(voiceId, sample: sample)
     }
 
-    func previewVoice(_ voiceId: String, sample: String, delivery: String? = nil) async {
+    /// `speed` (Sep 25 2026, the describer's narrator picker): the audition is
+    /// synthesized at this pace, inside the API's 0.5-1.5 range. nil = the
+    /// voice's own pace, as every other picker plays it.
+    func previewVoice(_ voiceId: String, sample: String, delivery: String? = nil, speed: Double? = nil) async {
         stopSpeaking()
         var fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
         if let delivery { fields.append(("delivery", delivery)) }
+        if let speed { fields.append(("speed", String(min(1.5, max(0.5, speed))))) }
         // Previews play at the picker's own pace, whatever the reply speed is.
         synthSpeedFactor = playbackRate
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)

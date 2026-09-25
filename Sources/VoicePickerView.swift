@@ -53,6 +53,13 @@ import UIKit
 /// the FULL audition and moving on cuts it; and a Delivery control (Steady /
 /// Balanced / Lively) saved per character on this phone and sent with every
 /// clip that character speaks.
+///
+/// Sep 25 2026: the describer's narrator picker is this one too. It passes
+/// its own voice list, shelves shown before the groups (My favourites,
+/// Recently used, Good for describing), a note under "About this voice",
+/// marks after names, auditions at her narration speed, and Add to
+/// favourites / Make default (buttons for sight and Voice Control, the
+/// Actions rotor for VoiceOver). All optional; the other screens pass none.
 struct VoicePickerView: View {
     let apiClient: KadeAPIClient
     @Binding var selection: String
@@ -69,6 +76,34 @@ struct VoicePickerView: View {
     /// Delivery control on this surface.
     let deliveryAgentId: String?
     @State private var delivery: String = ""   // "" = the proxy's default
+
+    /* Sep 25 2026, the describer's narrator picker. Every one of these is
+     * optional and its default leaves the picker exactly as the other
+     * screens have it: no shelves, no notes, no favourites, no default. */
+    /// A short list shown as its own wheel before the four groups ("My
+    /// favourites", "Recently used", "Good for describing"). Empty ones are skipped.
+    struct Shelf: Hashable {
+        let name: String
+        let voices: [String]
+    }
+    let shelves: [Shelf]
+    /// The voices to offer instead of the platform's list (the describer's own).
+    let voiceList: [String]?
+    /// Auditions at this pace (the API takes 0.5-1.5) and with this delivery
+    /// when none is chosen here. nil = as before.
+    let previewSpeed: Double?
+    let previewDelivery: String?
+    /// A sentence shown under "About this voice" (the describer's default and Fish notes).
+    let noteFor: ((String) -> String?)?
+    /// Words after a voice's name in the wheel and the search list ("your default, favourite").
+    let markFor: ((String) -> String?)?
+    let favorites: Set<String>
+    let onToggleFavorite: ((String) async -> Void)?
+    /// The voice already chosen as the default; "Make default" is not offered for it.
+    let defaultVoice: String?
+    let onMakeDefault: ((String) async -> Void)?
+    @State private var narratorBusy = false
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var voice: VoiceService
@@ -115,12 +150,38 @@ struct VoicePickerView: View {
     private static let moreGroup = "More"
     private static let groupOrder = ["Women", "Men", "Kids and teens", "Characters"]
 
-    init(apiClient: KadeAPIClient, selection: Binding<String>, agentLines: [String] = [], defaultLabel: String? = nil, deliveryAgentId: String? = nil) {
+    init(
+        apiClient: KadeAPIClient,
+        selection: Binding<String>,
+        agentLines: [String] = [],
+        defaultLabel: String? = nil,
+        deliveryAgentId: String? = nil,
+        voiceList: [String]? = nil,
+        shelves: [Shelf] = [],
+        previewSpeed: Double? = nil,
+        previewDelivery: String? = nil,
+        noteFor: ((String) -> String?)? = nil,
+        markFor: ((String) -> String?)? = nil,
+        favorites: Set<String> = [],
+        onToggleFavorite: ((String) async -> Void)? = nil,
+        defaultVoice: String? = nil,
+        onMakeDefault: ((String) async -> Void)? = nil
+    ) {
         self.apiClient = apiClient
         self._selection = selection
         self.agentLines = agentLines
         self.defaultLabel = defaultLabel
         self.deliveryAgentId = deliveryAgentId
+        self.voiceList = voiceList
+        self.shelves = shelves
+        self.previewSpeed = previewSpeed
+        self.previewDelivery = previewDelivery
+        self.noteFor = noteFor
+        self.markFor = markFor
+        self.favorites = favorites
+        self.onToggleFavorite = onToggleFavorite
+        self.defaultVoice = defaultVoice
+        self.onMakeDefault = onMakeDefault
         _voice = StateObject(wrappedValue: VoiceService(client: apiClient))
     }
 
@@ -190,8 +251,19 @@ struct VoicePickerView: View {
     /// claims. No catalog → one group, one kind, every voice in served order.
     private var groups: [Who] {
         let present = Set(voices)
+        // The describer's shelves come first, so a favourite opens on My favourites.
+        var shelved: [Who] = []
+        for shelf in shelves {
+            var kept: [String] = []
+            for v in shelf.voices where present.contains(v) && !kept.contains(v) {
+                kept.append(v)
+            }
+            if !kept.isEmpty {
+                shelved.append(Who(name: shelf.name, kinds: [Kind(name: shelf.name, short: shelf.name, voices: kept)]))
+            }
+        }
         guard !catalog.categories.isEmpty else {
-            return [Who(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
+            return shelved + [Who(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
         }
         var seen = Set<String>()
         var byGroup: [String: [Kind]] = [:]
@@ -216,7 +288,34 @@ struct VoicePickerView: View {
             let all = ks.flatMap { $0.voices }
             out.append(Who(name: g, kinds: [Kind(name: g, short: g, voices: all)]))
         }
-        return out
+        return shelved + out
+    }
+
+    /// The heading the wheel's voice is filed under. A shelf (My favourites)
+    /// is not a heading, so the voice's own group is named instead.
+    private var filedGroup: String {
+        guard shelves.contains(where: { $0.name == group }) else { return group }
+        for g in groups where !shelves.contains(where: { $0.name == g.name }) {
+            if g.kinds.contains(where: { $0.voices.contains(wheelVoice) }) { return g.name }
+        }
+        return group
+    }
+
+    /// The voice's name as the wheel and the search list show it, with the
+    /// describer's marks after it: "Flint (your default, favourite)".
+    private func rowTitle(_ v: String) -> String {
+        let name = catalog.name(of: v)
+        guard let mark = markFor?(v), !mark.isEmpty else { return name }
+        return "\(name) (\(mark))"
+    }
+
+    private func favoriteTitle(_ v: String) -> String {
+        favorites.contains(v) ? "Remove from favourites" : "Add to favourites"
+    }
+
+    /// Whether the describer's "Make default" belongs to this voice.
+    private func offersDefault(_ v: String) -> Bool {
+        onMakeDefault != nil && !v.isEmpty && v != defaultVoice
     }
 
     private var activeGroup: Who? { groups.first { $0.name == group } ?? groups.first }
@@ -290,11 +389,14 @@ struct VoicePickerView: View {
                 previewTask?.cancel()
                 voice.stopSpeaking()
             }
+            // Only the describer passes favourites; nothing else ever changes them.
+            .onChange(of: favorites) { _, _ in keepWheelOnVoice() }
         }
     }
 
     /// The wheels, her design. A plain scroll of controls, not a List, so the
-    /// wheel pickers get their natural height.
+    /// wheel pickers get their natural height. The pieces are their own views
+    /// so no one body is too long for the type-checker.
     private var wheels: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -313,129 +415,18 @@ struct VoicePickerView: View {
 
                 if !useDefault {
                     if groups.count > 1 {
-                        Picker("Who", selection: $group) {
-                            ForEach(groups, id: \.name) { g in
-                                Text(g.name).tag(g.name)
+                        whoPicker
+                            .onChange(of: group) { _, _ in
+                                guard !seeding else { return }
+                                kind = activeGroup?.kinds.first?.name ?? ""
+                                wheelVoice = wheelVoices.first ?? ""
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        .accessibilityLabel("Who")
-                        .onChange(of: group) { _, _ in
-                            guard !seeding else { return }
-                            kind = activeGroup?.kinds.first?.name ?? ""
-                            wheelVoice = wheelVoices.first ?? ""
-                        }
                     }
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Voice").font(.footnote).foregroundStyle(.secondary)
-                            .accessibilityHidden(true)
-                        Picker("Voice", selection: $wheelVoice) {
-                            ForEach(wheelVoices, id: \.self) { v in
-                                Text(catalog.name(of: v)).tag(v)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                        .frame(height: 170)
-                        .clipped()
-                        .accessibilityLabel("Voice")
-                        .accessibilityHint("Swipe up or down to flick through the voices. Each one plays its audition as you land on it; move on whenever you have heard enough. Done picks the one you are on.")
-                        .accessibilityActions {
-                            Button(previewing == wheelVoice ? "Stop" : "Play full audition") {
-                                Task { await preview(wheelVoice, long: true) }
-                            }
-                            Button("Hear another sample") {
-                                Task { await preview(wheelVoice, long: true, force: true) }
-                            }
-                        }
-                        .onChange(of: wheelVoice) { _, v in
-                            guard !seeding, !v.isEmpty else { return }
-                            touched = true
-                            // Debounced: a fast spin lands once, then speaks once.
-                            previewTask?.cancel()
-                            previewTask = Task {
-                                try? await Task.sleep(nanoseconds: 350_000_000)
-                                guard !Task.isCancelled else { return }
-                                // Part 119.3, her word: the long one. Moving on cuts it.
-                                await preview(v, long: true, force: true)
-                            }
-                        }
-                    }
+                    voiceWheel
 
                     if !wheelVoice.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let about = catalog.describe[wheelVoice] {
-                                Text(about)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityLabel("About this voice: \(about)")
-                            }
-                            if deliveryAgentId != nil {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Delivery").font(.footnote).foregroundStyle(.secondary)
-                                        .accessibilityHidden(true)
-                                    Picker("Delivery", selection: $delivery) {
-                                        Text("Default").tag("")
-                                        ForEach(VoiceService.deliveryOptions, id: \.value) { o in
-                                            Text(o.label).tag(o.value)
-                                        }
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .accessibilityLabel("Delivery")
-                                    .accessibilityHint(deliveryAgentId == ReadingRoomPlayer.deliveryPreference ? "How much the reading voice varies its delivery. Saved for library reading on this phone. Default is Steady. The next audition and book passage use it." : "How much this voice varies its delivery. Steady is consistent, Lively has the most emotional range. Default is the platform setting. Saved for this character on this phone; the next audition and every reply use it.")
-                                    .onChange(of: delivery) { _, v in
-                                        guard !seeding, let id = deliveryAgentId else { return }
-                                        VoiceService.setDelivery(v.isEmpty ? nil : v, forAgent: id)
-                                        touched = true
-                                        let spoken = VoiceService.deliveryOptions.first { $0.value == v }?.spoken ?? "Default delivery."
-                                        UIAccessibility.post(notification: .announcement, argument: spoken)
-                                        previewTask?.cancel()
-                                        previewTask = Task {
-                                            try? await Task.sleep(nanoseconds: 600_000_000)
-                                            guard !Task.isCancelled, !wheelVoice.isEmpty else { return }
-                                            await preview(wheelVoice, long: true, force: true)
-                                        }
-                                    }
-                                }
-                            }
-                            HStack(spacing: 12) {
-                                Button {
-                                    Task { await preview(wheelVoice, long: true) }
-                                } label: {
-                                    Label(previewing == wheelVoice ? "Stop" : "Play full audition",
-                                          systemImage: previewing == wheelVoice ? "stop.fill" : "speaker.wave.2.fill")
-                                }
-                                .buttonStyle(.bordered)
-                                .accessibilityHint("Plays the long audition in \(catalog.name(of: wheelVoice)).")
-                                if wheelVoice == current {
-                                    Label("Your current voice", systemImage: "checkmark.circle.fill")
-                                        .font(.footnote)
-                                        .foregroundStyle(.tint)
-                                        .accessibilityLabel("This is your current voice.")
-                                }
-                            }
-                            Button {
-                                flagging = true
-                            } label: {
-                                Label("Wrong section?", systemImage: "flag")
-                                    .font(.footnote)
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(flagBusy)
-                            .accessibilityHint("Tell Kade this voice is filed under the wrong heading. You say what it sounds like; the voice's name and its current heading go to the feedback board.")
-                            .confirmationDialog(
-                                "What does \(catalog.name(of: wheelVoice)) actually sound like?",
-                                isPresented: $flagging,
-                                titleVisibility: .visible
-                            ) {
-                                ForEach(Self.flagChoices, id: \.self) { choice in
-                                    Button(choice) { Task { await flagVoice(as: choice) } }
-                                }
-                                Button("Cancel", role: .cancel) {}
-                            } message: {
-                                Text("It is filed under \(group) right now.")
-                            }
-                        }
+                        voiceDetails
                     }
                 } else if selection.isEmpty {
                     Text("No voice picked yet — this character uses its default voice.")
@@ -444,6 +435,201 @@ struct VoicePickerView: View {
                 }
             }
             .padding()
+        }
+    }
+
+    /// Her four groups as segments. With the describer's shelves there are
+    /// too many for segments (every name would be cut off), so a menu.
+    @ViewBuilder
+    private var whoPicker: some View {
+        if shelves.isEmpty {
+            Picker("Who", selection: $group) {
+                ForEach(groups, id: \.name) { g in
+                    Text(g.name).tag(g.name)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Who")
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Kind of voice").font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Picker("Kind of voice", selection: $group) {
+                    ForEach(groups, id: \.name) { g in
+                        Text(g.name).tag(g.name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityLabel("Kind of voice")
+            }
+        }
+    }
+
+    private var voiceWheel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Voice").font(.footnote).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Picker("Voice", selection: $wheelVoice) {
+                ForEach(wheelVoices, id: \.self) { v in
+                    Text(rowTitle(v)).tag(v)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 170)
+            .clipped()
+            .accessibilityLabel("Voice")
+            .accessibilityHint("Swipe up or down to flick through the voices. Each one plays its audition as you land on it; move on whenever you have heard enough. Done picks the one you are on.")
+            .accessibilityActions {
+                Button(previewing == wheelVoice ? "Stop" : "Play full audition") {
+                    Task { await preview(wheelVoice, long: true) }
+                }
+                Button("Hear another sample") {
+                    Task { await preview(wheelVoice, long: true, force: true) }
+                }
+                // The describer's two, last, so the actions above keep their places.
+                if onToggleFavorite != nil, !wheelVoice.isEmpty {
+                    Button(favoriteTitle(wheelVoice)) {
+                        Task { await toggleFavorite(wheelVoice) }
+                    }
+                }
+                if offersDefault(wheelVoice) {
+                    Button("Make default") {
+                        Task { await makeDefault(wheelVoice) }
+                    }
+                }
+            }
+            .onChange(of: wheelVoice) { _, v in
+                guard !seeding, !v.isEmpty else { return }
+                touched = true
+                // Debounced: a fast spin lands once, then speaks once.
+                previewTask?.cancel()
+                previewTask = Task {
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    guard !Task.isCancelled else { return }
+                    // Part 119.3, her word: the long one. Moving on cuts it.
+                    await preview(v, long: true, force: true)
+                }
+            }
+        }
+    }
+
+    /// Under the wheel: about the voice (and the describer's note), Delivery,
+    /// Play, the describer's narrator buttons, and Wrong section.
+    private var voiceDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let about = catalog.describe[wheelVoice] {
+                Text(about)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("About this voice: \(about)")
+            }
+            if let note = noteFor?(wheelVoice), !note.isEmpty {
+                Text(note)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if deliveryAgentId != nil {
+                deliveryControl
+            }
+            HStack(spacing: 12) {
+                Button {
+                    Task { await preview(wheelVoice, long: true) }
+                } label: {
+                    Label(previewing == wheelVoice ? "Stop" : "Play full audition",
+                          systemImage: previewing == wheelVoice ? "stop.fill" : "speaker.wave.2.fill")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Plays the long audition in \(catalog.name(of: wheelVoice)).")
+                if wheelVoice == current {
+                    Label("Your current voice", systemImage: "checkmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.tint)
+                        .accessibilityLabel("This is your current voice.")
+                }
+            }
+            if onToggleFavorite != nil || onMakeDefault != nil {
+                narratorControls
+            }
+            flagButton
+        }
+    }
+
+    private var deliveryControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Delivery").font(.footnote).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Picker("Delivery", selection: $delivery) {
+                Text("Default").tag("")
+                ForEach(VoiceService.deliveryOptions, id: \.value) { o in
+                    Text(o.label).tag(o.value)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Delivery")
+            .accessibilityHint(deliveryAgentId == ReadingRoomPlayer.deliveryPreference ? "How much the reading voice varies its delivery. Saved for library reading on this phone. Default is Steady. The next audition and book passage use it." : "How much this voice varies its delivery. Steady is consistent, Lively has the most emotional range. Default is the platform setting. Saved for this character on this phone; the next audition and every reply use it.")
+            .onChange(of: delivery) { _, v in
+                guard !seeding, let id = deliveryAgentId else { return }
+                VoiceService.setDelivery(v.isEmpty ? nil : v, forAgent: id)
+                touched = true
+                let spoken = VoiceService.deliveryOptions.first { $0.value == v }?.spoken ?? "Default delivery."
+                UIAccessibility.post(notification: .announcement, argument: spoken)
+                previewTask?.cancel()
+                previewTask = Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard !Task.isCancelled, !wheelVoice.isEmpty else { return }
+                    await preview(wheelVoice, long: true, force: true)
+                }
+            }
+        }
+    }
+
+    /// The describer's two narrator actions, outside any row (a button inside
+    /// a row is a VoiceOver problem). Hidden from VoiceOver only: the wheel's
+    /// Actions rotor has both, and Voice Control still sees these buttons.
+    private var narratorControls: some View {
+        HStack(spacing: 12) {
+            if onToggleFavorite != nil {
+                Button {
+                    Task { await toggleFavorite(wheelVoice) }
+                } label: {
+                    Label(favoriteTitle(wheelVoice), systemImage: favorites.contains(wheelVoice) ? "star.fill" : "star")
+                }
+                .buttonStyle(.bordered)
+            }
+            if offersDefault(wheelVoice) {
+                Button {
+                    Task { await makeDefault(wheelVoice) }
+                } label: {
+                    Label("Make default", systemImage: "checkmark.seal")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .disabled(narratorBusy)
+        .accessibilityHidden(voiceOverOn)
+    }
+
+    private var flagButton: some View {
+        Button {
+            flagging = true
+        } label: {
+            Label("Wrong section?", systemImage: "flag")
+                .font(.footnote)
+        }
+        .buttonStyle(.borderless)
+        .disabled(flagBusy)
+        .accessibilityHint("Tell Kade this voice is filed under the wrong heading. You say what it sounds like; the voice's name and its current heading go to the feedback board.")
+        .confirmationDialog(
+            "What does \(catalog.name(of: wheelVoice)) actually sound like?",
+            isPresented: $flagging,
+            titleVisibility: .visible
+        ) {
+            ForEach(Self.flagChoices, id: \.self) { choice in
+                Button(choice) { Task { await flagVoice(as: choice) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It is filed under \(filedGroup) right now.")
         }
     }
 
@@ -476,7 +662,7 @@ struct VoicePickerView: View {
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(catalog.name(of: v))
+                        Text(rowTitle(v))
                         Text(Self.spoken(v)).font(.footnote).foregroundStyle(.secondary)
                         if let about {
                             Text(about).font(.footnote).foregroundStyle(.secondary)
@@ -495,7 +681,7 @@ struct VoicePickerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(catalog.name(of: v)), \(Self.spoken(v))")
+            .accessibilityLabel("\(rowTitle(v)), \(Self.spoken(v))")
             .accessibilityValue(isCurrent ? "Selected" : "")
             .accessibilityHint(about ?? "Picks this voice.")
             .accessibilityActions {
@@ -507,6 +693,17 @@ struct VoicePickerView: View {
                 }
                 Button("Hear another sample") {
                     Task { await preview(v, long: true, force: true) }
+                }
+                // The describer's two, last, so the actions above keep their places.
+                if onToggleFavorite != nil {
+                    Button(favoriteTitle(v)) {
+                        Task { await toggleFavorite(v) }
+                    }
+                }
+                if offersDefault(v) {
+                    Button("Make default") {
+                        Task { await makeDefault(v) }
+                    }
                 }
             }
 
@@ -543,9 +740,13 @@ struct VoicePickerView: View {
     private func load() async {
         isLoading = true
         loadFailed = false
-        async let listTask = voice.availableVoices()
         async let catalogTask = VoiceCatalog.shared.snapshot()
-        let list = await listTask
+        let list: [String]
+        if let voiceList, !voiceList.isEmpty {
+            list = voiceList
+        } else {
+            list = await voice.availableVoices()
+        }
         voices = list
         loadFailed = list.isEmpty
         catalog = await catalogTask
@@ -578,7 +779,7 @@ struct VoicePickerView: View {
         flagBusy = true
         defer { flagBusy = false }
         let name = catalog.name(of: label)
-        let heading = group.isEmpty ? "(unknown heading)" : group
+        let heading = filedGroup.isEmpty ? "(unknown heading)" : filedGroup
         do {
             try await FeedbackReportService(apiClient: apiClient).submit(
                 category: "bug",
@@ -602,17 +803,51 @@ struct VoicePickerView: View {
         if force { voice.stopSpeaking() }
         RecentVoices.record(v)
         previewing = v
-        let d = delivery.isEmpty ? nil : delivery
+        // No delivery chosen here: the surface's own (the describer's Steady), else the proxy's.
+        let d = delivery.isEmpty ? previewDelivery : delivery
         if let sample = nextAgentSample(long: long) {
-            await voice.previewVoice(v, sample: sample, delivery: d)
+            await voice.previewVoice(v, sample: sample, delivery: d, speed: previewSpeed)
         } else if long, d != nil {
             // The long audition sentinel, with the delivery choice attached.
-            await voice.previewVoice(v, sample: "Hi there. This is how I sound.", delivery: d)
+            await voice.previewVoice(v, sample: "Hi there. This is how I sound.", delivery: d, speed: previewSpeed)
         } else {
             await voice.previewVoice(v, long: long)
         }
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }
+    }
+
+    // MARK: - The describer's narrator actions
+
+    /// The surface says what happened (it knows its own words); a second tap
+    /// while one is saving is ignored.
+    @MainActor private func toggleFavorite(_ v: String) async {
+        guard let onToggleFavorite, !v.isEmpty, !narratorBusy else { return }
+        narratorBusy = true
+        defer { narratorBusy = false }
+        await onToggleFavorite(v)
+    }
+
+    @MainActor private func makeDefault(_ v: String) async {
+        guard let onMakeDefault, !v.isEmpty, !narratorBusy else { return }
+        narratorBusy = true
+        defer { narratorBusy = false }
+        await onMakeDefault(v)
+    }
+
+    /// A favourite added or removed changes the shelves. The wheel stays on
+    /// her voice, moving to the shelf or group that still holds it.
+    private func keepWheelOnVoice() {
+        guard !wheelVoice.isEmpty else { return }
+        let groupGone = !groups.contains(where: { $0.name == group })
+        guard groupGone || !wheelVoices.contains(wheelVoice) else { return }
+        let keep = wheelVoice
+        seeding = true
+        point(at: keep)
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            seeding = false
+        }
     }
 }
 
