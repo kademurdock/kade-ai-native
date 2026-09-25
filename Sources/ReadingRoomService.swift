@@ -207,6 +207,25 @@ struct RRError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// Part 291 (Sep 25 2026): the library already holds exactly this file (the
+/// same SHA-256) somewhere she can open it, so nothing was uploaded. Not a
+/// failure: the words are said as they are, and the upload counts as done.
+struct RRAlreadyInLibrary: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+
+    /// The server's own sentence when it sent one; otherwise the plain one.
+    init(serverMessage: String?, title: String?) {
+        let said = (serverMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !said.isEmpty {
+            message = said
+        } else {
+            message = "Already in the library: \(name.isEmpty ? "this file" : name). It is exactly the same file, so it is kept once."
+        }
+    }
+}
+
 // MARK: - The service
 
 @MainActor
@@ -317,19 +336,14 @@ final class ReadingRoomService: ObservableObject {
     // MARK: uploads
 
     /// `duplicate`: the server already had this exact text where you can open it (Sep 25 2026), so nothing new was saved.
-    struct UploadedBook: Decodable { let book: RRItem; let skipped: [RRSkippedSummary]?; let jacket: String?; let duplicate: Bool? }
+    /// `same == "file"` (Part 291): it was exactly the same file, found by its SHA-256 before any upload.
+    struct UploadedBook: Decodable { let book: RRItem; let skipped: [RRSkippedSummary]?; let jacket: String?; let duplicate: Bool?; let same: String?; let message: String? }
     struct RRSkippedSummary: Decodable { let title: String?; let reason: String? }
 
-    /// Upload bytes to storage, then check a durable import job using short requests.
-    /// `onProgress` (Sep 23 2026, C3) hears the storage upload's 0...1 for
-    /// the lock-screen card; without it the upload runs exactly as before.
-    func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false, onProgress: (@MainActor (Double) -> Void)? = nil) async throws -> UploadedBook {
-        let scoped = fileURL.startAccessingSecurityScopedResource()
-        defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
-        let before = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let bytes = (before[.size] as? NSNumber)?.int64Value ?? 0
-        let limit: Int64 = fileURL.pathExtension.lowercased() == "zip" ? 4 * 1024 * 1024 * 1024 : 256 * 1024 * 1024
-        guard bytes > 0, bytes <= limit else { throw RRError(message: "Book ZIPs must be 4 GB or smaller; other book files must be 256 MB or smaller.") }
+    /// SHA-256 of a file on disk as lowercase hex, read 1 MB at a time off the
+    /// main actor. Book imports and recording parts both send it (Part 291),
+    /// so the server can say "exactly the same file" before anything uploads.
+    private static func sha256Hex(of fileURL: URL) async throws -> String {
         let hashTask = Task.detached(priority: .utility) {
             let source = try FileHandle(forReadingFrom: fileURL)
             defer { try? source.close() }
@@ -342,10 +356,26 @@ final class ReadingRoomService: ObservableObject {
             }
             return hash.finalize().map { String(format: "%02x", $0) }.joined()
         }
-        let digest = try await withTaskCancellationHandler(operation: { try await hashTask.value }, onCancel: { hashTask.cancel() })
+        return try await withTaskCancellationHandler(operation: { try await hashTask.value }, onCancel: { hashTask.cancel() })
+    }
+
+    /// Upload bytes to storage, then check a durable import job using short requests.
+    /// `onProgress` (Sep 23 2026, C3) hears the storage upload's 0...1 for
+    /// the lock-screen card; without it the upload runs exactly as before.
+    func uploadBook(fileURL: URL, grownUpsOnly: Bool, keepPrivate: Bool = false, onProgress: (@MainActor (Double) -> Void)? = nil) async throws -> UploadedBook {
+        let scoped = fileURL.startAccessingSecurityScopedResource()
+        defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
+        let before = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let bytes = (before[.size] as? NSNumber)?.int64Value ?? 0
+        let limit: Int64 = fileURL.pathExtension.lowercased() == "zip" ? 4 * 1024 * 1024 * 1024 : 256 * 1024 * 1024
+        guard bytes > 0, bytes <= limit else { throw RRError(message: "Book ZIPs must be 4 GB or smaller; other book files must be 256 MB or smaller.") }
+        let digest = try await Self.sha256Hex(of: fileURL)
         let requestID = "book-" + digest + (keepPrivate ? "-private" : "-shared") + (grownUpsOnly ? "-adult" : "-all")
         struct Job: Decodable { let id: String; let state: String; let uploadRequired: Bool?; let url: String?; let mime: String?; let result: UploadedBook?; let error: String? }
-        var job = try await json(post("api/kade/reading-room/imports", ["requestId": requestID, "fileName": fileURL.lastPathComponent, "bytes": bytes, "private": keepPrivate, "grownUpsOnly": grownUpsOnly]), as: Job.self)
+        // `sha256` (Part 291): when the library already holds exactly this file
+        // where she can open it, the job comes back ready with a duplicate
+        // result and uploadRequired false, so nothing is uploaded.
+        var job = try await json(post("api/kade/reading-room/imports", ["requestId": requestID, "fileName": fileURL.lastPathComponent, "bytes": bytes, "private": keepPrivate, "grownUpsOnly": grownUpsOnly, "sha256": digest]), as: Job.self)
         if job.uploadRequired == true {
             guard let address = job.url, let url = URL(string: address) else { throw RRError(message: "Missing storage address.") }
             var put = URLRequest(url: url); put.httpMethod = "PUT"; put.timeoutInterval = 7200
@@ -393,7 +423,28 @@ final class ReadingRoomService: ObservableObject {
         guard bytes > 0, Int64(bytes) <= 20 * 1024 * 1024 * 1024 else { throw RRError(message: "Recordings must be 20 GB or smaller.") }
         struct Part: Decodable { let partNumber: Int; let url: String }
         struct Multipart: Decodable { let uploadId: String; let partBytes: Int; let parts: [Part] }
-        struct Pre: Decodable { let key: String; let url: String?; let mime: String; let multipart: Multipart? }
+        /// Only the title is read, and an odd shape reads as no title rather
+        /// than failing the whole answer.
+        struct Existing: Decodable {
+            let title: String?
+            enum CodingKeys: String, CodingKey { case title }
+            init(from decoder: Decoder) throws {
+                let c = try? decoder.container(keyedBy: CodingKeys.self)
+                title = try? c?.decode(String.self, forKey: .title)
+            }
+        }
+        // Part 291: a duplicate answer has no key or mime, only
+        // duplicate/same/message/existing, so those are optional here.
+        struct Pre: Decodable {
+            let key: String?
+            let url: String?
+            let mime: String?
+            let multipart: Multipart?
+            let duplicate: Bool?
+            let same: String?
+            let message: String?
+            let existing: Existing?
+        }
         struct R: Decodable { let item: RRItem }
         // Save the completion receipt before notifying the library, so a lost
         // response can be retried with the same storage key.
@@ -403,11 +454,19 @@ final class ReadingRoomService: ObservableObject {
             UserDefaults.standard.removeObject(forKey: recoveryKey)
             return result
         }
-        let pre = try await json(post("api/kade/reading-room/media/\(item.id)/track/presign", ["fileName": fileURL.lastPathComponent, "mime": "", "bytes": bytes, "multipart": true]), as: Pre.self)
+        // Part 291: the file's SHA-256 goes with the presign, so a file the
+        // library already holds (exactly the same bytes, somewhere she can
+        // open) is answered before any upload, and nothing is sent.
+        let digest = try await Self.sha256Hex(of: fileURL)
+        let pre = try await json(post("api/kade/reading-room/media/\(item.id)/track/presign", ["fileName": fileURL.lastPathComponent, "mime": "", "bytes": bytes, "multipart": true, "sha256": digest]), as: Pre.self)
+        if pre.duplicate == true {
+            throw RRAlreadyInLibrary(serverMessage: pre.message, title: pre.existing?.title)
+        }
+        guard let key = pre.key, let mime = pre.mime else { throw RRError(message: "The library did not return an upload address.") }
         func send(_ file: URL, address: String, offset: Int, length: Int) async throws -> HTTPURLResponse {
             guard let url = URL(string: address) else { throw RRError(message: "Bad upload address.") }
             var request = URLRequest(url: url); request.httpMethod = "PUT"; request.timeoutInterval = 7200
-            request.setValue(pre.mime, forHTTPHeaderField: "Content-Type")
+            request.setValue(mime, forHTTPHeaderField: "Content-Type")
             let delegate = UploadProgressDelegate { progress in onProgress((Double(offset) + progress * Double(length)) / Double(bytes)) }
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             defer { session.finishTasksAndInvalidate() }
@@ -415,7 +474,7 @@ final class ReadingRoomService: ObservableObject {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RRError(message: "Storage did not accept the file (\((response as? HTTPURLResponse)?.statusCode ?? 0)).") }
             return http
         }
-        var body: [String: Any] = ["key": pre.key, "title": title, "bytes": bytes, "seconds": seconds.isFinite ? seconds : 0, "originalName": fileURL.lastPathComponent]
+        var body: [String: Any] = ["key": key, "title": title, "bytes": bytes, "seconds": seconds.isFinite ? seconds : 0, "originalName": fileURL.lastPathComponent]
         if let multipart = pre.multipart {
             guard multipart.partBytes > 0, !multipart.parts.isEmpty else { throw RRError(message: "Invalid multipart upload plan.") }
             var receipts: [[String: Any]] = []

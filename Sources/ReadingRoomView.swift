@@ -490,7 +490,10 @@ struct ReadingRoomView: View {
             let r = try await service.uploadBook(fileURL: url, grownUpsOnly: grownUpsForBook, keepPrivate: keepUploadsPrivate, onProgress: { p in card.progress(p) })
             card.finish(failed: false)
             let skipped = r.skipped?.count ?? 0
-            if r.duplicate == true {
+            if r.duplicate == true && r.same == "file" {
+                // Part 291: found by the file's SHA-256 before any upload.
+                announce(RRAlreadyInLibrary(serverMessage: r.message, title: r.book.title).message)
+            } else if r.duplicate == true {
                 announce("Already in the library: \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). It has exactly the same text, so nothing new was added.")
             } else {
                 announce("Added \(r.book.title)\(r.book.author.map { " by \($0)" } ?? ""). \(r.book.sections ?? 0) sections, about \(r.book.listen ?? "") of listening." + (skipped > 0 ? " \(skipped) front-matter parts skipped." : ""))
@@ -524,6 +527,10 @@ struct ReadingRoomView: View {
         // One lock-screen card for the whole donation, not one per file.
         let card: LibraryUploadCard? = urls.isEmpty ? nil : LibraryUploadCard(name: item.title)
         var anyFailed = false
+        // Part 291: files the library already holds exactly (same SHA-256),
+        // so they were not uploaded. Said again in the closing summary, which
+        // would otherwise cut the announcement off.
+        var alreadyThere: [String] = []
         for (i, u) in urls.enumerated() {
             announce("Uploading \(u.lastPathComponent) (\(i + 1) of \(urls.count))…")
             uploadProgress = 0
@@ -535,6 +542,10 @@ struct ReadingRoomView: View {
                 uploadingItem = item
                 announce("Part \(item.tracks ?? 0) added to \(item.title).")
                 if u.path.contains("/SharedInbox/") { try? FileManager.default.removeItem(at: u) }
+            } catch let already as RRAlreadyInLibrary {
+                alreadyThere.append(already.message)
+                announce(already.message)
+                if u.path.contains("/SharedInbox/") { try? FileManager.default.removeItem(at: u) }
             } catch {
                 anyFailed = true
                 announce("\(u.lastPathComponent): \(error.localizedDescription)")
@@ -543,7 +554,15 @@ struct ReadingRoomView: View {
         card?.finish(failed: anyFailed)
         uploadProgress = nil
         await service.loadShelf()
-        announce("\(item.title) has \(item.tracks ?? 0) recording\((item.tracks ?? 0) == 1 ? "" : "s"). Open it from your shelf to play it or put it in the library.")
+        let count = item.tracks ?? 0
+        let closing = "\(item.title) has \(count) recording\(count == 1 ? "" : "s"). Open it from your shelf to play it or put it in the library."
+        if alreadyThere.isEmpty {
+            announce(closing)
+        } else if count == 0 {
+            announce(alreadyThere.joined(separator: " "))
+        } else {
+            announce((alreadyThere + [closing]).joined(separator: " "))
+        }
     }
 
     // MARK: - Player
