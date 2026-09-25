@@ -342,6 +342,7 @@ final class MessageSendingService: ObservableObject {
             "kade_transcribe": "transcript",
             "kade_make_file": "file",
             "kade_message": "message",
+            "kade_funding_balance": "cost and paid back",
             "flux": "picture",
             "fal_studio": "studio",
         ]
