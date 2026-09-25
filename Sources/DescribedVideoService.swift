@@ -359,12 +359,30 @@ struct DVConfig: Decodable {
     /// True when dialogue timing is included, like narration (the server's
     /// KADE_DESCRIPTION_FREE_DIALOGUE switch). Absent on older servers.
     let dialogueIncluded: Bool?
+    /// Her narrator choices, kept on the server since Sep 25 2026 (all
+    /// absent on older servers). `defaultVoice` above is the voice her new
+    /// videos start with: hers when she chose one, else the house voice.
+    let myDefaultVoice: String?
+    let houseVoice: String?
+    let favorites: [String]?
+    let recent: [String]?
+    let maxFavorites: Int?
+    /// "Good for describing": Inworld voices only, curated by Kade on the website.
+    let suggested: [String]?
+    /// Voices that speak through Fish, which sound less natural sped up,
+    /// and the gentle note the server words for them.
+    let fish: [String]?
+    let fishNote: String?
+    /// True for the administrator, who curates Good for describing on the
+    /// website. The phone offers no curating; it is read so the answer is whole.
+    let curate: Bool?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
         case remainingUSD, perMinuteUSD, extrasPerMinuteUSD, setAside, previewSeconds, library
         case defaultLibraryPath, defaultVoice, voicesAvailable, voices, describe, categories
         case dialogueIncluded
+        case myDefaultVoice, houseVoice, favorites, recent, maxFavorites, suggested, fish, fishNote, curate
     }
 }
 
@@ -416,6 +434,57 @@ extension DVConfig {
         describe = c.dvValue(.describe)
         categories = c.dvValue(.categories)
         dialogueIncluded = c.dvBool(.dialogueIncluded)
+        myDefaultVoice = c.dvString(.myDefaultVoice)
+        houseVoice = c.dvString(.houseVoice)
+        favorites = c.dvValue(.favorites)
+        recent = c.dvValue(.recent)
+        maxFavorites = c.dvInt(.maxFavorites)
+        suggested = c.dvValue(.suggested)
+        fish = c.dvValue(.fish)
+        fishNote = c.dvString(.fishNote)
+        curate = c.dvBool(.curate)
+    }
+}
+
+/// Her narrator choices as the server keeps them (Sep 25 2026): the voice
+/// her new videos start with, her favourites (up to 12) and the voices her
+/// last runs used. The answer to every change, and part of the config.
+struct DVPrefs: Decodable {
+    /// The voice her new videos start with: hers, else the house voice.
+    var defaultVoice: String?
+    /// The one she chose; nil until she chooses.
+    var myDefaultVoice: String?
+    /// The describer's own narrator, used until she chooses.
+    var houseVoice: String?
+    var favorites: [String] = []
+    var recent: [String] = []
+
+    enum CodingKeys: String, CodingKey { case defaultVoice, myDefaultVoice, houseVoice, favorites, recent }
+}
+
+extension DVPrefs {
+    init(config: DVConfig) {
+        defaultVoice = config.defaultVoice
+        myDefaultVoice = config.myDefaultVoice
+        houseVoice = config.houseVoice
+        favorites = config.favorites ?? []
+        recent = config.recent ?? []
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        defaultVoice = c.dvString(.defaultVoice)
+        myDefaultVoice = c.dvString(.myDefaultVoice)
+        houseVoice = c.dvString(.houseVoice)
+        favorites = c.dvValue(.favorites) ?? []
+        recent = c.dvValue(.recent) ?? []
+    }
+
+    /// A run just started with this voice: it leads Recently used, as the
+    /// server records it too (eight at most, like the server).
+    mutating func noteRecent(_ voice: String) {
+        guard !voice.isEmpty else { return }
+        recent = Array(([voice] + recent.filter { $0 != voice }).prefix(8))
     }
 }
 
@@ -920,6 +989,19 @@ final class DescribedVideoService: ObservableObject {
 
     func config() async throws -> DVConfig {
         try await get("config", fallback: "Couldn't open the video describer.")
+    }
+
+    // MARK: Narrator choices
+
+    /// The voice her new videos start with. Answers her choices as saved.
+    func setDefaultVoice(_ voice: String) async throws -> DVPrefs {
+        try await post("prefs/default", body: ["voice": voice], fallback: "Couldn't save your default narrator. Try again.")
+    }
+
+    /// Adds a voice to My favourites, or takes it off. A full list answers
+    /// with the server's own words ("Remove one first").
+    func setFavorite(_ voice: String, on: Bool) async throws -> DVPrefs {
+        try await post("prefs/favorites", body: ["voice": voice, "favorite": on], fallback: "Couldn't change your favourite narrators. Try again.")
     }
 
     func libraryFolders() async throws -> [String] {
