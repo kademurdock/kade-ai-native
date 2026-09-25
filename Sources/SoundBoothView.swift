@@ -1405,16 +1405,24 @@ struct SoundBoothView: View {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }
             var draft = result.screenplay ?? result.script
-            if engine == "yue2" {
-                guard let boundary = draft.range(of: "\nLyrics:", options: .caseInsensitive) else {
+            // Sep 25 2026: a Lyria draft is split like a YuE2 one, so its words
+            // land in Your own lyrics instead of inside Music direction. An
+            // instrumental has no Lyrics heading and stays whole; only YuE2
+            // insists on words.
+            if engine == "yue2" || engine == "lyria" {
+                if let boundary = draft.range(of: "\nLyrics:", options: .caseInsensitive) {
+                    values["lyrics"] = String(draft[boundary.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    draft = String(draft[..<boundary.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                } else if engine == "yue2" {
                     announce("The writer did not return separate lyrics. Your idea is kept."); return
                 }
-                values["lyrics"] = String(draft[boundary.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                draft = String(draft[..<boundary.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
             writingUndo = (engine, original, originalLyrics)
             script = draft; readback = result.readback ?? ""; invalidateQuote()
-            announce("Draft ready in the editor. You can edit or undo it. No audio has been generated.")
+            // A pasted three-box song comes back sorted with a note (no writer, no charge).
+            let note: String = (result.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let lead: String = note.isEmpty ? "" : note + " "
+            announce(lead + "Draft ready in the editor. You can edit or undo it. No audio has been generated.")
         } catch { announce((error as? LocalizedError)?.errorDescription ?? "The writing desk could not finish. Your text is kept.") }
     }
 

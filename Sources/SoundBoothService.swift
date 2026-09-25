@@ -143,6 +143,10 @@ struct SoundBoothScriptResult: Decodable {
     /// rather than shown, and Render stays available — she may want to fix it
     /// by hand in Advanced.
     let problem: String?
+    /// Sep 25 2026: set when a song pasted whole (Lyrics Box, Tag Box,
+    /// Negative Tag Box) was sorted into its boxes without the writer. Says
+    /// where each part went and that the negative tags were left out.
+    let note: String?
 }
 
 struct SoundBoothRenderResult: Decodable {
