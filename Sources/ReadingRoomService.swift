@@ -1225,7 +1225,26 @@ final class ReadingRoomPlayer: ObservableObject {
         } else {
             info[MPNowPlayingInfoPropertyIsLiveStream] = true
         }
+        // Part 292: a painted picture, added after the words. The artwork
+        // fetches its picture only when the system asks, so nothing here waits.
+        if let artwork = lockScreenArtwork(for: book) {
+            info[MPMediaItemPropertyArtwork] = artwork
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// Part 292: the lock screen's picture for the open item: the glowing old
+    /// radio for radio, the item's painted jacket for the rest, none for
+    /// kinds nobody painted or with "Painted pictures" off. One artwork per
+    /// picture, kept, so play and pause do not hand the lock screen a new one.
+    private static var lockScreenArt: [String: MPMediaItemArtwork] = [:]
+    private func lockScreenArtwork(for book: RRBook) -> MPMediaItemArtwork? {
+        let showPictures = (UserDefaults.standard.object(forKey: KadeArt.showKey) as? Bool) ?? true
+        guard showPictures, let name = KadeArt.lockScreenPicture(kind: book.kind, category: book.category) else { return nil }
+        if let kept = Self.lockScreenArt[name] { return kept }
+        let made = KadeArt.lockScreenArtwork(named: name)
+        Self.lockScreenArt[name] = made
+        return made
     }
     private func updateNowPlayingTime() {
         guard isAudio, var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }

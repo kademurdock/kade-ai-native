@@ -19,7 +19,6 @@ enum KadeArtWords {
         "ArtClubhouseHotel": "The front desk of a small country hotel at night: a green banker’s lamp, a service bell and flowers on a wooden desk, a wall of cubbyholes holding keys on blank tags, and a staircase with a red runner.",
         "ArtClubhouseLounge": "A cozy listening lounge at dusk: six mismatched armchairs in a half-circle around a braided rug, each with its own small lamp switched off, a record-player cabinet in the middle, and windows onto pines and a lake.",
         "ArtClubhouseMusicNight": "A backyard music night at sunset: a small wooden pallet stage with an acoustic guitar, a microphone stand and two speakers, folding chairs in a half circle, a cooler and string lights above a lake.",
-        "ArtClubhousePorch": "A covered wooden porch at sunset with two rocking chairs, a cushioned swing with an orange throw, a table with iced tea and glasses, hanging ferns and lanterns, overlooking a lake.",
         "ArtDescriberBooth": "A projection booth at dusk: an old film projector with two reels shines a beam through a wall opening into a small theater with red seats, beside stacked film cans, a microphone and a desk lamp.",
         "ArtEmptyFireside": "Two empty armchairs with knitted throws facing a small stone fireplace with a low fire, and a record player on a side table between them, on a braided rug.",
         "ArtEmptySearch": "An oak card-catalog cabinet with brass pulls, one drawer pulled out and empty, with a glowing lantern and a trailing plant on top.",
