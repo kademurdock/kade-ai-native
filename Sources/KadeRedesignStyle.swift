@@ -44,45 +44,89 @@ extension View {
 
 // MARK: - Painted headers (C4)
 
-/// A painted banner across the top of a tab page. The pictures are Kade's to
-/// make (ChatGPT, the way the face sheets were made); until an image named
+/// A painted banner across the top of a page. The pictures are Kade's to make
+/// (ChatGPT, then Gemini, every one described blind); until an image named
 /// `imageName` is in the asset catalog, a soft gradient with the page's symbol
-/// stands in, so the page never has a hole in it. Always decorative.
+/// stands in, so the page never has a hole in it.
+///
+/// Part 292 (Sep 25 2026): silent by default. With `described: true` and words
+/// in KadeArtWords, the banner is ONE VoiceOver picture element sorted after
+/// the rest of the screen (the screen's stack must carry
+/// `.accessibilityElement(children: .contain)` for the sort to hold), so it is
+/// never ahead of the first control. High contrast, the "Painted pictures"
+/// switch and a missing file all give plain colour, and then it is silent.
+/// Accessibility text sizes and landscape shrink it to 60 points.
 struct KadePaintedHeader: View {
     let imageName: String
     var symbol: String = "sparkles"
     var tint: Color = .indigo
     var height: CGFloat = 120
+    var described: Bool = false
     @KadeContrastPolicy private var highContrast: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @AppStorage(KadeArt.showKey) private var showPictures = true
+    @AppStorage(KadeArt.describeKey) private var describePictures = true
+
+    private var picture: UIImage? {
+        guard showPictures, !highContrast else { return nil }
+        return UIImage(named: imageName)
+    }
+
+    /// Big text and landscape leave the screen to the task (the plan's rule 27).
+    private var shownHeight: CGFloat {
+        typeSize.isAccessibilitySize || verticalSizeClass == .compact ? min(height, 60) : height
+    }
+
+    private var spokenWords: String? {
+        guard described, describePictures, picture != nil else { return nil }
+        return KadeArt.words(for: imageName)
+    }
 
     /// The size comes from the empty frame; the picture is an overlay on it,
     /// so a scaled-to-fill image can never widen the screen it sits on.
     var body: some View {
+        if let words = spokenWords {
+            banner
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(words)
+                .accessibilityAddTraits(.isImage)
+                .accessibilitySortPriority(-1)
+        } else {
+            banner
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var banner: some View {
         Color.clear
             .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .overlay {
-                if let picture = UIImage(named: imageName) {
-                    Image(uiImage: picture)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    ZStack {
-                        LinearGradient(
-                            colors: highContrast
-                                ? [tint, tint]
-                                : [tint.opacity(0.85), tint.opacity(0.45)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                        Image(systemName: symbol)
-                            .font(.system(size: height * 0.42, weight: .semibold))
-                            .foregroundStyle(.white.opacity(highContrast ? 1 : 0.85))
-                    }
-                }
-            }
+            .frame(height: shownHeight)
+            .overlay { artwork }
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .accessibilityHidden(true)
             .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        if let picture {
+            Image(uiImage: picture)
+                .resizable()
+                .scaledToFill()
+                .accessibilityIgnoresInvertColors(true)
+        } else {
+            ZStack {
+                LinearGradient(
+                    colors: highContrast
+                        ? [tint, tint]
+                        : [tint.opacity(0.85), tint.opacity(0.45)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                Image(systemName: symbol)
+                    .font(.system(size: shownHeight * 0.42, weight: .semibold))
+                    .foregroundStyle(.white.opacity(highContrast ? 1 : 0.85))
+            }
+        }
     }
 }
 

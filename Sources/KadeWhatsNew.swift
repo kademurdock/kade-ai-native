@@ -56,6 +56,10 @@ struct KadeWhatsNewCard: View {
     var body: some View {
         if whatsNew.showCard {
             VStack(alignment: .leading, spacing: 10) {
+                // Part 292: the house at dusk, silent here (the card sits on
+                // the busiest screen); Help's "What the app looks like" and
+                // the sign-in screen carry the words.
+                KadePaintedHeader(imageName: "ArtHouseAtDusk", symbol: "house.fill", tint: .indigo, height: 90)
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles")
                         .foregroundStyle(.orange)

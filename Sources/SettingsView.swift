@@ -158,6 +158,14 @@ struct SettingsView: View {
     var body: some View {
         List {
             if trimmedQuery.isEmpty {
+                // Part 292: the mudroom by the back door. Silent here (the
+                // list's first stop stays Main character); Help's "What the
+                // app looks like" carries its words.
+                Section {
+                    KadePaintedHeader(imageName: "ArtSettingsMudroom", symbol: "gearshape", tint: .gray, height: 110)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
                 mainAgentSection
                 if UIApplication.shared.supportsAlternateIcons {
                     appIconSection
@@ -343,6 +351,8 @@ struct SettingsView: View {
             highContrastRow(searchStyle: false)
             fontRow(searchStyle: false)
             spacingRow(searchStyle: false)
+            picturesRow(searchStyle: false)
+            pictureWordsRow(searchStyle: false)
         } header: {
             sectionHeader("Accessibility")
         } footer: {
@@ -565,7 +575,7 @@ struct SettingsView: View {
         case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, pronunciation
         case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
-        case highContrast, font, spacing
+        case highContrast, font, spacing, pictures, pictureWords
         case soundEffects, haptics, sensorySync, reduceMotion
         case keyboardPhrases, keyboardClean
         case location
@@ -595,6 +605,8 @@ struct SettingsView: View {
             case .highContrast: return "High contrast"
             case .font: return "Easy-read font"
             case .spacing: return "Line spacing"
+            case .pictures: return "Painted pictures"
+            case .pictureWords: return "Describe pictures"
             case .soundEffects: return "Sound effects"
             case .haptics: return "Haptics"
             case .sensorySync: return "Pulse with the visuals"
@@ -619,7 +631,7 @@ struct SettingsView: View {
             case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .pronunciation: return "Voice & Audio"
             case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
-            case .highContrast, .font, .spacing: return "Accessibility"
+            case .highContrast, .font, .spacing, .pictures, .pictureWords: return "Accessibility"
             case .soundEffects, .haptics, .sensorySync, .reduceMotion: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
             case .location: return "Location"
@@ -652,6 +664,8 @@ struct SettingsView: View {
             case .highContrast: return "contrast dark black theme appearance display low vision"
             case .font: return "font text typeface easy read dyslexic letters"
             case .spacing: return "spacing line space text gap read"
+            case .pictures: return "pictures picture paintings art artwork images banner show hide plain colour color"
+            case .pictureWords: return "describe descriptions pictures picture alt text image voiceover words skip"
             case .soundEffects: return "sound sounds effects earcon earcons chime beep audio"
             case .haptics: return "haptic haptics vibrate vibration buzz tap taps feel"
             case .sensorySync: return "pulse visuals sync haptic thinking dot rhythm"
@@ -728,6 +742,8 @@ struct SettingsView: View {
         case .highContrast: highContrastRow(searchStyle: true)
         case .font: fontRow(searchStyle: true)
         case .spacing: spacingRow(searchStyle: true)
+        case .pictures: picturesRow(searchStyle: true)
+        case .pictureWords: pictureWordsRow(searchStyle: true)
         case .soundEffects: soundEffectsRow(searchStyle: true)
         case .haptics: hapticsRow(searchStyle: true)
         case .sensorySync: sensorySyncRow(searchStyle: true)
@@ -958,6 +974,25 @@ struct SettingsView: View {
         }
     }
 
+    /// Part 292: Kade's painted pictures. Both start on.
+    @AppStorage(KadeArt.showKey) private var showPictures = true
+    @AppStorage(KadeArt.describeKey) private var describePictures = true
+
+    private func picturesRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $showPictures) {
+            tileLabel(searchStyle ? searchLabel(.pictures, "Painted pictures") : "Painted pictures", systemImage: "photo.artframe", tint: SectionTint.accessibility)
+        }
+        .accessibilityHint("Shows Kade's painted pictures at the top of screens. Turn off for plain colour. High contrast always uses plain colour.")
+    }
+
+    private func pictureWordsRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $describePictures) {
+            tileLabel(searchStyle ? searchLabel(.pictureWords, "Describe pictures") : "Describe pictures", systemImage: "text.below.photo", tint: SectionTint.accessibility)
+        }
+        .disabled(!showPictures)
+        .accessibilityHint("With VoiceOver, a screen's picture is described after everything else on that screen. Turn off to skip them. Help has every description in one place.")
+    }
+
     private func soundEffectsRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.soundEffects) {
             tileLabel(searchStyle ? searchLabel(.soundEffects, "Sound effects") : "Sound effects", systemImage: "speaker.wave.2.fill", tint: SectionTint.feedback)
@@ -1141,9 +1176,7 @@ struct SettingsView: View {
     /// Selected trait when it's the current one.
     private func appIconRow(_ choice: KadeAppIcon, searchStyle: Bool) -> some View {
         let isCurrent = KadeAppIcon.matching(alternateIconName: currentAppIconName) == choice
-        let hint: String = choice == .classic
-            ? "Puts the classic K back on your home screen."
-            : "Puts \(choice.displayName)'s face on your home screen."
+        let hint: String = choice.hint
         return Button {
             chooseAppIcon(choice)
         } label: {
@@ -1174,6 +1207,10 @@ struct SettingsView: View {
         Group {
             if let sheet = KadeCharacterFaceSheet.forAgent(choice.agentID) {
                 sheet.panel(.smile, side: 44)
+            } else if let picture = choice.thumbnailName {
+                Image(picture)
+                    .resizable()
+                    .scaledToFit()
             } else {
                 Image("LaunchMark")
                     .resizable()

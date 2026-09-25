@@ -717,10 +717,9 @@ struct ConversationListView: View {
     /// never the button (the Amber rule).
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 52))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+            // Part 292: the kitchen table, waiting (silent; the words below
+            // say what this screen means).
+            KadeArtSpot(imageName: "ArtTalkKitchen", fallbackSymbol: "bubble.left.and.bubble.right", width: 340, height: 150, rounded: true)
             VStack(spacing: 6) {
                 Text("No conversations yet")
                     .font(.headline)

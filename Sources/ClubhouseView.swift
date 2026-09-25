@@ -66,12 +66,25 @@ struct ClubhouseView: View {
     // ── the picker ──
     private var pickerScreen: some View {
         List {
+            // Part 292: the listening lounge. Silent here; Help's "What the
+            // app looks like" carries its words.
+            Section {
+                KadePaintedHeader(imageName: "ArtClubhouseLounge", symbol: "hifispeaker.2.fill", tint: .pink, height: 110)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
             Section {
                 Text(service.statusLine)
                     .font(.callout)
                     .accessibilityAddTraits(.updatesFrequently)
             }
             Section {
+                if service.publicRooms.isEmpty {
+                    // Two chairs by the fire while no room is showing (silent).
+                    KadeArtSpot(imageName: "ArtEmptyFireside", fallbackSymbol: "flame", width: 120, height: 120)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                }
                 ForEach(service.publicRooms) { room in
                     Button {
                         Task { await service.join(roomKey: room.key, label: room.name, code: nil) }
@@ -93,6 +106,9 @@ struct ClubhouseView: View {
                 Text("Live family voice rooms with a shared jukebox. Person to person on Kade's own room server — a character only ever hears a room you invited them into.")
             }
             Section {
+                KadePaintedHeader(imageName: "ArtClubhouseHotel", symbol: "key.fill", tint: .brown, height: 90)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 TextField("Your group's passcode", text: $hotelCode)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -161,6 +177,12 @@ struct ClubhouseView: View {
     // ── the room ──
     private var roomScreen: some View {
         List {
+            // Part 292: music night on the lawn (silent).
+            Section {
+                KadePaintedHeader(imageName: "ArtClubhouseMusicNight", symbol: "music.note.house", tint: .pink, height: 90)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
             if !service.roomSay.isEmpty {
                 Section {
                     Text(service.roomSay)

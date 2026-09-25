@@ -41,6 +41,7 @@ workflows:
           bash ./run-character-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
+          python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
           set -e
@@ -246,6 +247,7 @@ workflows:
           bash ./run-push-tests.sh
           bash ./run-character-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
           bash ./run-world-tests.sh
+          python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
           set -e

@@ -560,6 +560,9 @@ struct ContentView: View {
                 .padding()
                 .frame(maxWidth: 680)
                 .frame(maxWidth: .infinity)
+                // Part 292: one container, so the house's words (sorted last)
+                // come after the form and the web button, never before them.
+                .accessibilityElement(children: .contain)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Kade-AI")
@@ -597,6 +600,9 @@ struct ContentView: View {
     /// carries the meaning.
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // Part 292: the house on the hill, dressed for the season. Its
+            // words are the last thing on this screen for VoiceOver.
+            KadePaintedHeader(imageName: KadeArt.seasonalHouse(), symbol: "house.fill", tint: .indigo, height: 150, described: true)
             HStack(spacing: 10) {
                 KadeCharacterFace(agentID: CharacterMotion.kianaID, name: "Kiana", size: 60, face: .smile)
                 KadeCharacterFace(agentID: CharacterMotion.harleyID, name: "Harley", size: 60, face: .smile)

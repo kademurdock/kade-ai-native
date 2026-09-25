@@ -110,6 +110,13 @@ struct ParlorView: View {
         // that anyone else had a table open. Now: what this is, the games,
         // the lobby, your own tables, the code box, then standings.
         List {
+            // Part 292: game night at the kitchen table (silent; the menu's
+            // first stop is still Reverie).
+            Section {
+                KadePaintedHeader(imageName: "ArtClubhouseGameNight", symbol: "suit.club.fill", tint: .mint, height: 110)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
             // Sep 12 2026, her word: "Reverie is still in the admin corner, not in
             // the Parlor" (Part 180 put it first on the web Parlor; the phone
             // lagged). First thing on the menu, for everyone — the engine

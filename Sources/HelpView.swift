@@ -43,6 +43,10 @@ struct HelpView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                // Part 292: the front porch. Its words come last on this
+                // screen for VoiceOver (see the container below).
+                KadePaintedHeader(imageName: "ArtHelpPorch", symbol: "questionmark.circle", tint: .mint, height: 120, described: true)
+
                 Text("Everything Kade-AI can do, and how to get to it. With VoiceOver, turn on the Headings rotor to jump between sections; without it, just scroll.")
                     .font(.body)
 
@@ -116,17 +120,53 @@ struct HelpView: View {
                     }
                 }
 
+                picturesSection
+
                 Text("Still stuck? Search everything on the More tab finds any place in the app by the word you'd use. Or just ask any character — they know how the app works.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             .padding()
+            // Part 292: one container, so the porch's words (sorted last)
+            // never come ahead of the first control.
+            .accessibilityElement(children: .contain)
         }
         .navigationTitle("Help")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingReport) {
             if let apiClient {
                 FeedbackReportView(apiClient: apiClient)
+            }
+        }
+    }
+}
+
+extension HelpView {
+    /// Part 292: every painted picture's words in one place, so anyone can
+    /// hear what the app looks like without hunting screen by screen. Same
+    /// shape as the other sections: a heading, then one element per entry.
+    var picturesSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("What the app looks like")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            Text("Kade-AI has painted pictures on many screens, all from one house on a lake in the hills at dusk. With VoiceOver, a screen's picture comes after everything else on it, and Settings has switches to hide the pictures or skip their descriptions. Here is every one, by where it appears.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+            ForEach(KadeArt.tour) { stop in
+                let words = stop.pictures
+                    .map { "\($0.label): \(KadeArt.words(for: $0.name) ?? "")" }
+                    .joined(separator: " ")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(stop.place)
+                        .font(.headline)
+                    Text(words)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(stop.place). \(words)")
             }
         }
     }
