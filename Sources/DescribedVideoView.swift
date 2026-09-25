@@ -826,7 +826,7 @@ struct DescribedVideoView: View {
                 perMinute: config?.extrasPerMinuteUSD?.closeLook
             ))
             toggleRow("Look through the whole film first to learn who is who", isOn: $firstLook, hint: extraHint(
-                "An extra pass for consistent names and appearances. Names are still introduced only when the film reveals them. Adds time and cost.",
+                "An extra pass for consistent names and appearances. People are still named only when the film reveals their names; famous cartoon, puppet and game characters are named when they appear. Adds time and cost.",
                 perMinute: config?.extrasPerMinuteUSD?.firstLook
             ))
         }
@@ -1002,10 +1002,15 @@ struct DescribedVideoView: View {
 
     private func accountPrice(_ quote: DVEstimate) -> String {
         let mode = quote.billingMode ?? config?.billingMode
-        if mode == "platform" { return "Admin processing is paid by the platform. Narration is included." }
+        // Sep 25 2026: when the server includes dialogue timing (its
+        // dialogueIncluded field, on the estimate or in /config), say so,
+        // the same words as the website.
+        let dialogueIncluded = quote.dialogueIncluded == true || config?.dialogueIncluded == true
+        let included = dialogueIncluded ? "Narration and dialogue timing are included." : "Narration is included."
+        if mode == "platform" { return "Admin processing is paid by the platform. \(included)" }
         if mode == "balance" {
-            if let left = quote.remainingUSD { return "\(Self.money(left)) is available in your account. Narration is included." }
-            return "Narration is included."
+            if let left = quote.remainingUSD { return "\(Self.money(left)) is available in your account. \(included)" }
+            return included
         }
         if let left = quote.remainingUSD, let daily = quote.dailyUSD {
             return "\(Self.money(left)) of \(Self.money(daily)) is left today."

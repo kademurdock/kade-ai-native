@@ -356,11 +356,15 @@ struct DVConfig: Decodable {
     let voices: [String]?
     let describe: [String: String]?
     let categories: [VoiceCategory]?
+    /// True when dialogue timing is included, like narration (the server's
+    /// KADE_DESCRIPTION_FREE_DIALOGUE switch). Absent on older servers.
+    let dialogueIncluded: Bool?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
         case remainingUSD, perMinuteUSD, extrasPerMinuteUSD, setAside, previewSeconds, library
         case defaultLibraryPath, defaultVoice, voicesAvailable, voices, describe, categories
+        case dialogueIncluded
     }
 }
 
@@ -411,6 +415,7 @@ extension DVConfig {
         voices = c.dvValue(.voices)
         describe = c.dvValue(.describe)
         categories = c.dvValue(.categories)
+        dialogueIncluded = c.dvBool(.dialogueIncluded)
     }
 }
 
@@ -683,10 +688,13 @@ struct DVEstimate: Decodable, Equatable {
     /// would ask for (the website reads either name).
     let allowUpToUSD: Double?
     let approvedUSD: Double?
+    /// True when dialogue timing is included, like narration. Absent on
+    /// older servers.
+    let dialogueIncluded: Bool?
 
     enum CodingKeys: String, CodingKey {
         case estimateUSD, setAsideUSD, remainingUSD, dailyUSD, limitUSD, allowed, reason, billingMode
-        case seconds, breakdown, allowUpToUSD, approvedUSD
+        case seconds, breakdown, allowUpToUSD, approvedUSD, dialogueIncluded
     }
 
     var isAllowed: Bool { allowed ?? true }
@@ -718,6 +726,7 @@ extension DVEstimate {
         breakdown = c.dvValue(.breakdown)
         allowUpToUSD = c.dvNumber(.allowUpToUSD)
         approvedUSD = c.dvNumber(.approvedUSD)
+        dialogueIncluded = c.dvBool(.dialogueIncluded)
     }
 }
 
