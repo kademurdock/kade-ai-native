@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: Library actions and requests"
-    static let body = "In the Library, Ask the librarian, Make a described copy and Add to a collection are in the VoiceOver Actions rotor on every item, and on the player's title and Play button. Under Add you can now ask the library for something and hear when it's filled."
+    static let title = "What's new: pictures, and your own narrator"
+    static let body = "The app has painted pictures now. With VoiceOver, a screen's picture is described after everything else on it, Help reads them all under What the app looks like, and Settings can skip them. Described videos keep your favourite narrators on your account and keep playing outside the app, and Library actions are in the Actions rotor."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

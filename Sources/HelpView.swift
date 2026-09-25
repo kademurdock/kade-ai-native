@@ -232,11 +232,15 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build: Library actions and requests",
+                title: "Newest build: pictures, narrators and fixes",
+                body: "Kade-AI has its own painted pictures now, all from one house on a lake in the hills at dusk: the house on the hill when you sign in, dressed for the season, plus rooms for the Clubhouse, the Parlor, Help, Settings, the Library shelves, the described video screen and each main character. With VoiceOver, a screen's picture is described after everything else on it, so it never gets in your way; What the app looks like, near the end of Help, reads them all in one place. Settings, Accessibility, has Painted pictures to hide them and Describe pictures to skip the descriptions. There are two new app icons in Settings, both the letter K in braille. Described videos now keep your narrator on your account, shared with the website: pick a default, star favourites, and find your recently used voices first in the picker, where each voice's Actions rotor has Add to favourites and Make default. Lilly's moving face now belongs to the Lilly everyone can talk to."
+            ),
+            HelpEntry(
+                title: "Before that: Library actions and requests",
                 body: "In the Library, what you can do with an item is in the VoiceOver Actions rotor as you pass it: Ask the librarian about this, Make a described copy on videos, Add to a collection, and for your own uploads Move or Delete. Swipe up or down on the item to hear them; a long press shows the same list. In the player those buttons moved into the rotor on the title and on Play, with What just happened? for videos, so there are fewer stops before Play. New under Add: ask the library for a book, recording or video, even if you only remember a little, and hear when it's filled. A YouTube link you copied fills in the described video link box by itself, and any link fills the Library's submit box. And a book that is already in the library with exactly the same text is no longer added twice. In Kade's Clubhouse the jukebox takes YouTube and Spotify song links again, and a song link you copied fills in by itself."
             ),
             HelpEntry(
-                title: "Before that: an easier layout",
+                title: "Earlier this month: an easier layout",
                 body: "Everything now lives in five tabs along the bottom of the screen: Talk, Library, Create, Play and More. Each tab keeps your place, so going to Talk and back to Library lands you right where you were, and tapping the tab you're already on takes you back to its start. The app still opens into a chat with your main character, Call your Spotter is still the first button on the Talk tab, and backing out of a chat still lands on your conversations, now grouped by day with each character's face beside them. Your book keeps playing while you move around the app, with a small Now Playing bar above the tabs, and it pauses by itself for a voice message or a call. New too: Search everything, a Where is list at the top of Help, little new badges on Alerts and Announcements, a friendlier first chat with starter lines, a Sound Booth that asks what you want to make, and in Settings, your pick of app icon: Kiana, Harley, Della or Lilly's face."
             ),
             HelpEntry(
