@@ -90,6 +90,9 @@ struct ReadingRoomView: View {
     @State private var routedIncoming = false
     @AccessibilityFocusState private var focus: Focus?
     private enum Focus: Hashable { case status, play, shelf }
+    /// Part 292: Kade's painted pictures here are all silent (see KadeArt).
+    @KadeArtShown private var artShown: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     init(apiClient: KadeAPIClient, incomingFile: URL? = nil, incomingName: String? = nil) {
         let shared = LibraryNowPlaying.shared
@@ -215,7 +218,7 @@ struct ReadingRoomView: View {
             }
             if let p = uploadProgress, let item = uploadingItem {
                 Section("Uploading to \(item.title)") {
-                    ProgressView(value: p).accessibilityLabel("Uploading, \(Int(p * 100)) percent")
+                    uploadRow(p)
                 }
             }
             /* Her word (Sep 12 2026): "confusing that there are multiple donation button
@@ -260,6 +263,28 @@ struct ReadingRoomView: View {
                 Button(c.title) { if let item = collectingItem { Task { await addItem(item, to: c) } } }
             }
             Button("Cancel", role: .cancel) { collectingItem = nil }
+        }
+    }
+
+    /// The upload's progress bar, spoken exactly as before. Part 292: the
+    /// book cart beside it while pictures show (silent, fixed size).
+    private func uploadRow(_ p: Double) -> some View {
+        HStack(spacing: 12) {
+            if artShown && !typeSize.isAccessibilitySize {
+                KadeArtSpot(imageName: "ArtBookCart", fallbackSymbol: "books.vertical", width: 44, height: 44)
+            }
+            ProgressView(value: p).accessibilityLabel("Uploading, \(Int(p * 100)) percent")
+        }
+    }
+
+    /// Part 292: the empty wall shelf above "Nothing on your shelf yet", once
+    /// the shelf has really loaded (never while it is still on its way).
+    /// Silent, inside the same row as the words, so the row reads as before.
+    @ViewBuilder
+    private var emptyShelfArt: some View {
+        if artShown && !typeSize.isAccessibilitySize && service.shelf != nil {
+            KadeArtSpot(imageName: "ArtEmptyShelf", fallbackSymbol: "books.vertical", width: 120, height: 120)
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -370,7 +395,12 @@ struct ReadingRoomView: View {
         let borrowed = (service.shelf?.borrowed ?? []).map { ($0, "borrowed") }
         let all = mine + borrowed
         if all.isEmpty {
-            Section { Text("Nothing on your shelf yet. Open anything under Browse, donate a book or a recording under Add, or share a file from another app to Kade-AI.").foregroundStyle(.secondary) } header: { Text("Your shelf").accessibilityAddTraits(.isHeader) }
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    emptyShelfArt
+                    Text("Nothing on your shelf yet. Open anything under Browse, donate a book or a recording under Add, or share a file from another app to Kade-AI.").foregroundStyle(.secondary)
+                }
+            } header: { Text("Your shelf").accessibilityAddTraits(.isHeader) }
         } else {
             ForEach(["Books", "Audio", "Videos"], id: \.self) { folder in
                 let items = all.filter { shelfFolder($0.0) == folder }
@@ -592,12 +622,8 @@ struct ReadingRoomView: View {
                 Button { closeBook() } label: { Label("Back to the shelf", systemImage: "chevron.left") }
                     .buttonStyle(.bordered)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(book.title).font(.title2.bold())
-                    Text(bookMeta(book)).font(.subheadline).foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityActions { bookActions(book) }
+                titleBlock(book)
+                LibraryPlayerArt(title: book.title, category: book.category, showsSound: book.isAudio && !isVideoTrack(book), waiting: book.tracks.isEmpty)
 
                 Button { Task { await talkToLibrarian(itemId: book.id) } } label: {
                     Label("Ask the librarian about this", systemImage: "bubble.left.and.bubble.right")
@@ -670,6 +696,34 @@ struct ReadingRoomView: View {
             ForEach(myCollections) { c in Button(c.title) { Task { await addTo(c, book: book) } } }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// The open item's title and details: one VoiceOver element carrying the
+    /// item's actions, exactly as before. Part 292: its painted jacket sits
+    /// beside it (hidden, fixed size) when nothing else on the page pictures
+    /// it.
+    private func titleBlock(_ book: RRBook) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let jacket = pageJacket(book) {
+                KadeArtThumb(imageName: jacket, width: 48, height: 72)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.title).font(.title2.bold())
+                Text(bookMeta(book)).font(.subheadline).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityActions { bookActions(book) }
+        }
+    }
+
+    /// Part 292: the jacket beside an open item's title, for a book, an
+    /// audiobook, music and the like. None beside a video (it is its own
+    /// picture), a recording on a tape or one still waiting for recordings
+    /// (LibraryPlayerArt pictures those), or at accessibility text sizes.
+    private func pageJacket(_ book: RRBook) -> String? {
+        guard artShown, !typeSize.isAccessibilitySize, !isVideoTrack(book) else { return nil }
+        if book.isAudio && (book.tracks.isEmpty || KadeArt.tape(category: book.category) != nil) { return nil }
+        return KadeArt.jacket(kind: book.kind, category: book.category)
     }
 
     /// The open item's actions for the Actions rotor, on the title and on
@@ -1036,6 +1090,41 @@ private struct LibraryPlayerObserver<Content: View>: View {
     }
 
     var body: some View { content() }
+}
+
+/// Part 292: the Library player's picture for a recording with none of its
+/// own: a cassette, a radio reel box or a videotape with the title written on
+/// its label, or the book cart while a donation waits for its first
+/// recording. Silent (the title is right above it) and untouchable. Gone with
+/// "Painted pictures" off, under high contrast, at accessibility text sizes
+/// and in landscape, where the screen belongs to the controls. Takes plain
+/// values that change only with the item or its part, not with the clock.
+private struct LibraryPlayerArt: View {
+    let title: String
+    let category: String
+    /// A recording (not a text book) whose open part is not a video.
+    let showsSound: Bool
+    /// No recordings yet.
+    let waiting: Bool
+    @KadeArtShown private var artShown: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var roomForIt: Bool {
+        showsSound && artShown && !typeSize.isAccessibilitySize && verticalSizeClass != .compact
+    }
+
+    var body: some View {
+        if roomForIt {
+            if waiting {
+                KadeArtSpot(imageName: "ArtBookCart", fallbackSymbol: "books.vertical", width: 120, height: 120)
+                    .frame(maxWidth: .infinity)
+            } else if let tape = KadeArt.tape(category: category) {
+                KadeTapeLabel(imageName: tape, title: title)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
 }
 
 /// Sep 23 2026 (C3): the lock-screen card for one Library upload. Fail-soft

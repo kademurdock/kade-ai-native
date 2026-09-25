@@ -395,6 +395,10 @@ struct ArchiveSection: View {
     @State private var status = ""
     @Binding var query: String
     @Binding var results: [RRItem]
+    /// Part 292: the last search found nothing (its count was said aloud).
+    @State private var searchFoundNothing = false
+    @KadeArtShown private var artShown: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Section {
@@ -402,11 +406,12 @@ struct ArchiveSection: View {
                 TextField("A title, a channel, a brand, a year…", text: $query).textFieldStyle(.roundedBorder).onSubmit { Task { await doSearch() } }
                 Button("Search") { Task { await doSearch() } }
             }
+            searchEmptyArt
             ForEach(results) { item in itemRow(item) }
         } header: { Text("Find something in the library").accessibilityAddTraits(.isHeader) }
 
         Section {
-            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in results = []; Task { await load("", 0) } }
+            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in results = []; searchFoundNothing = false; Task { await load("", 0) } }
             Text("Books, Audio, and Videos. Your uploads stay yours to manage; only shared items appear in the public library.").font(.footnote).foregroundStyle(.secondary)
             HStack(spacing: 4) {
                 Button("All media") { Task { await load("", 0) } }.font(.subheadline)
@@ -417,6 +422,7 @@ struct ArchiveSection: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Where you are: " + (path.isEmpty ? "the archive" : path.replacingOccurrences(of: "/", with: ", ")))
+            shelfBand
             if let p = page {
                 if p.folders.isEmpty && p.items.isEmpty {
                     Text(path.isEmpty ? "Nothing has been pushed to the archive yet. On the PC, run \"9 - PUSH TO LIBRARY\" in the collection folder." : "This folder is empty.").foregroundStyle(.secondary)
@@ -459,6 +465,30 @@ struct ArchiveSection: View {
             Button("Delete it", role: .destructive) { if let d = deleting { deleting = nil; Task { await deleteItem(d) } } }
             Button("Cancel", role: .cancel) { deleting = nil }
         } message: { Text("It is removed for everyone, and this cannot be undone.") }
+    }
+
+    /// Part 292: Kade's painted shelf for the folder on show (Books, Radio,
+    /// Springfield's local news…), found by the words in its path
+    /// (KadeArt.shelfPicture). A silent row with nothing in it for VoiceOver,
+    /// like the reading alcove on the shelf screen; no row at all with
+    /// pictures off, under high contrast, or in a folder nobody painted.
+    @ViewBuilder
+    private var shelfBand: some View {
+        if artShown, let name = KadeArt.shelfPicture(forArchivePath: path) {
+            KadePaintedHeader(imageName: name, symbol: "books.vertical", tint: .brown, height: 110)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+        }
+    }
+
+    /// Part 292: the empty card-catalog drawer under the search box after a
+    /// search that found nothing. Silent: the count is already said aloud.
+    @ViewBuilder
+    private var searchEmptyArt: some View {
+        if searchFoundNothing && results.isEmpty && artShown && !typeSize.isAccessibilitySize {
+            KadeArtSpot(imageName: "ArtEmptySearch", fallbackSymbol: "tray", width: 110, height: 110)
+                .frame(maxWidth: .infinity)
+        }
     }
 
     /// Everything you can do with an item besides opening it: the Actions
@@ -514,7 +544,7 @@ struct ArchiveSection: View {
     private func doSearch() async {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
-        do { results = try await service.search(q, scope: scope); UIAccessibility.post(notification: .announcement, argument: "\(results.count) result\(results.count == 1 ? "" : "s") for \(q).") } catch { status = error.localizedDescription }
+        do { results = try await service.search(q, scope: scope); searchFoundNothing = results.isEmpty; UIAccessibility.post(notification: .announcement, argument: "\(results.count) result\(results.count == 1 ? "" : "s") for \(q).") } catch { status = error.localizedDescription }
     }
 }
 

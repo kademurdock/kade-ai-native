@@ -474,6 +474,12 @@ struct NowPlayingBar: View {
 /// the same for the same title, and a symbol for what the item is. A fixed
 /// frame, so it never moves a row, and always hidden from VoiceOver; the row's
 /// own label already says the title.
+///
+/// Part 292 (Sep 25 2026): where Kade's painted jacket exists for what the
+/// item is (a book, an audiobook, a movie, TV, commercials, radio, music), it
+/// fills the same frame instead (KadeArt.jacket). "Painted pictures" off,
+/// high contrast, and cassettes or "other" recordings keep the drawn jacket.
+/// Same frame, same hiding, same place in the row: nothing is said or moved.
 struct LibraryJacket: View {
     let kind: String
     var category: String = ""
@@ -481,11 +487,37 @@ struct LibraryJacket: View {
     var width: CGFloat = 40
     var height: CGFloat = 56
     @KadeContrastPolicy private var highContrast: Bool
+    @AppStorage(KadeArt.showKey) private var showPictures = true
+
+    /// The painted jacket, or nil for the drawn one.
+    private var painting: UIImage? {
+        guard showPictures, !highContrast, let name = KadeArt.jacket(kind: kind, category: category) else { return nil }
+        return UIImage(named: name)
+    }
 
     var body: some View {
+        Group {
+            if let painting {
+                Color.clear
+                    .overlay {
+                        Image(uiImage: painting)
+                            .resizable()
+                            .scaledToFill()
+                            .accessibilityIgnoresInvertColors(true)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                drawn
+            }
+        }
+        .frame(width: width, height: height)
+        .accessibilityHidden(true)
+    }
+
+    private var drawn: some View {
         let tint = Self.tint(for: title)
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-        ZStack {
+        return ZStack {
             shape.fill(LinearGradient(
                 colors: highContrast ? [tint, tint] : [tint.opacity(0.9), tint.opacity(0.6)],
                 startPoint: .topLeading,
@@ -498,8 +530,6 @@ struct LibraryJacket: View {
         .overlay {
             if highContrast { shape.stroke(Color.primary.opacity(0.65), lineWidth: 1.5) }
         }
-        .frame(width: width, height: height)
-        .accessibilityHidden(true)
     }
 
     private var symbol: String {
