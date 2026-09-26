@@ -138,8 +138,13 @@ struct SoundBoothView: View {
     @State private var savingTakeId: String?
     @State private var activeSheet: BoothSheet?
     @State private var showFileImporter = false
-    /// Part 293: the YouTube link being pasted for a YuE2 cover.
-    @State private var youtubeLink = ""
+    /// Part 293: the media link (YouTube, another media site, or a direct
+    /// audio or video file) being pasted for a YuE2 cover.
+    @State private var mediaLink = ""
+    /// True only while a media link is being brought in. Its own flag, so the
+    /// link button says "Importing from the link…" and the Files button keeps
+    /// its label (and each shows its own spinner) whichever import is running.
+    @State private var isImportingLink = false
     @State private var showChooser = false
     @State private var showHowTo = false
     @State private var catalog: VoiceCatalog.Snapshot = .empty
@@ -369,7 +374,7 @@ struct SoundBoothView: View {
         quoteVersion += 1
     }
 
-    private var workspaceBusy: Bool { isWriting || isRendering || isImporting || currentJobId != nil }
+    private var workspaceBusy: Bool { isWriting || isRendering || isImporting || isImportingLink || currentJobId != nil }
     private var editorTitle: String { isEffects ? "Sound description" : isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
     private var generateLabel: String {
         if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
@@ -895,8 +900,8 @@ struct SoundBoothView: View {
             .accessibilityHint(st.hint + " Opens Files.")
             Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
-            if let link = st.link, clips.count < st.clipMax {
-                linkImportRow(link)
+            if clips.count < st.clipMax, let row = mediaLinkRow(for: st) {
+                linkImportRow(row.link, locked: row.locked)
             }
 
             if !importError.isEmpty {
@@ -948,79 +953,114 @@ struct SoundBoothView: View {
         return engine == "yue2" ? "Covering: " : "Cloning: "
     }
 
-    /// Part 293: paste a YouTube link for a YuE2 cover, beside the Files import.
-    /// Only drawn when the server's guide gives the cover setting a `link`,
-    /// which it never does for the App Review seat.
-    private func linkImportRow(_ link: SoundBoothGuide.Setting.Link) -> some View {
-        let empty = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// Part 293, the Family feature pack: which media-link row the cover field
+    /// gets. Live when the server sent `link` for this account. Greyed out,
+    /// with the server's reason, when it sent `lockedLink` instead, or when a
+    /// `link` says it is unavailable or the pack map says media links are off
+    /// for this account. Nil only when the server offers links to nobody (its
+    /// switch is off), so the row is never hidden from one person alone.
+    private func mediaLinkRow(for st: SoundBoothGuide.Setting) -> (link: SoundBoothGuide.Setting.Link, locked: String?)? {
+        if let live = st.link {
+            if live.available == false || health?.features?.mediaLinks == false {
+                return (live, live.locked ?? KadeFamilyFeatures.note)
+            }
+            return (live, nil)
+        }
+        if let greyed = st.lockedLink {
+            return (greyed, greyed.locked ?? KadeFamilyFeatures.note)
+        }
+        return nil
+    }
+
+    /// Part 293: paste a media link for a YuE2 cover, beside the Files import.
+    /// With `locked` set (no Family feature pack) the same row is drawn greyed
+    /// out: the field, Paste and the import button are disabled, VoiceOver's
+    /// hint on each says why, and the reason is also shown as text.
+    private func linkImportRow(_ link: SoundBoothGuide.Setting.Link, locked: String?) -> some View {
+        let empty = mediaLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hint = (link.hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isLocked = locked != nil
+        let reason: String = locked ?? ""
+        let fieldHint: String = isLocked ? reason : (hint.isEmpty ? "A link to one song or video." : hint)
+        let pasteHint: String = isLocked ? reason : "Puts the link you copied into the media link field."
+        var buttonHint: String = "Brings in the sound from the link as the recording to cover. " + hint
+        if empty { buttonHint = "Available once a link is in the media link field." }
+        if isLocked { buttonHint = reason }
         return VStack(alignment: .leading, spacing: 6) {
             Text(link.label).font(.subheadline).accessibilityHidden(true)
-            TextField("https://youtu.be/…", text: $youtubeLink)
+            TextField("Paste a media link", text: $mediaLink)
                 .textFieldStyle(.roundedBorder)
                 .keyboardType(.URL)
                 .textContentType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.go)
-                .onSubmit { Task { await importYouTubeLink() } }
-                .disabled(workspaceBusy)
+                .onSubmit { Task { await importMediaLink() } }
+                .disabled(workspaceBusy || isLocked)
                 .accessibilityLabel(link.label)
-                .accessibilityHint(link.hint)
+                .accessibilityHint(fieldHint)
             HStack {
                 PasteButton(payloadType: String.self) { strings in
                     let pasted = strings.first ?? ""
-                    Task { @MainActor in pasteYouTubeLink(pasted, button: link.button) }
+                    Task { @MainActor in pasteMediaLink(pasted, button: link.button) }
                 }
-                .disabled(workspaceBusy)
-                .accessibilityHint("Puts the link you copied into the YouTube link field.")
+                .disabled(workspaceBusy || isLocked)
+                .accessibilityHint(pasteHint)
                 Button {
                     KadeHaptics.press()
-                    Task { await importYouTubeLink() }
+                    Task { await importMediaLink() }
                 } label: {
                     HStack {
-                        Text(isImporting ? "Importing from YouTube…" : link.button)
-                        if isImporting { ProgressView().accessibilityHidden(true) }
+                        Text(isImportingLink ? "Importing from the link…" : link.button)
+                        if isImportingLink { ProgressView().accessibilityHidden(true) }
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(workspaceBusy || empty)
-                .accessibilityHint("Brings in the sound of the video in the link as the recording to cover. " + link.hint)
+                .disabled(workspaceBusy || empty || isLocked)
+                .accessibilityHint(buttonHint)
             }
-            Text(link.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            if isLocked {
+                // The reason, visible too: a greyed-out box must say why.
+                Text(reason).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            } else if !hint.isEmpty {
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            }
         }
     }
 
-    private func pasteYouTubeLink(_ pasted: String, button: String) {
+    private func pasteMediaLink(_ pasted: String, button: String) {
         let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { announce("There is no link to paste. Copy the video's link first."); return }
-        youtubeLink = text
+        guard !text.isEmpty else { announce("There is no link to paste. Copy the song's or video's link first."); return }
+        mediaLink = text
         announce("Link pasted. Choose \(button) to bring in the song.")
     }
 
-    /// Brings in a YouTube video's sound as the YuE2 cover recording. The server
-    /// checks the length before downloading and refuses playlists, anything over
-    /// six minutes, and App Review; its answer matches a file import, so the
-    /// clip row, player and Transcribe reference lyrics work unchanged.
-    private func importYouTubeLink() async {
-        let link = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !link.isEmpty else { announce("Paste a YouTube link first."); return }
+    /// Brings in the sound from a media link as the YuE2 cover recording. The
+    /// server checks the length before downloading and refuses playlists,
+    /// anything over six minutes, private addresses and accounts without the
+    /// Family feature pack, each in its own words; its answer matches a file
+    /// import, so the clip row, player and Transcribe reference lyrics work
+    /// unchanged.
+    private func importMediaLink() async {
+        let link = mediaLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !link.isEmpty else { announce("Paste a media link first."); return }
         guard !workspaceBusy else { announce("Finish the current operation before importing a reference."); return }
         invalidateQuote(); showRenderConfirmation = false
-        isImporting = true; importError = ""
-        defer { isImporting = false }
+        isImportingLink = true; importError = ""
+        defer { isImportingLink = false }
         let sourceEngine = engine
-        announce("Bringing in the sound from YouTube. This can take up to two minutes.")
+        announce("Bringing in the sound from the link. This can take up to two minutes.")
         do {
             let imported = try await service.importReferenceLink(link: link, engine: engine)
             guard engine == sourceEngine else { return }
             clips.append((url: imported.url, name: imported.name))
-            youtubeLink = ""
+            mediaLink = ""
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()
             announce(imported.spoken)
         } catch {
             Earcons.shared.play(.error)
-            importError = (error as? LocalizedError)?.errorDescription ?? "The song could not be brought in from YouTube."
+            importError = (error as? LocalizedError)?.errorDescription ?? "The song could not be brought in from that link."
             announce(importError)
         }
     }
@@ -1562,7 +1602,7 @@ struct SoundBoothView: View {
 
     private func renderTapped(preview: Bool) async {
         guard !isWriting else { announce("Wait for the writing draft to finish."); return }
-        guard !isImporting else { announce("Wait for the reference clip to finish importing."); return }
+        guard !isImporting, !isImportingLink else { announce("Wait for the reference clip to finish importing."); return }
         guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         if trackTitle.count > 80 { announce("Use a title up to 80 characters."); return }

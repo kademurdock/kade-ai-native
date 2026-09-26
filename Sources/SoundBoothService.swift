@@ -245,14 +245,31 @@ struct SoundBoothGuide: Decodable {
         let defaultString: String?
         let defaultNumber: Double?
         let defaultBool: Bool?
-        /// Part 293: on the YuE2 cover field only when this account may paste a
-        /// YouTube link (the server leaves it off for App Review).
-        struct Link: Decodable, Hashable { let label: String; let hint: String; let button: String; let path: String? }
+        /// Part 293: the media link on the YuE2 cover field (YouTube and other
+        /// media sites, or a direct audio or video file link). The server sends
+        /// `link` only when this account can use it: it has the Family feature
+        /// pack. Everyone else gets `lockedLink` (no path, no hint, `locked`
+        /// says why), which the booth shows greyed out, never hidden. Neither
+        /// is sent while the server's link switch is off.
+        struct Link: Decodable, Hashable {
+            let label: String
+            let hint: String?
+            let button: String
+            let path: String?
+            /// "media" since the Family feature pack; absent on older servers.
+            let site: String?
+            /// False only on a locked link.
+            let available: Bool?
+            /// Why a locked link cannot be used: "Part of the Family feature pack".
+            let locked: String?
+            let maxSeconds: Double?
+        }
         let link: Link?
+        let lockedLink: Link?
         var id: String { key }
         var clipMax: Int { Int(max ?? 1) }
 
-        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, `default` }
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, lockedLink, `default` }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             key = try c.decode(String.self, forKey: .key)
@@ -264,6 +281,7 @@ struct SoundBoothGuide: Decodable {
             min = try? c.decodeIfPresent(Double.self, forKey: .min)
             max = try? c.decodeIfPresent(Double.self, forKey: .max)
             link = try? c.decodeIfPresent(Link.self, forKey: .link)
+            lockedLink = try? c.decodeIfPresent(Link.self, forKey: .lockedLink)
             // `default` is one of three shapes depending on the kind.
             defaultString = try? c.decodeIfPresent(String.self, forKey: .default)
             defaultNumber = try? c.decodeIfPresent(Double.self, forKey: .default)
@@ -312,6 +330,43 @@ struct SoundBoothHealth: Decodable {
     let moods: [Mood]
     let limits: Limits?
     let guide: SoundBoothGuide?
+    /// Part 293: this person's Family feature pack map. Absent on older servers.
+    let features: KadeFamilyFeatures?
+}
+
+/// THE FAMILY FEATURE PACK (Part 293, Sep 25 2026). One map per person, the
+/// same one GET /api/kade/features answers, also carried as `features` on the
+/// Sound Booth's /health, the describer's /config and the Clubhouse's /config.
+/// True means usable now. False means the control is shown greyed out with
+/// `note` as its reason, never hidden. Every field is read leniently, and a
+/// map that cannot be read at all counts as absent (an older server, which
+/// gates nothing), so it can never break the answer it rides in.
+struct KadeFamilyFeatures: Decodable, Equatable {
+    /// The Sound Booth's media link for a cover.
+    let mediaLinks: Bool?
+    /// The video describer's link import.
+    let describerLinks: Bool?
+    /// The Clubhouse jukebox's song links.
+    let jukeboxLinks: Bool?
+    /// Kade's shared Library shelves.
+    let familyLibrary: Bool?
+
+    /// The reason beside every greyed-out pack control (family/pack.ts FAMILY_PACK_NOTE).
+    static let note = "Part of the Family feature pack"
+
+    private enum CodingKeys: String, CodingKey { case mediaLinks, describerLinks, jukeboxLinks, familyLibrary }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        func flag(_ key: CodingKeys) -> Bool? {
+            guard let c else { return nil }
+            return try? c.decodeIfPresent(Bool.self, forKey: key)
+        }
+        mediaLinks = flag(.mediaLinks)
+        describerLinks = flag(.describerLinks)
+        jukeboxLinks = flag(.jukeboxLinks)
+        familyLibrary = flag(.familyLibrary)
+    }
 }
 
 @MainActor
@@ -610,30 +665,33 @@ final class SoundBoothService: ObservableObject {
         )
     }
 
-    /// A YOUTUBE LINK FOR A YUE2 COVER (Part 293), her ask: "The soundbooth
+    /// A MEDIA LINK FOR A YUE2 COVER (Part 293), her ask: "The soundbooth
     /// needs a youtube paste link in the yue2 workflow so people can cover
-    /// songs from youtube videos." The server checks the video's length before
-    /// downloading, brings in only its sound, and answers exactly as a file
-    /// import does plus the video's title and length. It gives up by itself in
-    /// under two minutes, so 150 seconds here never cuts off a real answer.
+    /// songs from youtube videos." Since the Family feature pack it takes
+    /// YouTube, other big media sites and direct audio or video file links.
+    /// The server checks the length before downloading, brings in only the
+    /// sound, and answers exactly as a file import does plus the source's
+    /// site, title and length. An account without the pack gets 403 with the
+    /// server's own sentence, which is said as it is. The server gives up by
+    /// itself in under two minutes, so 150 seconds never cuts off an answer.
     func importReferenceLink(link: String, engine: String) async throws -> ImportedReference {
-        struct Source: Decodable { let title: String?; let seconds: Double? }
+        struct Source: Decodable { let site: String?; let title: String?; let seconds: Double? }
         struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let seconds: Double?; let source: Source? }
         let r: Resp = try await post(
             "api/kade/sound-booth/reference/link",
             body: ["engine": engine, "url": link],
             timeout: 150,
-            fallback: "The song could not be brought in from YouTube."
+            fallback: "The song could not be brought in from that link."
         )
         guard let remote = r.url, !remote.isEmpty else {
-            throw BoothError(message: "The song could not be brought in from YouTube.")
+            throw BoothError(message: "The song could not be brought in from that link.")
         }
-        let title = r.source?.title ?? r.name ?? "YouTube song"
+        let title = r.source?.title ?? r.name ?? "Song from a link"
         let seconds = r.seconds ?? r.source?.seconds
         return ImportedReference(
             url: remote,
             name: seconds.map { "\(title) (\(Self.clock($0)))" } ?? title,
-            spoken: r.spoken ?? "Song imported from YouTube."
+            spoken: r.spoken ?? "Song imported from the link."
         )
     }
 
