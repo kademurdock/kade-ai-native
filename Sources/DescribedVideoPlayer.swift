@@ -37,21 +37,33 @@ import MediaPlayer
 //    dialogue: "the onscreen captioning is read out by voiceover still and
 //    talks over the film". That copy's only text track is "Audio
 //    descriptions (text)", switched off in the file (media.ts
-//    quietTextTracks), so the phone switched it back on. The film started
-//    playing BEFORE the captions file had downloaded and the captions were
-//    turned off, and until then AVPlayer's automatic media selection
-//    (appliesMediaSelectionCriteriaAutomatically, on by default) was free to
-//    pick a text track in her language because of her Subtitles & Captioning
-//    settings (Closed Captions + SDH); AVKit's "Auto" can ask for the same
-//    pick later. Now, while quiet: the automatic pick is off on the player
-//    before the film is loaded, every text track is switched off BEFORE Play,
-//    again when the film is ready, and again whenever anything switches one
-//    on (AVPlayerItem.mediaSelectionDidChangeNotification, with a check on
-//    the clock as a backstop). AVKit's subtitle menu cannot tell the player
-//    whether a change was hers or automatic, so while quiet a track picked
-//    there goes straight back off; the Read captions button is how she has
-//    them read. The rule is DescribedCaptionPlan (DescribedCaptions.swift,
-//    tested in DescribedCaptionsTests).
+//    quietTextTracks), and its captions file is empty, so what was read was
+//    most likely that track, switched back on. Which player she used and
+//    what switched it on are NOT known yet. The candidates: AVPlayer's
+//    automatic media selection (appliesMediaSelectionCriteriaAutomatically,
+//    on by default) picking a text track in her language from her Subtitles
+//    & Captioning settings (Closed Captions + SDH), or AVKit's "Auto" doing
+//    it again later (fullscreen, AirPlay stopping, the film becoming ready);
+//    the Read captions switch, which handed that pick to the system whenever
+//    the captions file was not read, and on this film the pick is the
+//    descriptions track; a saved copy played in Files or Photos (the track
+//    is still in the MP4); the website's player; or iOS's own Live Captions
+//    (Settings, Accessibility), which no app code can quiet. The film
+//    starting before its captions file downloaded explains at most the first
+//    second or so: build 315 already switched the tracks off once that small
+//    file arrived. Now, whenever VoiceOver is on and the film plays on the
+//    phone, the player's choice is HELD: AVPlayer's automatic pick is off
+//    before the film is loaded, and the chosen track (none while quiet; with
+//    Read captions, the Captions track found by its name or place, never
+//    another) is set BEFORE Play, again when the film is ready, and again
+//    whenever anything changes it
+//    (AVPlayerItem.mediaSelectionDidChangeNotification, with a check on the
+//    clock as a backstop). AVKit's subtitle menu cannot tell the player
+//    whether a change was hers or automatic, so while held a pick there goes
+//    straight back; the Read captions button is how she changes it. Without
+//    VoiceOver, or on AirPlay, a pick in that menu stays the viewer's. The
+//    rule is DescribedCaptionPlan (DescribedCaptions.swift, tested in
+//    DescribedCaptionsTests).
 //
 // Her Library rule holds: nothing resumes by itself. A call or another app's
 // sound pauses the film (AVPlayer does that); Play is always her press.
@@ -74,8 +86,10 @@ final class DescribedVideoPlayback: ObservableObject {
     private var hasDialogue: Bool?
     private var voiceOver = false
     private var readAloud = false
-    /// The open film's list of text tracks, once loaded.
+    /// The open film's list of text tracks, once loaded, and what the phone
+    /// says about each one (DescribedCaptionPlan.captionsTrack).
     private var legible: AVMediaSelectionGroup?
+    private var legibleNames: [[String]] = []
     private var timeObserver: Any?
     private var watches: [NSKeyValueObservation] = []
     /// AVPlayerItem.mediaSelectionDidChangeNotification for the open film.
@@ -90,8 +104,9 @@ final class DescribedVideoPlayback: ObservableObject {
 
     // MARK: Open and close
 
-    /// Opens the film and plays it. Her caption choice comes in with it, so a
-    /// quiet film has every text track off before it plays (see 3 above).
+    /// Opens the film and plays it. Her caption choice comes in with it, so
+    /// the text track it calls for (none while quiet) is set before it plays
+    /// (see 3 above).
     func open(url: URL, title: String, isVideo: Bool, voiceOver: Bool, readAloud: Bool) async {
         guard player.currentItem == nil else { return }
         self.title = title
@@ -138,12 +153,12 @@ final class DescribedVideoPlayback: ObservableObject {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.keepQuiet() }
+            Task { @MainActor in self?.holdChoice() }
         }
         wireRemote()
-        // Text tracks off BEFORE Play when quiet. Their list comes from the
-        // same header AVPlayer reads before it can play, so this adds next to
-        // no wait.
+        // Her choice of text track is in place BEFORE Play. Their list comes
+        // from the same header AVPlayer reads before it can play, so this adds
+        // next to no wait.
         await applyCaptions()
         // Done or the escape gesture while it loaded: close() already ran.
         guard player.currentItem === item else { return }
@@ -160,6 +175,7 @@ final class DescribedVideoPlayback: ObservableObject {
         if let selectionWatch { NotificationCenter.default.removeObserver(selectionWatch) }
         selectionWatch = nil
         legible = nil
+        legibleNames = []
         unwireRemote()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.replaceCurrentItem(with: nil)
@@ -190,12 +206,18 @@ final class DescribedVideoPlayback: ObservableObject {
                                     external: player.isExternalPlaybackActive, hasDialogue: hasDialogue)
     }
 
+    /// The Captions track's place in the list of text tracks, or nil.
+    private var captionsTrack: Int? {
+        DescribedCaptionPlan.captionsTrack(names: legibleNames, hasDialogue: hasDialogue)
+    }
+
     /// Quiet (VoiceOver on, not asked to read, on the phone): the system
     /// captions go OFF, AVPlayer's automatic pick is off so it cannot put
     /// them back, and the app draws them. Otherwise the system shows the
     /// Captions track, never "Audio descriptions (text)", which the narrator
-    /// already says. An explicit selection also stops AVPlayer re-applying
-    /// the system's automatic caption choice to this item.
+    /// already says; with VoiceOver on, not even the system's own pick. An
+    /// explicit selection also stops AVPlayer re-applying the system's
+    /// automatic caption choice to this item.
     private func applyCaptions() async {
         // At once, before any wait, so a change of choice leaves no gap.
         player.appliesMediaSelectionCriteriaAutomatically = plan.systemMayPick
@@ -205,21 +227,20 @@ final class DescribedVideoPlayback: ObservableObject {
             return
         }
         let group = try? await item.asset.loadMediaSelectionGroup(for: .legible)
+        let names = await Self.names(of: group?.options ?? [])
         guard player.currentItem === item else { return }
         // Read again: the choice, or AirPlay, can change while the list loads.
         let chosen = plan
         player.appliesMediaSelectionCriteriaAutomatically = chosen.systemMayPick
         if let group {
             legible = group
-            switch chosen {
-            case .quiet, .off:
-                if group.allowsEmptySelection { item.select(nil, in: group) }
-            case .captions:
-                // media.ts assemble() puts Captions FIRST whenever the copy has dialogue.
-                item.select(group.options.first, in: group)
-            case .automatic:
-                // The captions file could not be read: leave it to the system.
+            legibleNames = names
+            if chosen == .automatic {
+                // No VoiceOver, or AirPlay, and the captions file could not
+                // be read: leave it to the system.
                 item.selectMediaOptionAutomatically(in: group)
+            } else {
+                show(chosen.track(captions: captionsTrack), in: group, of: item)
             }
         }
         // No list yet (readiness tries again) or no text tracks at all: the
@@ -228,24 +249,56 @@ final class DescribedVideoPlayback: ObservableObject {
         caption = drawsCaptions ? DescribedCaptions.caption(at: player.currentTime().seconds, in: cues) : ""
     }
 
-    /// While quiet, a text track that comes back on (AVPlayer, AVKit's
-    /// "Auto", her settings, or AVKit's subtitle menu: none of them says
-    /// which) goes straight back off. Only a track actually showing is
-    /// touched, so switching it off (which posts the same notification) ends
-    /// there.
-    private func keepQuiet() {
-        guard let item = player.currentItem, let legible, legible.allowsEmptySelection,
-              plan.mustSwitchOff(trackShowing: item.currentMediaSelection.selectedMediaOption(in: legible) != nil)
-        else { return }
+    /// Shows the text track at `place` in the list, or none.
+    private func show(_ place: Int?, in group: AVMediaSelectionGroup, of item: AVPlayerItem) {
+        if let place, group.options.indices.contains(place) {
+            item.select(group.options[place], in: group)
+        } else if group.allowsEmptySelection {
+            item.select(nil, in: group)
+        }
+    }
+
+    /// What the phone says about each text track, in order: its display name
+    /// and every title in its metadata (media.ts writes "Captions" or "Audio
+    /// descriptions (text)" as the title). Whatever it leaves out, the
+    /// Captions track is still found by its place.
+    private static func names(of options: [AVMediaSelectionOption]) async -> [[String]] {
+        var all: [[String]] = []
+        for option in options {
+            var said = [option.displayName]
+            let items: [AVMetadataItem] = option.commonMetadata
+                + option.availableMetadataFormats.flatMap { option.metadata(forFormat: $0) }
+            for entry in items {
+                if let text = try? await entry.load(.stringValue) { said.append(text) }
+            }
+            all.append(said)
+        }
+        return all
+    }
+
+    /// While held (VoiceOver on, film on the phone), a text track that
+    /// changes behind the player's back (AVPlayer, AVKit's "Auto", her
+    /// settings, or AVKit's subtitle menu: none of them says which) goes
+    /// straight back: nothing while quiet, only the Captions track while she
+    /// has captions read. Only a wrong track is touched, so putting it back
+    /// (which posts the same notification) ends there.
+    private func holdChoice() {
+        guard let item = player.currentItem, let legible else { return }
+        let chosen = plan
+        let captions = captionsTrack
+        // -1: an option the list does not hold, which is wrong either way.
+        let showing = item.currentMediaSelection.selectedMediaOption(in: legible)
+            .map { legible.options.firstIndex(of: $0) ?? -1 }
+        guard chosen.mustRestore(showing: showing, captions: captions) else { return }
         player.appliesMediaSelectionCriteriaAutomatically = false
-        item.select(nil, in: legible)
+        show(chosen.track(captions: captions), in: legible, of: item)
     }
 
     private func tick(_ seconds: Double) {
         guard seconds.isFinite else { return }
-        // The backstop for 3 above: a track that came back on without the
-        // notification goes off within a quarter of a second.
-        keepQuiet()
+        // The backstop for 3 above: a track that changed without the
+        // notification goes back within a quarter of a second.
+        holdChoice()
         if drawsCaptions {
             let now = DescribedCaptions.caption(at: seconds, in: cues)
             if now != caption { caption = now }
@@ -403,9 +456,9 @@ struct DescribedVideoPlayerSheet: View {
                 keptSpeed = start
                 speed = start
                 playback.setSpeed(start)
-                // Her caption choice goes in with the film (Part 295), so a
-                // quiet film is quiet from its first frame, not only once the
-                // captions file has downloaded.
+                // Her caption choice goes in with the film (Part 295), so it
+                // holds from the first frame, not only once the captions file
+                // has downloaded.
                 await playback.open(url: url, title: title, isVideo: isVideo,
                                     voiceOver: voiceOverOn, readAloud: readCaptions)
                 await playback.loadCaptions(from: captionsURL)
