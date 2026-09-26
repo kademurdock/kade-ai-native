@@ -525,8 +525,18 @@ struct DescribedVideoView: View {
         }
     }
 
+    /// Part 293: the reason the link import is greyed out (no Family feature
+    /// pack), or nil when it can be used.
+    private var linkLock: String? { config?.linkImportLock }
+
+    /// Part 293: without the Family feature pack the same row is drawn greyed
+    /// out, never hidden: the box and the button are disabled, VoiceOver's
+    /// hint on each says why, and the reason shows as text beneath them.
     private var youtubeRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let lock = linkLock
+        let fieldHint: String = lock ?? "One finished video, not a channel or playlist."
+        let buttonHint: String = lock ?? "Checks the video for free. If YouTube refuses the server, save the video and choose it from Files instead."
+        return VStack(alignment: .leading, spacing: 6) {
             Text("Or a YouTube link")
                 .font(.subheadline)
                 .accessibilityHidden(true)
@@ -535,12 +545,19 @@ struct DescribedVideoView: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .disabled(lock != nil)
                 .accessibilityLabel("YouTube video link")
-                .accessibilityHint("One finished video, not a channel or playlist.")
+                .accessibilityHint(fieldHint)
             Button("Import from YouTube") { Task { await importYouTube() } }
                 .buttonStyle(.bordered)
-                .disabled(choosingDisabled || youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityHint("Checks the video for free. If YouTube refuses the server, save the video and choose it from Files instead.")
+                .disabled(choosingDisabled || lock != nil || youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityHint(buttonHint)
+            if let lock {
+                Text(lock)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
         }
     }
 
@@ -2622,7 +2639,8 @@ struct DescribedVideoView: View {
     /// for her to choose Import from YouTube.
     private func fillCopiedYouTubeLink() {
         Task {
-            guard youtubeLink.isEmpty, !choosingDisabled,
+            // A greyed-out box (no Family feature pack) is never filled in.
+            guard youtubeLink.isEmpty, !choosingDisabled, linkLock == nil,
                   let link = await CopiedLink.take("described-video-youtube", where: CopiedLink.isYouTube),
                   youtubeLink.isEmpty else { return }
             youtubeLink = link
@@ -2633,6 +2651,7 @@ struct DescribedVideoView: View {
     private func importYouTube() async {
         let link = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !link.isEmpty, !isBusy else { return }
+        if let lock = linkLock { announce(lock + "."); return }
         isBusy = true
         defer { isBusy = false }
         announce("Importing from YouTube.")

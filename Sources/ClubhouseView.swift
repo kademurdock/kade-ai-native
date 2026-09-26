@@ -302,15 +302,26 @@ struct ClubhouseView: View {
                 }
                 Button("Add a song") { showFilePicker = true }
                     .accessibilityHint("Pick an audio file, then choose to cut in or queue it politely.")
+                /* Part 293, the Family feature pack: without it (while the
+                 * server gates song links) the box and the button are greyed
+                 * out, never hidden; each one's hint says why and the reason
+                 * shows beneath them. Adding a file stays open. */
                 TextField("Or paste a song link: YouTube, Spotify, SoundCloud, or an audio file", text: $songLink)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .disabled(service.songLinksLock != nil)
                     .accessibilityLabel("Song link")
-                    .accessibilityHint("A YouTube or Spotify song, SoundCloud, Bandcamp, or a link to an audio file. A song link you copied fills in by itself.")
+                    .accessibilityHint(service.songLinksLock ?? "A YouTube or Spotify song, SoundCloud, Bandcamp, or a link to an audio file. A song link you copied fills in by itself.")
                 Button("Fetch from the link") { showLinkChoice = true }
-                    .disabled(songLink.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityHint("The server pulls the song, up to 15 minutes long, then you choose to cut in or queue it.")
+                    .disabled(service.songLinksLock != nil || songLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityHint(service.songLinksLock ?? "The server pulls the song, up to 15 minutes long, then you choose to cut in or queue it.")
+                if let lock = service.songLinksLock {
+                    Text(lock)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
                 if !service.knockLine.isEmpty {
                     Text(service.knockLine)
                         .font(.footnote)
@@ -491,7 +502,8 @@ struct ClubhouseView: View {
     private func fillCopiedSongLink(after seconds: Double) {
         Task {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard songLink.isEmpty, service.phase == .inRoom,
+            // A greyed-out box (no Family feature pack) is never filled in.
+            guard songLink.isEmpty, service.phase == .inRoom, service.songLinksLock == nil,
                   let link = await CopiedLink.take("clubhouse-song-link", where: CopiedLink.isSongLink),
                   songLink.isEmpty else { return }
             songLink = link

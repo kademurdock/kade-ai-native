@@ -127,6 +127,10 @@ final class ClubhouseService: NSObject, ObservableObject {
     @Published var recFileLine = ""
     @Published var tapersLine = ""
     @Published var knockLine = ""
+    /// Part 293: why the jukebox's song links are greyed out (the account has
+    /// no Family feature pack while the server gates them), or nil when they
+    /// can be used. Read from /config's `features`; absent on older servers.
+    @Published var songLinksLock: String?
 
     private let client: KadeAPIClient
     let engine = ClubhouseEngine()
@@ -900,6 +904,11 @@ final class ClubhouseService: NSObject, ObservableObject {
             guard let key = r["key"] as? String, let name = r["name"] as? String else { return nil }
             return ClubHotelRoom(key: key, name: name)
         }
+        /* Part 293, the Family feature pack: `features.jukeboxLinks` false
+         * means the song-link box is shown greyed out with the reason, never
+         * hidden. Missing (an older server) means links are open, as before. */
+        let features = j["features"] as? [String: Any]
+        songLinksLock = (features?["jukeboxLinks"] as? Bool) == false ? KadeFamilyFeatures.note : nil
         statusLine = serverReady
             ? "Pick a room."
             : "The Clubhouse is built and ready — it's just waiting on the room-server keys."
@@ -1433,6 +1442,10 @@ final class ClubhouseService: NSObject, ObservableObject {
     func addSong(fromLink raw: String, interrupt: Bool) {
         let urlStr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !urlStr.isEmpty else { return }
+        if let lock = songLinksLock {
+            announce("Song links are greyed out. \(lock). Add a song from a file instead.")
+            return
+        }
         guard let url = URL(string: urlStr), CopiedLink.isWebLink(url),
               let host = url.host?.lowercased(), !host.isEmpty else {
             announce("That doesn't look like a web link. Paste a YouTube, Spotify or SoundCloud song link, or a link to an audio file.")

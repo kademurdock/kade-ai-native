@@ -378,6 +378,12 @@ struct DVConfig: Decodable {
     let curate: Bool?
     /// Her speeds, kept for her account (Sep 25 2026; absent on older servers).
     let speeds: DVSpeeds?
+    /// Part 293: may this account import a video from a link? Absent on older
+    /// servers, where it always may. `available` false is the Family feature
+    /// pack's lock: the link box is shown greyed out with `locked`, never hidden.
+    let linkImport: DVLinkImport?
+    /// Part 293: this person's Family feature pack map (absent on older servers).
+    let features: KadeFamilyFeatures?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
@@ -386,6 +392,35 @@ struct DVConfig: Decodable {
         case dialogueIncluded
         case myDefaultVoice, houseVoice, favorites, recent, maxFavorites, suggested, fish, fishNote, curate
         case speeds
+        case linkImport, features
+    }
+
+    /// Part 293: the reason the link import is greyed out, or nil when it can
+    /// be used. Locked when the server's `linkImport` says unavailable, or its
+    /// pack map says the describer's links are off for this account.
+    var linkImportLock: String? {
+        if linkImport?.available == false || features?.describerLinks == false {
+            let said = (linkImport?.locked ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return said.isEmpty ? KadeFamilyFeatures.note : said
+        }
+        return nil
+    }
+}
+
+/// Part 293: the describer's answer to "may I import from a link?".
+struct DVLinkImport: Decodable, Equatable {
+    let available: Bool?
+    /// Why not: "Part of the Family feature pack".
+    let locked: String?
+
+    enum CodingKeys: String, CodingKey { case available, locked }
+}
+
+extension DVLinkImport {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        available = c.dvBool(.available)
+        locked = c.dvString(.locked)
     }
 }
 
@@ -447,6 +482,8 @@ extension DVConfig {
         fishNote = c.dvString(.fishNote)
         curate = c.dvBool(.curate)
         speeds = c.dvValue(.speeds)
+        linkImport = c.dvValue(.linkImport)
+        features = c.dvValue(.features)
     }
 }
 
