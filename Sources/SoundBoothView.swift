@@ -1215,6 +1215,24 @@ struct SoundBoothView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(p.summary)
 
+            /* Sep 25 2026: what a Lyria take sang, kept apart from the
+             * readback above ("What you will hear") and closed until asked
+             * for, so a long lyric sheet is never read out as the row. */
+            if let sung = p.sungLyrics?.trimmingCharacters(in: .whitespacesAndNewlines), !sung.isEmpty {
+                DisclosureGroup {
+                    Text(sung)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                } label: {
+                    Text("Words it sang")
+                        .font(.caption.bold())
+                        .accessibilityLabel("Words it sang, \(p.title)")
+                }
+                .accessibilityHint("Shows the words this song sang. They are not part of What you will hear.")
+            }
+
             if p.state == "failed", let error = p.lastError, !error.isEmpty {
                 Text("Generation stopped. \(error)")
                     .font(.callout)
@@ -1522,10 +1540,16 @@ struct SoundBoothView: View {
         let requestEngine = engine
         let version = quoteVersion
         let idea = (script.isEmpty ? text : script).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard idea.count >= 3 else { announce("Write an idea first, or choose Surprise me."); return }
+        /* A song pasted whole into the lyrics box, with no direction typed, is
+         * sorted by the server with no writer and no charge, so it needs no
+         * idea of its own. Anything else still needs one. */
+        let lyricsPasteOnly = isMusic && idea.count < 3 && Self.looksLikeSongPaste(originalLyrics)
+        guard idea.count >= 3 || lyricsPasteOnly else { announce("Write an idea first, or choose Surprise me."); return }
         isWriting = true
         defer { isWriting = false }
-        announce(isMusic
+        announce(lyricsPasteOnly
+            ? "Sorting the song you pasted into the lyrics box."
+            : isMusic
             ? "Writing your song. The writer takes its time, about five minutes, then goes back over it like a producer. You will get a notice when the draft is ready."
             : "Writing a draft from your idea.")
         do {
@@ -1536,26 +1560,81 @@ struct SoundBoothView: View {
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }
-            var draft = result.screenplay ?? result.script
-            // Sep 25 2026: a Lyria draft is split like a YuE2 one, so its words
-            // land in Your own lyrics instead of inside Music direction. An
-            // instrumental has no Lyrics heading and stays whole; only YuE2
-            // insists on words.
-            if engine == "yue2" || engine == "lyria" {
-                if let boundary = draft.range(of: "\nLyrics:", options: .caseInsensitive) {
-                    values["lyrics"] = String(draft[boundary.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                    draft = String(draft[..<boundary.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                } else if engine == "yue2" {
-                    announce("The writer did not return separate lyrics. Your idea is kept."); return
-                }
-            }
+            let placed = placeSongDraft(result, engine: engine, lyricsBefore: originalLyrics)
+            guard let draft = placed.direction else { announce(placed.lead); return }
             writingUndo = (engine, original, originalLyrics)
             script = draft; readback = result.readback ?? ""; invalidateQuote()
-            // A pasted three-box song comes back sorted with a note (no writer, no charge).
-            let note: String = (result.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let lead: String = note.isEmpty ? "" : note + " "
-            announce(lead + "Draft ready in the editor. You can edit or undo it. No audio has been generated.")
+            announce(placed.lead + "Draft ready in the editor. You can edit or undo it. No audio has been generated.")
         } catch { announce((error as? LocalizedError)?.errorDescription ?? "The writing desk could not finish. Your text is kept.") }
+    }
+
+    /// True when text holds a song pasted whole from ChatGPT's three boxes
+    /// (a "Lyrics Box" or "Tag Box" heading). Only decides whether the phone
+    /// may send it without an idea; the server does the real sorting and says
+    /// plainly when it is not a paste.
+    private static func looksLikeSongPaste(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("lyrics box") || lower.contains("lyric box") || lower.contains("tag box") || lower.contains("tags box")
+    }
+
+    /// Where a song draft's parts go, and what to say first (Sep 25 2026, the
+    /// web's sortDraft rules). The draft arrives as "direction, then Lyrics:".
+    ///   - Lyria: the desk's words move into Your own lyrics only when that box
+    ///     is empty; words she wrote there stay, and she is told when the
+    ///     desk's copy differed.
+    ///   - YuE2: the desk's words replace the lyrics (YuE2 will not sing
+    ///     without them), and she is told when hers were different.
+    ///   - A paste the server sorted (`pasted`): its words land wherever it
+    ///     put them, and what the paste is missing is said as "One thing to fix
+    ///     first", instead of the writer error.
+    ///   - A paste in the lyrics box sorted while the writer drafted
+    ///     (`pasteSorted.lyrics`): those words go in the lyrics box.
+    /// `direction` is nil when nothing should change; `lead` then says why.
+    private func placeSongDraft(_ result: SoundBoothScriptResult, engine: String, lyricsBefore: String) -> (direction: String?, lead: String) {
+        var draft = result.screenplay ?? result.script
+        let pasted = result.pasted == true
+        guard engine == "yue2" || engine == "lyria" else { return (draft, Self.noteLead(result.note)) }
+        let mine = lyricsBefore.trimmingCharacters(in: .whitespacesAndNewlines)
+        let box = currentEngine?.settings.first(where: { $0.key == "lyrics" })?.label
+            ?? (engine == "lyria" ? "Your own lyrics" : "Lyrics")
+        var lead = ""
+        var deskBlock = false
+        if let boundary = draft.range(of: "\nLyrics:", options: .caseInsensitive) {
+            deskBlock = true
+            let deskWords = String(draft[boundary.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            draft = String(draft[..<boundary.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if engine == "lyria" && !pasted && !mine.isEmpty {
+                if deskWords != mine && !(result.note ?? "").contains("were kept") {
+                    lead = "Your own lyrics were kept as you wrote them; the copy the desk put in its draft was left out. "
+                }
+            } else {
+                values["lyrics"] = deskWords
+                if !pasted && !deskWords.isEmpty {
+                    if mine.isEmpty {
+                        lead = "The words the desk wrote are now in \(box), under Lyrics, covers, and song settings. "
+                    } else if deskWords != mine {
+                        lead = "\(box) now holds the desk version of your words; Undo writing change brings back yours. "
+                    }
+                }
+            }
+        }
+        let sortedWords = (result.pasteSorted?.lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sortedWords.isEmpty && (!deskBlock || engine == "lyria") {
+            values["lyrics"] = sortedWords
+        } else if !deskBlock && engine == "yue2" && !pasted {
+            return (nil, "The writer did not return separate lyrics. Your idea is kept.")
+        }
+        lead += Self.noteLead(result.note)
+        if pasted, let problem = result.problem?.trimmingCharacters(in: .whitespacesAndNewlines), !problem.isEmpty {
+            lead += "One thing to fix first: \(problem) "
+        }
+        return (draft, lead)
+    }
+
+    /// The server's note, trimmed, with a space after it; empty when none.
+    private static func noteLead(_ note: String?) -> String {
+        let said = (note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return said.isEmpty ? "" : said + " "
     }
 
     private func makeScript(kind: String) async {
@@ -1645,8 +1724,13 @@ struct SoundBoothView: View {
         do {
             confirmArmed = false
             announce(preview ? "Sending the voice sample…" : "Sending the render…")
+            let sourceEngine = engine
             let r = try await service.render(body: body)
             newVoice = false; currentProjectId = r.projectId ?? currentProjectId
+            // Sep 25 2026: a song pasted whole was sorted by the server first;
+            // the editor takes the sorted boxes so it shows what was sent.
+            let sortedSentence = applyPasteSorted(r.pasteSorted, engine: sourceEngine)
+            let pasteNote = (r.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if r.queued == true, let job = r.jobId {
                 currentJobId = job; Earcons.shared.play(.actionStart)
                 if card == nil {
@@ -1655,18 +1739,49 @@ struct SoundBoothView: View {
                 }
                 // Filed under the project, so a later visit can still move it on.
                 service.fileRenderCard(card, under: currentProjectId ?? job, showing: cardWords)
-                announce((preview ? "Voice sample queued. " : "Queued. ") + (r.estimate?.spoken ?? "") + ((engine == "yue2" || isEffects) ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."))
+                let estimateWords = r.estimate?.spoken ?? ""
+                // The paste note rides in front of the estimate already; said once.
+                let noteWords = pasteNote.isEmpty || estimateWords.contains(pasteNote) ? "" : pasteNote + " "
+                let leaveWords = (engine == "yue2" || isEffects) ? " You can leave this screen. A notification will open the Sound Booth when all takes finish." : " Progress will be read here. Long pieces continue while this screen is open."
+                announce((preview ? "Voice sample queued. " : "Queued. ") + noteWords + estimateWords + leaveWords + sortedSentence)
                 startPolling(job)
             } else {
                 service.finishRenderCard(id: card, status: "Ready to play")
                 Earcons.shared.play(.actionDone); KadeHaptics.success()
-                announce("Ready. The recording is in your library below and in My Creations.")
+                // The server's own sentence first (a paste note, Lyria's "it
+                // wrote words for it"), then the booth's.
+                let serverWords = (r.spoken ?? r.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let lead = serverWords.isEmpty ? "" : serverWords + " "
+                announce(lead + "Ready. The recording is in your library below and in My Creations." + sortedSentence)
                 await loadProjects()
             }
         } catch {
             service.finishRenderCard(id: card, status: SoundBoothService.cardReason((error as? LocalizedError)?.errorDescription ?? error.localizedDescription), failed: true)
             announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.")
         }
+    }
+
+    /// Sep 25 2026: a render whose paste the server sorted. The phone sends a
+    /// song pasted whole from ChatGPT unsorted; the server renders only the
+    /// direction and the words, and hands back where it put them. The editor
+    /// takes those boxes, so what she reads is what was sent, and Undo writing
+    /// change brings back what she pasted. Returns the sentence to add, or "".
+    private func applyPasteSorted(_ sorted: SoundBoothPasteSorted?, engine sourceEngine: String) -> String {
+        guard let sorted, engine == sourceEngine else { return "" }
+        let beforeScript = script
+        let beforeLyrics = values["lyrics"] ?? ""
+        var changed = false
+        if let direction = sorted.script, direction != beforeScript {
+            script = direction
+            changed = true
+        }
+        if let words = sorted.lyrics, words != beforeLyrics {
+            values["lyrics"] = words
+            changed = true
+        }
+        guard changed else { return "" }
+        writingUndo = (sourceEngine, beforeScript, beforeLyrics)
+        return " The editor now shows your song as it was sorted. Undo writing change brings back what you pasted."
     }
 
     /// C3: what the lock-screen card calls this render. The kind picks the

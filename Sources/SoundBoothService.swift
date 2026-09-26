@@ -87,6 +87,10 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let voiceSeed: Int?
     let script: String
     let readback: String?
+    /// Sep 25 2026: the words a Lyria take sang. They used to be written into
+    /// `readback`, which this screen reads out as "What you will hear"; the
+    /// server now keeps them apart, so the library shows them apart too.
+    let sungLyrics: String?
     let jobs: [String]?
     let state: String
     let lastError: String?
@@ -147,6 +151,21 @@ struct SoundBoothScriptResult: Decodable {
     /// Negative Tag Box) was sorted into its boxes without the writer. Says
     /// where each part went and that the negative tags were left out.
     let note: String?
+    /// True when the answer is a pasted song sorted into its boxes rather than
+    /// a draft from the writer. `problem` then names what the paste is missing.
+    let pasted: Bool?
+    /// Set when a song pasted into the lyrics box was sorted while the writer
+    /// drafted: `lyrics` belongs in the lyrics box, `script` is nil (the draft
+    /// above is the direction).
+    let pasteSorted: SoundBoothPasteSorted?
+}
+
+/// Sep 25 2026: where the server put a song pasted whole from ChatGPT. The
+/// phone sends a paste unsorted; these are the boxes the server sorted it
+/// into, for the editor to match what was actually used.
+struct SoundBoothPasteSorted: Decodable, Equatable {
+    let script: String?
+    let lyrics: String?
 }
 
 struct SoundBoothRenderResult: Decodable {
@@ -160,6 +179,15 @@ struct SoundBoothRenderResult: Decodable {
     let seconds: Int?
     let costUSD: Double?
     let estimate: SoundBoothEstimate?
+    /// Sep 25 2026: what the server did with a pasted song, when it sorted one.
+    let note: String?
+    /// The server's own sentence about the finished render (Lyria: whether it
+    /// wrote words for the song), with any paste note already in front.
+    let spoken: String?
+    /// Lyria: the words the take sang, when it sang any.
+    let lyrics: String?
+    /// The boxes a pasted song was sorted into before the engine saw it.
+    let pasteSorted: SoundBoothPasteSorted?
 }
 
 struct SoundBoothStatus: Decodable {
