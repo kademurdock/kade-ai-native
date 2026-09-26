@@ -1457,7 +1457,8 @@ struct SoundBoothView: View {
             isWriting = true
             defer { isWriting = false }
             announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about ten seconds.")
-            if let idea = try? await service.songIdea(), !idea.isEmpty {
+            // Part 293: the chosen YuE2 Style rides along, so a Kids song idea comes back clean.
+            if let idea = try? await service.songIdea(band: engine == "yue2" ? values["band"] : nil), !idea.isEmpty {
                 guard engine == requestEngine, script == original else { announce("Your editor changed while the idea was being made. Your current text is kept."); return }
                 writingUndo = (engine, script, values["lyrics"] ?? "")
                 script = idea
@@ -1490,7 +1491,8 @@ struct SoundBoothView: View {
         do {
             let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
                 voiceDescription: values["voice_description"], gender: values["gender"] ?? "female",
-                mood: nil, scene: nil, shot: nil, lyrics: isMusic ? originalLyrics : nil)
+                mood: nil, scene: nil, shot: nil, lyrics: isMusic ? originalLyrics : nil,
+                band: engine == "yue2" ? values["band"] : nil)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }

@@ -360,9 +360,13 @@ final class SoundBoothService: ObservableObject {
     /// writer brainstorms and throws ideas away, and one pitch comes back:
     /// about ten seconds and a fraction of a cent. Any failure throws and
     /// the view falls back to its own free list.
-    func songIdea() async throws -> String {
+    /// Part 293: `band` is the YuE2 Style she chose (Kids, Soul…). A Kids style
+    /// makes the server pitch only clean ideas, whoever is asking.
+    func songIdea(band: String? = nil) async throws -> String {
         struct Idea: Decodable { let idea: String }
-        let made: Idea = try await post("api/kade/sound-booth/idea", body: [:], timeout: 90, fallback: "The writer could not be reached.")
+        var body: [String: Any] = [:]
+        if let band, !band.isEmpty { body["band"] = band }
+        let made: Idea = try await post("api/kade/sound-booth/idea", body: body, timeout: 90, fallback: "The writer could not be reached.")
         return made.idea
     }
 
@@ -378,11 +382,14 @@ final class SoundBoothService: ObservableObject {
         scene: String?,
         shot: String?,
         clipURLs: [String] = [],
-        lyrics: String? = nil
+        lyrics: String? = nil,
+        band: String? = nil
     ) async throws -> SoundBoothScriptResult {
         var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "gender": gender]
         if engine == "lyria" || engine == "yue2" { body.removeValue(forKey: "gender") }
         if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
+        // Part 293: the YuE2 Style, so the desk writes a Kids song clean.
+        if engine == "yue2", let band, !band.isEmpty { body["band"] = band }
         if let v = voiceDescription, !v.isEmpty { body["voice_description"] = v }
         if let m = mood, !m.isEmpty { body["mood"] = m }
         if let s = scene, !s.isEmpty { body["scene"] = s }
@@ -451,8 +458,10 @@ final class SoundBoothService: ObservableObject {
     }
 
     struct LyricsDraft: Decodable { let transcript: String; let warning: String }
+    /// Part 293: 240 seconds (was 210), so a long cover recording's words are
+    /// not cut off by the phone while the server is still listening.
     func transcribeLyrics(url: String) async throws -> LyricsDraft {
-        try await post("api/kade/sound-booth/reference/lyrics", body: ["url": url], timeout: 210, fallback: "Could not hear the words. Your lyrics are kept.")
+        try await post("api/kade/sound-booth/reference/lyrics", body: ["url": url], timeout: 240, fallback: "Could not hear the words. Your lyrics are kept.")
     }
 
     func render(body: [String: Any]) async throws -> SoundBoothRenderResult {
