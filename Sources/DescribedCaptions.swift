@@ -84,3 +84,55 @@ enum DescribedCaptions {
         return total
     }
 }
+
+// MARK: - Which captions the system shows (Sep 26 2026, Part 295)
+//
+// Her words after a Road Runner short with no dialogue at all: "the onscreen
+// captioning is read out by voiceover still and talks over the film". That
+// copy's only text track is "Audio descriptions (text)", switched off in the
+// file, so something on the phone switched it back on (see
+// DescribedVideoPlayer.swift, 2). The rule itself lives here, pure, so
+// DescribedCaptionsTests checks it with no phone.
+
+/// What the player does with the MP4's own text tracks.
+enum DescribedCaptionPlan: Equatable {
+    /// VoiceOver on, not asked to read, film on the phone: every text track
+    /// off and kept off, and the app draws the captions (only when the film
+    /// has dialogue) for anyone watching with her.
+    case quiet(draws: Bool)
+    /// The Captions track: media.ts puts it FIRST whenever there is dialogue.
+    case captions
+    /// No dialogue: the only text track would be "Audio descriptions
+    /// (text)", which the narrator already says, so nothing is shown.
+    case off
+    /// The captions file could not be read: left to the system.
+    case automatic
+
+    /// Quiet wins whenever VoiceOver could read over the film, even before
+    /// the captions file has been read (`hasDialogue` nil), so not one
+    /// caption slips out while it downloads.
+    static func choose(voiceOver: Bool, readAloud: Bool, external: Bool, hasDialogue: Bool?) -> DescribedCaptionPlan {
+        if voiceOver && !readAloud && !external { return .quiet(draws: hasDialogue == true) }
+        switch hasDialogue {
+        case .some(true): return .captions
+        case .some(false): return .off
+        case .none: return .automatic
+        }
+    }
+
+    /// Whether AVPlayer may pick text tracks from her accessibility settings
+    /// (Subtitles & Captioning's Closed Captions + SDH, a subtitle language).
+    /// Never while quiet: that automatic pick is what turns a switched-off
+    /// track back on.
+    var systemMayPick: Bool {
+        if case .quiet = self { return false }
+        return true
+    }
+
+    /// True when a text track has been switched on behind the player's back
+    /// (AVKit, AVPlayer, her settings) and must go off again.
+    func mustSwitchOff(trackShowing: Bool) -> Bool {
+        if case .quiet = self { return trackShowing }
+        return false
+    }
+}

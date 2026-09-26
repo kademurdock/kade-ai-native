@@ -75,6 +75,32 @@ checkEqual("wordless cue skipped", DescribedCaptions.parse("WEBVTT\n\n00:00:01.0
 checkEqual("seconds, hours", DescribedCaptions.seconds("01:02:03.500") ?? -1, 3723.5)
 check("seconds, junk", DescribedCaptions.seconds("1:2:3:4") == nil && DescribedCaptions.seconds("abc") == nil && DescribedCaptions.seconds("") == nil)
 
+// Part 295 (Sep 26 2026): which captions the system shows. The Road Runner
+// short had no dialogue (empty captions.vtt) and VoiceOver still read text
+// over the film.
+func plan(voiceOver: Bool = true, readAloud: Bool = false, external: Bool = false, dialogue: Bool?) -> DescribedCaptionPlan {
+    DescribedCaptionPlan.choose(voiceOver: voiceOver, readAloud: readAloud, external: external, hasDialogue: dialogue)
+}
+
+checkEqual("Road Runner: quiet, nothing drawn", plan(dialogue: false), .quiet(draws: false))
+checkEqual("quiet before the captions file has downloaded", plan(dialogue: nil), .quiet(draws: false))
+checkEqual("quiet with dialogue: the app draws it", plan(dialogue: true), .quiet(draws: true))
+checkEqual("Read captions: the Captions track", plan(readAloud: true, dialogue: true), .captions)
+checkEqual("Read captions, no dialogue: nothing shown", plan(readAloud: true, dialogue: false), .off)
+checkEqual("Read captions, file unread: the system's choice", plan(readAloud: true, dialogue: nil), .automatic)
+checkEqual("AirPlay: the TV shows the Captions track", plan(external: true, dialogue: true), .captions)
+checkEqual("no VoiceOver: the Captions track", plan(voiceOver: false, dialogue: true), .captions)
+checkEqual("no VoiceOver, no dialogue: nothing shown", plan(voiceOver: false, dialogue: false), .off)
+
+check("quiet: AVPlayer may not pick", !plan(dialogue: false).systemMayPick && !plan(dialogue: true).systemMayPick)
+check("asked to read or on AirPlay: AVPlayer may pick again",
+      plan(readAloud: true, dialogue: true).systemMayPick && plan(external: true, dialogue: nil).systemMayPick)
+check("quiet: a track that came back on goes off", plan(dialogue: false).mustSwitchOff(trackShowing: true))
+check("quiet: nothing showing, nothing done", !plan(dialogue: false).mustSwitchOff(trackShowing: false))
+check("her own choice to read is never undone",
+      !plan(readAloud: true, dialogue: true).mustSwitchOff(trackShowing: true)
+      && !plan(external: true, dialogue: true).mustSwitchOff(trackShowing: true))
+
 if failures == 0 {
     print("\nAll described-caption checks passed.")
     exit(0)
