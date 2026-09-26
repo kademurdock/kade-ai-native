@@ -245,10 +245,14 @@ struct SoundBoothGuide: Decodable {
         let defaultString: String?
         let defaultNumber: Double?
         let defaultBool: Bool?
+        /// Part 293: on the YuE2 cover field only when this account may paste a
+        /// YouTube link (the server leaves it off for App Review).
+        struct Link: Decodable, Hashable { let label: String; let hint: String; let button: String; let path: String? }
+        let link: Link?
         var id: String { key }
         var clipMax: Int { Int(max ?? 1) }
 
-        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, `default` }
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, `default` }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             key = try c.decode(String.self, forKey: .key)
@@ -259,6 +263,7 @@ struct SoundBoothGuide: Decodable {
             step = try? c.decodeIfPresent(Double.self, forKey: .step)
             min = try? c.decodeIfPresent(Double.self, forKey: .min)
             max = try? c.decodeIfPresent(Double.self, forKey: .max)
+            link = try? c.decodeIfPresent(Link.self, forKey: .link)
             // `default` is one of three shapes depending on the kind.
             defaultString = try? c.decodeIfPresent(String.self, forKey: .default)
             defaultNumber = try? c.decodeIfPresent(Double.self, forKey: .default)
@@ -594,6 +599,39 @@ final class SoundBoothService: ObservableObject {
             name: r?.name ?? fileName,
             spoken: r?.spoken ?? "Clip imported. It will be used as the voice to clone."
         )
+    }
+
+    /// A YOUTUBE LINK FOR A YUE2 COVER (Part 293), her ask: "The soundbooth
+    /// needs a youtube paste link in the yue2 workflow so people can cover
+    /// songs from youtube videos." The server checks the video's length before
+    /// downloading, brings in only its sound, and answers exactly as a file
+    /// import does plus the video's title and length. It gives up by itself in
+    /// under two minutes, so 150 seconds here never cuts off a real answer.
+    func importReferenceLink(link: String, engine: String) async throws -> ImportedReference {
+        struct Source: Decodable { let title: String?; let seconds: Double? }
+        struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let seconds: Double?; let source: Source? }
+        let r: Resp = try await post(
+            "api/kade/sound-booth/reference/link",
+            body: ["engine": engine, "url": link],
+            timeout: 150,
+            fallback: "The song could not be brought in from YouTube."
+        )
+        guard let remote = r.url, !remote.isEmpty else {
+            throw BoothError(message: "The song could not be brought in from YouTube.")
+        }
+        let title = r.source?.title ?? r.name ?? "YouTube song"
+        let seconds = r.seconds ?? r.source?.seconds
+        return ImportedReference(
+            url: remote,
+            name: seconds.map { "\(title) (\(Self.clock($0)))" } ?? title,
+            spoken: r.spoken ?? "Song imported from YouTube."
+        )
+    }
+
+    /// "3:12" for a length in seconds.
+    static func clock(_ seconds: Double) -> String {
+        let total = Swift.max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// WORKING DOWNLOADS, her words. The bytes come through the SAME authorized

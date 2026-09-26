@@ -138,6 +138,8 @@ struct SoundBoothView: View {
     @State private var savingTakeId: String?
     @State private var activeSheet: BoothSheet?
     @State private var showFileImporter = false
+    /// Part 293: the YouTube link being pasted for a YuE2 cover.
+    @State private var youtubeLink = ""
     @State private var showChooser = false
     @State private var showHowTo = false
     @State private var catalog: VoiceCatalog.Snapshot = .empty
@@ -893,6 +895,10 @@ struct SoundBoothView: View {
             .accessibilityHint(st.hint + " Opens Files.")
             Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
+            if let link = st.link, clips.count < st.clipMax {
+                linkImportRow(link)
+            }
+
             if !importError.isEmpty {
                 Text(importError + " Retry the import or discard this failed attempt before generating.")
                     .font(.footnote)
@@ -909,7 +915,7 @@ struct SoundBoothView: View {
             }
             ForEach(Array(clips.prefix(st.clipMax).enumerated()), id: \.offset) { i, clip in
                 HStack {
-                    Text("\(st.clipMax > 1 ? "@Audio\(i + 1): " : "Cloning: ")\(clip.name)")
+                    Text(clipPrefix(max: st.clipMax, index: i) + clip.name)
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     /* Her ask. Hearing the sample is the only way to know the
@@ -932,6 +938,90 @@ struct SoundBoothView: View {
                     .accessibilityLabel("Remove \(clip.name)")
                 }
             }
+        }
+    }
+
+    /// "@Audio2: " for Seed's numbered clips, "Covering: " for a YuE2 cover,
+    /// "Cloning: " for an AuK voice.
+    private func clipPrefix(max: Int, index: Int) -> String {
+        if max > 1 { return "@Audio\(index + 1): " }
+        return engine == "yue2" ? "Covering: " : "Cloning: "
+    }
+
+    /// Part 293: paste a YouTube link for a YuE2 cover, beside the Files import.
+    /// Only drawn when the server's guide gives the cover setting a `link`,
+    /// which it never does for the App Review seat.
+    private func linkImportRow(_ link: SoundBoothGuide.Setting.Link) -> some View {
+        let empty = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(link.label).font(.subheadline).accessibilityHidden(true)
+            TextField("https://youtu.be/…", text: $youtubeLink)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.URL)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .onSubmit { Task { await importYouTubeLink() } }
+                .disabled(workspaceBusy)
+                .accessibilityLabel(link.label)
+                .accessibilityHint(link.hint)
+            HStack {
+                PasteButton(payloadType: String.self) { strings in
+                    let pasted = strings.first ?? ""
+                    Task { @MainActor in pasteYouTubeLink(pasted, button: link.button) }
+                }
+                .disabled(workspaceBusy)
+                .accessibilityHint("Puts the link you copied into the YouTube link field.")
+                Button {
+                    KadeHaptics.press()
+                    Task { await importYouTubeLink() }
+                } label: {
+                    HStack {
+                        Text(isImporting ? "Importing from YouTube…" : link.button)
+                        if isImporting { ProgressView().accessibilityHidden(true) }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(workspaceBusy || empty)
+                .accessibilityHint("Brings in the sound of the video in the link as the recording to cover. " + link.hint)
+            }
+            Text(link.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    private func pasteYouTubeLink(_ pasted: String, button: String) {
+        let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { announce("There is no link to paste. Copy the video's link first."); return }
+        youtubeLink = text
+        announce("Link pasted. Choose \(button) to bring in the song.")
+    }
+
+    /// Brings in a YouTube video's sound as the YuE2 cover recording. The server
+    /// checks the length before downloading and refuses playlists, anything over
+    /// six minutes, and App Review; its answer matches a file import, so the
+    /// clip row, player and Transcribe reference lyrics work unchanged.
+    private func importYouTubeLink() async {
+        let link = youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !link.isEmpty else { announce("Paste a YouTube link first."); return }
+        guard !workspaceBusy else { announce("Finish the current operation before importing a reference."); return }
+        invalidateQuote(); showRenderConfirmation = false
+        isImporting = true; importError = ""
+        defer { isImporting = false }
+        let sourceEngine = engine
+        announce("Bringing in the sound from YouTube. This can take up to two minutes.")
+        do {
+            let imported = try await service.importReferenceLink(link: link, engine: engine)
+            guard engine == sourceEngine else { return }
+            clips.append((url: imported.url, name: imported.name))
+            youtubeLink = ""
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
+            announce(imported.spoken)
+        } catch {
+            Earcons.shared.play(.error)
+            importError = (error as? LocalizedError)?.errorDescription ?? "The song could not be brought in from YouTube."
+            announce(importError)
         }
     }
 
