@@ -75,6 +75,63 @@ checkEqual("wordless cue skipped", DescribedCaptions.parse("WEBVTT\n\n00:00:01.0
 checkEqual("seconds, hours", DescribedCaptions.seconds("01:02:03.500") ?? -1, 3723.5)
 check("seconds, junk", DescribedCaptions.seconds("1:2:3:4") == nil && DescribedCaptions.seconds("abc") == nil && DescribedCaptions.seconds("") == nil)
 
+// Part 295 (Sep 26 2026): which captions the system shows. The Road Runner
+// short had no dialogue (empty captions.vtt) and VoiceOver still read text
+// over the film.
+func plan(voiceOver: Bool = true, readAloud: Bool = false, external: Bool = false, dialogue: Bool?) -> DescribedCaptionPlan {
+    DescribedCaptionPlan.choose(voiceOver: voiceOver, readAloud: readAloud, external: external, hasDialogue: dialogue)
+}
+
+checkEqual("Road Runner: quiet, nothing drawn", plan(dialogue: false), .quiet(draws: false))
+checkEqual("quiet before the captions file has downloaded", plan(dialogue: nil), .quiet(draws: false))
+checkEqual("quiet with dialogue: the app draws it", plan(dialogue: true), .quiet(draws: true))
+checkEqual("Read captions: the player's pick", plan(readAloud: true, dialogue: true), .reads)
+checkEqual("Read captions, no dialogue: still the player's pick", plan(readAloud: true, dialogue: false), .reads)
+checkEqual("Read captions, file unread: never the system's pick", plan(readAloud: true, dialogue: nil), .reads)
+checkEqual("AirPlay: the TV shows the Captions track", plan(external: true, dialogue: true), .captions)
+checkEqual("AirPlay, file unread: the system's choice", plan(readAloud: true, external: true, dialogue: nil), .automatic)
+checkEqual("no VoiceOver: the Captions track", plan(voiceOver: false, dialogue: true), .captions)
+checkEqual("no VoiceOver, no dialogue: nothing shown", plan(voiceOver: false, dialogue: false), .off)
+checkEqual("no VoiceOver, file unread: the system's choice", plan(voiceOver: false, dialogue: nil), .automatic)
+
+check("quiet: AVPlayer may not pick", !plan(dialogue: false).systemMayPick && !plan(dialogue: true).systemMayPick)
+check("Read captions: AVPlayer may not pick, even before the file is read",
+      !plan(readAloud: true, dialogue: nil).systemMayPick && !plan(readAloud: true, dialogue: true).systemMayPick)
+check("AirPlay or no VoiceOver: AVPlayer may pick again",
+      plan(external: true, dialogue: nil).systemMayPick && plan(voiceOver: false, dialogue: true).systemMayPick)
+
+// Which track is Captions. media.ts titles; the phone may or may not pass them on.
+let roadRunner = [["English", "Audio descriptions (text)"]]
+let both = [["English", "Captions"], ["English", "Audio descriptions (text)"]]
+checkEqual("Road Runner: no Captions track, file unread", DescribedCaptionPlan.captionsTrack(names: roadRunner, hasDialogue: nil), nil)
+checkEqual("Road Runner: no Captions track, file read", DescribedCaptionPlan.captionsTrack(names: roadRunner, hasDialogue: false), nil)
+checkEqual("a descriptions track is never Captions", DescribedCaptionPlan.captionsTrack(names: roadRunner, hasDialogue: true), nil)
+checkEqual("both tracks by name", DescribedCaptionPlan.captionsTrack(names: both, hasDialogue: nil), 0)
+checkEqual("the name wins over the place", DescribedCaptionPlan.captionsTrack(names: [both[1], both[0]], hasDialogue: true), 1)
+checkEqual("two nameless tracks: the first", DescribedCaptionPlan.captionsTrack(names: [["English"], ["English"]], hasDialogue: nil), 0)
+checkEqual("one nameless track, file unread: cannot tell", DescribedCaptionPlan.captionsTrack(names: [["English"]], hasDialogue: nil), nil)
+checkEqual("one nameless track, no dialogue: not Captions", DescribedCaptionPlan.captionsTrack(names: [["English"]], hasDialogue: false), nil)
+checkEqual("one nameless track, dialogue: Captions", DescribedCaptionPlan.captionsTrack(names: [["English"]], hasDialogue: true), 0)
+checkEqual("a name that only mentions captions is not enough", DescribedCaptionPlan.captionsTrack(names: [["English CC (captions)"]], hasDialogue: nil), nil)
+checkEqual("no text tracks", DescribedCaptionPlan.captionsTrack(names: [], hasDialogue: true), nil)
+
+// The guard: while held, whatever else comes on is put back.
+check("quiet: a track that came back on goes off", plan(dialogue: false).mustRestore(showing: 0, captions: nil))
+check("quiet: nothing showing, nothing done", !plan(dialogue: false).mustRestore(showing: nil, captions: nil))
+check("Read captions, Road Runner: the descriptions track goes off",
+      plan(readAloud: true, dialogue: nil).mustRestore(showing: 0, captions: nil)
+      && plan(readAloud: true, dialogue: false).mustRestore(showing: 0, captions: nil))
+check("Read captions, Road Runner: nothing showing, nothing done", !plan(readAloud: true, dialogue: false).mustRestore(showing: nil, captions: nil))
+check("Read captions: the descriptions track gives way to Captions", plan(readAloud: true, dialogue: true).mustRestore(showing: 1, captions: 0))
+check("Read captions: Captions showing, nothing done", !plan(readAloud: true, dialogue: true).mustRestore(showing: 0, captions: 0))
+check("Read captions: Captions switched off comes back", plan(readAloud: true, dialogue: true).mustRestore(showing: nil, captions: 0))
+checkEqual("Read captions shows the Captions track", plan(readAloud: true, dialogue: true).track(captions: 0), 0)
+checkEqual("quiet shows no track", plan(dialogue: true).track(captions: 0), nil)
+check("a sighted viewer's or the TV's pick is never undone",
+      !plan(voiceOver: false, dialogue: true).mustRestore(showing: 1, captions: 0)
+      && !plan(external: true, dialogue: true).mustRestore(showing: 1, captions: 0)
+      && !plan(voiceOver: false, dialogue: nil).mustRestore(showing: 0, captions: nil))
+
 if failures == 0 {
     print("\nAll described-caption checks passed.")
     exit(0)
