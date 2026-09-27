@@ -23,8 +23,10 @@ import UIKit
 // MARK: - Wire shapes
 
 struct RRFolder: Codable, Identifiable, Hashable { let name: String; let count: Int; let path: String; var id: String { path } }
-struct RRArchivePage: Codable { let path: String; let folders: [RRFolder]; let items: [RRItem]; let total: Int; let page: Int; let limit: Int }
-struct RRSearch: Codable { let items: [RRItem] }
+/// `deep` (Part 296): the server listed every item under `path` (a small
+/// shelf shown whole), each with its `sub`.
+struct RRArchivePage: Codable { let path: String; let folders: [RRFolder]; let items: [RRItem]; let total: Int; let page: Int; let limit: Int; let deep: Bool? }
+struct RRSearch: Codable { let items: [RRItem]; let more: Bool? }
 struct RRCollectionRow: Codable, Identifiable, Hashable { let id: String; let title: String; let description: String?; let shared: Bool; let ownerName: String?; let count: Int }
 struct RRCollectionItem: Codable, Identifiable, Hashable { let n: Int; let book: RRItem; let track: Int; let title: String; let mime: String?; let seconds: Double?; var id: Int { n } }
 struct RRCollectionDetail: Codable { let id: String; let title: String; let shared: Bool; let ownerName: String?; let mine: Bool; let items: [RRCollectionItem]; let description: String? }
@@ -53,11 +55,30 @@ extension ReadingRoomService {
     }
     struct OK: Decodable { let ok: Bool? }
 
-    func archive(path: String, page: Int, scope: String = "public") async throws -> RRArchivePage {
-        try await get("api/kade/reading-room/archive", [URLQueryItem(name: "path", value: path), URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "scope", value: scope)], as: RRArchivePage.self)
+    /// One shelf's level (its shelves and a page of its items). `deep`
+    /// (Part 296) lists every item anywhere under a small shelf instead; an
+    /// older server ignores it and answers as before.
+    func archive(path: String, page: Int, scope: String = "public", deep: Bool = false) async throws -> RRArchivePage {
+        var items = [URLQueryItem(name: "path", value: path), URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "scope", value: scope)]
+        if deep { items.append(URLQueryItem(name: "deep", value: "1")) }
+        var req = client.request(path: "api/kade/reading-room/archive", authorized: true, queryItems: items, timeout: 60)
+        // A shelf name with "+" in it ("Disney+") must reach the server as a
+        // plus, not as the space a query string reads it as.
+        if let url = req.url, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let query = comps.percentEncodedQuery, query.contains("+") {
+            comps.percentEncodedQuery = query.replacingOccurrences(of: "+", with: "%2B")
+            req.url = comps.url ?? url
+        }
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else { throw RRError(message: (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "The library answered \(http.statusCode).") }
+        return try JSONDecoder().decode(RRArchivePage.self, from: data)
     }
     func search(_ q: String, scope: String = "public") async throws -> [RRItem] {
         try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q), URLQueryItem(name: "scope", value: scope)], as: RRSearch.self).items
+    }
+    /// A page of search results (100 a page) and whether there are more.
+    func searchPage(_ q: String, page: Int, scope: String = "public") async throws -> RRSearch {
+        try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q), URLQueryItem(name: "scope", value: scope), URLQueryItem(name: "page", value: String(page))], as: RRSearch.self)
     }
     struct Colls: Decodable { let mine: [RRCollectionRow]; let shared: [RRCollectionRow] }
     func collections() async throws -> Colls { try await get("api/kade/reading-room/collections", as: Colls.self) }
@@ -365,188 +386,11 @@ struct LibrarianPane: View {
     }
 }
 
-// MARK: - Archive browser, search, collections (shelf sections)
-
-struct ArchiveSection: View {
-    let service: ReadingRoomService
-    let open: (RRItem) -> Void
-    var me: String = ""
-    var librarian: Bool = false
-    /// Sep 25 2026, her word: what you can do with an item rides the
-    /// VoiceOver Actions rotor as you pass it, so asking the librarian about
-    /// it, making a described copy or collecting it needs no trip inside.
-    var askLibrarian: (RRItem) -> Void = { _ in }
-    var collect: (RRItem) -> Void = { _ in }
-    @Environment(\.kadeNavigation) private var nav
-    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
-    @State private var deleting: RRItem?
-    @State private var moving: RRItem?
-    @State private var moveTo = ""
-    @State private var folderMoveTo = ""
-    @State private var showFolderMove = false
-    private func canManage(_ item: RRItem) -> Bool { librarian || (!me.isEmpty && item.owner == me) }
-    /* Sep 23 2026 (B7): where you are in the archive, and your search, belong
-     * to the Library screen now. This section is rebuilt every time Browse is
-     * chosen, and a trip to Listen or Add must not drop you back at the top. */
-    @Binding var page: RRArchivePage?
-    @Binding var path: String
-    @Binding var pageNo: Int
-    @Binding var scope: String
-    @State private var status = ""
-    @Binding var query: String
-    @Binding var results: [RRItem]
-    /// Part 292: the last search found nothing (its count was said aloud).
-    @State private var searchFoundNothing = false
-    @KadeArtShown private var artShown: Bool
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        Section {
-            HStack {
-                TextField("A title, a channel, a brand, a year…", text: $query).textFieldStyle(.roundedBorder).onSubmit { Task { await doSearch() } }
-                Button("Search") { Task { await doSearch() } }
-            }
-            searchEmptyArt
-            ForEach(results) { item in itemRow(item) }
-        } header: { Text("Find something in the library").accessibilityAddTraits(.isHeader) }
-
-        Section {
-            Picker("Show", selection: $scope) { Text("Public library").tag("public"); Text("Your uploads").tag("mine") }.onChange(of: scope) { _ in results = []; searchFoundNothing = false; Task { await load("", 0) } }
-            Text("Books, Audio, and Videos. Your uploads stay yours to manage; only shared items appear in the public library.").font(.footnote).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                Button("All media") { Task { await load("", 0) } }.font(.subheadline)
-                ForEach(Array(path.split(separator: "/").enumerated()), id: \.offset) { i, seg in
-                    Text("›").accessibilityHidden(true)
-                    Button(String(seg)) { Task { await load(path.split(separator: "/").prefix(i + 1).joined(separator: "/"), 0) } }.font(.subheadline)
-                }
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Where you are: " + (path.isEmpty ? "the archive" : path.replacingOccurrences(of: "/", with: ", ")))
-            shelfBand
-            if let p = page {
-                if p.folders.isEmpty && p.items.isEmpty {
-                    Text(path.isEmpty ? "Nothing has been pushed to the archive yet. On the PC, run \"9 - PUSH TO LIBRARY\" in the collection folder." : "This folder is empty.").foregroundStyle(.secondary)
-                }
-                ForEach(p.folders) { f in
-                    Button { Task { await load(f.path, 0) } } label: {
-                        HStack { Image(systemName: "folder").foregroundStyle(.brown).accessibilityHidden(true); Text(f.name); Spacer(); Text("\(f.count)").foregroundStyle(.secondary).monospacedDigit() }
-                    }
-                    .accessibilityLabel("Folder \(f.name), \(f.count) item\(f.count == 1 ? "" : "s")")
-                    .accessibilityHint("Opens the folder.")
-                }
-                ForEach(p.items) { item in itemRow(item) }
-                if !path.isEmpty, librarian || p.items.contains(where: canManage) {
-                    Button("Move or rename this folder") { folderMoveTo = path; showFolderMove = true }
-                }
-                if p.total > p.limit {
-                    HStack {
-                        Button("Previous page") { Task { await load(path, max(0, pageNo - 1)) } }.disabled(pageNo == 0)
-                        Spacer()
-                        Text("Page \(pageNo + 1) of \(Int(ceil(Double(p.total) / Double(p.limit))))").font(.footnote).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Next page") { Task { await load(path, pageNo + 1) } }.disabled((pageNo + 1) * p.limit >= p.total)
-                    }
-                }
-            } else { Text(status.isEmpty ? "Loading…" : status).foregroundStyle(.secondary) }
-        } header: { Text("The archive").accessibilityAddTraits(.isHeader) }
-        .task { if page == nil { await load("", 0) } }
-        .alert("Move \(moving?.title ?? "") to", isPresented: Binding(get: { moving != nil }, set: { if !$0 { moving = nil } })) {
-            TextField("Folder, like Video/Commercials", text: $moveTo)
-            Button("Move") { Task { if let m = moving { _ = try? await service.batch(ids: [m.id], action: "move", to: moveTo); moving = nil; await load(path, pageNo) } } }
-            Button("Cancel", role: .cancel) { moving = nil }
-        }
-        .alert("Move or rename the folder", isPresented: $showFolderMove) {
-            TextField("New name or place", text: $folderMoveTo)
-            Button("Move") { Task { if let r = try? await service.moveFolder(from: path, to: folderMoveTo) { UIAccessibility.post(notification: .announcement, argument: "Moved \(r.moved ?? 0) items."); await load(r.to ?? folderMoveTo, 0) } } }
-            Button("Cancel", role: .cancel) {}
-        }
-        // Delete is one flick away in the rotor now, so it asks first.
-        .confirmationDialog("Delete \(deleting?.title ?? "this") from the library?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-            Button("Delete it", role: .destructive) { if let d = deleting { deleting = nil; Task { await deleteItem(d) } } }
-            Button("Cancel", role: .cancel) { deleting = nil }
-        } message: { Text("It is removed for everyone, and this cannot be undone.") }
-    }
-
-    /// Part 292: Kade's painted shelf for the folder on show (Books, Radio,
-    /// Springfield's local news…), found by the words in its path
-    /// (KadeArt.shelfPicture). A silent row with nothing in it for VoiceOver,
-    /// like the reading alcove on the shelf screen; no row at all with
-    /// pictures off, under high contrast, or in a folder nobody painted.
-    @ViewBuilder
-    private var shelfBand: some View {
-        if artShown, let name = KadeArt.shelfPicture(forArchivePath: path) {
-            KadePaintedHeader(imageName: name, symbol: "books.vertical", tint: .brown, height: 110)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-        }
-    }
-
-    /// Part 292: the empty card-catalog drawer under the search box after a
-    /// search that found nothing. Silent: the count is already said aloud.
-    @ViewBuilder
-    private var searchEmptyArt: some View {
-        if searchFoundNothing && results.isEmpty && artShown && !typeSize.isAccessibilitySize {
-            KadeArtSpot(imageName: "ArtEmptySearch", fallbackSymbol: "tray", width: 110, height: 110)
-                .frame(maxWidth: .infinity)
-        }
-    }
-
-    /// Everything you can do with an item besides opening it: the Actions
-    /// rotor and a long press offer the same list.
-    @ViewBuilder
-    private func itemActions(_ item: RRItem) -> some View {
-        Button("Ask the librarian about this") { askLibrarian(item) }
-        if item.kind == "video" && describedVideo.allowed {
-            Button("Make a described copy") { nav.open(.describedVideo(DescribedVideoStart(book: item.id, track: 0))) }
-        }
-        Button("Add to a collection") { collect(item) }
-        if canManage(item) {
-            Button("Move to another folder") { moving = item; moveTo = item.path ?? path }
-            Button("Delete from the library", role: .destructive) { deleting = item }
-        }
-    }
-
-    private func deleteItem(_ item: RRItem) async {
-        _ = try? await service.batch(ids: [item.id], action: "delete")
-        UIAccessibility.post(notification: .announcement, argument: "Deleted \(item.title).")
-        await load(path, pageNo)
-    }
-
-    private func itemRow(_ item: RRItem) -> some View {
-        Button { open(item) } label: {
-            HStack(alignment: .top, spacing: 12) {
-                LibraryJacket(kind: item.kind, category: item.category, title: item.title)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title).font(.headline)
-                    Text(detail(item)).font(.subheadline).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .accessibilityLabel(item.spokenRow(where: "archive") + (item.described == true ? ", described" : ""))
-        .accessibilityHint("Opens it.")
-        .contextMenu { itemActions(item) }
-        .accessibilityActions { itemActions(item) }
-    }
-    private func detail(_ item: RRItem) -> String {
-        var bits: [String] = [item.categoryName]
-        if let a = item.author, !a.isEmpty { bits.append(a) }
-        if let y = item.copyrightYear, !y.isEmpty { bits.append(y) }
-        if let l = item.listen, !l.isEmpty { bits.append(l) }
-        if item.described == true { bits.append("described") }
-        return bits.joined(separator: " · ")
-    }
-    private func load(_ p: String, _ n: Int) async {
-        do { let pg = try await service.archive(path: p, page: n, scope: scope); page = pg; path = pg.path; pageNo = pg.page
-            UIAccessibility.post(notification: .announcement, argument: (pg.path.isEmpty ? "The archive" : pg.path.components(separatedBy: "/").last ?? pg.path) + ": \(pg.folders.count) folder\(pg.folders.count == 1 ? "" : "s"), \(pg.total) clip\(pg.total == 1 ? "" : "s").")
-        } catch { status = error.localizedDescription }
-    }
-    private func doSearch() async {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return }
-        do { results = try await service.search(q, scope: scope); searchFoundNothing = results.isEmpty; UIAccessibility.post(notification: .announcement, argument: "\(results.count) result\(results.count == 1 ? "" : "s") for \(q).") } catch { status = error.localizedDescription }
-    }
-}
+// MARK: - Collections
+//
+// Part 296 (Sep 27 2026): the in-place archive browser (ArchiveSection, with
+// its breadcrumb row, scope picker, painted band and page buttons) is gone.
+// Every shelf is its own screen now: LibraryShelfScreen.swift.
 
 struct CollectionsSection: View {
     let service: ReadingRoomService
@@ -604,6 +448,8 @@ struct CollectionScreen: View {
     let service: ReadingRoomService
     let row: RRCollectionRow
     let play: (RRCollectionItem, [RRCollectionItem]) -> Void
+    /// Leaves the screen (after "Delete this collection"). Part 296: a real
+    /// screen now, so Back at the top left is the way out, not a row.
     let back: () -> Void
     var askLibrarian: (RRItem) -> Void = { _ in }
     @State private var detail: RRCollectionDetail?
@@ -612,9 +458,6 @@ struct CollectionScreen: View {
 
     var body: some View {
         List {
-            Section {
-                Button { back() } label: { Label("Back to the shelf", systemImage: "chevron.left") }
-            }
             if let d = detail {
                 Section {
                     Text("\(d.items.count) item\(d.items.count == 1 ? "" : "s")" + (d.mine ? (d.shared ? " · shared with the family" : " · private") : " · by \(d.ownerName ?? "someone")")).foregroundStyle(.secondary)
@@ -651,6 +494,7 @@ struct CollectionScreen: View {
             } else { Text(status.isEmpty ? "Loading…" : status).foregroundStyle(.secondary) }
         }
         .navigationTitle(row.title)
+        .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
     private func load() async { do { detail = try await service.collection(row.id) } catch { status = error.localizedDescription } }

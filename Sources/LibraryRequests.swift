@@ -49,10 +49,13 @@ struct RRRequestList: Codable {
 }
 struct RRRequestResult: Codable { let request: RRRequest?; let duplicate: Bool? }
 
-/// The request list, held by the Library screen so its count can be said at
-/// the top of the shelf ("One of your library requests has news").
+/// The request list. Part 296: one for the whole Library, so the first
+/// screen's "Add and requests" row can say "1 request has news" and the Add
+/// screen shows the same list.
 @MainActor
 final class LibraryRequestsModel: ObservableObject {
+    static let shared = LibraryRequestsModel()
+
     @Published private(set) var requests: [RRRequest] = []
     @Published private(set) var canRequest = false
     @Published private(set) var admin = false
@@ -64,6 +67,17 @@ final class LibraryRequestsModel: ObservableObject {
 
     /// Silent unless this account may ask, owns the library, or already has requests.
     var visible: Bool { canRequest || admin || !requests.isEmpty }
+
+    /// Sign-out: nothing of this account's requests is left for the next one.
+    func reset() {
+        requests = []
+        canRequest = false
+        admin = false
+        unread = 0
+        review = 0
+        next = nil
+        everyone = false
+    }
 
     /// A failed load keeps what was shown; nobody hears an error about a list they never asked for.
     func reload(_ service: ReadingRoomService) async {

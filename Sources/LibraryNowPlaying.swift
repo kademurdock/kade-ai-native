@@ -16,10 +16,13 @@ import UIKit
 ///   - `LibraryNowPlaying.shared`
 ///   - `bind(client:voice:)`          once signed in; idempotent
 ///   - `stop()`                       on sign-out; closes the player completely
-///   - `showPlayerRequest`            bump it; the Library tab shows the player
-///   - `openItemRequest`              set an item id; it opens here, the Library
-///                                    tab shows the player, and it goes back to nil
 ///   - `NowPlayingBar(openPlayer:)`   above the tab bar; draws nothing when idle
+///
+/// Part 296 (Sep 27 2026): the player is a screen of its own now
+/// (`LibraryRoute.item`), pushed onto the Library tab's stack. The Now Playing
+/// bar and Search everything push it there (ContentView), and the pushed
+/// screen shows whatever is already open without reopening it, so the old
+/// `showPlayerRequest` / `openItemRequest` hand-offs are gone.
 ///
 /// Her Library rule (Part 181) holds: nothing auto-plays. The book only ever
 /// pauses BY ITSELF — for a voice message, a recording or a call — and never
@@ -32,13 +35,6 @@ import UIKit
 @MainActor
 final class LibraryNowPlaying: ObservableObject {
     static let shared = LibraryNowPlaying()
-
-    /// Bumped by the root to ask the Library tab to show the player screen.
-    @Published var showPlayerRequest = 0
-    /// A Library item id the root wants opened on the Library tab. Opened
-    /// here (so it works before the Library tab was ever visited), then set
-    /// back to nil.
-    @Published var openItemRequest: String?
 
     /// What is open in the player, for the bar and the Library's Continue row;
     /// nil when nothing is. Changes on open/close, play/pause and chapter
@@ -64,23 +60,13 @@ final class LibraryNowPlaying: ObservableObject {
     private var playerWatch: [AnyCancellable] = []
     private var voiceWatch: [AnyCancellable] = []
     private weak var watchedVoice: VoiceService?
-    private var requestWatch: AnyCancellable?
     /// Library screens on display, and whether each is showing the player.
     /// Keyed per screen, because two Library screens can be alive at once
     /// (the share sheet pushes a second over the Library tab's own).
     private var screens: [UUID: Bool] = [:]
     /// The item `pausedFor` belongs to.
     private var pausedBookID: String?
-    private var showPlayerHandled = 0
     private var messageCount = 0
-    private var openingRequest = false
-
-    init() {
-        requestWatch = $openItemRequest.sink { [weak self] id in
-            guard id != nil else { return }
-            Task { @MainActor in await self?.openRequestedItem() }
-        }
-    }
 
     // MARK: - The root's calls
 
@@ -127,13 +113,11 @@ final class LibraryNowPlaying: ObservableObject {
                 Task { @MainActor in self?.routeAnnouncement() }
             },
         ]
-        if openItemRequest != nil {
-            Task { await openRequestedItem() }
-        }
         return (newService, newPlayer)
     }
 
-    /// Closes the player completely (sign-out) and forgets the shelf, so the
+    /// Closes the player completely (sign-out) and forgets the shelf, the
+    /// shelves (on disk too), the request news and any upload line, so the
     /// next person to sign in never sees this one's books.
     func stop() {
         if let player, player.book != nil {
@@ -143,8 +127,9 @@ final class LibraryNowPlaying: ObservableObject {
         service?.shelf = nil
         pausedFor = nil
         pausedBookID = nil
-        openItemRequest = nil
-        showPlayerHandled = showPlayerRequest
+        LibraryShelves.shared.reset()
+        LibraryRequestsModel.shared.reset()
+        LibraryUploadState.shared.reset()
         refresh()
     }
 
@@ -196,16 +181,8 @@ final class LibraryNowPlaying: ObservableObject {
         screensChanged()
     }
 
-    /// True once per bump of `showPlayerRequest` when something is open, so
-    /// only one Library screen answers it even with two alive.
-    func takeShowPlayerRequest() -> Bool {
-        guard showPlayerRequest != showPlayerHandled else { return false }
-        showPlayerHandled = showPlayerRequest
-        return player?.book != nil
-    }
-
-    /// One line for the Library to say. A Library screen on display shows it
-    /// in its status line and speaks it; with none on display, it is spoken.
+    /// One line for the Library to say. The player screen on display speaks
+    /// it; with none on display, it is spoken here.
     func say(_ text: String) {
         if screens.isEmpty {
             UIAccessibility.post(notification: .announcement, argument: text)
@@ -269,24 +246,6 @@ final class LibraryNowPlaying: ObservableObject {
         } catch {
             say(error.localizedDescription)
         }
-    }
-
-    private func openRequestedItem() async {
-        guard !openingRequest, let service, let player else { return }
-        openingRequest = true
-        while let id = openItemRequest {
-            if player.book?.id != id {
-                do {
-                    let book = try await service.openBook(id)
-                    player.open(book)
-                } catch {
-                    say(error.localizedDescription)
-                }
-            }
-            if player.book?.id == id { showPlayerRequest += 1 }
-            if openItemRequest == id { openItemRequest = nil }
-        }
-        openingRequest = false
     }
 }
 

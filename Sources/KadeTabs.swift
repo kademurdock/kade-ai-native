@@ -53,6 +53,10 @@ struct KadeNavigation {
     var callSpotter: () -> Void = {}
     /// Open one Library item by id on the Library tab.
     var openLibraryItem: (String) -> Void = { _ in }
+    /// Part 296: push a Library screen (a shelf, a list, the player for an
+    /// item) onto the Library tab's own stack, switching to that tab. The
+    /// player for the item already on top is never pushed twice.
+    var pushLibrary: (LibraryRoute) -> Void = { _ in }
 }
 
 private struct KadeNavigationKey: EnvironmentKey {

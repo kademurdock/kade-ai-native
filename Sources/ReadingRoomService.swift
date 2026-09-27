@@ -75,6 +75,12 @@ struct RRItem: Codable, Identifiable, Hashable {
     var progress: RRProgress?
     var path: String?
     var described: Bool?
+    /// Part 296: where it sits under the shelf it was listed from, as words
+    /// ("Bumpers, 1990s"), when a small shelf is listed whole (/archive?deep=1).
+    var sub: String?
+    /// Part 296: the library owner's own item. A row does not end "donated
+    /// by" her on almost every item in the archive.
+    var fromLibraryOwner: Bool?
 
     /// Sep 12 2026, her word: "videos are showing up as books, doesn't seem
     /// like there's a way to play them or get AI descriptions". The archive
@@ -83,25 +89,19 @@ struct RRItem: Codable, Identifiable, Hashable {
     /// that is not text is a recording with tracks (audio or video).
     var isAudio: Bool { kind != "text" }
     var categoryName: String { RRCategory.name(category, isAudio: isAudio) }
-    /// What VoiceOver says for the row.
-    func spokenRow(where place: String) -> String {
-        var bits: [String] = [title]
-        if let a = author, !a.isEmpty { bits.append("by \(a)") }
-        bits.append(categoryName)
-        if let l = listen, !l.isEmpty { bits.append(l) }
-        if let p = progress, let w = p.where_, !w.isEmpty { bits.append((isAudio ? "part " : "chapter ") + w) }
-        if place != "mine", let d = ownerName, !d.isEmpty { bits.append("donated by \(d)") }
-        if state == "pending" { bits.append("no recordings yet") }
-        if place == "mine", shared { bits.append("in the library") }
-        return bits.joined(separator: ", ")
-    }
+    // Part 296: what VoiceOver says for a row is LibraryWords.spokenRow
+    // (LibraryNavigation.swift), the same in every Library list.
 }
 
 enum RRCategory {
     static let audio: [(String, String)] = [("audiobook", "Audiobook"), ("movie", "Movie"), ("cassette", "Cassette"), ("radio", "Radio"), ("commercials", "Commercials"), ("music", "Music"), ("other", "Other")]
+    /// Part 296: the server's other kinds, which used to read "Tv", "Vhs"
+    /// and "Psa". Names only; the donate picker keeps its own list.
+    static let otherNames: [String: String] = ["tv": "Television", "vhs": "Home video", "psa": "Public service announcement"]
     static func name(_ key: String, isAudio: Bool) -> String {
         if !isAudio { return "Book" }
-        return audio.first(where: { $0.0 == key })?.1 ?? key.capitalized
+        if let known = audio.first(where: { $0.0 == key })?.1 { return known }
+        return otherNames[key] ?? key.capitalized
     }
 }
 
@@ -116,6 +116,9 @@ struct RRShelf: Codable {
     var archiveOwned: Int?
     var libraryCount: Int?
     var libraryFiled: Int?
+    /// True in the family library; false for an outside seat; null for the
+    /// App Review seat (which hears nothing of a family collection).
+    var familyLibrary: Bool?
 }
 
 struct RRChapter: Codable, Identifiable, Hashable {
@@ -189,6 +192,8 @@ struct RRBook: Codable {
     var librarian: RRLibrarian?
     var path: String?
     var copyrightYear: String?
+    /// Part 296: the library owner's own item (no "donated by" her).
+    var fromLibraryOwner: Bool?
     var isAudio: Bool { kind != "text" }   // audio or video: tracks, not chapters
     var partCount: Int { isAudio ? tracks.count : chapters.count }
     func partTitle(_ s: Int) -> String {
