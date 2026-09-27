@@ -37,7 +37,7 @@ struct LibraryHomeView: View {
             Section {
                 Group {
                     continueRow
-                    if showsLocal { localRow }
+                    localRow
                     mediaRow("Video", root: "Videos", icon: "film")
                     mediaRow("Audio", root: "Audio", icon: "waveform")
                     mediaRow("Books", root: "Books", icon: "book.closed")
@@ -136,18 +136,44 @@ struct LibraryHomeView: View {
         return (item.isAudio ? "Part " : "Chapter ") + w
     }
 
-    /// Springfield and the Ozarks: only in the family library (the App
-    /// Review seat and other outside seats hear nothing of it). Its place is
-    /// remembered between launches, so the row is there from the start; on
-    /// the first launch the shelf's own answer (which usually comes before
-    /// the tree) puts it in, so it is not slipped in above Video later.
-    private var showsLocal: Bool {
-        if let tree = shelves.publicTree { return tree.local != nil }
-        if shelves.treeUnsupported { return service.shelf?.familyLibrary == true }
-        return rememberedLocal || service.shelf?.familyLibrary == true
+    /// Springfield and the Ozarks is always the second row, so nothing is
+    /// slipped in above Video once things load. It opens in the family
+    /// library. Anywhere else (an outside seat, the App Review seat) it stays
+    /// where it is, greyed out with the Family feature pack's reason: her
+    /// Sep 25 rule for pack features is greyed, never hidden. Until that is
+    /// known it is dimmed and says loading; the family's answer is
+    /// remembered between launches, so for them it is live from the start.
+    private enum LocalRow { case open, loading, locked }
+
+    private var localState: LocalRow {
+        let family = service.shelf?.familyLibrary
+        if let tree = shelves.publicTree { return tree.local != nil || family == true ? .open : .locked }
+        if family == true { return .open }
+        // The shelf has answered: false for an outside seat, null for the App Review seat.
+        if service.shelf != nil { return .locked }
+        return rememberedLocal ? .open : .loading
     }
 
+    @ViewBuilder
     private var localRow: some View {
+        switch localState {
+        case .open: openLocalRow
+        case .loading: dimmedLocalRow(locked: false)
+        case .locked: dimmedLocalRow(locked: true)
+        }
+    }
+
+    private func dimmedLocalRow(locked: Bool) -> some View {
+        let detail = locked ? KadeFamilyFeatures.note : "loading"
+        return Button {} label: {
+            rowLabel("Springfield and the Ozarks", icon: "mappin.and.ellipse", detail: detail)
+        }
+        .disabled(true)
+        .accessibilityLabel("Springfield and the Ozarks, \(detail)")
+        .accessibilityHint(locked ? "Local TV, radio and commercials from Springfield and the Ozarks." : "")
+    }
+
+    private var openLocalRow: some View {
         let local = shelves.publicTree?.local
         let ref = LibraryShelfRef(id: local?.id ?? "#local", title: "Springfield and the Ozarks",
                                   path: local?.path.isEmpty == false ? (local?.path ?? "") : "Videos/Ozarks (Springfield Area)",
@@ -155,6 +181,8 @@ struct LibraryHomeView: View {
         let detail: String
         if let n = local?.count {
             detail = LibraryWords.items(n)
+        } else if shelves.publicTree != nil {
+            detail = "no items yet"
         } else if shelves.treeUnsupported {
             detail = "local TV, radio and commercials"
         } else {
