@@ -604,7 +604,10 @@ struct SubmissionsSection: View {
             let m = try await service.submissions(all: false)
             mine = m.submissions; librarian = m.librarian ?? false
             if librarian { waiting = try await service.submissions(all: true, status: "pending").submissions }
-        } catch { announce(error.localizedDescription) }
+        } catch {
+            // Part 296: leaving Add while this loads cancels it; that is never read out on the next screen.
+            if !LibraryLoad.cancelled(error) { announce(error.localizedDescription) }
+        }
     }
 }
 
