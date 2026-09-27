@@ -437,7 +437,8 @@ struct CollectionsSection: View {
         .accessibilityHint("Opens the collection.")
     }
     func reload() async {
-        do { let c = try await service.collections(); mine = c.mine; shared = c.shared; loaded = true } catch { status = error.localizedDescription }
+        // Part 296: a load cut short by opening a collection is no error (LibraryLoad); it reloads on return.
+        do { let c = try await service.collections(); mine = c.mine; shared = c.shared; loaded = true; status = "" } catch { if !LibraryLoad.cancelled(error) { status = error.localizedDescription } }
     }
     private func make() async {
         do { _ = try await service.newCollection(newTitle.trimmingCharacters(in: .whitespaces)); UIAccessibility.post(notification: .announcement, argument: "Made \(newTitle)."); newTitle = ""; await reload() } catch { status = error.localizedDescription }
@@ -497,7 +498,7 @@ struct CollectionScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
-    private func load() async { do { detail = try await service.collection(row.id) } catch { status = error.localizedDescription } }
+    private func load() async { do { detail = try await service.collection(row.id); status = "" } catch { if !LibraryLoad.cancelled(error) { status = error.localizedDescription } } }
     private func remove(_ it: RRCollectionItem) async {
         do {
             try await service.editCollection(row.id, remove: it.n)
