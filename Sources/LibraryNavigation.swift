@@ -241,6 +241,21 @@ enum LibraryWords {
     }
 }
 
+// MARK: - A load cut short
+
+/// SwiftUI cancels a screen's `.task` when the screen leaves the display: a
+/// push on top of it (a shelf opened before this one's items arrived) or a
+/// switch to another tab. A load cut short that way is never an error to show
+/// her ("cancelled", with a Try again row pushed in under the heading); the
+/// screen loads again when it comes back.
+enum LibraryLoad {
+    static func cancelled(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        return Task.isCancelled
+    }
+}
+
 // MARK: - Shelf rows from the tree, or from /archive
 
 enum LibraryShelfRules {

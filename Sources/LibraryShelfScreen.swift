@@ -38,6 +38,9 @@ struct LibraryShelfScreen: View {
     @State private var skippedTo: String?
     @State private var skippedTitle: String?
     @State private var started = false
+    /// The last load was cut short (a push on top, another tab), so it runs
+    /// again when this screen comes back (LibraryLoad).
+    @State private var cutShort = false
     /// VoiceOver is on the heading already, so a count arriving later is said once.
     @State private var headingFocusDone = false
     /// My uploads: what is still on its way.
@@ -223,7 +226,12 @@ struct LibraryShelfScreen: View {
     // MARK: loading
 
     private func start() async {
-        guard !started else { return }
+        guard !started else {
+            // Back on display after a load was cut short: load again, quietly
+            // (VoiceOver goes back to the row she opened, not the heading).
+            if cutShort { await load(again: false, speak: false) }
+            return
+        }
         started = true
         focusHeadingSoon()
         if service.shelf == nil { await service.loadShelf() }
@@ -246,6 +254,7 @@ struct LibraryShelfScreen: View {
         let mine = token
         let wasWaiting = shelfRows == nil || totalCount == nil
         failure = nil
+        cutShort = false
         if again || !shelves.settled(shelf.scope) {
             await shelves.refresh(service, scope: shelf.scope, force: again)
         }
@@ -261,7 +270,7 @@ struct LibraryShelfScreen: View {
         } else {
             await loadLevel(token: mine)
         }
-        guard mine == token else { return }
+        guard mine == token, !cutShort else { return }
         if speak && (wasWaiting || again) && headingFocusDone && shelfRows != nil {
             say(heading)
         }
@@ -288,6 +297,7 @@ struct LibraryShelfScreen: View {
             itemsLoaded = true
         } catch {
             guard mine == token else { return }
+            if LibraryLoad.cancelled(error) { cutShort = true; return }
             failure = error.localizedDescription
             itemsLoaded = true
         }
@@ -325,6 +335,7 @@ struct LibraryShelfScreen: View {
             itemsLoaded = true
         } catch {
             guard mine == token else { return }
+            if LibraryLoad.cancelled(error) { cutShort = true; return }
             failure = error.localizedDescription
         }
     }
@@ -494,6 +505,8 @@ struct LibraryRecentScreen: View {
     @State private var unsupported = false
     @State private var failure: String?
     @State private var started = false
+    /// The first load was cut short (LibraryLoad); it runs again on return.
+    @State private var cutShort = false
     @AccessibilityFocusState private var headingFocused: Bool
 
     init(apiClient: KadeAPIClient) {
@@ -532,7 +545,10 @@ struct LibraryRecentScreen: View {
         .refreshable { await load() }
         .onChange(of: actions.changes) { _, _ in Task { await load() } }
         .task {
-            guard !started else { return }
+            guard !started else {
+                if cutShort { await load() }
+                return
+            }
             started = true
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 550_000_000)
@@ -545,6 +561,7 @@ struct LibraryRecentScreen: View {
 
     private func load() async {
         failure = nil
+        cutShort = false
         do {
             if let found = try await service.recentItems() {
                 items = found
@@ -553,6 +570,7 @@ struct LibraryRecentScreen: View {
                 unsupported = true
             }
         } catch {
+            if LibraryLoad.cancelled(error) { cutShort = true; return }
             if items == nil { failure = error.localizedDescription }
         }
     }

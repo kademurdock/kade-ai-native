@@ -323,6 +323,9 @@ struct ReadingRoomView: View {
             let resume = (book.progress?.s ?? 0) > 0 || (book.progress?.c ?? 0) > 0 || (book.progress?.pos ?? 0) > 5
             sayThenFocusPlay((resume ? "Resuming " : "Opened ") + book.title + ". " + player.positionSpoken + (autoplay ? "." : ". Press Play."))
         } catch {
+            // Another tab chosen while it opened cancels the screen's task
+            // (LibraryLoad): nothing to read out; it opens on return.
+            if LibraryLoad.cancelled(error) { askedToOpen = false; return }
             openFailure = error.localizedDescription
             announce(error.localizedDescription)
         }

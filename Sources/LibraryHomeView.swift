@@ -302,7 +302,6 @@ struct LibraryHomeView: View {
     /// always asks), so a walk through the shelves never floods the server.
     private func reload(force: Bool) async {
         if !force, let last = lastLoad, Date().timeIntervalSince(last) < 30 { return }
-        lastLoad = Date()
         let service = self.service
         let shelves = self.shelves
         async let shelf: Void = service.loadShelf()
@@ -311,5 +310,9 @@ struct LibraryHomeView: View {
         await tree
         await requests.reload(service)
         if let c = try? await service.collections() { collectionCount = c.mine.count + c.shared.count }
+        // Opening a row (or another tab) before this finished cancels it
+        // (LibraryLoad); then the next return asks again instead of leaving
+        // "loading" on a row for half a minute.
+        if !Task.isCancelled { lastLoad = Date() }
     }
 }
