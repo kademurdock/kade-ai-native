@@ -953,6 +953,8 @@ struct ContentView: View {
                 ("launch-chat", { tab = .talk; talkPath = [.mainChat] }),
                 ("talk", { tab = .talk; talkPath = [] }),
                 ("library", { tab = .library; libraryPath = [] }),
+                // Part 296: one shelf as its own screen (Back at the top left).
+                ("library-shelf", { tab = .library; libraryPath = [.library(.shelf(LibraryShelfRef(id: "Videos", title: "Video", path: "Videos")))] }),
                 ("create", { tab = .create; createPath = [] }),
                 ("play", { tab = .play; playPath = [] }),
                 ("more", { tab = .more; morePath = [] }),
