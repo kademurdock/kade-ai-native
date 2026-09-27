@@ -33,6 +33,11 @@ struct WorldView: View {
     @State private var creationStep: String?
     @State private var mode = "play"
     @State private var logExpanded = false
+    /// Part 295: the expanded log shows the newest 80 lines; "Show earlier"
+    /// reveals 80 more (the admin log's shape). The eager VStack lays out
+    /// every shown line on each live append, so the window keeps that small.
+    @State private var logWindow = 80
+    private let logWindowStep = 80
     @State private var isVisible = false
     @AccessibilityFocusState private var focusedChoice: String?
     /// Build 195: the sound manifest — district (ward-bed) ambience urls and
@@ -73,7 +78,20 @@ struct WorldView: View {
         VStack(spacing: 0) {
             ScrollViewReader { _ in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
+                    /* Sep 26 2026 (Part 295, Amber A, build 316): this was a
+                     * LazyVStack, the last one on a VoiceOver screen that also
+                     * mutates its rows live. Half an hour into Reverie the
+                     * main thread froze for over a minute and iOS killed the
+                     * app (0x8BADF00D, stack all AttributeGraph/SwiftUICore
+                     * inside a layout commit, no app frames). That is the
+                     * build-225 transcript freeze exactly: radar FB21851974 /
+                     * forums thread 814208, a lazy container allocating rows
+                     * while a state write lands (the picture's onAppear, the
+                     * live feed's appends) and VoiceOver walks the tree. Same
+                     * medicine as the transcript, the admin log and the
+                     * logbook: an eager VStack, a bounded log window, and no
+                     * state write inside a layout pass. */
+                    VStack(alignment: .leading, spacing: 6) {
                         if pictureOn, let picture, mode == "play" {
                             WorldPictureView(snapshot: picture,
                                 motion: pictureMotion && !reduceMotion && !lowPowerMode && pictureVisible && scenePhase == .active && isVisible,
@@ -82,8 +100,9 @@ struct WorldView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                                 .accessibilityHidden(true)
                                 .allowsHitTesting(false)
-                                .onAppear { pictureVisible = true }
-                                .onDisappear { pictureVisible = false }
+                                .onAppear { DispatchQueue.main.async { pictureVisible = true } }
+                                .onDisappear { DispatchQueue.main.async { pictureVisible = false } }
+                                .modifier(WorldPictureScrollPause(visible: $pictureVisible))
                         }
                         if !latestReply.isEmpty {
                             Text("Latest reply").font(.headline).accessibilityAddTraits(.isHeader)
@@ -93,7 +112,13 @@ struct WorldView: View {
                         }
                         worldControls
                         DisclosureGroup("World log, \(log.count) entries", isExpanded: $logExpanded) {
-                            ForEach(log) { line in
+                            if log.count > logWindow {
+                                Button("Show \(min(logWindowStep, log.count - logWindow)) earlier entries") {
+                                    logWindow += logWindowStep
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            ForEach(Array(log.suffix(logWindow))) { line in
                                 Text(line.text)
                                     .font(.system(.body, design: .monospaced))
                                     .foregroundStyle(color(for: line.role))
@@ -453,5 +478,26 @@ struct WorldView: View {
             WorldTones.shared.play(kind)
         }
         WorldHaptics.play(kind)
+    }
+}
+
+/// Part 295: the room picture's motion still pauses once it scrolls out of
+/// sight. The LazyVStack used to do that through onAppear/onDisappear; an
+/// eager VStack fires those only when the picture is added or removed, so on
+/// iOS 18 and later the scroll view says when it is on screen. iOS 17 keeps
+/// animating while scrolled away, which costs battery, never a freeze. The
+/// write waits for the next main-queue turn, never inside a layout pass.
+private struct WorldPictureScrollPause: ViewModifier {
+    @Binding var visible: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollVisibilityChange(threshold: 0.2) { shown in
+                DispatchQueue.main.async { visible = shown }
+            }
+        } else {
+            content
+        }
     }
 }
