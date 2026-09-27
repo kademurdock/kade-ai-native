@@ -220,8 +220,9 @@ struct ReadingRoomView: View {
                 return
             }
             routedIncoming = true
-            if service.shelf == nil { await service.loadShelf() }
+            // The shared file first: the Add screen is already on display.
             if let f = incomingFile { routeIncoming(f) }
+            if service.shelf == nil { await service.loadShelf() }
             await requests.reload(service)
         case .item(let route):
             guard !askedToOpen else { return }

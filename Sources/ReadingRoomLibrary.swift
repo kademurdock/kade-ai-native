@@ -557,6 +557,11 @@ struct SubmissionsSection: View {
             }
             await reload()
         }
+        // Part 296: Add is its own screen now, on display before a link
+        // shared into the app is routed to it, so the link can arrive late.
+        .onChange(of: incomingLink) { _, link in
+            if let link, url.isEmpty { url = link }
+        }
         .alert(decisionApprove ? "Approve it?" : "Decline it?", isPresented: Binding(get: { deciding != nil }, set: { if !$0 { deciding = nil } })) {
             TextField(decisionApprove ? "A word for them (optional)" : "Tell them why (optional)", text: $decisionNote)
             Button(decisionApprove ? "Approve" : "Decline") { Task { await decide() } }
