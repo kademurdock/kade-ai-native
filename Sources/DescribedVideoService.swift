@@ -650,6 +650,10 @@ struct DVJob: Decodable, Identifiable {
     let libraryPath: String?
     /// A Library import that found a video she already has.
     let existing: Bool?
+    /// Sep 27 2026: a checked video whose run finished or stopped, which can
+    /// be described again from the original the server kept. Absent on
+    /// older servers, which could do that only for a finished copy.
+    let describableAgain: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, bytes, state, source, seconds, stage, progress, etaSeconds, error
@@ -659,6 +663,7 @@ struct DVJob: Decodable, Identifiable {
         case finishedAt, expiresAt, cancelRequested, cancelStuck, uploadedBytes, queuePosition
         case sourcePrivate, sourceGrownUps, sourceOwner, range, preview
         case keepable, recheckable, overQuote, approvedUSD, libraryPath, existing
+        case describableAgain
     }
 
     var title: String {
@@ -777,6 +782,7 @@ extension DVJob {
         approvedUSD = c.dvNumber(.approvedUSD)
         libraryPath = c.dvString(.libraryPath)
         existing = c.dvBool(.existing)
+        describableAgain = c.dvBool(.describableAgain)
     }
 }
 
@@ -1244,7 +1250,9 @@ final class DescribedVideoService: ObservableObject {
         var requestId = importIds[link] ?? Self.newRequestId()
         importIds[link] = requestId
         var job: DVJob = try await post("imports", body: ["url": link, "requestId": requestId], fallback: "That YouTube video could not be imported.")
-        if ["failed", "cancelled", "done"].contains(job.state) {
+        // A video she already has (`existing`, Sep 27 2026) is the answer
+        // itself: the server keeps its original, so it is not asked again.
+        if job.existing != true, ["failed", "cancelled", "done"].contains(job.state) {
             requestId = Self.newRequestId()
             importIds[link] = requestId
             job = try await post("imports", body: ["url": link, "requestId": requestId], fallback: "That YouTube video could not be imported.")
@@ -1269,8 +1277,9 @@ final class DescribedVideoService: ObservableObject {
 
     // MARK: Spending
 
-    /// action: start, preview, resume, finish or redo. The price is the
-    /// server's, never a formula on the phone.
+    /// action: start, preview, resume, finish, redo or reanalyze (Describe
+    /// again; `preview` true in its settings for the first minutes only).
+    /// The price is the server's, never a formula on the phone.
     func estimate(jobId: String, action: String, settings: [String: Any]?, sections: [Int]? = nil) async throws -> DVEstimate {
         var body: [String: Any] = ["action": action]
         if let settings { body["settings"] = settings }
@@ -1300,6 +1309,18 @@ final class DescribedVideoService: ObservableObject {
     /// Back to the last finished version after a stopped remake.
     func abandon(jobId: String) async throws -> DVJob {
         try await post("jobs/\(jobId)/abandon", fallback: "Couldn't go back to the earlier version.")
+    }
+
+    /// Describe again (Sep 27 2026): fresh descriptions from the original
+    /// the server already has, so a YouTube link is never fetched again.
+    /// After a finished copy (earlier versions stay) or a run that stopped
+    /// (it starts over). `expectedVersion` is the video's current version,
+    /// so a change made in another tab is never overwritten.
+    func reanalyze(jobId: String, settings: [String: Any], expectedVersion: Int, preview: Bool) async throws -> DVJob {
+        var body = settings
+        body["expectedVersion"] = expectedVersion
+        if preview { body["preview"] = true }
+        return try await post("jobs/\(jobId)/reanalyze", body: body, fallback: "That could not start. Nothing was spent.")
     }
 
     /// Describe again only the parts that could not be described.

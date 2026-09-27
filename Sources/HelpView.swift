@@ -453,6 +453,10 @@ struct HelpSection: Identifiable {
                 body: "Play the described video, listen to the described audio, or read the described transcript one line at a time. Save or share sends the video, audio or transcript to Files or anywhere else. Keep it in your Library files it with the family or just for you. After a preview, Describe the rest finishes the video, and parts that could not be described can be tried again. Finished copies are kept for seven days."
             ),
             HelpEntry(
+                title: "Describing a video again",
+                body: "Open a video you already tried from Your videos, finished or stopped, and choose Describe again near the end of its screen. It writes fresh descriptions from the copy already on the server, so a YouTube link is never fetched again. It starts with that video's choices; turn on Change the narration or detail to pick others. A long video also offers Try the first 3 minutes again. The price is said first, and earlier versions stay. In Your videos, Describe again is also in a video's Actions rotor. Pasting a YouTube link you already brought in opens that video instead of downloading it again, and if YouTube would not hand a video over, Check again tries the link again. The server keeps a video until the date on its screen; after that, choose it again."
+            ),
+            HelpEntry(
                 title: "Watching with the screen locked, and captions",
                 body: "The described video keeps playing when you switch apps or lock the phone, and play, pause, and back or forward 10 seconds work from the Lock Screen and your headphones. Captions show on the picture for anyone watching with you. With VoiceOver on, they are not read over the film. To have VoiceOver read them, turn on Read captions with VoiceOver, under Listen to the described audio or at the top of the player. VoiceOver then follows Media Descriptions in Settings, Accessibility, VoiceOver, Verbosity: Speech reads them aloud, Braille shows them on a braille display."
             ),

@@ -105,9 +105,35 @@ Rules the second pass fixed or settled:
 - When an action takes its own button away, VoiceOver lands on the video's
   heading (or the Library section, or Choose a video) after the confirmation.
 
+**Describe again** (Sep 27 2026, her ask: YouTube refuses the server now and
+then, so a video must never have to be imported twice): a section after the
+result on any video the server marks `describableAgain` (a checked video whose
+run finished, failed or was cancelled, even one Continue refuses; an older
+server without the field gets it on finished videos only). It writes fresh
+descriptions from the original the server kept (`POST jobs/:id/reanalyze`
+with the settings and `expectedVersion`, `preview: true` for "Try the first 3
+minutes again"), priced first like every spend button (estimate action
+`reanalyze`, the preview marked in its settings). It starts with the video's
+own choices; the toggle "Change the narration or detail" shows them (with
+Continue on screen, only detail, passes, notes and part, since the narration
+above is shared). When the original is gone the server refuses the estimate
+with the reason, so the buttons are dimmed with it as their hint and it is
+written in the section. Each row in Your videos has Describe again in its
+Actions rotor, which opens the video on that heading, and a stopped row says
+"can be described again".
+
+Review fixes (Sep 27 2026): pasting a YouTube link she already brought in
+opens that video (the server answers `/imports` with `existing: true` when it
+was checked and its original is still kept, or is still coming in) and lands on
+Describe again, so the link is not downloaded a second time. A YouTube import
+YouTube may let through later (the bot wall) is `recheckable`, and Check again
+brings the link in again. After three server stops at the same part, the
+server refuses the same choices, so Describe again's choices open by
+themselves. Turning "Change the narration or detail" off puts the video's own
+choices back. A refused button never reads a price of $0.00.
+
 Not on the phone yet (use the website): making a new version with different
-narration (revoice), fresh descriptions (reanalyze), the script editor, and the
-free rehearsal.
+narration (revoice), the script editor, and the free rehearsal.
 
 ## What to test on a phone (with VoiceOver on)
 
@@ -140,3 +166,12 @@ free rehearsal.
    there. Come back: the uploaded video is open and its news is said.
 12. With one video describing and another just finished, tap the "ready" push:
    the finished one opens (a lock-screen card still opens the one describing).
+13. Describe again: open a finished video, choose Describe again (the alert
+   names the choices and the price), and hear "Describing it again". Open a
+   stopped one (failed or cancelled): the facts say Describe again is further
+   down, and it starts over at a new version. In Your videos, a row's Actions
+   rotor has Describe again, which lands on that heading. With the server's
+   original gone, both buttons are dimmed and the section says why.
+14. Paste the link of a YouTube video already in Your videos and choose Import
+   from YouTube: it says "You already have this video", opens it and lands on
+   Describe again; nothing is downloaded.
