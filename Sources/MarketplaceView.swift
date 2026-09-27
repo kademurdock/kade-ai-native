@@ -434,12 +434,30 @@ struct MarketplaceView: View {
 /// at all. Otherwise the load starts when the row appears and stops if it
 /// goes away (leaving the Marketplace, or a search that drops the row), and
 /// the one state write lands after the download, never inside a layout pass.
+/// The downloaded picture is kept with the address it came from, so a row
+/// whose character changes picture never keeps the old face. The load is
+/// keyed on the address AND on whether a picture is drawn, so a picture the
+/// memory cache let go (a memory warning) is fetched again, from the disk
+/// cache, instead of leaving a grey circle.
 private struct MarketplaceAvatar: View {
     let url: URL
-    @State private var loaded: UIImage?
+    @State private var loaded: Loaded?
+
+    private struct Loaded {
+        let url: URL
+        let image: UIImage
+    }
+
+    /// What the load waits on: this address, and whether it is drawn yet.
+    private struct Want: Equatable {
+        let url: URL
+        let drawn: Bool
+    }
 
     var body: some View {
-        let picture: UIImage? = loaded ?? MarketplaceAvatarLoader.shared.cached(url)
+        let mine: UIImage? = loaded?.url == url ? loaded?.image : nil
+        let picture: UIImage? = mine ?? MarketplaceAvatarLoader.shared.cached(url)
+        let drawn: Bool = picture != nil
         ZStack {
             if let picture {
                 Image(uiImage: picture)
@@ -452,11 +470,12 @@ private struct MarketplaceAvatar: View {
         .frame(width: 44, height: 44)
         .clipShape(Circle())
         .accessibilityHidden(true)
-        .task(id: url) {
-            if loaded != nil || MarketplaceAvatarLoader.shared.cached(url) != nil { return }
+        .task(id: Want(url: url, drawn: drawn)) {
+            // Already drawn, from memory or this row's own download: nothing to do.
+            if drawn { return }
             let image = await MarketplaceAvatarLoader.shared.image(for: url)
             if Task.isCancelled { return }
-            if let image { loaded = image }
+            if let image { loaded = Loaded(url: url, image: image) }
         }
     }
 }
