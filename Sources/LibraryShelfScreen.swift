@@ -45,6 +45,8 @@ struct LibraryShelfScreen: View {
     @State private var showFolderMove = false
     @State private var folderMoveTo = ""
     @AccessibilityFocusState private var headingFocused: Bool
+    /// After "Show 60 more", VoiceOver moves to the first of the new items.
+    @AccessibilityFocusState private var focusedItem: String?
     /// Part 292: Kade's painted shelves are silent (see KadeArt).
     @KadeArtShown private var artShown: Bool
 
@@ -177,7 +179,9 @@ struct LibraryShelfScreen: View {
         .libraryRowActions(actions)
         .task { await start() }
         .refreshable { await load(again: true) }
-        .onChange(of: actions.changes) { _, _ in Task { await load(again: true) } }
+        // After a move or a delete the row's own line ("Moved ...", "Deleted
+        // ...") is the one thing said; the reload stays quiet.
+        .onChange(of: actions.changes) { _, _ in Task { await load(again: true, speak: false) } }
         .background {
             Color.clear
                 .alert("Move or rename this shelf", isPresented: $showFolderMove) {
@@ -197,6 +201,7 @@ struct LibraryShelfScreen: View {
                 }
                 ForEach(items) { item in
                     LibraryItemRow(item: item, place: shelf.scope == "mine" ? "mine" : "archive", actions: actions)
+                        .accessibilityFocused($focusedItem, equals: item.id)
                 }
                 if itemsLoaded, let total = itemTotal, items.count < total {
                     Button(loadingMore ? "Loading more…" : "Show \(min(60, total - items.count)) more") { Task { await showMore() } }
@@ -232,7 +237,7 @@ struct LibraryShelfScreen: View {
         }
     }
 
-    private func load(again: Bool) async {
+    private func load(again: Bool, speak: Bool = true) async {
         token += 1
         let mine = token
         let wasWaiting = shelfRows == nil || totalCount == nil
@@ -253,7 +258,7 @@ struct LibraryShelfScreen: View {
             await loadLevel(token: mine)
         }
         guard mine == token else { return }
-        if (wasWaiting || again) && headingFocusDone && shelfRows != nil {
+        if speak && (wasWaiting || again) && headingFocusDone && shelfRows != nil {
             say(heading)
         }
     }
@@ -332,7 +337,19 @@ struct LibraryShelfScreen: View {
             let fresh = page.items.filter { !known.contains($0.id) }
             items.append(contentsOf: fresh)
             pageNo = page.page
-            say(fresh.isEmpty ? "That is everything on this shelf." : "\(fresh.count) more. Showing \(items.count.formatted()) of \(total.formatted()).")
+            if let first = fresh.first {
+                // The new items go in where the button was, so VoiceOver moves
+                // to the first of them and reads it; swiping right goes on
+                // through the rest to the button. Left on the button, she had
+                // to swipe back past sixty rows to hear them.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    guard mine == token else { return }
+                    focusedItem = first.id
+                }
+            } else {
+                say("That is everything on this shelf.")
+            }
         } catch {
             say(error.localizedDescription)
         }
