@@ -12,6 +12,10 @@ import SwiftUI
 /// - Every row is a plain Button carrying its own accessibility label — no
 ///   `children:.ignore` anywhere (the Amber rule, builds 139/146).
 /// - Avatars are decorative and accessibilityHidden; the words carry it.
+/// - Part 295 (Sep 27 2026): no lazy container. An eager VStack over
+///   bounded windows of rows, with "Show N more" buttons per category and
+///   for search results (see `list`). Every category's heading is always
+///   there, so the Headings rotor still reaches all of them.
 ///
 /// Publish/unpublish rides the same wire the web sharing dialog uses:
 ///   GET /api/permissions/agent/{_id}        -> current sharing state
@@ -38,6 +42,46 @@ struct MarketplaceView: View {
         var id: String { agentId }
     }
     @State private var talkTarget: MarketplaceTalk?
+
+    /* Sep 27 2026 (Part 295, her word on this list: "if it needs to be
+     * changed regardless of whether it's been reported, change it."): the
+     * windows that keep the eager stack in `list` affordable. The comment on
+     * that container says why it is eager at all.
+     * - A category shows its first 6 characters, or all of them when it has
+     *   8 or fewer (so no "Show 1 more" buttons); "Show N more in <name>"
+     *   reveals 20 at a time. House picks follow the same rule.
+     * - Every category's heading is always on screen: the Headings rotor is
+     *   how she hops across the categories (see the header above), so no
+     *   category is windowed away, only rows. An earlier draft showed the
+     *   first 12 categories behind a "Show more categories" button, and the
+     *   rotor then stopped at the 12th. On the real roster (companions 50,
+     *   roleplay 36, creative 19, expert 18, then a long tail of ones and
+     *   twos) the 6-or-8 rule leaves about 125 rows, the size of the
+     *   logbook's eager window (120 rows); the tail categories are small,
+     *   so they show whole. CHECK ON A PHONE WITH VOICEOVER ON if the
+     *   roster grows a lot past that.
+     * - Search shows the first 25 matches; "Show N more results" reveals 25
+     *   at a time. That window belongs to the query it was opened for, so a
+     *   new query starts back at 25 with no state write while she types.
+     * Every reveal says how many arrived, and once that sentence has been
+     * heard VoiceOver moves to the first new row (the describer's and the
+     * Sound Booth's rule: moving focus on top of an announcement cuts it
+     * off). Nothing is taken away: an opened category stays open across
+     * searches. */
+    private let sectionWindow = 6
+    private let sectionWholeUpTo = 8
+    private let sectionStep = 20
+    private let searchStep = 25
+    @State private var sectionShown: [String: Int] = [:]
+    @State private var searchShown = 25
+    @State private var searchShownFor = ""
+    @AccessibilityFocusState private var a11yFocus: String?
+    /// A reveal's sentence and the row VoiceOver moves to once it is heard.
+    private struct PendingFocus: Equatable {
+        let text: String
+        let key: String
+    }
+    @State private var pendingFocus: PendingFocus?
 
     private var isSearching: Bool {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -96,6 +140,16 @@ struct MarketplaceView: View {
         .navigationTitle("Marketplace")
         .navigationBarTitleDisplayMode(.inline)
         .task { await agentsService.loadIfNeeded() }
+        /* A reveal's count is heard in full, THEN VoiceOver moves to the
+         * first new row (the describer's rule). */
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
+            // A finished announcement may name its text either way.
+            let value = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey]
+            let spoken = (value as? String) ?? (value as? NSAttributedString)?.string
+            guard let waiting = pendingFocus, spoken == waiting.text else { return }
+            pendingFocus = nil
+            a11yFocus = waiting.key
+        }
         .sheet(item: $selectedAgent) { agent in
             MarketplaceAgentDetail(
                 agent: agent,
@@ -120,22 +174,121 @@ struct MarketplaceView: View {
 
     private var list: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
+            /* Sep 27 2026 (Part 295): this was a LazyVStack holding the
+             * search field, the results and every category of ~224
+             * characters. Nobody had reported a freeze here, but it is the
+             * exact recipe of the one that killed the World screen the night
+             * before and the build-225 transcript: radar FB21851974 / forums
+             * thread 814208, a lazy container allocating rows while a state
+             * write lands and VoiceOver walks the tree. Here the state write
+             * is her own typing: the field sits inside the stack, so every
+             * letter swaps the stack's content while VoiceOver is standing in
+             * it. Her word was to change it whether or not it had been
+             * reported, so it is the house medicine: an eager VStack over
+             * bounded windows (see the constants above), no state write
+             * inside a layout pass, and focus moves only after a render.
+             *
+             * Avatars: AsyncImage in an eager stack starts loading every row
+             * that is shown, so the windows are also what bound the image
+             * loads. The LazyVStack kept every row it had ever built, so
+             * scrolling to the bottom used to load and hold all ~224 at once;
+             * now it is at most what the windows show. */
+            VStack(alignment: .leading, spacing: 14) {
                 searchField
                 if isSearching {
                     searchResults
                 } else {
-                    if !promoted.isEmpty {
-                        sectionHeader("House picks")
-                        ForEach(promoted) { agent in row(agent) }
-                    }
-                    ForEach(categories, id: \.title) { bucket in
-                        sectionHeader(bucket.title)
-                        ForEach(bucket.agents) { agent in row(agent) }
-                    }
+                    browseSections
                 }
             }
             .padding()
+        }
+    }
+
+    /// House picks, then every category, each with its own window of rows.
+    @ViewBuilder
+    private var browseSections: some View {
+        let picks = promoted
+        if !picks.isEmpty {
+            section(title: "House picks", key: "picks", agents: picks)
+        }
+        ForEach(categories, id: \.title) { bucket in
+            section(title: bucket.title, key: "cat:" + bucket.title, agents: bucket.agents)
+        }
+    }
+
+    /// One heading, its first rows, and its own "Show N more" button.
+    @ViewBuilder
+    private func section(title: String, key: String, agents: [KadeAgent]) -> some View {
+        let shown = shownCount(key: key, total: agents.count)
+        sectionHeader(title)
+        ForEach(Array(agents.prefix(shown))) { agent in
+            row(agent, focusKey: key + "|" + agent.id)
+        }
+        if shown < agents.count {
+            let label: String = sectionMoreLabel(title: title, total: agents.count, shown: shown)
+            let hint: String = sectionMoreHint(title: title, total: agents.count, shown: shown)
+            Button(label) {
+                revealSection(key: key, title: title, agents: agents)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint(hint)
+        }
+    }
+
+    private func sectionMoreLabel(title: String, total: Int, shown: Int) -> String {
+        let more = min(sectionStep, total - shown)
+        return "Show \(more) more in \(title)"
+    }
+
+    private func sectionMoreHint(title: String, total: Int, shown: Int) -> String {
+        let hidden = total - shown
+        let noun = hidden == 1 ? "character" : "characters"
+        return "\(hidden) more \(noun) in \(title) not shown yet."
+    }
+
+    private func shownCount(key: String, total: Int) -> Int {
+        if total <= sectionWholeUpTo { return total }
+        return min(total, sectionShown[key] ?? sectionWindow)
+    }
+
+    private func revealSection(key: String, title: String, agents: [KadeAgent]) {
+        let was = shownCount(key: key, total: agents.count)
+        let now = min(agents.count, was + sectionStep)
+        guard now > was else { return }
+        sectionShown[key] = now
+        let still = agents.count - now
+        let tail = still > 0 ? " \(still) still not shown." : " That's everyone in \(title)."
+        announceThenFocus("Showing \(now - was) more in \(title)." + tail, key: key + "|" + agents[was].id)
+    }
+
+    private func revealResults(query: String, hits: [KadeAgent], shown: Int) {
+        let now = min(hits.count, shown + searchStep)
+        guard now > shown else { return }
+        searchShownFor = query
+        searchShown = now
+        let added = now - shown
+        let still = hits.count - now
+        let noun = added == 1 ? "result" : "results"
+        let tail = still > 0 ? " \(still) still not shown." : " That's every match."
+        announceThenFocus("Showing \(added) more \(noun)." + tail, key: "search|" + hits[shown].id)
+    }
+
+    /// Says the count, then moves VoiceOver to the first new row once the
+    /// sentence has been heard (`announcementDidFinishNotification`, in
+    /// `body`); by then the row has been rendered. The fallback moves it if
+    /// that notice never comes (VoiceOver off, or the notice lost), long
+    /// after any count would have finished. The writes happen on main-actor
+    /// turns of their own, never inside a layout pass.
+    private func announceThenFocus(_ text: String, key: String) {
+        let waiting = PendingFocus(text: text, key: key)
+        pendingFocus = waiting
+        UIAccessibility.post(notification: .announcement, argument: text)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard pendingFocus == waiting else { return }
+            pendingFocus = nil
+            a11yFocus = key
         }
     }
 
@@ -175,19 +328,50 @@ struct MarketplaceView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
+    /// Part 295: the first 25 matches, then "Show N more results". The
+    /// window is keyed to the query it was opened for (`searchShownFor`), so
+    /// typing never writes any state but the field's own text.
     private var searchResults: some View {
         Group {
+            let q = searchText.trimmingCharacters(in: .whitespaces)
             let hits = filtered
-            Text(hits.isEmpty
-                 ? "No characters match. Try fewer letters."
-                 : "\(hits.count) match\(hits.count == 1 ? "" : "es").")
+            let shown = min(hits.count, searchShownFor == q ? searchShown : searchStep)
+            Text(resultsSummary(total: hits.count, shown: shown))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            ForEach(hits) { agent in row(agent) }
+            ForEach(Array(hits.prefix(shown))) { agent in
+                row(agent, focusKey: "search|" + agent.id)
+            }
+            if shown < hits.count {
+                let label: String = resultsMoreLabel(total: hits.count, shown: shown)
+                let hint: String = resultsMoreHint(total: hits.count, shown: shown)
+                Button(label) {
+                    revealResults(query: q, hits: hits, shown: shown)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint(hint)
+            }
         }
     }
 
-    private func row(_ agent: KadeAgent) -> some View {
+    private func resultsMoreLabel(total: Int, shown: Int) -> String {
+        let more = min(searchStep, total - shown)
+        return more == 1 ? "Show 1 more result" : "Show \(more) more results"
+    }
+
+    private func resultsMoreHint(total: Int, shown: Int) -> String {
+        let hidden = total - shown
+        let noun = hidden == 1 ? "match" : "matches"
+        return "\(hidden) more \(noun) not shown yet."
+    }
+
+    private func resultsSummary(total: Int, shown: Int) -> String {
+        if total == 0 { return "No characters match. Try fewer letters." }
+        let base = "\(total) match\(total == 1 ? "" : "es")."
+        return shown < total ? base + " Showing the first \(shown)." : base
+    }
+
+    private func row(_ agent: KadeAgent, focusKey: String) -> some View {
         Button {
             selectedAgent = agent
         } label: {
@@ -218,6 +402,7 @@ struct MarketplaceView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(rowLabel(agent))
         .accessibilityHint("Opens \(agent.name)'s card — hear the full description, start talking, or manage publishing if they're yours.")
+        .accessibilityFocused($a11yFocus, equals: focusKey)
     }
 
     private func rowLabel(_ agent: KadeAgent) -> String {
