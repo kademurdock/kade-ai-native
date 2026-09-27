@@ -48,7 +48,9 @@ struct RoomListView: View {
         .navigationTitle("Debate Room")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            // Part 296 (Sep 27 2026): Hall moved beside New room. Beside Back
+            // it crowded the top-left corner, where touch looks for Back alone.
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     openingHall = true
                 } label: {
