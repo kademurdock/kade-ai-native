@@ -13,8 +13,9 @@ import SwiftUI
 ///   `children:.ignore` anywhere (the Amber rule, builds 139/146).
 /// - Avatars are decorative and accessibilityHidden; the words carry it.
 /// - Part 295 (Sep 27 2026): no lazy container. An eager VStack over
-///   bounded windows, with "Show N more" buttons per category, for the
-///   category list and for search results (see `list`).
+///   bounded windows of rows, with "Show N more" buttons per category and
+///   for search results (see `list`). Every category's heading is always
+///   there, so the Headings rotor still reaches all of them.
 ///
 /// Publish/unpublish rides the same wire the web sharing dialog uses:
 ///   GET /api/permissions/agent/{_id}        -> current sharing state
@@ -49,29 +50,38 @@ struct MarketplaceView: View {
      * - A category shows its first 6 characters, or all of them when it has
      *   8 or fewer (so no "Show 1 more" buttons); "Show N more in <name>"
      *   reveals 20 at a time. House picks follow the same rule.
-     * - Browsing shows the first 12 categories; "Show N more categories"
-     *   reveals 12 at a time. With the 6-or-8 rule that caps the first
-     *   screen near a hundred rows on any roster; on the real one
-     *   (companions 50, roleplay 36, creative 19, expert 18, then a long
-     *   tail of ones and twos) it is nearer fifty. The per-category cap
-     *   alone could not do it: most categories hold one to three
-     *   characters, so the tail is where the rows are.
+     * - Every category's heading is always on screen: the Headings rotor is
+     *   how she hops across the categories (see the header above), so no
+     *   category is windowed away, only rows. An earlier draft showed the
+     *   first 12 categories behind a "Show more categories" button, and the
+     *   rotor then stopped at the 12th. On the real roster (companions 50,
+     *   roleplay 36, creative 19, expert 18, then a long tail of ones and
+     *   twos) the 6-or-8 rule leaves about 125 rows, the size of the
+     *   logbook's eager window (120 rows); the tail categories are small,
+     *   so they show whole. CHECK ON A PHONE WITH VOICEOVER ON if the
+     *   roster grows a lot past that.
      * - Search shows the first 25 matches; "Show N more results" reveals 25
      *   at a time. That window belongs to the query it was opened for, so a
      *   new query starts back at 25 with no state write while she types.
-     * Every reveal says how many arrived and moves VoiceOver to the first
-     * new row or heading (the logbook's shape). Nothing is taken away: an
-     * opened category stays open across searches. */
+     * Every reveal says how many arrived, and once that sentence has been
+     * heard VoiceOver moves to the first new row (the describer's and the
+     * Sound Booth's rule: moving focus on top of an announcement cuts it
+     * off). Nothing is taken away: an opened category stays open across
+     * searches. */
     private let sectionWindow = 6
     private let sectionWholeUpTo = 8
     private let sectionStep = 20
-    private let categoryStep = 12
     private let searchStep = 25
     @State private var sectionShown: [String: Int] = [:]
-    @State private var categoryWindow = 12
     @State private var searchShown = 25
     @State private var searchShownFor = ""
     @AccessibilityFocusState private var a11yFocus: String?
+    /// A reveal's sentence and the row VoiceOver moves to once it is heard.
+    private struct PendingFocus: Equatable {
+        let text: String
+        let key: String
+    }
+    @State private var pendingFocus: PendingFocus?
 
     private var isSearching: Bool {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -130,6 +140,16 @@ struct MarketplaceView: View {
         .navigationTitle("Marketplace")
         .navigationBarTitleDisplayMode(.inline)
         .task { await agentsService.loadIfNeeded() }
+        /* A reveal's count is heard in full, THEN VoiceOver moves to the
+         * first new row (the describer's rule). */
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { note in
+            // A finished announcement may name its text either way.
+            let value = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey]
+            let spoken = (value as? String) ?? (value as? NSAttributedString)?.string
+            guard let waiting = pendingFocus, spoken == waiting.text else { return }
+            pendingFocus = nil
+            a11yFocus = waiting.key
+        }
         .sheet(item: $selectedAgent) { agent in
             MarketplaceAgentDetail(
                 agent: agent,
@@ -185,21 +205,15 @@ struct MarketplaceView: View {
         }
     }
 
-    /// House picks, then the first `categoryWindow` categories, then the
-    /// button that reveals more of them.
+    /// House picks, then every category, each with its own window of rows.
     @ViewBuilder
     private var browseSections: some View {
         let picks = promoted
-        let cats = categories
-        let shownCats = min(categoryWindow, cats.count)
         if !picks.isEmpty {
             section(title: "House picks", key: "picks", agents: picks)
         }
-        ForEach(Array(cats.prefix(shownCats)), id: \.title) { bucket in
+        ForEach(categories, id: \.title) { bucket in
             section(title: bucket.title, key: "cat:" + bucket.title, agents: bucket.agents)
-        }
-        if shownCats < cats.count {
-            moreCategoriesButton(cats.map { $0.title }, shown: shownCats)
         }
     }
 
@@ -207,9 +221,7 @@ struct MarketplaceView: View {
     @ViewBuilder
     private func section(title: String, key: String, agents: [KadeAgent]) -> some View {
         let shown = shownCount(key: key, total: agents.count)
-        let headKey: String = "head|" + key
         sectionHeader(title)
-            .accessibilityFocused($a11yFocus, equals: headKey)
         ForEach(Array(agents.prefix(shown))) { agent in
             row(agent, focusKey: key + "|" + agent.id)
         }
@@ -240,20 +252,6 @@ struct MarketplaceView: View {
         return min(total, sectionShown[key] ?? sectionWindow)
     }
 
-    private func moreCategoriesButton(_ titles: [String], shown: Int) -> some View {
-        let more = min(categoryStep, titles.count - shown)
-        let hidden = titles.count - shown
-        let next = shown < titles.count ? titles[shown] : ""
-        let label: String = more == 1 ? "Show 1 more category" : "Show \(more) more categories"
-        let noun = hidden == 1 ? "category" : "categories"
-        let hint: String = "\(hidden) \(noun) not shown yet, starting with \(next)."
-        return Button(label) {
-            revealCategories(titles, shown: shown)
-        }
-        .buttonStyle(.bordered)
-        .accessibilityHint(hint)
-    }
-
     private func revealSection(key: String, title: String, agents: [KadeAgent]) {
         let was = shownCount(key: key, total: agents.count)
         let now = min(agents.count, was + sectionStep)
@@ -261,22 +259,7 @@ struct MarketplaceView: View {
         sectionShown[key] = now
         let still = agents.count - now
         let tail = still > 0 ? " \(still) still not shown." : " That's everyone in \(title)."
-        UIAccessibility.post(notification: .announcement,
-                             argument: "Showing \(now - was) more in \(title)." + tail)
-        focusAfterRender(key + "|" + agents[was].id)
-    }
-
-    private func revealCategories(_ titles: [String], shown: Int) {
-        let now = min(titles.count, shown + categoryStep)
-        guard now > shown else { return }
-        categoryWindow = now
-        let added = now - shown
-        let still = titles.count - now
-        let noun = added == 1 ? "category" : "categories"
-        let tail = still > 0 ? " \(still) still not shown." : " That's every category."
-        UIAccessibility.post(notification: .announcement,
-                             argument: "Showing \(added) more \(noun)." + tail)
-        focusAfterRender("head|cat:" + titles[shown])
+        announceThenFocus("Showing \(now - was) more in \(title)." + tail, key: key + "|" + agents[was].id)
     }
 
     private func revealResults(query: String, hits: [KadeAgent], shown: Int) {
@@ -288,17 +271,23 @@ struct MarketplaceView: View {
         let still = hits.count - now
         let noun = added == 1 ? "result" : "results"
         let tail = still > 0 ? " \(still) still not shown." : " That's every match."
-        UIAccessibility.post(notification: .announcement,
-                             argument: "Showing \(added) more \(noun)." + tail)
-        focusAfterRender("search|" + hits[shown].id)
+        announceThenFocus("Showing \(added) more \(noun)." + tail, key: "search|" + hits[shown].id)
     }
 
-    /// SwiftUI needs a render pass before it can resolve a focus target
-    /// that did not exist yet (the logbook's delay). The write happens on a
-    /// later main-actor turn, never inside a layout pass.
-    private func focusAfterRender(_ key: String) {
+    /// Says the count, then moves VoiceOver to the first new row once the
+    /// sentence has been heard (`announcementDidFinishNotification`, in
+    /// `body`); by then the row has been rendered. The fallback moves it if
+    /// that notice never comes (VoiceOver off, or the notice lost), long
+    /// after any count would have finished. The writes happen on main-actor
+    /// turns of their own, never inside a layout pass.
+    private func announceThenFocus(_ text: String, key: String) {
+        let waiting = PendingFocus(text: text, key: key)
+        pendingFocus = waiting
+        UIAccessibility.post(notification: .announcement, argument: text)
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard pendingFocus == waiting else { return }
+            pendingFocus = nil
             a11yFocus = key
         }
     }
