@@ -68,7 +68,8 @@ struct LibraryShelfScreen: View {
         return shelf.path.isEmpty ? nil : shelves.node(shelf.path, scope: shelf.scope)
     }
 
-    private var shownTitle: String { skippedTitle ?? shelf.title }
+    /// "Local News, 1990s" for a shelf whose own name says too little (LibraryWords.placed).
+    private var shownTitle: String { skippedTitle ?? shelf.screenTitle ?? shelf.title }
 
     /// The shelves on this shelf, in order (nil until known).
     private var shelfRows: [LibraryShelfRef]? {
@@ -149,7 +150,7 @@ struct LibraryShelfScreen: View {
             }
             if let rows = shelfRows, !rows.isEmpty {
                 Section {
-                    ForEach(rows, id: \.id) { ref in LibraryShelfRow(shelf: ref) }
+                    ForEach(rows, id: \.id) { ref in LibraryShelfRow(shelf: LibraryWords.placed(ref, under: shownTitle)) }
                 }
             }
             itemsSection
@@ -297,7 +298,7 @@ struct LibraryShelfScreen: View {
             return
         }
         var path = shelf.path
-        var title = shelf.title
+        var title = shelf.screenTitle ?? shelf.title
         do {
             var page = try await service.archive(path: path, page: 0, scope: shelf.scope, deep: shelf.flat)
             var hops = 0

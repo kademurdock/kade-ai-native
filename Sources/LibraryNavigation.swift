@@ -75,6 +75,10 @@ struct LibraryShelfRef: Hashable {
     /// "audio" on a Springfield row that is local radio.
     var medium: String? = nil
     var members: [LibraryShelfRef] = []
+    /// The screen's title when the name alone says too little: "1990s"
+    /// opened from Local News is titled "Local News, 1990s", so touching the
+    /// top of the screen says where she is. The row keeps the short name.
+    var screenTitle: String? = nil
 
     var isGroup: Bool { !members.isEmpty }
     /// What VoiceOver says for the row: "Cars and Trucks, 956 items".
@@ -175,6 +179,24 @@ enum LibraryWords {
         let kid = words(child)
         if !kid.isEmpty && kid.isSubset(of: words(parent)) { return parent }
         return parent + ", " + child
+    }
+
+    /// A shelf name that means little without the shelf it sits on: a
+    /// decade or a year, Undated, Multiple decades, a season.
+    static func needsPlace(_ name: String) -> Bool {
+        let n = name.trimmingCharacters(in: .whitespaces).lowercased()
+        if n == "undated" || n == "multiple decades" { return true }
+        if n.range(of: #"^\d{4}s?$"#, options: .regularExpression) != nil { return true }
+        return n.range(of: #"^season \d+"#, options: .regularExpression) != nil
+    }
+
+    /// A row as pushed from the shelf titled `parent`: a name that says too
+    /// little on its own gets the parent's name in its screen title.
+    static func placed(_ ref: LibraryShelfRef, under parent: String) -> LibraryShelfRef {
+        guard ref.screenTitle == nil, !parent.isEmpty, needsPlace(ref.title) else { return ref }
+        var copy = ref
+        copy.screenTitle = parent + ", " + ref.title
+        return copy
     }
 
     /// Whether a row ends "donated by": never for your own items, never for
