@@ -45,6 +45,8 @@ struct LibraryShelfScreen: View {
     @State private var showFolderMove = false
     @State private var folderMoveTo = ""
     @AccessibilityFocusState private var headingFocused: Bool
+    /// Part 292: Kade's painted shelves are silent (see KadeArt).
+    @KadeArtShown private var artShown: Bool
 
     init(apiClient: KadeAPIClient, shelf: LibraryShelfRef) {
         let pair = LibraryNowPlaying.shared.ensure(client: apiClient)
@@ -115,6 +117,14 @@ struct LibraryShelfScreen: View {
         return words
     }
 
+    /// Part 292's painted shelf for this one (Books, Radio, Springfield's
+    /// local news…), found by the words in its path; none for a gathered row.
+    private var shelfPicture: String? {
+        guard artShown else { return nil }
+        let path = itemsPath.isEmpty ? shelf.path : itemsPath
+        return path.isEmpty ? nil : KadeArt.shelfPicture(forArchivePath: path)
+    }
+
     /// The librarian (or the owner, in their own uploads) can move or rename a real shelf.
     private var canMoveFolder: Bool {
         guard !shelf.isGroup, !isMineRoot, !itemsPath.isEmpty, node?.isVirtual != true else { return false }
@@ -150,6 +160,15 @@ struct LibraryShelfScreen: View {
                 Section {
                     Button("Move or rename this shelf") { folderMoveTo = itemsPath; showFolderMove = true }
                         .accessibilityHint("The librarian's tool. Everything on it moves too.")
+                }
+            }
+            if let picture = shelfPicture {
+                // Silent, and at the bottom (Part 296): it used to be a band at
+                // the top that came and went per folder and moved the list.
+                Section {
+                    KadePaintedHeader(imageName: picture, symbol: "books.vertical", tint: .brown, height: 110)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
             }
         }
@@ -527,6 +546,8 @@ struct LibraryOpenedScreen: View {
     @StateObject private var actions: LibraryRowActions
     @State private var started = false
     @AccessibilityFocusState private var headingFocused: Bool
+    @KadeArtShown private var artShown: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     init(apiClient: KadeAPIClient) {
         let pair = LibraryNowPlaying.shared.ensure(client: apiClient)
@@ -570,6 +591,12 @@ struct LibraryOpenedScreen: View {
                             }
                     }
                 }
+            }
+            if let items, items.isEmpty, artShown, !typeSize.isAccessibilitySize {
+                // Part 292's empty wall shelf: silent, at the bottom, only once the list has really loaded.
+                KadeArtSpot(imageName: "ArtEmptyShelf", fallbackSymbol: "books.vertical", width: 120, height: 120)
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
             }
         }
         .navigationTitle("Recently opened")
