@@ -222,10 +222,10 @@ final class LibraryShelves: ObservableObject {
             // server today answers an unknown address with its web page, so
             // both mean "ask /archive", and the first screen's three counts
             // come from its first level (never "loading" for ever).
-            let data = try await service.libraryTreeData(scope: scope)
-            let decoded: RRTree?
-            if let data { decoded = await Self.decode(data) } else { decoded = nil }
-            guard let data, let tree = decoded else {
+            let answer = try await service.libraryTreeData(scope: scope)
+            var decoded: RRTree?
+            if let answer { decoded = await Self.decode(answer) }
+            guard let data = answer, let tree = decoded else {
                 noTree()
                 if scope == "public" {
                     let page = try await service.archive(path: "", page: 0)
