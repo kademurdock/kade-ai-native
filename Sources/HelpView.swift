@@ -384,7 +384,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "What each item is",
-                body: "After its title, every item says what it is. Described audio movie and Described audio episode are sound only: the film or show with a narrator describing what happens. A few episodes whose folders say so are Audio episode, not described. Videos say Full movie, Movie trailer, Movie clip, TV recording, Commercial and so on. The described films and shows are under Audio, in Described audio movies and TV."
+                body: "After its title, every item says what it is. Described audio movie and Described audio episode are sound only: the film or show with a narrator describing what happens. A few episodes whose folders say so are Audio episode, not described. Videos say Full movie, Movie trailer, Movie clip, TV recording, Commercial and so on, and a video with the description mixed in says Described full movie. The described films and shows are under Audio, in Described audio movies and TV."
             ),
             HelpEntry(
                 title: "Actions on every item",

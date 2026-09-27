@@ -211,6 +211,12 @@ enum LibraryWords {
         return item.fromLibraryOwner != true
     }
 
+    /// Whether the type word already says "described" ("Described full
+    /// movie"), so the row does not say it twice.
+    static func typeSaysDescribed(_ item: RRItem) -> Bool {
+        return item.typeWord.range(of: "described", options: .caseInsensitive) != nil
+    }
+
     /// What VoiceOver says for an item row: title, type, length, where it
     /// sits on a small shelf listed whole, "described".
     static func spokenRow(_ item: RRItem, me: String, place: String) -> String {
@@ -220,7 +226,7 @@ enum LibraryWords {
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }
-        if item.described == true { bits.append("described") }
+        if item.described == true, !typeSaysDescribed(item) { bits.append("described") }
         if let p = item.progress, p.finished != true, let w = p.where_, !w.isEmpty { bits.append((item.isAudio ? "part " : "chapter ") + w) }
         if showsDonor(item, me: me), let d = item.ownerName { bits.append("donated by \(d)") }
         if item.state == "pending" { bits.append("no recordings yet") }
@@ -236,7 +242,7 @@ enum LibraryWords {
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }
-        if item.described == true { bits.append("described") }
+        if item.described == true, !typeSaysDescribed(item) { bits.append("described") }
         if let p = item.progress, p.finished != true, let w = p.where_, !w.isEmpty { bits.append((item.isAudio ? "part " : "chapter ") + w) }
         if showsDonor(item, me: me), let d = item.ownerName { bits.append("donated by \(d)") }
         if item.state == "pending" { bits.append("no recordings yet") }
