@@ -136,7 +136,9 @@ extension ReadingRoomService {
         let (data, http) = try await client.send(req)
         if http.statusCode == 404 { return nil }
         guard http.statusCode == 200 else { throw RRError(message: "The library answered \(http.statusCode).") }
-        return try JSONDecoder().decode(Recent.self, from: data).items
+        // A 200 that is not the list is the live server's web page for an
+        // address it does not know yet: no such list, not an error to read out.
+        return (try? JSONDecoder().decode(Recent.self, from: data))?.items
     }
 }
 
@@ -216,7 +218,14 @@ final class LibraryShelves: ObservableObject {
 
     private func fetch(_ service: ReadingRoomService, scope: String) async {
         do {
-            guard let data = try await service.libraryTreeData(scope: scope) else {
+            // No tree route (404), or a 200 that is not a tree: the live
+            // server today answers an unknown address with its web page, so
+            // both mean "ask /archive", and the first screen's three counts
+            // come from its first level (never "loading" for ever).
+            let data = try await service.libraryTreeData(scope: scope)
+            let decoded: RRTree?
+            if let data { decoded = await Self.decode(data) } else { decoded = nil }
+            guard let data, let tree = decoded else {
                 noTree()
                 if scope == "public" {
                     let page = try await service.archive(path: "", page: 0)
@@ -224,12 +233,6 @@ final class LibraryShelves: ObservableObject {
                 }
                 loadedAt[scope] = Date()
                 failed = false
-                return
-            }
-            guard let tree = await Self.decode(data) else {
-                // A 200 that is not a tree (an old server's fallback page): same as none.
-                noTree()
-                loadedAt[scope] = Date()
                 return
             }
             treeUnsupported = false
