@@ -380,7 +380,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Shelves and counts",
-                body: "A shelf row says its name and how many items are on it, like Cars and Trucks, 956 items. Inside a shelf, VoiceOver starts on a line like 53 shelves, 26,817 items; swipe right for the shelves, then the items. A long shelf shows 60 items at a time, then Show 60 more. A count is only said once it is real; until then the row says loading. A small shelf lists all its items at once, with the decade on each, and anything the librarian has not filed yet waits under Not filed yet, at the end."
+                body: "A shelf row says its name and how many items are on it, like Cars and Trucks, 956 items. Inside a shelf, VoiceOver starts on a line like 53 shelves, 26,817 items; swipe right for the shelves, then the items. A long shelf shows 60 items at a time, then Show 60 more, which puts you on the first of the next ones. A decade or a season says whose it is at the top of its screen, like Local News, 1990s. A count is only said once it is real; until then the row says loading. A small shelf lists all its items at once, with the decade on each, and anything the librarian has not filed yet waits under Not filed yet, at the end."
             ),
             HelpEntry(
                 title: "Actions on every item",
