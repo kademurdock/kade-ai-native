@@ -193,7 +193,8 @@ final class LibraryShelves: ObservableObject {
         let task = Task { @MainActor in await self.fetch(service, scope: scope) }
         running[scope] = task
         await task.value
-        running[scope] = nil
+        // A sign-out while this waited may have started a newer load; leave that one be.
+        if running[scope] == task { running[scope] = nil }
     }
 
     /// Forgets everything (sign-out), on disk too, so the next person to
@@ -222,13 +223,18 @@ final class LibraryShelves: ObservableObject {
             // server today answers an unknown address with its web page, so
             // both mean "ask /archive", and the first screen's three counts
             // come from its first level (never "loading" for ever).
+            //
+            // Each step checks for a sign-out (reset() cancels this task), so
+            // one account's shelves never land on, or on the disk for, the next.
             let answer = try await service.libraryTreeData(scope: scope)
             var decoded: RRTree?
             if let answer { decoded = await Self.decode(answer) }
+            guard !Task.isCancelled else { return }
             guard let data = answer, let tree = decoded else {
                 noTree()
                 if scope == "public" {
                     let page = try await service.archive(path: "", page: 0)
+                    guard !Task.isCancelled else { return }
                     rootFolders = page.folders
                 }
                 loadedAt[scope] = Date()
@@ -241,6 +247,7 @@ final class LibraryShelves: ObservableObject {
             loadedAt[scope] = Date()
             if scope == "public" { Self.writeDisk(data) }
         } catch {
+            guard !Task.isCancelled else { return }
             if tree(scope) == nil && rootFolders == nil { failed = true }
         }
     }
