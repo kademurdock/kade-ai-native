@@ -839,15 +839,32 @@ struct SoundBoothView: View {
                 }
                 .padding(.top, 6)
             } label: {
+                /* The hint sits on the group's own header (its label), not on
+                 * the whole group: on the group it could be read on the plain
+                 * setting names inside it as well. */
                 Text("More settings").font(.subheadline.bold())
+                    .accessibilityHint(moreSettingsHint(count: more.count))
             }
-            .accessibilityHint(moreSettingsHint(count: more.count))
         }
     }
 
+    /// Says what a double tap does now: open the group, or close it again.
     private func moreSettingsHint(count: Int) -> String {
         let noun = count == 1 ? "setting" : "settings"
+        if showMoreSettings { return "Hides these \(count) \(noun) again." }
         return "Shows \(count) more \(noun) for \(Self.engineName(engine)). Most people leave them as they are."
+    }
+
+    /// Part 296, as on the web page: true when a setting inside More settings
+    /// holds words for this engine (a saved ABC score), so opening that project
+    /// opens the group to show them instead of hiding them behind it.
+    private func moreSettingsHoldWords(engine key: String) -> Bool {
+        guard let settings = guide?.engines[key]?.settings else { return false }
+        return settings.contains { st in
+            guard st.advanced == true, st.kind == "text", st.lockReason == nil else { return false }
+            let words = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return !words.isEmpty
+        }
     }
 
     /// Part 296: true when the guide marks which of this engine's settings are
@@ -2147,6 +2164,8 @@ struct SoundBoothView: View {
         if p.engine == "seed", case .array(let references) = p.options?["audio_urls"] {
             clips = references.compactMap { if case .string(let url) = $0 { return (url: url, name: "Saved reference") }; return nil }
         } else if case .string(let url) = p.options?["reference_voice_url"] { clips = [(url: url, name: "Saved reference")] }
+        // Part 296: a saved score sits in More settings, so the group opens to show it.
+        if moreSettingsHoldWords(engine: p.engine) { showMoreSettings = true }
         announce("Opened \(p.title). Its draft and settings are restored. Change what you like and generate another take.")
         focusStatus = true
     }
