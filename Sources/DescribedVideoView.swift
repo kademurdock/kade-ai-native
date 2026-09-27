@@ -1672,9 +1672,8 @@ struct DescribedVideoView: View {
         if current.resumable == true, (current.done ?? 0) > 0 {
             parts.append("It starts over; \(resumeTitle(current)) keeps the finished sections instead.")
         }
-        if stoppedForGood(current) {
-            parts.append("It stopped three times at the same part with this video's choices, so the server will not run those again. Change how much to describe or the extra passes, or choose a shorter part.")
-        }
+        // After three stops at the same part the server's own refusal (said
+        // with the price below) says why the same choices will not run.
         if let expires = current.expiresAt, let when = KadeDateFormatting.stamp(from: expires) {
             parts.append("The video is kept on the server until \(when).")
         }
