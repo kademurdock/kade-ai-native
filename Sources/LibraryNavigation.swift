@@ -488,7 +488,10 @@ struct LibraryDestination: View {
         case .shelf(let ref):
             LibraryShelfScreen(apiClient: apiClient, shelf: ref)
         case .item(let item):
-            ReadingRoomView(apiClient: apiClient, item: item)
+            // Another item can take the top player's place (ContentView's
+            // pushLibrary); the id makes that a fresh screen that opens it,
+            // never the old screen's state still showing the old item.
+            ReadingRoomView(apiClient: apiClient, item: item).id(item)
         case .collection(let row):
             LibraryCollectionScreen(apiClient: apiClient, row: row)
         case .page(let page):
