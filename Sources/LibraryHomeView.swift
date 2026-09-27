@@ -87,12 +87,14 @@ struct LibraryHomeView: View {
                          route: LibraryItemRoute(id: item.id, title: item.title))
         } else {
             // Dimmed until there is something to pick up (never "nothing" while it loads).
+            // Laid out like the real row (a jacket-sized space, "Continue" over
+            // a headline), so the rows under it stay put when it fills in.
             Button {} label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "play.circle").font(.title2).frame(width: 40).accessibilityHidden(true)
+                    Image(systemName: "play.circle").font(.title2).frame(width: 40, height: 56).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Continue").font(.headline)
-                        Text(service.shelf == nil ? "loading" : "nothing started yet").font(.subheadline)
+                        Text("Continue").font(.subheadline.weight(.semibold))
+                        Text(service.shelf == nil ? "Loading" : "Nothing started yet").font(.headline)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -136,11 +138,13 @@ struct LibraryHomeView: View {
 
     /// Springfield and the Ozarks: only in the family library (the App
     /// Review seat and other outside seats hear nothing of it). Its place is
-    /// remembered between launches, so the row is there from the start.
+    /// remembered between launches, so the row is there from the start; on
+    /// the first launch the shelf's own answer (which usually comes before
+    /// the tree) puts it in, so it is not slipped in above Video later.
     private var showsLocal: Bool {
         if let tree = shelves.publicTree { return tree.local != nil }
         if shelves.treeUnsupported { return service.shelf?.familyLibrary == true }
-        return rememberedLocal
+        return rememberedLocal || service.shelf?.familyLibrary == true
     }
 
     private var localRow: some View {
@@ -193,9 +197,10 @@ struct LibraryHomeView: View {
         return pending > 0 ? "\(pending) still uploading" : "books and recordings you added"
     }
 
+    /// "Collections, 3" (it read "Collections, 3 collections").
     private var collectionsDetail: String {
         guard let n = collectionCount else { return "loading" }
-        return n == 0 ? "none yet" : LibraryWords.count(n, "collection", "collections")
+        return n == 0 ? "none yet" : n.formatted()
     }
 
     private var librarianRow: some View {
