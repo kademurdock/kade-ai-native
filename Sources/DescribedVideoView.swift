@@ -1685,7 +1685,9 @@ struct DescribedVideoView: View {
         return parts.joined(separator: " ")
     }
 
-    private func againPriceWords(_ current: DVJob) -> String {
+    /// `withAccount` false leaves out the balance sentence when the words
+    /// above already said it.
+    private func againPriceWords(_ current: DVJob, withAccount: Bool = true) -> String {
         if let problem = partProblem(current) { return problem }
         var parts: [String] = []
         var reasons: [String] = []
@@ -1710,7 +1712,7 @@ struct DescribedVideoView: View {
         if reasons.count == parts.count, let first = reasons.first, reasons.allSatisfy({ $0 == first }) {
             return first
         }
-        if !account.isEmpty { parts.append(account) }
+        if withAccount, !account.isEmpty { parts.append(account) }
         return parts.joined(separator: " ")
     }
 
@@ -2565,7 +2567,9 @@ struct DescribedVideoView: View {
     private func spokenPrices(_ current: DVJob) -> String {
         let main = priceSentence(current)
         guard againChoices, offersDescribeAgain(current) else { return main }
-        let again = againPriceWords(current)
+        // priceSentence ends with the balance whenever it prices anything
+        // (the stopped-over-quote words do not say it), so it is said once.
+        let again = againPriceWords(current, withAccount: main.isEmpty || current.stoppedOverQuote)
         if main.isEmpty { return again }
         return again.isEmpty ? main : main + " " + again
     }
