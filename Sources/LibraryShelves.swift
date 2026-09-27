@@ -256,8 +256,10 @@ final class LibraryShelves: ObservableObject {
             index[node.id] = node
             for kid in node.children { add(kid) }
         }
-        for root in tree.roots { add(root) }
+        // Springfield's rows first: one of them ("All local video") can share
+        // its real path with the shelf under Video, and the shelf itself wins.
         if let local = tree.local { add(local) }
+        for root in tree.roots { add(root) }
         if scope == "mine" {
             mineIndex = index
             mineTree = tree
