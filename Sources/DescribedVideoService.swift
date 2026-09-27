@@ -1250,7 +1250,9 @@ final class DescribedVideoService: ObservableObject {
         var requestId = importIds[link] ?? Self.newRequestId()
         importIds[link] = requestId
         var job: DVJob = try await post("imports", body: ["url": link, "requestId": requestId], fallback: "That YouTube video could not be imported.")
-        if ["failed", "cancelled", "done"].contains(job.state) {
+        // A video she already has (`existing`, Sep 27 2026) is the answer
+        // itself: the server keeps its original, so it is not asked again.
+        if job.existing != true, ["failed", "cancelled", "done"].contains(job.state) {
             requestId = Self.newRequestId()
             importIds[link] = requestId
             job = try await post("imports", body: ["url": link, "requestId": requestId], fallback: "That YouTube video could not be imported.")

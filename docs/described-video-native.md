@@ -122,6 +122,16 @@ written in the section. Each row in Your videos has Describe again in its
 Actions rotor, which opens the video on that heading, and a stopped row says
 "can be described again".
 
+Review fixes (Sep 27 2026): pasting a YouTube link she already brought in
+opens that video (the server answers `/imports` with `existing: true` when it
+was checked and its original is still kept, or is still coming in) and lands on
+Describe again, so the link is not downloaded a second time. A YouTube import
+YouTube may let through later (the bot wall) is `recheckable`, and Check again
+brings the link in again. After three server stops at the same part, the
+server refuses the same choices, so Describe again's choices open by
+themselves. Turning "Change the narration or detail" off puts the video's own
+choices back. A refused button never reads a price of $0.00.
+
 Not on the phone yet (use the website): making a new version with different
 narration (revoice), the script editor, and the free rehearsal.
 
@@ -162,3 +172,6 @@ narration (revoice), the script editor, and the free rehearsal.
    down, and it starts over at a new version. In Your videos, a row's Actions
    rotor has Describe again, which lands on that heading. With the server's
    original gone, both buttons are dimmed and the section says why.
+14. Paste the link of a YouTube video already in Your videos and choose Import
+   from YouTube: it says "You already have this video", opens it and lands on
+   Describe again; nothing is downloaded.

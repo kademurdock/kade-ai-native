@@ -454,7 +454,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Describing a video again",
-                body: "Open a video you already tried from Your videos, finished or stopped, and choose Describe again near the end of its screen. It writes fresh descriptions from the copy already on the server, so a YouTube link is never fetched again. It starts with that video's choices; turn on Change the narration or detail to pick others. A long video also offers Try the first 3 minutes again. The price is said first, and earlier versions stay. In Your videos, Describe again is also in a video's Actions rotor. The server keeps a video until the date on its screen; after that, choose it again."
+                body: "Open a video you already tried from Your videos, finished or stopped, and choose Describe again near the end of its screen. It writes fresh descriptions from the copy already on the server, so a YouTube link is never fetched again. It starts with that video's choices; turn on Change the narration or detail to pick others. A long video also offers Try the first 3 minutes again. The price is said first, and earlier versions stay. In Your videos, Describe again is also in a video's Actions rotor. Pasting a YouTube link you already brought in opens that video instead of downloading it again, and if YouTube would not hand a video over, Check again tries the link again. The server keeps a video until the date on its screen; after that, choose it again."
             ),
             HelpEntry(
                 title: "Watching with the screen locked, and captions",

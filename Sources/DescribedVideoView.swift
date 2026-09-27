@@ -420,6 +420,10 @@ struct DescribedVideoView: View {
             .onChange(of: partOn) { _, on in
                 if on { fillPartDefaults() }
             }
+            // Off means the video's own choices again, not hidden edits.
+            .onChange(of: againChoices) { _, on in
+                if !on { restoreAgainChoices() }
+            }
     }
 
     @ViewBuilder
@@ -625,7 +629,7 @@ struct DescribedVideoView: View {
                 }
                 .buttonStyle(KadeCardButtonStyle())
                 .disabled(isBusy)
-                .accessibilityHint("The check was interrupted before it finished. Checking again is free.")
+                .accessibilityHint(importDidNotFinish(current) ? "Brings the YouTube video in again. It is free." : "The check was interrupted before it finished. Checking again is free.")
             }
             if current.abandonable == true, let last = current.finishedCopies.last {
                 Button("Go back to version \(last.number)") {
@@ -666,7 +670,9 @@ struct DescribedVideoView: View {
                 // them, when it can carry on.
                 parts.append(current.resumable == true ? "Stopped because it is costing more than quoted." : overQuoteSentence(current))
             } else if current.recheckable == true {
-                parts.append("The check was interrupted before it finished. Checking again is free.")
+                parts.append(importDidNotFinish(current)
+                    ? "YouTube did not hand the video over this time. Check again brings it in again, free."
+                    : "The check was interrupted before it finished. Checking again is free.")
             } else {
                 parts.append("Stopped before finishing.")
             }
@@ -730,9 +736,20 @@ struct DescribedVideoView: View {
                 : words
         }
         if fresh.recheckable == true {
+            if importDidNotFinish(fresh) {
+                let why = Self.sentence(fresh.error ?? "")
+                return "The YouTube import stopped. " + (why.isEmpty ? "" : why + " ") + "Choose Check again to try it again; it is free."
+            }
             return "The check was interrupted before it finished. Choose Check again; checking is free."
         }
         return "Stopped before finishing. " + Self.sentence(fresh.error ?? "")
+    }
+
+    /// A YouTube link whose import never finished (Sep 27 2026): when the
+    /// server says a later try may get through, Check again brings the link
+    /// in again.
+    private func importDidNotFinish(_ current: DVJob) -> Bool {
+        current.source == "youtube" && (current.seconds ?? 0) <= 0
     }
 
     private func queueWords(_ current: DVJob) -> String {
@@ -1216,7 +1233,13 @@ struct DescribedVideoView: View {
     /// typed wrong) keeps it off and is the hint instead.
     private func spendButton(_ action: String, title: String, kind: DVConfirm.Kind, lead: String? = nil, problem: String? = nil) -> some View {
         let quote = estimates[action]
-        let price = problem == nil ? quote?.estimateUSD : nil
+        // A refusal the server could not price (the original is gone, a part
+        // it cannot describe) comes back as $0.00; the label never reads that
+        // as a price. A refusal over a limit keeps its real price.
+        var price: Double? = nil
+        if problem == nil, let priced = quote, priced.isAllowed || (priced.estimateUSD ?? 0) > 0 {
+            price = priced.estimateUSD
+        }
         let label = price.map { "\(title), about \(Self.money($0))" } ?? title
         let blocked = problem != nil || price == nil || quote?.isAllowed == false || isBusy || uploads.isRunning
         let hint: String = problem ?? ((lead.map { $0 + " " } ?? "") + spendHint(quote))
@@ -1644,8 +1667,13 @@ struct DescribedVideoView: View {
         if !current.finishedCopies.isEmpty {
             parts.append("Earlier versions stay available.")
         }
-        if current.resumable == true {
-            parts.append("It starts over; Continue carries on from where it stopped instead.")
+        // Only when a section finished: before that, the button above is Try
+        // again, and both would start from the beginning.
+        if current.resumable == true, (current.done ?? 0) > 0 {
+            parts.append("It starts over; \(resumeTitle(current)) keeps the finished sections instead.")
+        }
+        if stoppedForGood(current) {
+            parts.append("It stopped three times at the same part with this video's choices, so the server will not run those again. Change how much to describe or the extra passes, or choose a shorter part.")
         }
         if let expires = current.expiresAt, let when = KadeDateFormatting.stamp(from: expires) {
             parts.append("The video is kept on the server until \(when).")
@@ -1712,10 +1740,43 @@ struct DescribedVideoView: View {
         if !current.finishedCopies.isEmpty {
             words.append("Earlier versions stay available.")
         }
-        if current.resumable == true, (current.done ?? 0) > 0 {
-            words.append("It starts over, so the sections already finished are paid for again; Continue keeps them.")
+        // Any stopped run with finished sections, Continue or not (after three
+        // stops at the same part there is no Continue, and they are still
+        // paid for again).
+        if ["failed", "cancelled"].contains(current.state), (current.done ?? 0) > 0 {
+            words.append(current.resumable == true
+                ? "It starts over, so the sections already finished are paid for again; \(resumeTitle(current)) keeps them."
+                : "It starts over, so the sections already finished are paid for again.")
         }
         return words.joined(separator: " ")
+    }
+
+    /// A stopped run Continue refuses though it has its choices: the server
+    /// stopped three times at the same part. Describing it again with those
+    /// same choices is refused, so they open by themselves.
+    private func stoppedForGood(_ current: DVJob) -> Bool {
+        guard ["failed", "cancelled"].contains(current.state), current.settings != nil else { return false }
+        return current.resumable != true && offersDescribeAgain(current)
+    }
+
+    /// Turning Describe again's choices off puts back the video's own, as the
+    /// toggle's hint says. With Continue on screen only what this panel shows
+    /// goes back: the narration above is Continue's too.
+    private func restoreAgainChoices() {
+        guard let current = job, offersDescribeAgain(current) else { return }
+        guard current.resumable == true else {
+            _ = seed(from: current.settings, range: current.range)
+            return
+        }
+        let settings = current.settings
+        let part = settings?.range ?? current.range
+        notes = settings?.notes ?? ""
+        closeLook = settings?.closeLook ?? false
+        firstLook = settings?.firstLook ?? false
+        partOn = part != nil
+        partFrom = part.map { Self.clock($0.start) } ?? ""
+        partTo = part.map { Self.clock($0.end) } ?? ""
+        if let value = settings?.detail, Self.detailOptions.contains(where: { $0.value == value }) { detail = value }
     }
 
     static func detailWords(_ value: String) -> String {
@@ -2234,6 +2295,9 @@ struct DescribedVideoView: View {
         // A run that started takes the Describe again section away; it comes
         // back closed.
         if !offersDescribeAgain(fresh) { againChoices = false }
+        // A run that has just stopped three times at the same part opens
+        // Describe again's choices: the same ones would be refused.
+        if let previous, !stoppedForGood(previous), stoppedForGood(fresh) { againChoices = true }
         let actionsChanged = previous?.state != fresh.state
             || previous?.resumable != fresh.resumable
             || previous?.finishable != fresh.finishable
@@ -2253,7 +2317,8 @@ struct DescribedVideoView: View {
         viewVersion = 0
         estimates = [:]
         estimateTask?.cancel()
-        againChoices = false
+        // Open by themselves only where the video's own choices are refused.
+        againChoices = stoppedForGood(fresh)
         spokenState = fresh.state
         spokenStage = fresh.stage ?? ""
         spokenProgress = fresh.progress ?? 0
@@ -2706,7 +2771,10 @@ struct DescribedVideoView: View {
 
     private func recheck(_ current: DVJob) async {
         let id = current.id
-        await act("Checking the video again. Checking is free.") { try await service.recheck(jobId: id) }
+        let said = importDidNotFinish(current)
+            ? "Bringing the YouTube video in again. It is free."
+            : "Checking the video again. Checking is free."
+        await act(said) { try await service.recheck(jobId: id) }
     }
 
     /// Free, so it is not asked first. When it can be kept no longer the
@@ -2907,12 +2975,32 @@ struct DescribedVideoView: View {
         do {
             let fresh = try await service.importYouTube(url: link)
             youtubeLink = ""
-            sound(.actionStart)
-            open(fresh)
+            if fresh.existing == true {
+                // Sep 27 2026: a link she already brought in opens that video
+                // instead of downloading it again (YouTube refuses the server
+                // now and then); VoiceOver lands on Describe again.
+                sound(.actionDone)
+                let again = offersDescribeAgain(fresh)
+                open(fresh, saying: existingYouTubeWords(fresh, again: again), landing: again ? .again : .jobHeading)
+            } else {
+                sound(.actionStart)
+                open(fresh)
+            }
             await reloadList()
         } catch {
             fail(error)
         }
+    }
+
+    private func existingYouTubeWords(_ fresh: DVJob, again: Bool) -> String {
+        let base = "You already have this video: \(fresh.title), \(fresh.stateWord). It is open now"
+        let copies = !fresh.finishedCopies.isEmpty
+        if again {
+            return base + (copies
+                ? ". Nothing is downloaded again; your described copy and Describe again are below."
+                : ". Nothing is downloaded again; Describe again is below.")
+        }
+        return base + (copies ? "; your described copy is below." : ".")
     }
 
     private func importLibrary(_ pending: DescribedVideoStart) async {
