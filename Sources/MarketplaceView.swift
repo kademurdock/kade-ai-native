@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 /// The Marketplace, native (July 28 2026 — Kade's pick from the roadmap:
 /// "Both parler 2.1 and market"). The last big web-only storefront: browse
@@ -188,11 +189,13 @@ struct MarketplaceView: View {
              * bounded windows (see the constants above), no state write
              * inside a layout pass, and focus moves only after a render.
              *
-             * Avatars: AsyncImage in an eager stack starts loading every row
-             * that is shown, so the windows are also what bound the image
-             * loads. The LazyVStack kept every row it had ever built, so
-             * scrolling to the bottom used to load and hold all ~224 at once;
-             * now it is at most what the windows show. */
+             * Avatars: an eager stack starts loading every row that is shown,
+             * so the windows are also what bound the image loads. The
+             * LazyVStack kept every row it had ever built, so scrolling to the
+             * bottom used to load and hold all ~224 at once; now it is at most
+             * what the windows show. Part 296: those loads go through
+             * MarketplaceAvatarLoader (six at a time, top rows first, shrunk
+             * and kept in memory and on disk) instead of AsyncImage. */
             VStack(alignment: .leading, spacing: 14) {
                 searchField
                 if isSearching {
@@ -416,18 +419,144 @@ struct MarketplaceView: View {
     private func avatarThumb(_ agent: KadeAgent) -> some View {
         if let path = agent.avatar?.filepath, !path.isEmpty,
            let url = URL(string: path.hasPrefix("http") ? path : "https://kademurdock.com\(path)") {
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Circle().fill(Color.secondary.opacity(0.2))
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
-            .accessibilityHidden(true)
+            // Part 296: cached and shrunk, instead of AsyncImage (see MarketplaceAvatarLoader).
+            MarketplaceAvatar(url: url)
         } else {
             KadeSpeakerMonogram(name: agent.name)
                 .frame(width: 44, height: 44)
         }
+    }
+}
+
+/// One row's picture (Part 296, Sep 27 2026). Decorative and hidden from
+/// VoiceOver, as the AsyncImage it replaces was; the row's words carry it.
+/// A picture already in memory draws on the first pass with no state write
+/// at all. Otherwise the load starts when the row appears and stops if it
+/// goes away (leaving the Marketplace, or a search that drops the row), and
+/// the one state write lands after the download, never inside a layout pass.
+private struct MarketplaceAvatar: View {
+    let url: URL
+    @State private var loaded: UIImage?
+
+    var body: some View {
+        let picture: UIImage? = loaded ?? MarketplaceAvatarLoader.shared.cached(url)
+        ZStack {
+            if let picture {
+                Image(uiImage: picture)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle().fill(Color.secondary.opacity(0.2))
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+        .task(id: url) {
+            if loaded != nil || MarketplaceAvatarLoader.shared.cached(url) != nil { return }
+            let image = await MarketplaceAvatarLoader.shared.image(for: url)
+            if Task.isCancelled { return }
+            if let image { loaded = image }
+        }
+    }
+}
+
+/// THE MARKETPLACE'S PICTURES (Part 296, Sep 27 2026). Opening the
+/// Marketplace used to start about 126 AsyncImage downloads at once (about
+/// 4.9 MB, with nothing kept), so the circles stayed blank for seconds, every
+/// visit. Now:
+/// - Each picture is shrunk once to the 44-point circle (132 pixels) and
+///   kept in memory, so a second visit, a search or a Show more draws it
+///   straight away.
+/// - The files themselves sit in a URLCache of their own on disk, so the next
+///   launch downloads nothing it already has.
+/// - At most six download at a time, first come first served. Rows appear top
+///   first, so the ones on screen fill in first and the rest follow. A row
+///   that goes away before its turn gives its place up without downloading.
+///   (In an eager VStack every row in the windows "appears" as soon as the
+///   screen opens, so this queue is what puts the visible ones first.)
+@MainActor
+final class MarketplaceAvatarLoader {
+    static let shared = MarketplaceAvatarLoader()
+
+    private let memory = NSCache<NSURL, UIImage>()
+    private let session: URLSession
+    private let slots = 6
+    private var running = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    private init() {
+        memory.countLimit = 400
+        memory.totalCostLimit = 32 * 1024 * 1024
+        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("MarketplaceAvatars", isDirectory: true)
+        let config = URLSessionConfiguration.default
+        config.urlCache = URLCache(memoryCapacity: 4 * 1024 * 1024, diskCapacity: 64 * 1024 * 1024, directory: folder)
+        // A file already on disk is used as it is. Avatar paths change when a
+        // picture changes, so a kept file is never a stale face.
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.httpMaximumConnectionsPerHost = 6
+        config.timeoutIntervalForRequest = 30
+        session = URLSession(configuration: config)
+    }
+
+    /// The shrunk picture, if it is already in memory.
+    func cached(_ url: URL) -> UIImage? {
+        memory.object(forKey: url as NSURL)
+    }
+
+    /// The shrunk picture, from memory, the disk cache or the network. Nil on
+    /// any failure (the grey circle stays) or when the asking row went away.
+    func image(for url: URL) async -> UIImage? {
+        if let hit = cached(url) { return hit }
+        await takeSlot()
+        defer { giveSlot() }
+        if Task.isCancelled { return nil }
+        // The same face can sit in House picks and in its category.
+        if let hit = cached(url) { return hit }
+        guard let (data, response) = try? await session.data(from: url) else { return nil }
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return nil }
+        let image: UIImage? = await Task.detached(priority: .utility) {
+            MarketplaceAvatarLoader.thumbnail(data, maxPixels: 132)
+        }.value
+        guard let image else { return nil }
+        let cost: Int = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        memory.setObject(image, forKey: url as NSURL, cost: cost)
+        return image
+    }
+
+    private func takeSlot() async {
+        if running < slots {
+            running += 1
+            return
+        }
+        // giveSlot hands its place straight to the first one waiting.
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            waiting.append(c)
+        }
+    }
+
+    private func giveSlot() {
+        if waiting.isEmpty {
+            running -= 1
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+
+    /// Decodes straight to a small picture (ImageIO), so a large avatar file
+    /// never becomes a full-size bitmap in memory. Off the main actor.
+    nonisolated static func thumbnail(_ data: Data, maxPixels: Int) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ] as CFDictionary
+        guard let small = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        return UIImage(cgImage: small)
     }
 }
 
