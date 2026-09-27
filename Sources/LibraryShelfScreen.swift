@@ -106,6 +106,9 @@ struct LibraryShelfScreen: View {
         guard let rows = shelfRows, let total = totalCount else {
             return failure == nil ? "Loading \(shownTitle)…" : "Could not open \(shownTitle)."
         }
+        if rows.isEmpty && total == 0 && isMineRoot && pending.isEmpty {
+            return "You have not added anything yet. Add and requests, on the Library's first screen, is where to add a book or a recording."
+        }
         if rows.isEmpty { return total == 0 ? "Nothing on this shelf yet." : LibraryWords.items(total) }
         return LibraryWords.shelves(rows.count) + ", " + LibraryWords.items(total)
     }
