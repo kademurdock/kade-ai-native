@@ -475,7 +475,7 @@ struct CollectionScreen: View {
                             Button { play(it, Array(d.items.dropFirst(i + 1))) } label: {
                                 VStack(alignment: .leading) {
                                     Text("\(i + 1). \(it.title)").font(.headline)
-                                    Text([it.book.author, RRCategory.name(it.book.kind == "text" ? "book" : it.book.category, isAudio: it.book.kind != "text"), it.seconds.map { ReadingRoomPlayer.clock($0) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                                    Text([it.book.author, it.book.typeWord, it.seconds.map { ReadingRoomPlayer.clock($0) }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }
                             .accessibilityHint("Plays it, then the rest of the collection.")
@@ -624,7 +624,7 @@ struct EditItemSheet: View {
     @State private var category = "other"
     @State private var path = ""
     @State private var desc = ""
-    private let shelves: [(String, String)] = [("audiobook", "Audiobook"), ("movie", "Movie"), ("tv", "TV"), ("commercials", "Commercials"), ("psa", "PSA"), ("vhs", "VHS / home video"), ("cassette", "Cassette"), ("radio", "Radio"), ("music", "Music"), ("other", "Other")]
+    private let shelves: [(String, String)] = [("audiobook", "Audiobook"), ("movie", "Movie or described audio"), ("tv", "TV"), ("commercials", "Commercials"), ("psa", "PSA"), ("vhs", "VHS / home video"), ("cassette", "Cassette"), ("radio", "Radio"), ("music", "Music"), ("other", "Other")]
 
     var body: some View {
         NavigationStack {

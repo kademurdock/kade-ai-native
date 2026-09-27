@@ -81,6 +81,12 @@ struct RRItem: Codable, Identifiable, Hashable {
     /// Part 296: the library owner's own item. A row does not end "donated
     /// by" her on almost every item in the archive.
     var fromLibraryOwner: Bool?
+    /// Part 296 (her Sep 27 word): the server's one word for what this is,
+    /// worked out from the real file ("Described audio movie", "Described
+    /// audio episode", "Movie trailer"). Her described MP3s are all filed
+    /// with the movie category, so the category alone said "Movie" for every
+    /// episode. `category` stays as stored: pictures and Edit key on it.
+    var typeLabel: String?
 
     /// Sep 12 2026, her word: "videos are showing up as books, doesn't seem
     /// like there's a way to play them or get AI descriptions". The archive
@@ -89,6 +95,9 @@ struct RRItem: Codable, Identifiable, Hashable {
     /// that is not text is a recording with tracks (audio or video).
     var isAudio: Bool { kind != "text" }
     var categoryName: String { RRCategory.name(category, isAudio: isAudio) }
+    /// What a row says the item is: the server's word, or the category's
+    /// name from an older server.
+    var typeWord: String { RRCategory.word(typeLabel, category: category, isAudio: isAudio) }
     // Part 296: what VoiceOver says for a row is LibraryWords.spokenRow
     // (LibraryNavigation.swift), the same in every Library list.
 }
@@ -98,6 +107,14 @@ enum RRCategory {
     /// Part 296: the server's other kinds, which used to read "Tv", "Vhs"
     /// and "Psa". Names only; the donate picker keeps its own list.
     static let otherNames: [String: String] = ["tv": "Television", "vhs": "Home video", "psa": "Public service announcement"]
+    /// Part 296: the Donate picker's words. "movie" is where described audio
+    /// goes, so it says so; the value sent is the same.
+    static let donateChoices: [(String, String)] = audio.map { $0.0 == "movie" ? ($0.0, "Movie or described audio") : $0 }
+    /// The server's type word when it sent one, else the category's name.
+    static func word(_ label: String?, category: String, isAudio: Bool) -> String {
+        if let label = label?.trimmingCharacters(in: .whitespaces), !label.isEmpty { return label }
+        return name(category, isAudio: isAudio)
+    }
     static func name(_ key: String, isAudio: Bool) -> String {
         if !isAudio { return "Book" }
         if let known = audio.first(where: { $0.0 == key })?.1 { return known }
@@ -194,7 +211,10 @@ struct RRBook: Codable {
     var copyrightYear: String?
     /// Part 296: the library owner's own item (no "donated by" her).
     var fromLibraryOwner: Bool?
+    /// Part 296: the server's word for what this is (see RRItem.typeLabel).
+    var typeLabel: String?
     var isAudio: Bool { kind != "text" }   // audio or video: tracks, not chapters
+    var typeWord: String { RRCategory.word(typeLabel, category: category, isAudio: isAudio) }
     var partCount: Int { isAudio ? tracks.count : chapters.count }
     func partTitle(_ s: Int) -> String {
         if isAudio { return tracks.indices.contains(s) ? tracks[s].title : "" }

@@ -176,7 +176,7 @@ struct ReadingRoomView: View {
             if let b = openBook {
                 EditItemSheet(book: b) { fields in
                     Task {
-                        do { let it = try await service.editItem(b.id, fields: fields); announce("Saved."); if var ob = openBook { ob = RRBook(id: ob.id, kind: ob.kind, category: it.category, title: it.title, author: it.author, description: it.description, ownerName: ob.ownerName, shared: it.shared, grownUpsOnly: it.grownUpsOnly, listen: ob.listen, jacket: ob.jacket, chapters: ob.chapters, tracks: ob.tracks, skipped: ob.skipped, bookmarks: ob.bookmarks, mine: ob.mine, defaultVoice: ob.defaultVoice, progress: ob.progress, librarian: ob.librarian, path: it.path, copyrightYear: it.copyrightYear, fromLibraryOwner: ob.fromLibraryOwner); openBook = ob } } catch { announce(error.localizedDescription) }
+                        do { let it = try await service.editItem(b.id, fields: fields); announce("Saved."); if var ob = openBook { ob = RRBook(id: ob.id, kind: ob.kind, category: it.category, title: it.title, author: it.author, description: it.description, ownerName: ob.ownerName, shared: it.shared, grownUpsOnly: it.grownUpsOnly, listen: ob.listen, jacket: ob.jacket, chapters: ob.chapters, tracks: ob.tracks, skipped: ob.skipped, bookmarks: ob.bookmarks, mine: ob.mine, defaultVoice: ob.defaultVoice, progress: ob.progress, librarian: ob.librarian, path: it.path, copyrightYear: it.copyrightYear, fromLibraryOwner: ob.fromLibraryOwner, typeLabel: it.typeLabel); openBook = ob } } catch { announce(error.localizedDescription) }
                     }
                 }
             }
@@ -339,7 +339,7 @@ struct ReadingRoomView: View {
 
     /// The item as a row, for "Add recordings".
     private func recordingItem(_ book: RRBook) -> RRItem {
-        RRItem(id: book.id, kind: "audio", category: book.category, description: nil, tracks: book.tracks.count, seconds: nil, state: nil, title: book.title, author: book.author, publisher: nil, copyrightYear: nil, synopsis: nil, source: nil, ownerName: book.ownerName, owner: nil, shared: book.shared, grownUpsOnly: book.grownUpsOnly, sections: nil, chunks: nil, listen: book.listen, skippedCount: nil, progress: nil)
+        RRItem(id: book.id, kind: "audio", category: book.category, description: nil, tracks: book.tracks.count, seconds: nil, state: nil, title: book.title, author: book.author, publisher: nil, copyrightYear: nil, synopsis: nil, source: nil, ownerName: book.ownerName, owner: nil, shared: book.shared, grownUpsOnly: book.grownUpsOnly, sections: nil, chunks: nil, listen: book.listen, skippedCount: nil, progress: nil, typeLabel: book.typeLabel)
     }
 
     // MARK: - Donations
@@ -783,7 +783,7 @@ struct ReadingRoomView: View {
     private func bookMeta(_ book: RRBook) -> String {
         var bits: [String] = []
         if let a = book.author, !a.isEmpty { bits.append("by \(a)") }
-        bits.append(RRCategory.name(book.category, isAudio: book.isAudio))
+        bits.append(book.typeWord)
         if let l = book.listen, !l.isEmpty { bits.append(l) }
         if !book.mine, let d = book.ownerName, !d.isEmpty, book.fromLibraryOwner != true { bits.append("donated by \(d)") }
         return bits.joined(separator: " · ")
@@ -1055,7 +1055,7 @@ struct DonateRecordingSheet: View {
                     TextField("Who made it (optional)", text: $author)
                     TextField("Year (optional)", text: $year).keyboardType(.numberPad)
                     Picker("Type of recording", selection: $category) {
-                        ForEach(RRCategory.audio, id: \.0) { Text($0.1).tag($0.0) }
+                        ForEach(RRCategory.donateChoices, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     TextField("About it (optional)", text: $desc, axis: .vertical).lineLimit(2 ... 5)
                     Toggle("Grown-ups only", isOn: $grownUps)

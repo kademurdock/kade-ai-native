@@ -182,10 +182,14 @@ enum LibraryWords {
     }
 
     /// A shelf name that means little without the shelf it sits on: a
-    /// decade or a year, Undated, Multiple decades, a season.
+    /// decade or a year, Undated, Multiple decades, a season, and (Part 296)
+    /// a letter shelf, so the described films' "A" screen is titled
+    /// "Described audio movies, A".
     static func needsPlace(_ name: String) -> Bool {
         let n = name.trimmingCharacters(in: .whitespaces).lowercased()
         if n == "undated" || n == "multiple decades" { return true }
+        if n == "0-9" || n == "numbers" { return true }
+        if n.count == 1, let c = n.first, c.isLetter { return true }
         if n.range(of: #"^\d{4}s?$"#, options: .regularExpression) != nil { return true }
         return n.range(of: #"^season \d+"#, options: .regularExpression) != nil
     }
@@ -212,7 +216,7 @@ enum LibraryWords {
     static func spokenRow(_ item: RRItem, me: String, place: String) -> String {
         var bits: [String] = [item.title]
         if let a = item.author, !a.isEmpty { bits.append("by \(a)") }
-        bits.append(item.categoryName)
+        bits.append(item.typeWord)
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }
@@ -228,7 +232,7 @@ enum LibraryWords {
     static func detailLine(_ item: RRItem, me: String, place: String) -> String {
         var bits: [String] = []
         if let a = item.author, !a.isEmpty { bits.append("by \(a)") }
-        bits.append(item.categoryName)
+        bits.append(item.typeWord)
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }

@@ -269,7 +269,7 @@ struct KadeSearchView: View {
     private func libraryDetail(_ item: RRItem) -> String {
         var parts: [String] = []
         if let author = item.author, !author.isEmpty { parts.append(author) }
-        parts.append(RRCategory.name(item.kind == "text" ? "book" : item.category, isAudio: item.kind != "text"))
+        parts.append(item.typeWord)
         return parts.joined(separator: ", ")
     }
 
