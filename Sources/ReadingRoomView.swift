@@ -772,7 +772,7 @@ struct ReadingRoomView: View {
                     .accessibilityHint("Removes it for everyone. Cannot be undone.")
             } else {
                 Button("Return it to the library") { Task { await returnIt() } }
-                    .accessibilityHint("Takes it off your shelf and forgets your place.")
+                    .accessibilityHint("Takes it off Recently opened and forgets your place.")
             }
         }
     }
@@ -849,7 +849,7 @@ struct ReadingRoomView: View {
         do {
             let r = try await service.setShared(bookId: book.id, shared: !book.shared)
             openBook?.shared = r.book.shared
-            announce(r.pending == true ? "Submitted for the library. The librarian will look at it and you will be told." : (r.book.shared ? "It is in the library now. Everyone will see it as donated by \(book.ownerName ?? "you")." : "Back on your private shelf."))
+            announce(r.pending == true ? "Submitted for the library. The librarian will look at it and you will be told." : (r.book.shared ? "It is in the library now. Everyone will see it as donated by \(book.ownerName ?? "you")." : "It is private again. Only you can see it, in My uploads."))
         } catch { announce(error.localizedDescription) }
     }
     private func toggleGrownUps() async {
