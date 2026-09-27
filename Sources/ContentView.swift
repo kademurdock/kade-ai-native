@@ -381,11 +381,15 @@ struct ContentView: View {
         pushLibrary(.item(LibraryItemRoute(id: current.id, title: current.title)))
     }
 
-    /// Part 296: a Library screen onto the Library tab's own stack. The
-    /// player for the item already on top is not pushed a second time.
+    /// Part 296: a Library screen onto the Library tab's own stack. At most
+    /// one player screen sits on top: the item already there is not pushed a
+    /// second time, and another item (from Search everything or the Now
+    /// Playing bar on another tab) takes its place, so Back goes to where she
+    /// was browsing instead of to a second player that now shows the new item.
     private func pushLibrary(_ route: LibraryRoute) {
         tab = .library
-        if case .item(let wanted) = route, case .library(.item(let top))? = libraryPath.last, top.id == wanted.id {
+        if case .item(let wanted) = route, case .library(.item(let top))? = libraryPath.last {
+            if top.id != wanted.id { libraryPath[libraryPath.count - 1] = .library(route) }
             return
         }
         libraryPath.append(.library(route))
@@ -912,7 +916,9 @@ struct ContentView: View {
             if kind == "described-video" {
                 go(.describedVideo(DescribedVideoStart(openLatest: true)))
             } else {
-                go(kind == "upload" ? .readingRoom : .soundBooth)
+                // Part 296: an upload's card opens Add and requests, where the
+                // upload line is now (the Library's first screen has none).
+                go(kind == "upload" ? .library(.page(.add)) : .soundBooth)
             }
         default:
             break
