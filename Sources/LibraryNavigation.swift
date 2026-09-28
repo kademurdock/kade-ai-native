@@ -104,9 +104,12 @@ enum LibraryWords {
     static func items(_ n: Int) -> String { count(n, "item", "items") }
     static func shelves(_ n: Int) -> String { count(n, "shelf", "shelves") }
 
-    /// "45 seconds", "12 minutes", "1 hour 5 minutes".
+    /// "45 seconds", "12 minutes", "1 hour 5 minutes". A length from the
+    /// server is never trusted to fit an Int (DescribedVideoView's rule): a
+    /// broken value would stop every shelf that lists the item from opening.
     static func length(seconds: Double) -> String {
-        let total = Int(seconds.rounded())
+        guard seconds.isFinite, seconds > 0 else { return "" }
+        let total = Int(Swift.min(seconds, 1_000_000_000).rounded())
         guard total > 0 else { return "" }
         if total < 60 { return count(total, "second", "seconds") }
         let minutes = Int((Double(total) / 60).rounded())

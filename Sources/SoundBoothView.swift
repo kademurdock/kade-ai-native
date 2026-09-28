@@ -2293,8 +2293,9 @@ struct SoundBoothView: View {
 
     /// "Song title (3:12)" when the length is known.
     private static func withLength(_ name: String, seconds: Double?) -> String {
-        guard let seconds, seconds > 0 else { return name }
-        let total: Int = Swift.max(0, Int(seconds.rounded()))
+        // A length from the server is never trusted to fit an Int.
+        guard let seconds, seconds.isFinite, seconds > 0 else { return name }
+        let total: Int = Swift.max(0, Int(Swift.min(seconds, 1_000_000_000).rounded()))
         let clock: String = "\(total / 60):" + String(format: "%02d", total % 60)
         return "\(name) (\(clock))"
     }
