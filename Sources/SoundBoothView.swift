@@ -487,11 +487,18 @@ struct SoundBoothView: View {
     private func goalHeader(_ g: BoothGoal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(g.title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
-            Text(g == .myVoice ? g.caption : "\(g.caption) Made with \(Self.engineName(engine)).")
+            Text(goalLine(g))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             engineSection
         }
+    }
+
+    /// The line under a goal's heading. Sing it in my voice says the server's
+    /// own tagline here, once; its form below does not repeat it.
+    private func goalLine(_ g: BoothGoal) -> String {
+        if g == .myVoice { return currentEngine?.tagline ?? g.caption }
+        return "\(g.caption) Made with \(Self.engineName(engine))."
     }
 
     /// A goal picks its engine (the booth's own pick for it, or the engine
@@ -1312,6 +1319,9 @@ struct SoundBoothView: View {
                                 Button("Cover this take") { prepareCover(take, project: p) }
                                 if let words = singTakeWords(take, project: p) {
                                     Button(words) { prepareSingTake(take, project: p) }
+                                        // Which take, as its Play and Save buttons say.
+                                        .accessibilityLabel("\(words), take \(takes.count - idx)")
+                                        .accessibilityHint("Attaches this take to Sing it in my voice, above. Nothing is made until you choose Sing it in my voice there. The original is kept.")
                                 }
                             } else if p.engine != "stable" && p.engine != "myvoice" {
                                 Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
@@ -1356,7 +1366,8 @@ struct SoundBoothView: View {
             health = h
             guide = h.guide
             // Sep 27 2026: reopened on Sing it in my voice, which this account no longer has.
-            if engine == "myvoice" && h.guide?.engines["myvoice"] == nil { leaveUnavailableUpload() }
+            // Never while a job or an import is running: the form stays with its work.
+            if engine == "myvoice" && h.guide?.engines["myvoice"] == nil && !workspaceBusy { leaveUnavailableUpload() }
             let scenemaOK = h.engines["scenema"]?.configured ?? false
             let seedOK = h.engines["seed"]?.configured ?? false
             let lyriaOK = h.engines["lyria"]?.configured ?? false
@@ -2150,11 +2161,13 @@ struct SoundBoothView: View {
     /// writing desk, no voice preview.
     private var uploadSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(currentEngine?.name ?? "Sing it in my voice")
+            /* Not the engine's name: the goal's heading just above already says
+             * "Sing it in my voice", and two headings with the same words in a
+             * row read as one repeated on the headings rotor. */
+            Text("What to sing")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
             if let g = currentEngine {
-                Text(g.tagline).font(.footnote).foregroundStyle(.secondary)
                 DisclosureGroup(isExpanded: $showHowTo) {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in

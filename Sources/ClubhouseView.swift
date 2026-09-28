@@ -53,7 +53,9 @@ struct ClubhouseView: View {
          * (onDisappear), so the tape was thrown away without a word. While a
          * tape is running, the system Back (and its swipe) steps aside for
          * one that asks first. The tape lives only while this screen does, so
-         * the question is keep recording, or discard. */
+         * the question offers the same way out as Leave the room: keep the
+         * tape and land on the front page ("Your last tape"), or lose it and
+         * go back, or keep recording. */
         .navigationBarBackButtonHidden(service.recording)
         .toolbar {
             if service.recording {
@@ -68,15 +70,18 @@ struct ClubhouseView: View {
                         }
                     }
                     .accessibilityLabel("Back")
-                    .accessibilityHint("You're recording. Asks first, because going back throws the tape away.")
+                    .accessibilityHint("You're recording. Asks first, because going back loses the tape unless you keep it.")
+                    // The scrub with focus up here in the bar asks too.
+                    .accessibilityAction(.escape) { showBackWhileTaping = true }
                 }
             }
         }
-        .confirmationDialog("Stop recording and discard the tape?", isPresented: $showBackWhileTaping, titleVisibility: .visible) {
+        .confirmationDialog("You're still taping this room.", isPresented: $showBackWhileTaping, titleVisibility: .visible) {
+            Button("Stop the tape, keep it, then leave the room") { service.stopRecordingThenLeave() }
+            Button("Go back and lose the tape", role: .destructive) { discardTapeAndGoBack() }
             Button("Keep recording", role: .cancel) {}
-            Button("Discard", role: .destructive) { discardTapeAndGoBack() }
         } message: {
-            Text("Going back ends the tape, and it is not saved. To keep it, choose Keep recording, then Stop the recording, and share or save it.")
+            Text("Going back closes the Clubhouse, and the tape is lost unless you keep it first. Keeping it takes you to the Clubhouse front page, where you can share it or save it to Files.")
         }
         .background(
             EngineHostView(engine: service.engine, up: service.engineUp)
@@ -553,8 +558,9 @@ struct ClubhouseView: View {
         }
     }
 
-    /// Discard, chosen in the Back question: the room is left (which ends the
-    /// tape unsaved, as Leave and lose the tape does) and the screen closes.
+    /// Go back and lose the tape, chosen in the Back question: the room is left
+    /// (which ends the tape unsaved, as Leave and lose the tape does) and the
+    /// screen closes.
     private func discardTapeAndGoBack() {
         service.leave()
         dismiss()
