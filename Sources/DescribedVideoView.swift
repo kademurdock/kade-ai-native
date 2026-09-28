@@ -688,7 +688,9 @@ struct DescribedVideoView: View {
         if current.isWorking, let eta = current.etaSeconds, eta > 0 {
             parts.append("About \(Self.lengthWords(max(60, (eta / 60).rounded() * 60))) left.")
         }
-        if current.isWorking, let cost = current.runCostUSD ?? current.costUSD, cost > 0 {
+        if let spending = costWords(current) {
+            parts.append(spending)
+        } else if current.isWorking, let cost = current.runCostUSD ?? current.costUSD, cost > 0 {
             var line = "Cost so far: \(Self.money(cost))"
             if let estimated = current.estimatedUSD, estimated > 0 {
                 line += " of about \(Self.money(estimated))"
@@ -712,6 +714,95 @@ struct DescribedVideoView: View {
             parts.append("The original is marked grown-ups only.")
         }
         return parts.joined(separator: " ")
+    }
+
+    /// The money words from a server that says what is spent and what is
+    /// held (Sep 27 2026), the website's own: spent means settled, a look
+    /// still out holds its worst-case price apart, and a finished or stopped
+    /// run lists what each part cost. nil from an older server, whose one
+    /// figure is said as before. Read with the facts, never announced as the
+    /// numbers move.
+    private func costWords(_ current: DVJob) -> String? {
+        guard let spent = current.spentUSD else { return nil }
+        let held = current.heldUSD ?? 0
+        if current.isWorking {
+            if ["checking", "importing"].contains(current.state) { return nil }
+            guard current.state == "running" || spent > 0 || held >= 0.005 else { return nil }
+            var line = "Spent so far \(Self.cents(spent))"
+            if let estimated = current.estimatedUSD, estimated > 0 {
+                line += ", of about \(Self.cents(estimated))"
+            }
+            line += "."
+            // The most the requests still out can cost, never "set aside":
+            // those are the words for the money held from her balance, which
+            // a look's worst case can pass.
+            if held >= 0.005 {
+                let looks = current.heldLooks ?? 0
+                if looks > 1 {
+                    line += " The \(looks) looks in progress can cost at most \(Self.cents(held)) together; you pay only what they really cost."
+                } else {
+                    let what: String = looks == 1 ? "look" : "work"
+                    line += " The \(what) in progress can cost at most \(Self.cents(held)); you pay only what it really costs."
+                }
+            }
+            if let most = current.approvedUSD, most > 0 {
+                line += " It asks before spending more than \(Self.cents(most))."
+            }
+            return line + allVersionsWords(current, spent: spent) + " Work already sent to a service may still be charged if you cancel."
+        }
+        guard let lines = current.costParts, current.settings != nil,
+              ["done", "failed", "cancelled"].contains(current.state) else { return nil }
+        var words = current.state == "done" ? "This run cost " : "The stopped run cost "
+        words += spent > 0 ? Self.cents(spent) : "nothing"
+        if let estimated = current.estimatedUSD, estimated > 0 {
+            words += ", of about \(Self.cents(estimated)) quoted"
+        }
+        words += "."
+        var paid: [DVCostPart] = []
+        var free: [String] = []
+        var voicePaid = false
+        for item in lines where !item.label.isEmpty {
+            if item.included {
+                let platform = item.usd >= 0.005 ? " (\(Self.cents(item.usd)), paid by the platform)" : ""
+                free.append(item.label.lowercased() + platform)
+                continue
+            }
+            if item.part == "voice" { voicePaid = true }
+            paid.append(item)
+        }
+        // A run from before its parts were kept has one part, other: it is
+        // not broken down.
+        if paid.count == 1, paid[0].part == "other" { paid = [] }
+        // Whole cents that add up to the total just said.
+        let whole: [Int] = Self.centShares(paid.map { $0.usd }, total: spent)
+        var said: [String] = []
+        for (index, item) in paid.enumerated() {
+            let name: String = index == 0 ? item.label : Self.lowerFirst(item.label)
+            let count: Int = index < whole.count ? whole[index] : 0
+            said.append("\(name): \(Self.centsSaid(count, of: item.usd))")
+        }
+        if !said.isEmpty { words += " " + said.joined(separator: "; ") + "." }
+        if !voicePaid { free.append("narration") }
+        var list: String = free.joined(separator: " and ")
+        if free.count > 2 {
+            let first: String = free.dropLast().joined(separator: ", ")
+            list = first + " and " + (free.last ?? "")
+        }
+        let verb: String = free.count > 1 ? " are included." : " is included."
+        words += " " + Self.upperFirst(list) + verb
+        return words + allVersionsWords(current, spent: spent)
+    }
+
+    /// Every version's cost, said only when earlier runs cost something too.
+    private func allVersionsWords(_ current: DVJob, spent: Double) -> String {
+        guard let total = current.costUSD, total - spent >= 0.005 else { return "" }
+        return " All versions of this video: \(Self.cents(total))."
+    }
+
+    /// What a finished run cost, said once with the news that it is ready.
+    private func costSaid(_ fresh: DVJob) -> String {
+        guard fresh.costParts != nil, let spent = fresh.spentUSD else { return "" }
+        return " It cost " + (spent > 0 ? Self.cents(spent) : "nothing") + "."
     }
 
     private func stageSentence(_ current: DVJob) -> String {
@@ -2357,7 +2448,7 @@ struct DescribedVideoView: View {
             case "done":
                 sound(.actionDone)
                 buzz(success: true)
-                announce(fresh.preview == true ? "Your preview is ready." : "Your described copy is ready.", thenFocus: .results)
+                announce((fresh.preview == true ? "Your preview is ready." : "Your described copy is ready.") + costSaid(fresh), thenFocus: .results)
             case "failed":
                 sound(.error)
                 buzz(success: false)
@@ -3204,6 +3295,60 @@ struct DescribedVideoView: View {
         let amount = value ?? 0
         if amount > 0 && amount < 0.01 { return "under 1 cent" }
         return String(format: "$%.2f", amount)
+    }
+
+    static func lowerFirst(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return String(first).lowercased() + String(text.dropFirst())
+    }
+
+    static func upperFirst(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return String(first).uppercased() + String(text.dropFirst())
+    }
+
+    /// Money as it is said (the website's words): 9 cents, under 1 cent, $1.24.
+    static func cents(_ value: Double?) -> String {
+        let amount = value ?? 0
+        guard amount.isFinite, amount > 0 else { return "0 cents" }
+        return centsSaid(wholeCents(amount), of: amount)
+    }
+
+    /// An amount in whole cents, rounded; never trusted to fit an Int.
+    static func wholeCents(_ amount: Double) -> Int {
+        guard amount.isFinite, amount > 0 else { return 0 }
+        return Int((min(amount, 10_000_000) * 100).rounded())
+    }
+
+    /// Whole cents as they are said: 9 cents, $1.24, and under 1 cent for
+    /// an amount that rounds to none.
+    static func centsSaid(_ count: Int, of amount: Double) -> String {
+        if count >= 100 { return String(format: "$%.2f", Double(count) / 100) }
+        if count == 1 { return "1 cent" }
+        if count > 1 { return "\(count) cents" }
+        return amount.isFinite && amount > 0 ? "under 1 cent" : "0 cents"
+    }
+
+    /// Whole cents for each part, adding up to the whole cents of the total
+    /// they make (the website's own rule): each is rounded down and the
+    /// cents left over go to the largest remainders, so the parts said add
+    /// up to the sum said (17 cents from 5.6 and 11.5 is 6 and 11).
+    static func centShares(_ amounts: [Double], total: Double) -> [Int] {
+        let raw: [Double] = amounts.map { amount -> Double in
+            amount.isFinite ? min(max(0, amount), 10_000_000) * 100 : 0
+        }
+        var shares: [Int] = raw.map { value -> Int in Int((value + 0.000001).rounded(.down)) }
+        var left: Int = wholeCents(total) - shares.reduce(0, +)
+        let order: [Int] = raw.indices.sorted { first, second -> Bool in
+            let a: Double = raw[first] - Double(shares[first])
+            let b: Double = raw[second] - Double(shares[second])
+            return a != b ? a > b : first < second
+        }
+        for index in order where left > 0 {
+            shares[index] += 1
+            left -= 1
+        }
+        return shares
     }
 
     /// A number from the server is never trusted to fit an Int.

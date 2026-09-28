@@ -654,6 +654,19 @@ struct DVJob: Decodable, Identifiable {
     /// be described again from the original the server kept. Absent on
     /// older servers, which could do that only for a finished copy.
     let describableAgain: Bool?
+    // Cost clarity (Sep 27 2026): each only from a server that sends it.
+    // That server also sends runCostUSD and costUSD settled only; an older
+    // one counted a look still out at its worst-case price.
+    /// What this run has spent: settled requests only.
+    let spentUSD: Double?
+    /// Held right now for requests still out: not spent. Each settles at
+    /// what it really cost, and only that is charged.
+    let heldUSD: Double?
+    /// How many of the requests still out are looks.
+    let heldLooks: Int?
+    /// What this run's settled requests cost, part by part, at her price;
+    /// work the platform paid for comes last, marked included.
+    let costParts: [DVCostPart]?
 
     enum CodingKeys: String, CodingKey {
         case id, name, bytes, state, source, seconds, stage, progress, etaSeconds, error
@@ -664,6 +677,7 @@ struct DVJob: Decodable, Identifiable {
         case sourcePrivate, sourceGrownUps, sourceOwner, range, preview
         case keepable, recheckable, overQuote, approvedUSD, libraryPath, existing
         case describableAgain
+        case spentUSD, heldUSD, heldLooks, costParts
     }
 
     var title: String {
@@ -783,6 +797,32 @@ extension DVJob {
         libraryPath = c.dvString(.libraryPath)
         existing = c.dvBool(.existing)
         describableAgain = c.dvBool(.describableAgain)
+        spentUSD = c.dvNumber(.spentUSD).map { $0.isFinite ? max(0, $0) : 0 }
+        heldUSD = c.dvNumber(.heldUSD).map { $0.isFinite ? max(0, $0) : 0 }
+        heldLooks = c.dvInt(.heldLooks)
+        costParts = c.dvValue(.costParts)
+    }
+}
+
+/// One part of a run's cost (Sep 27 2026): its name as the server words it
+/// ("Closer looks", "Second looks at rushed parts"), and what it cost at her
+/// price. An included part is work the platform paid for: its amount is
+/// what it really cost the platform, shown to the administrator only, else 0.
+struct DVCostPart: Decodable {
+    let part: String
+    let label: String
+    let usd: Double
+    let included: Bool
+
+    private enum CodingKeys: String, CodingKey { case part, label, usd, included }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        part = c.dvString(.part) ?? ""
+        label = (c.dvString(.label) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = c.dvNumber(.usd) ?? 0
+        usd = amount.isFinite ? max(0, amount) : 0
+        included = c.dvBool(.included) ?? false
     }
 }
 

@@ -97,6 +97,9 @@ struct SoundBoothView: View {
     }
     @State private var drafts: [String: WorkspaceDraft] = [:]
     @State private var showEngineDetails = false
+    /// Part 296: the engine's one "More settings" group (the settings the
+    /// guide marks `advanced`). Closed again whenever the engine changes.
+    @State private var showMoreSettings = false
 
     // What she wants to make (redesign B8, Sep 23 2026). The last goal and the
     // engine last used for it are remembered, so the booth opens straight into
@@ -279,7 +282,11 @@ struct SoundBoothView: View {
                     scriptSection
                     if !usesDirectPrompt {
                         DisclosureGroup("Voice, references, and writing desk") {
-                            modeSection
+                            /* Part 296: when the guide groups this engine's
+                             * settings (More settings), Easy and Advanced
+                             * would only repeat that choice, so the picker
+                             * is left out. An older server keeps it. */
+                            if !guideGroupsSettings { modeSection }
                             writingSection
                         }
                     }
@@ -397,7 +404,7 @@ struct SoundBoothView: View {
         readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
         inputMode = draft.inputMode; values = draft.values; clips = draft.clips; importError = draft.importError
         currentProjectId = draft.projectId; newVoice = draft.newVoice
-        starterId = ""; showHowTo = false; showEngineDetails = false
+        starterId = ""; showHowTo = false; showEngineDetails = false; showMoreSettings = false
         invalidateQuote()
         settleGoal(on: next)
     }
@@ -677,6 +684,8 @@ struct SoundBoothView: View {
     // MARK: - Writing
 
     /// Which settings Easy shows. Everything else waits behind Advanced.
+    /// Part 296: only for a server that does not mark `advanced` settings;
+    /// a guide that does gets More settings instead (`settingsList`).
     private static let easyKeys: [String: [String]] = [
         "scenema": ["auk_task", "instruction", "voice_description", "reference_voice_url", "gen_seconds"],
         "seed": ["voice", "audio_urls"],
@@ -761,10 +770,15 @@ struct SoundBoothView: View {
             }
 
             if let g = currentEngine {
-                let keys = Self.easyKeys[engine] ?? []
-                let shown = g.settings.filter { mode == "advanced" || keys.contains($0.key) }
-                ForEach(shown) { setting in
-                    settingRow(setting)
+                if guideGroupsSettings {
+                    // Part 296: every setting, the advanced ones under More settings.
+                    settingsList(g.settings)
+                } else {
+                    let keys = Self.easyKeys[engine] ?? []
+                    let shown = g.settings.filter { mode == "advanced" || keys.contains($0.key) }
+                    ForEach(shown) { setting in
+                        settingRow(setting)
+                    }
                 }
                 if let recipes = g.recipes, !recipes.isEmpty {
                     DisclosureGroup("Voice design and editing ideas") {
@@ -804,86 +818,222 @@ struct SoundBoothView: View {
         }
     }
 
+    /// Part 296, the shared contract: the settings most people use first, in
+    /// the guide's order, then the ones the guide marks `advanced` inside ONE
+    /// collapsed "More settings" group. A locked setting is drawn greyed out
+    /// wherever it sits, never hidden. With no `advanced` marks (an older
+    /// server) this is just the settings, as before.
+    @ViewBuilder
+    private func settingsList(_ list: [SoundBoothGuide.Setting]) -> some View {
+        let main = list.filter { $0.advanced != true }
+        let more = list.filter { $0.advanced == true }
+        ForEach(main) { setting in
+            settingRow(setting)
+        }
+        if !more.isEmpty {
+            DisclosureGroup(isExpanded: $showMoreSettings) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(more) { setting in
+                        settingRow(setting)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                /* The hint sits on the group's own header (its label), not on
+                 * the whole group: on the group it could be read on the plain
+                 * setting names inside it as well. */
+                Text("More settings").font(.subheadline.bold())
+                    .accessibilityHint(moreSettingsHint(count: more.count))
+            }
+        }
+    }
+
+    /// Says what a double tap does now: open the group, or close it again.
+    private func moreSettingsHint(count: Int) -> String {
+        let noun = count == 1 ? "setting" : "settings"
+        if showMoreSettings { return "Hides these \(count) \(noun) again." }
+        return "Shows \(count) more \(noun) for \(Self.engineName(engine)). Most people leave them as they are."
+    }
+
+    /// Part 296, as on the web page: true when a setting inside More settings
+    /// holds words for this engine (a saved ABC score), so opening that project
+    /// opens the group to show them instead of hiding them behind it.
+    private func moreSettingsHoldWords(engine key: String) -> Bool {
+        guard let settings = guide?.engines[key]?.settings else { return false }
+        return settings.contains { st in
+            guard st.advanced == true, st.kind == "text", st.lockReason == nil else { return false }
+            let words = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return !words.isEmpty
+        }
+    }
+
+    /// Part 296: true when the guide marks which of this engine's settings are
+    /// advanced. Then More settings does the Easy and Advanced picker's job.
+    private var guideGroupsSettings: Bool {
+        currentEngine?.settings.contains(where: { $0.advanced != nil }) ?? false
+    }
+
     /// One setting, rendered from the guide. The hint is the accessibility
     /// hint AND the visible footnote, so what a sighted person reads and what
     /// VoiceOver says are the same sentence.
+    /// Part 296: a locked setting (`locked` carries the reason) is disabled,
+    /// shows the value it will actually use (its default), leads its hint
+    /// with the reason, and is never sent (`collectedSettings`).
     @ViewBuilder
     private func settingRow(_ st: SoundBoothGuide.Setting) -> some View {
+        let hint = Self.hintText(for: st)
+        let isLocked = st.lockReason != nil
         switch st.kind {
         case "text":
             VStack(alignment: .leading, spacing: 4) {
                 Text(st.label).font(.subheadline)
                 if st.key == "lyrics" {
-                    TextEditor(text: binding(st.key))
+                    TextEditor(text: binding(for: st))
                         .disabled(isTranscribing)
                         .frame(minHeight: 150)
                         .padding(6)
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                         .accessibilityLabel(st.label)
-                        .accessibilityHint(st.hint)
+                        .accessibilityHint(hint)
                 } else {
-                    TextField(st.hint, text: binding(st.key), axis: .vertical)
+                    TextField(st.hint, text: binding(for: st), axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...3)
                         .accessibilityLabel(st.label)
-                        .accessibilityHint(st.hint)
+                        .accessibilityHint(hint)
                 }
-                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
+            .disabled(isLocked)
         case "choice":
             VStack(alignment: .leading, spacing: 4) {
-                Picker(st.label, selection: binding(st.key, fallback: st.defaultString ?? "")) {
+                Picker(st.label, selection: binding(for: st, fallback: st.defaultString ?? "")) {
                     ForEach(st.options ?? [], id: \.self) { o in
-                        Text(o.isEmpty ? "None" : o.replacingOccurrences(of: "_", with: " ").capitalized).tag(o)
+                        Text(Self.optionText(o)).tag(o)
                     }
                 }
                 .accessibilityLabel(st.label)
-                .accessibilityHint(st.hint)
-                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                .accessibilityHint(hint)
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
+            .disabled(isLocked)
         case "toggle":
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(st.label, isOn: Binding(
-                    get: { values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false },
-                    set: { values[st.key] = $0 ? "1" : "" }
+                    get: { toggleValue(st) },
+                    set: { if !isLocked { values[st.key] = $0 ? "1" : "" } }
                 ))
-                .accessibilityHint(st.hint)
-                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                .accessibilityHint(hint)
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
+            .disabled(isLocked)
         case "range":
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(st.label): \((Double(values[st.key] ?? "") ?? st.defaultNumber ?? 0).formatted())").font(.subheadline)
+                // The slider says its own name and value; this line is for the eye.
+                Text("\(st.label): \(rangeValue(st).formatted())").font(.subheadline).accessibilityHidden(true)
                 Slider(value: Binding(
-                    get: { Double(values[st.key] ?? "") ?? st.defaultNumber ?? st.min ?? 0 },
-                    set: { values[st.key] = String($0) }
+                    get: { sliderValue(st) },
+                    set: { if !isLocked { values[st.key] = String($0) } }
                 ), in: (st.min ?? 0)...(st.max ?? 100), step: st.step ?? 1)
                 .accessibilityLabel(st.label)
-                .accessibilityValue((Double(values[st.key] ?? "") ?? st.defaultNumber ?? 0).formatted())
-                .accessibilityHint(st.hint)
-                Text(st.hint).font(.footnote).foregroundStyle(.secondary)
+                .accessibilityValue(rangeValue(st).formatted())
+                .accessibilityHint(hint)
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
+            .disabled(isLocked)
         case "number":
             VStack(alignment: .leading, spacing: 4) {
                 Text(st.label).font(.subheadline)
-                TextField(st.defaultNumber.map { "normal is \($0.formatted())" } ?? "leave empty", text: binding(st.key))
+                TextField(st.defaultNumber.map { "normal is \($0.formatted())" } ?? "leave empty", text: binding(for: st))
                     .keyboardType(.decimalPad)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel(st.label)
-                    .accessibilityHint(st.hint)
-                Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                    .accessibilityHint(hint)
+                Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
+            .disabled(isLocked)
         case "clip":
-            importRow(setting: st)
+            importRow(setting: st, hint: hint)
+                .disabled(isLocked)
         default:
             EmptyView()
         }
     }
 
-    private func binding(_ key: String, fallback: String = "") -> Binding<String> {
-        Binding(get: { values[key] ?? fallback }, set: { values[key] = $0 })
+    /// A range setting's number as shown: its default while it is locked.
+    private func rangeValue(_ st: SoundBoothGuide.Setting) -> Double {
+        if st.lockReason != nil { return st.defaultNumber ?? 0 }
+        return Double(values[st.key] ?? "") ?? st.defaultNumber ?? 0
     }
 
-    private func importRow(setting st: SoundBoothGuide.Setting) -> some View {
+    /// Where a range setting's slider sits: its default (or lowest) while locked.
+    private func sliderValue(_ st: SoundBoothGuide.Setting) -> Double {
+        let fallback: Double = st.defaultNumber ?? st.min ?? 0
+        if st.lockReason != nil { return fallback }
+        return Double(values[st.key] ?? "") ?? fallback
+    }
+
+    /// A toggle setting's state: its default while locked.
+    private func toggleValue(_ st: SoundBoothGuide.Setting) -> Bool {
+        let fallback: Bool = st.defaultBool ?? false
+        if st.lockReason != nil { return fallback }
+        guard let stored = values[st.key] else { return fallback }
+        return stored == "1"
+    }
+
+    /// A setting's value in the editor. A locked setting shows `fallback` (its
+    /// default) and ignores edits, so nothing it holds can reach the wire.
+    private func binding(for st: SoundBoothGuide.Setting, fallback: String = "") -> Binding<String> {
+        let isLocked = st.lockReason != nil
+        return Binding(
+            get: { isLocked ? fallback : (values[st.key] ?? fallback) },
+            set: { if !isLocked { values[st.key] = $0 } }
+        )
+    }
+
+    /// Part 296: a choice's words as the server wrote them. "Sung, with my
+    /// lyrics" used to come out "Sung, With My Lyrics" (Title Case); now only a
+    /// raw key such as "melody" gains a capital first letter, and a raw key's
+    /// underscores read as spaces (the web page's rule).
+    static func optionText(_ option: String) -> String {
+        if option.isEmpty { return "None" }
+        let words = option.contains(" ") ? option : option.replacingOccurrences(of: "_", with: " ")
+        guard let first = words.first, first.isLowercase else { return words }
+        return "\(first.uppercased())\(words.dropFirst())"
+    }
+
+    /// Part 296: a setting's hint, with a locked setting's reason FIRST, so
+    /// VoiceOver says why a greyed-out setting cannot change before it
+    /// describes it. The server already ends the locked Style's hint with the
+    /// sentence that starts with the reason ("Part of the Family feature pack,
+    /// so songs on this account use None, plain YuE2."); that sentence moves
+    /// to the front rather than being said twice. A hint without the reason
+    /// gets the reason in front of it.
+    static func hintText(for st: SoundBoothGuide.Setting) -> String {
+        let hint = st.hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let reason = st.lockReason else { return hint }
+        guard let found = hint.range(of: reason) else {
+            let lead = reason.hasSuffix(".") ? reason : reason + "."
+            return hint.isEmpty ? lead : "\(lead) \(hint)"
+        }
+        let before = String(hint[..<found.lowerBound])
+        var sentence = String(hint[found.lowerBound...])
+        var after = ""
+        if let stop = sentence.range(of: ". ") {
+            after = String(sentence[stop.upperBound...])
+            sentence = String(sentence[..<stop.upperBound])
+        }
+        sentence = sentence.trimmingCharacters(in: .whitespaces)
+        if !sentence.hasSuffix(".") { sentence += "." }
+        let rest = (before + " " + after)
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? sentence : "\(sentence) \(rest)"
+    }
+
+    /// `hint` is the setting's hint as `hintText(for:)` words it (a locked
+    /// clip row leads with its reason).
+    private func importRow(setting st: SoundBoothGuide.Setting, hint: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
                 KadeHaptics.press()
@@ -897,8 +1047,8 @@ struct SoundBoothView: View {
             }
             .disabled(workspaceBusy || clips.count >= st.clipMax)
             .accessibilityLabel(clips.isEmpty ? st.label : "\(st.label). \(clips.count) of \(st.clipMax) imported.")
-            .accessibilityHint(st.hint + " Opens Files.")
-            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            .accessibilityHint(st.lockReason == nil ? hint + " Opens Files." : hint)
+            Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
             if clips.count < st.clipMax, let row = mediaLinkRow(for: st) {
                 linkImportRow(row.link, locked: row.locked)
@@ -1095,9 +1245,8 @@ struct SoundBoothView: View {
             if usesDirectPrompt, let g = currentEngine {
                 DisclosureGroup(isEffects ? "Sound settings" : "Lyrics, covers, and song settings") {
                 Text(isEffects ? "Sound options" : "Song options").font(.headline).accessibilityAddTraits(.isHeader)
-                ForEach(g.settings.filter { values["instrumental"] != "1" || ($0.key != "lyrics" && $0.key != "keep_lyrics") }) { setting in
-                    settingRow(setting)
-                }
+                // Part 296: the settings most people use, then More settings.
+                settingsList(g.settings.filter { values["instrumental"] != "1" || ($0.key != "lyrics" && $0.key != "keep_lyrics") })
                 }
             }
 
@@ -1283,6 +1432,17 @@ struct SoundBoothView: View {
                             }
                         }
                         .disabled(workspaceBusy)
+                        /* Part 296: the server's short note on this take (no
+                         * chords heard, words short or long for a section's
+                         * tune). Spoken once when the batch finished; kept
+                         * here, under its own take, for reading back. */
+                        if let note = take.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+                            Text(note)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Note on take \(takes.count - idx). \(note)")
+                        }
                     }
                 }
             }
@@ -1433,10 +1593,14 @@ struct SoundBoothView: View {
     /// explicit off values; numbers only when they parse and sit in range; empty
     /// strings are dropped. The guide's own min/max are the rails, so a value
     /// the engine cannot take never leaves the phone.
+    /// Part 296: a setting the guide has locked for this account (`locked`)
+    /// is left out entirely, whatever an opened project or an earlier pick
+    /// left in `values`.
     private func collectedSettings() -> [String: Any] {
         var out: [String: Any] = [:]
         guard let g = currentEngine else { return out }
         for st in g.settings {
+            if st.lockReason != nil { continue }
             let raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             switch st.kind {
             case "toggle":
@@ -1459,11 +1623,25 @@ struct SoundBoothView: View {
             return out
         }
         if engine != "yue2" && engine != "stable" && out["gender"] == nil { out["gender"] = "female" }
-        if !clips.isEmpty {
+        if !clips.isEmpty && !clipsLocked {
             if engine == "seed" { out["audio_urls"] = clips.prefix(3).map { $0.url } }
             else { out["reference_voice_url"] = clips[0].url }
         }
         return out
+    }
+
+    /// Part 296: true when this engine's clip setting is locked, so no
+    /// imported clip is sent with it.
+    private var clipsLocked: Bool {
+        currentEngine?.settings.contains(where: { $0.kind == "clip" && $0.lockReason != nil }) ?? false
+    }
+
+    /// Part 296: a setting's value for a request that is not a render (the
+    /// song writer, Surprise me). Nil when the guide has it locked for this
+    /// account, so a locked setting's value never leaves the phone.
+    private func sendableValue(_ key: String) -> String? {
+        if currentEngine?.settings.first(where: { $0.key == key })?.lockReason != nil { return nil }
+        return values[key]
     }
 
     private func transcribeLyrics() async {
@@ -1516,7 +1694,8 @@ struct SoundBoothView: View {
             defer { isWriting = false }
             announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about ten seconds.")
             // Part 293: the chosen YuE2 Style rides along, so a Kids song idea comes back clean.
-            if let idea = try? await service.songIdea(band: engine == "yue2" ? values["band"] : nil), !idea.isEmpty {
+            // Part 296: never a locked Style (sendableValue).
+            if let idea = try? await service.songIdea(band: engine == "yue2" ? sendableValue("band") : nil), !idea.isEmpty {
                 guard engine == requestEngine, script == original else { announce("Your editor changed while the idea was being made. Your current text is kept."); return }
                 writingUndo = (engine, script, values["lyrics"] ?? "")
                 script = idea
@@ -1553,10 +1732,12 @@ struct SoundBoothView: View {
             ? "Writing your song. The writer takes its time, about five minutes, then goes back over it like a producer. You will get a notice when the draft is ready."
             : "Writing a draft from your idea.")
         do {
+            // Part 296: every setting here goes through sendableValue, so a locked one stays home.
+            let lyricsToSend: String? = isMusic && sendableValue("lyrics") != nil ? originalLyrics : nil
             let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
-                voiceDescription: values["voice_description"], gender: values["gender"] ?? "female",
-                mood: nil, scene: nil, shot: nil, lyrics: isMusic ? originalLyrics : nil,
-                band: engine == "yue2" ? values["band"] : nil)
+                voiceDescription: sendableValue("voice_description"), gender: sendableValue("gender") ?? "female",
+                mood: nil, scene: nil, shot: nil, lyrics: lyricsToSend,
+                band: engine == "yue2" ? sendableValue("band") : nil)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }
@@ -1658,7 +1839,7 @@ struct SoundBoothView: View {
                 mood: mood.isEmpty ? nil : mood,
                 scene: st["scene"] as? String,
                 shot: st["shot"] as? String,
-                clipURLs: engine == "lyria" ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
+                clipURLs: engine == "lyria" || clipsLocked ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             )
             script = r.screenplay ?? r.script
             readback = r.readback ?? ""
@@ -1686,7 +1867,8 @@ struct SoundBoothView: View {
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         if trackTitle.count > 80 { announce("Use a title up to 80 characters."); return }
         if engine == "yue2", let settings = currentEngine?.settings {
-            for setting in settings where ["number", "range"].contains(setting.kind) {
+            // A locked setting is never sent, so it is never checked either.
+            for setting in settings where ["number", "range"].contains(setting.kind) && setting.lockReason == nil {
                 let raw = (values[setting.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if raw.isEmpty { continue }
                 guard let number = Double(raw), number.isFinite,
@@ -1701,7 +1883,7 @@ struct SoundBoothView: View {
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
-        if engine != "lyria" && !clips.isEmpty { body["referenceExpected"] = true }
+        if engine != "lyria" && !clips.isEmpty && !clipsLocked { body["referenceExpected"] = true }
         body["title"] = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         body["engine"] = engine; body["mode"] = mode
         body["sourceText"] = text; body["readback"] = readback
@@ -1827,7 +2009,13 @@ struct SoundBoothView: View {
             return "About \(max(1, Int((perSong * 100).rounded()))) cents for the song, whatever length it comes out. Lyria is priced per song, not per minute. Usually back in under a minute."
         }
         if isEffects { return currentEngine?.cost ?? "Provider cost: 2.06 cents per recording. No credit balance deduction during this trial." }
-        if engine == "yue2" { return "YuE2 uses a sleeping GPU at about $1.22 per hour. Startup, generation and ten minutes awake afterward are billed. There is no reliable per-song estimate yet." }
+        /* Part 296: the server's own cost wording first. The fallback names
+         * no hourly figure: since Part 295 a take is priced by the second at
+         * the rate of whichever graphics card ran it, so one fixed rate was
+         * wrong on every other card. */
+        if engine == "yue2" {
+            return currentEngine?.cost ?? "No reliable per-song cost estimate yet. GPU time is paid by the second, at the rate of whichever graphics card runs the song, including startup and ten minutes awake after the last job."
+        }
         if engine == "scenema" {
             return "AuK HQ uses a sleeping GPU. Startup and processing are billed. A reliable cost and wait estimate is not available yet. Longer work runs in sections."
         }
@@ -1976,6 +2164,8 @@ struct SoundBoothView: View {
         if p.engine == "seed", case .array(let references) = p.options?["audio_urls"] {
             clips = references.compactMap { if case .string(let url) = $0 { return (url: url, name: "Saved reference") }; return nil }
         } else if case .string(let url) = p.options?["reference_voice_url"] { clips = [(url: url, name: "Saved reference")] }
+        // Part 296: a saved score sits in More settings, so the group opens to show it.
+        if moreSettingsHoldWords(engine: p.engine) { showMoreSettings = true }
         announce("Opened \(p.title). Its draft and settings are restored. Change what you like and generate another take.")
         focusStatus = true
     }

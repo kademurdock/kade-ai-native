@@ -38,6 +38,11 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     let seconds: Double?
     let costUSD: Double?
     let createdAt: String?
+    /// Part 296: a YuE2 take's short note from the server (no chords were
+    /// heard in the recording, or a section's words look short or long for
+    /// its tune). The server speaks it when the batch finishes; the library
+    /// shows it under the take. Empty or absent for most takes.
+    let note: String?
 
     /// What VoiceOver reads for this take's row.
     func label(number: Int) -> String {
@@ -294,10 +299,25 @@ struct SoundBoothGuide: Decodable {
         }
         let link: Link?
         let lockedLink: Link?
+        /// Part 296, the booth's shared contract: true puts this setting in
+        /// the one collapsed "More settings" group of its engine, after the
+        /// settings most people use. Absent on older servers.
+        let advanced: Bool?
+        /// Part 295/296: why this setting cannot be used on this account
+        /// (the Style choice outside the Family feature pack says "Part of
+        /// the Family feature pack"). A locked setting is shown greyed out
+        /// with this reason, never hidden, and its value is never sent.
+        let locked: String?
         var id: String { key }
         var clipMax: Int { Int(max ?? 1) }
+        /// The reason, when the setting is locked. An empty string counts as
+        /// unlocked, as it does on the web page.
+        var lockReason: String? {
+            let reason = (locked ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return reason.isEmpty ? nil : reason
+        }
 
-        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, lockedLink, `default` }
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, lockedLink, advanced, locked, `default` }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             key = try c.decode(String.self, forKey: .key)
@@ -310,6 +330,9 @@ struct SoundBoothGuide: Decodable {
             max = try? c.decodeIfPresent(Double.self, forKey: .max)
             link = try? c.decodeIfPresent(Link.self, forKey: .link)
             lockedLink = try? c.decodeIfPresent(Link.self, forKey: .lockedLink)
+            // Part 296: read leniently, so an odd value never breaks the guide.
+            advanced = try? c.decodeIfPresent(Bool.self, forKey: .advanced)
+            locked = try? c.decodeIfPresent(String.self, forKey: .locked)
             // `default` is one of three shapes depending on the kind.
             defaultString = try? c.decodeIfPresent(String.self, forKey: .default)
             defaultNumber = try? c.decodeIfPresent(Double.self, forKey: .default)
