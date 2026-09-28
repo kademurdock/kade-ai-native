@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// Aug 8 2026 — THE WORLD SCREEN: her MUSHclient on the phone. A scrolling
 /// log, a command line, quick buttons, earcons and haptics per event kind —
@@ -47,6 +48,8 @@ struct WorldView: View {
     /// engine now sends. The manifest has always had this scope; nothing
     /// could reach it until the room started saying its own name.
     @State private var roomSounds: [String: String] = [:]
+    @State private var eventSounds: [String: String] = [:]
+    @State private var soundProblem = false
     @State private var soundVersions: [String: String] = [:]
     @State private var currentRoomId: String?
     @State private var currentDistrict: String?
@@ -65,6 +68,8 @@ struct WorldView: View {
 
     private let quickCommands: [(label: String, cmd: String, hint: String)] = [
         ("Look", "look", "Describe where you are"),
+        ("Town guide", "town", "Find activities and walking directions"),
+        ("My notebook", "notebook", "Continue the free canal trail and your projects"),
         ("Inventory", "inventory", "What you are carrying"),
         ("Who", "who", "Who is here with you"),
         // Build 195 — the Reverie verbs, one tap each (Aug 10 city).
@@ -147,6 +152,7 @@ struct WorldView: View {
                         soundsOn.toggle()
                         UserDefaults.standard.set(soundsOn, forKey: "kade.world.sounds")
                         if soundsOn {
+                            WorldTones.shared.activate()
                             WorldTones.shared.play("say")
                             Task {
                                 await refreshAmbience()
@@ -158,6 +164,12 @@ struct WorldView: View {
                         }
                     }
                     .buttonStyle(.bordered)
+                    if soundProblem && soundsOn {
+                        Button("Retry sounds") {
+                            Task { WorldTones.shared.activate(); await loadWorldSounds() }
+                        }.buttonStyle(.bordered)
+                        .accessibilityHint("Try loading the sounds for your current place again")
+                    }
                     .accessibilityHint("Earcons that mark movement, pickups, speech, and arrivals.")
                 }
                 .padding(.horizontal)
@@ -190,12 +202,13 @@ struct WorldView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             isVisible = true
+            WorldTones.shared.activate()
             if log.isEmpty {
                 append("The gate knows you. Type look, or press the Look button.", .world)
                 await send("look")
                 startLiveIfNeeded()
-                await loadWorldSounds()
             } else { startLiveIfNeeded() }
+            await loadWorldSounds()
         }
         .onChange(of: liveOn) { _, enabled in if enabled { startLiveIfNeeded() } else { service.stopListening() } }
         .onChange(of: ambienceOn) { _, _ in Task { await refreshAmbience(); await refreshRoomTone() } }
@@ -204,9 +217,14 @@ struct WorldView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active && isVisible {
+                WorldTones.shared.activate()
                 startLiveIfNeeded()
-                Task { if let result = await service.here() { updateControls(result) }; await refreshAmbience(); await refreshRoomTone() }
+                Task { if let result = await service.here() { updateControls(result) }; await loadWorldSounds() }
             } else { service.stopListening(); WorldTones.shared.stop() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)) { _ in
+            guard isVisible, scenePhase == .active else { return }
+            Task { WorldTones.shared.activate(); await loadWorldSounds() }
         }
         .onDisappear {
             isVisible = false
@@ -307,7 +325,12 @@ struct WorldView: View {
     private func updateControls(_ result: WorldService.WorldResult) {
         if mode == "create" && result.step == nil && result.mode == "create" { return }
         if let h = result.hud { hud = h }
-        if let room = result.room { picture = WorldPictureSnapshot(room: room.picture, hud: result.hud ?? hud) }
+        if let room = result.room {
+            picture = WorldPictureSnapshot(room: room.picture, hud: result.hud ?? hud)
+            currentRoomId = room.roomId
+            currentDistrict = room.district ?? result.district
+            Task { await refreshAmbience(); await refreshRoomTone() }
+        }
         else if picture != nil {
             if let h = result.hud { picture?.hud = h }
             if let occupants = result.people { picture?.room.peopleDetail = occupants }
@@ -397,15 +420,6 @@ struct WorldView: View {
                 append(extras, .world)
                 spoken.append("\(room.name). \(room.desc) \(extras)")
             }
-            let d = result.district ?? result.room?.district
-            if let d, d != currentDistrict {
-                currentDistrict = d
-                await refreshAmbience()
-            }
-            if let r = result.room?.roomId, r != currentRoomId {
-                currentRoomId = r
-                await refreshRoomTone()
-            }
             let kinds = result.kinds ?? []
             if result.ok != true && kinds.isEmpty {
                 playFeedback("err")
@@ -434,18 +448,10 @@ struct WorldView: View {
     /// synth earcons for her real sounds where they exist, and start the
     /// ward-bed ambience for wherever she is standing.
     private func loadWorldSounds() async {
-        guard let manifest = await service.fetchSoundManifest() else { return }
+        guard let manifest = await service.fetchSoundManifest(), isVisible, !Task.isCancelled else { soundProblem = true; return }
+        soundProblem = false
         soundVersions = manifest.versions ?? [:]
-        for (kind, urlStr) in manifest.event ?? [:] {
-            if Task.isCancelled || !isVisible { return }
-            if let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["event:" + kind]) {
-                WorldTones.shared.installEventSound(kind: kind, fileURL: local)
-                // Build 197: the same file, measured for its haptic shape.
-                // Sound and touch are installed together from one source, so
-                // they can never end up describing two different events.
-                await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
-            }
-        }
+        eventSounds = manifest.event ?? [:]
         districtSounds = manifest.district ?? [:]
         roomSounds = manifest.room ?? [:]
         await refreshAmbience()
@@ -453,13 +459,19 @@ struct WorldView: View {
     }
 
     private func refreshAmbience() async {
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let d = currentDistrict, let urlStr = districtSounds[d] else {
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, let d = currentDistrict else {
             WorldTones.shared.setAmbience(key: nil, fileURL: nil)
             return
         }
-        let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["district:" + d])
-        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentDistrict == d else { return }
-        WorldTones.shared.setAmbience(key: d, fileURL: local)
+        let room = currentRoomId
+        let specific = picture?.room.sensory?.ambience
+        let scope = specific.flatMap { eventSounds[$0] == nil ? nil : "event:" + $0 } ?? "district:" + d
+        guard let urlStr = specific.flatMap({ eventSounds[$0] }) ?? districtSounds[d] else { return }
+        let revision = soundVersions[scope]
+        let local = await WorldService.cachedSoundFile(for: urlStr, revision: revision)
+        guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == room, currentDistrict == d else { return }
+        if local == nil { soundProblem = true }
+        WorldTones.shared.setAmbience(key: scope + urlStr + (revision ?? ""), fileURL: local)
     }
 
     private func refreshRoomTone() async {
@@ -467,15 +479,35 @@ struct WorldView: View {
             WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
             return
         }
+        if let specific = picture?.room.sensory?.ambience, eventSounds[specific] == urlStr {
+            WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
+            return
+        }
         let local = await WorldService.cachedSoundFile(for: urlStr, revision: soundVersions["room:" + r])
         guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == r else { return }
-        WorldTones.shared.setRoomTone(key: r, fileURL: local)
+        if local == nil { soundProblem = true }
+        WorldTones.shared.setRoomTone(key: r + urlStr + (soundVersions["room:" + r] ?? ""), fileURL: local)
     }
 
     private func playFeedback(_ kind: String) {
         guard isVisible, scenePhase == .active else { return }
         if soundsOn {
-            WorldTones.shared.play(kind)
+            if let url = eventSounds[kind] {
+                let requested = Date()
+                let room = currentRoomId
+                Task {
+                    let local = await WorldService.cachedSoundFile(for: url, revision: soundVersions["event:" + kind])
+                    guard isVisible, scenePhase == .active, soundsOn, room == currentRoomId else { return }
+                    if let local {
+                        WorldTones.shared.installEventSound(kind: kind, fileURL: local)
+                        if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
+                        await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
+                    } else {
+                        soundProblem = true
+                        if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
+                    }
+                }
+            } else { WorldTones.shared.play(kind) }
         }
         WorldHaptics.play(kind)
     }

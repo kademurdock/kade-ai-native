@@ -86,11 +86,16 @@ enum WorldSoundIdentity {
 }
 
 struct WorldPictureRoom: Codable, Equatable {
-    struct Senses: Codable, Equatable { let nature: Bool?; let water: String? }
+    struct Senses: Codable, Equatable {
+        let nature: Bool?
+        let water: String?
+        var ambience: String? = nil
+    }
     struct Home: Codable, Equatable { let mine: Bool? }
     let roomId: String?
     let name: String
     let desc: String
+    var district: String? = nil
     let outdoor: Bool?
     let furniture: [String]?
     let sensory: Senses?

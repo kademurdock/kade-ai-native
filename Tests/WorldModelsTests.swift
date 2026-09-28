@@ -38,6 +38,9 @@ import Foundation
         precondition(oldRoom.sensory == nil && oldRoom.home == nil && oldRoom.peopleDetail == nil)
         let night = try decoder.decode(WorldHUD.self, from: Data(#"{"name":"Alex","dark":true,"weather":"snow"}"#.utf8))
         precondition(night.dark == true && night.weather == "snow")
-        print("World models: 16 checks passed. This checks decoding and cache identity, not VoiceOver playback or WebKit rendering.")
+        let canal = try decoder.decode(WorldPictureRoom.self, from: Data(#"{"name":"Lock Garden","desc":"A canal","district":"sweetwater","sensory":{"nature":true,"water":"canal","ambience":"amb.canal.water"}}"#.utf8))
+        precondition(canal.district == "sweetwater" && canal.sensory?.ambience == "amb.canal.water")
+        precondition(picture.sensory?.ambience == nil)
+        print("World models: 18 checks passed. This checks decoding and cache identity, not VoiceOver playback or WebKit rendering.")
     }
 }
