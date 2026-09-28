@@ -2300,12 +2300,14 @@ struct SoundBoothView: View {
         return "\(name) (\(clock))"
     }
 
-    /// What the price on screen was asked for: the recording and What is in
-    /// the file, the two things the server's estimate reads. Empty when there
-    /// is nothing to price.
+    /// What the price on screen was asked for: the recording, What is in the
+    /// file and the vocal effect (an effect adds a little work), the things
+    /// the server's estimate reads. Empty when there is nothing to price.
     private var uploadQuoteKey: String {
         guard isUpload, importError.isEmpty, let url = clips.first?.url else { return "" }
-        return "\(engine)|\(url)|\(values["voice_source"] ?? "")"
+        let source: String = values["voice_source"] ?? ""
+        let effect: String = values["vocal_fx"] ?? ""
+        return "\(engine)|\(url)|\(source)|\(effect)"
     }
 
     /// A Sing it in my voice request as the web page sends it: the guide's
