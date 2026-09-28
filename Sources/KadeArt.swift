@@ -88,13 +88,13 @@ enum KadeArt {
             ("Lilly", "ArtHomeLilly"), ("Mrs. Witherspoon", "ArtHomeWitherspoon"),
         ]),
         KadeArtStop(place: "Choosing a character, above Characters with moving faces", pictures: [("The house of five lit windows", "ArtCastWindows")]),
-        KadeArtStop(place: "The Library's shelves, under Browse", pictures: [
+        KadeArtStop(place: "The Library's shelves, at the bottom of each shelf", pictures: [
             ("Books", "ArtShelfBooks"), ("Audiobooks", "ArtShelfAudiobooks"),
             ("Cassettes", "ArtShelfCassettes"), ("Radio", "ArtShelfRadio"),
             ("Music", "ArtShelfMusic"), ("Movies", "ArtShelfMovies"),
             ("Home movies", "ArtShelfFamily"), ("Missouri and the Ozarks", "ArtShelfMissouri"),
         ]),
-        KadeArtStop(place: "The Library's Springfield and Ozarks shelves", pictures: [
+        KadeArtStop(place: "The Library's Springfield and Ozarks shelves, at the bottom", pictures: [
             ("Local news", "ArtOzarksNews"), ("Weather", "ArtOzarksWeather"),
             ("Local sports", "ArtOzarksSports"), ("Local commercials and breaks", "ArtOzarksCommercials"),
             ("Station IDs and sign-offs", "ArtOzarksStationIDs"), ("Promos", "ArtOzarksPromos"),
@@ -110,7 +110,7 @@ enum KadeArt {
             ("Radio", "ArtTapeReel"),
         ]),
         KadeArtStop(place: "The Library: empty shelves, searches and waits", pictures: [
-            ("Nothing on your shelf yet", "ArtEmptyShelf"), ("A search that found nothing", "ArtEmptySearch"),
+            ("Nothing opened yet", "ArtEmptyShelf"), ("A search that found nothing", "ArtEmptySearch"),
             ("Uploading, or waiting for recordings", "ArtBookCart"),
         ]),
         KadeArtStop(place: "Library radio on the lock screen", pictures: [("The glowing radio", "ArtNowPlayingRadio")]),

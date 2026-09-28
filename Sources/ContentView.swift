@@ -266,7 +266,7 @@ struct ContentView: View {
     private var talkStack: some View {
         NavigationStack(path: $talkPath) {
             ConversationListView(talkHeader: AnyView(TalkHeader()))
-                .toolbar { ToolbarItem(placement: .topBarLeading) { searchButton(on: .talk) } }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton(on: .talk) } }
                 .navigationDestination(for: HomeRoute.self) { route in destination(route) }
                 /* The shared file opens a chat with whoever her main agent is,
                  * with the file already attaching and her note pre-typed. She
@@ -290,11 +290,16 @@ struct ContentView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { nowPlayingInset }
     }
 
+    /// Part 296 (Sep 27 2026): the Library is one screen at a time, like the
+    /// Files app. Every shelf, list and the player is pushed onto THIS stack
+    /// as `HomeRoute.library(...)`, so Back at the top left always goes up
+    /// one level; re-tapping the tab still comes back to the first screen.
     private var libraryStack: some View {
         NavigationStack(path: $libraryPath) {
-            ReadingRoomView(apiClient: apiClient)
-                .toolbar { ToolbarItem(placement: .topBarLeading) { searchButton(on: .library) } }
+            LibraryHomeView(apiClient: apiClient)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton(on: .library) } }
                 .navigationDestination(for: HomeRoute.self) { route in destination(route) }
+                // A book or recording from the share sheet opens Add and requests.
                 .navigationDestination(item: $pendingLibraryShare) { handoff in
                     ReadingRoomView(apiClient: apiClient, incomingFile: handoff.url, incomingName: handoff.displayName)
                 }
@@ -305,7 +310,7 @@ struct ContentView: View {
     private var createStack: some View {
         NavigationStack(path: $createPath) {
             CreateHomeView()
-                .toolbar { ToolbarItem(placement: .topBarLeading) { searchButton(on: .create) } }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton(on: .create) } }
                 .navigationDestination(for: HomeRoute.self) { route in destination(route) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { nowPlayingInset }
@@ -314,7 +319,7 @@ struct ContentView: View {
     private var playStack: some View {
         NavigationStack(path: $playPath) {
             PlayHomeView()
-                .toolbar { ToolbarItem(placement: .topBarLeading) { searchButton(on: .play) } }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton(on: .play) } }
                 .navigationDestination(for: HomeRoute.self) { route in destination(route) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { nowPlayingInset }
@@ -340,7 +345,8 @@ struct ContentView: View {
     }
 
     /// Search opens on top of whichever tab you're on, so Back returns you to
-    /// exactly where you were.
+    /// exactly where you were. Part 296: at the top right of each tab's first
+    /// screen, so the top-left corner is only ever Back (or Cancel on a sheet).
     private func searchButton(on which: KadeTab) -> some View {
         Button {
             push(.search, on: which)
@@ -362,10 +368,31 @@ struct ContentView: View {
         }
     }
 
+    /// The Now Playing bar's title (and the "continue" deep link): the
+    /// player for what is open, pushed on top of wherever the Library tab
+    /// was, so Back returns there. With nothing open, the Library's first
+    /// screen, where Continue is.
     private func openLibraryPlayer() {
+        guard let current = LibraryNowPlaying.shared.current else {
+            tab = .library
+            libraryPath = []
+            return
+        }
+        pushLibrary(.item(LibraryItemRoute(id: current.id, title: current.title)))
+    }
+
+    /// Part 296: a Library screen onto the Library tab's own stack. At most
+    /// one player screen sits on top: the item already there is not pushed a
+    /// second time, and another item (from Search everything or the Now
+    /// Playing bar on another tab) takes its place, so Back goes to where she
+    /// was browsing instead of to a second player that now shows the new item.
+    private func pushLibrary(_ route: LibraryRoute) {
         tab = .library
-        libraryPath = []
-        LibraryNowPlaying.shared.showPlayerRequest += 1
+        if case .item(let wanted) = route, case .library(.item(let top))? = libraryPath.last {
+            if top.id != wanted.id { libraryPath[libraryPath.count - 1] = .library(route) }
+            return
+        }
+        libraryPath.append(.library(route))
     }
 
     /// What screens deep inside a tab may ask of the root (KadeTabs.swift).
@@ -380,9 +407,10 @@ struct ContentView: View {
                 callingSpotter = true
             },
             openLibraryItem: { id in
-                tab = .library
-                libraryPath = []
-                LibraryNowPlaying.shared.openItemRequest = id
+                pushLibrary(.item(LibraryItemRoute(id: id)))
+            },
+            pushLibrary: { route in
+                pushLibrary(route)
             }
         )
     }
@@ -419,6 +447,9 @@ struct ContentView: View {
         case .readingRoom:
             tab = .library
             libraryPath = []
+        case .library:
+            tab = .library
+            libraryPath = [destination]
         case .soundBooth, .myCreations, .wallOfFame, .agentBuilder, .prompts, .describedVideo:
             tab = .create
             createPath = [destination]
@@ -525,7 +556,10 @@ struct ContentView: View {
             DescribedVideoView(apiClient: apiClient, start: start)
         case .readingRoom:
             // Never pushed (the Library tab's root is the Library).
-            ReadingRoomView(apiClient: apiClient)
+            LibraryHomeView(apiClient: apiClient)
+        case .library(let route):
+            // Part 296: every Library shelf, list and player (LibraryNavigation.swift).
+            LibraryDestination(route: route, apiClient: apiClient)
         case .myCreations:
             MyCreationsView(apiClient: apiClient)
         case .wallOfFame:
@@ -882,7 +916,9 @@ struct ContentView: View {
             if kind == "described-video" {
                 go(.describedVideo(DescribedVideoStart(openLatest: true)))
             } else {
-                go(kind == "upload" ? .readingRoom : .soundBooth)
+                // Part 296: an upload's card opens Add and requests, where the
+                // upload line is now (the Library's first screen has none).
+                go(kind == "upload" ? .library(.page(.add)) : .soundBooth)
             }
         default:
             break
@@ -923,6 +959,8 @@ struct ContentView: View {
                 ("launch-chat", { tab = .talk; talkPath = [.mainChat] }),
                 ("talk", { tab = .talk; talkPath = [] }),
                 ("library", { tab = .library; libraryPath = [] }),
+                // Part 296: one shelf as its own screen (Back at the top left).
+                ("library-shelf", { tab = .library; libraryPath = [.library(.shelf(LibraryShelfRef(id: "Videos", title: "Video", path: "Videos")))] }),
                 ("create", { tab = .create; createPath = [] }),
                 ("play", { tab = .play; playPath = [] }),
                 ("more", { tab = .more; morePath = [] }),
@@ -1293,6 +1331,10 @@ enum HomeRoute: Identifiable, Hashable {
     /// Part 181 (Sep 11 2026) — the Library (born the Reading Room). Its own
     /// tab since the redesign.
     case readingRoom
+    /// Part 296 (Sep 27 2026) — one Library screen: a shelf, a list, or the
+    /// player for an item. ONE case for all of them, so each tab still
+    /// registers HomeRoute exactly once.
+    case library(LibraryRoute)
     case myCreations
     case wallOfFame
     case admin
@@ -1333,6 +1375,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .describedVideo(let start):
             return "describedVideo-\(start.book ?? "")-\(start.track ?? 0)-\(start.openLatest)-\(start.openFinished)"
         case .readingRoom: return "readingRoom"
+        case .library(let route): return "library-\(route.id)"
         case .myCreations: return "myCreations"
         case .wallOfFame: return "wallOfFame"
         case .admin: return "admin"

@@ -181,7 +181,9 @@ struct KadeSearchView: View {
                     } else {
                         ForEach(libraryResults.prefix(25)) { item in
                             Button {
-                                nav.openLibraryItem(item.id)
+                                // Part 296: the player opens on top of the
+                                // Library tab's place; Back returns there.
+                                nav.pushLibrary(.item(LibraryItemRoute(id: item.id, title: item.title)))
                             } label: {
                                 Label(item.title, systemImage: item.kind == "text" ? "book.closed" : (item.kind == "video" ? "film" : "waveform"))
                             }
@@ -267,7 +269,7 @@ struct KadeSearchView: View {
     private func libraryDetail(_ item: RRItem) -> String {
         var parts: [String] = []
         if let author = item.author, !author.isEmpty { parts.append(author) }
-        parts.append(RRCategory.name(item.kind == "text" ? "book" : item.category, isAudio: item.kind != "text"))
+        parts.append(item.typeWord)
         return parts.joined(separator: ", ")
     }
 

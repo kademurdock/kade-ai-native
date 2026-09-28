@@ -375,8 +375,16 @@ struct HelpSection: Identifiable {
         ]),
         HelpSection(title: "The Library", entries: [
             HelpEntry(
-                title: "Three parts",
-                body: "The Library tab is split three ways by a switch near the top. Listen holds what you're reading or hearing now, your shelf and your collections. Browse holds search, the archive's folders and loose donations. Add holds every way to donate a book or a recording. Continue, at the very top, picks up the book you were last in."
+                title: "One screen at a time",
+                body: "The Library works like the Files app. Its first screen is a short list that never changes order: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Talk to the Librarian, and Add and requests. Each one opens its own screen, and so does every shelf and the player, with Back at the top left. Tapping the Library tab again comes back to the first screen."
+            ),
+            HelpEntry(
+                title: "Shelves and counts",
+                body: "A shelf row says its name and how many items are on it, like Cars and Trucks, 956 items. Inside a shelf, VoiceOver starts on a line like 53 shelves, 26,817 items; swipe right for the shelves, then the items. A long shelf shows 60 items at a time, then Show 60 more, which puts you on the first of the next ones. A decade, a season or a letter says whose it is at the top of its screen, like Local News, 1990s. A count is only said once it is real; until then the row says loading. A small shelf lists all its items at once, with the decade on each, and anything the librarian has not filed yet waits under Not filed yet, at the end."
+            ),
+            HelpEntry(
+                title: "What each item is",
+                body: "After its title, every item says what it is. Described audio movie and Described audio episode are sound only: the film or show with a narrator describing what happens. A few episodes whose folders say so are Audio episode, not described. Videos say Full movie, Movie trailer, Movie clip, TV recording, Commercial and so on, and a video with the description mixed in says Described full movie. The described films and shows are under Audio, in Described audio movies and TV."
             ),
             HelpEntry(
                 title: "Actions on every item",
@@ -384,11 +392,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Asking for something",
-                body: "Under Add, Ask the library for something takes a title or a few words, the kind of thing it is, and whatever you remember. The library owner sees every request, and you get an alert when yours is filled; then it says so at the top of the Library, and Open plays it. Each request's actions are Hear the details, Add details and Cancel this request. You can also just tell the librarian."
+                body: "In Add and requests, Ask the library for something takes a title or a few words, the kind of thing it is, and whatever you remember. The library owner sees every request, and you get an alert when yours is filled; then the Library's Add and requests row says so, and Open plays it. Each request's actions are Hear the details, Add details and Cancel this request. You can also just tell the librarian."
             ),
             HelpEntry(
                 title: "It keeps playing",
-                body: "A book or recording keeps playing while you use the rest of the app. A small Now Playing bar sits above the tabs with the title, Play or Pause, and Stop and close; tap the title to go back to the full player. A voice message or a call pauses the book by itself, and the bar then offers Resume. The lock screen and your headphone buttons keep working the whole time."
+                body: "A book or recording keeps playing while you use the rest of the app. A small Now Playing bar sits above the tabs with the title, Play or Pause, and Stop and close; tap the title to go back to the full player. Back from the player leaves it playing. A voice message or a call pauses the book by itself, and the bar then offers Resume. The lock screen and your headphone buttons keep working the whole time."
             ),
         ]),
         HelpSection(title: "Transcribe", entries: [
