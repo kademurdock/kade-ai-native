@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 import AVFoundation
 
-/// Aug 8 2026 — THE WORLD SCREEN: her MUSHclient on the phone. A scrolling
-/// log, a command line, quick buttons, earcons and haptics per event kind —
+/// Aug 8 2026 â€” THE WORLD SCREEN: her MUSHclient on the phone. A scrolling
+/// log, a command line, quick buttons, earcons and haptics per event kind â€”
 /// and no model between her and the ground (POST /api/world/command hits the
 /// deterministic engine raw). VoiceOver-first the BASSLINE way: each reply
 /// is announced ONCE as a compact sentence, the log stays quiet history for
@@ -41,10 +41,10 @@ struct WorldView: View {
     private let logWindowStep = 80
     @State private var isVisible = false
     @AccessibilityFocusState private var focusedChoice: String?
-    /// Build 195: the sound manifest — district (ward-bed) ambience urls and
+    /// Build 195: the sound manifest â€” district (ward-bed) ambience urls and
     /// the district she currently stands in.
     @State private var districtSounds: [String: String] = [:]
-    /// Build 197 — layer two: room-scoped tones, keyed by the roomId the
+    /// Build 197 â€” layer two: room-scoped tones, keyed by the roomId the
     /// engine now sends. The manifest has always had this scope; nothing
     /// could reach it until the room started saying its own name.
     @State private var roomSounds: [String: String] = [:]
@@ -72,9 +72,9 @@ struct WorldView: View {
         ("My notebook", "notebook", "Continue the free canal trail and your projects"),
         ("Inventory", "inventory", "What you are carrying"),
         ("Who", "who", "Who is here with you"),
-        // Build 195 — the Reverie verbs, one tap each (Aug 10 city).
+        // Build 195 â€” the Reverie verbs, one tap each (Aug 10 city).
         ("Map", "map", "How this ward hangs together"),
-        ("Status", "status", "How you are doing — fed, rested, coin"),
+        ("Status", "status", "How you are doing â€” fed, rested, coin"),
         ("Weather", "weather", "What the sky is doing"),
         ("Recap", "recap", "Replay your last meanwhile"),
     ]
@@ -138,46 +138,10 @@ struct WorldView: View {
                 .accessibilityLabel("Reverie")
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(quickCommands, id: \.cmd) { item in
-                        Button(item.label) {
-                            Task { await send(item.cmd) }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(service.isSending)
-                        .accessibilityHint(item.hint)
-                    }
-                    Button(soundsOn ? "Sounds on" : "Sounds off") {
-                        soundsOn.toggle()
-                        UserDefaults.standard.set(soundsOn, forKey: "kade.world.sounds")
-                        if soundsOn {
-                            WorldTones.shared.activate()
-                            WorldTones.shared.play("say")
-                            Task {
-                                await refreshAmbience()
-                                await refreshRoomTone()
-                            }
-                        } else {
-                            WorldTones.shared.setAmbience(key: nil, fileURL: nil)
-                            WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    if soundProblem && soundsOn {
-                        Button("Retry sounds") {
-                            Task { WorldTones.shared.activate(); await loadWorldSounds() }
-                        }.buttonStyle(.bordered)
-                        .accessibilityHint("Try loading the sounds for your current place again")
-                    }
-                    .accessibilityHint("Earcons that mark movement, pickups, speech, and arrivals.")
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-            }
+            worldToolbar
 
             HStack(spacing: 8) {
-                TextField("Command — look, n, take lantern, say hello", text: $command)
+                TextField("Command â€” look, n, take lantern, say hello", text: $command)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                     .autocorrectionDisabled(true)
@@ -231,6 +195,46 @@ struct WorldView: View {
             service.stopListening()
             WorldTones.shared.stop()
         }
+    }
+
+    private var worldToolbar: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+            ForEach(quickCommands, id: \.cmd) { item in
+                Button(item.label) {
+                    Task { await send(item.cmd) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(service.isSending)
+                .accessibilityHint(item.hint)
+            }
+            Button(soundsOn ? "Sounds on" : "Sounds off") {
+                soundsOn.toggle()
+                UserDefaults.standard.set(soundsOn, forKey: "kade.world.sounds")
+                if soundsOn {
+                    WorldTones.shared.activate()
+                    WorldTones.shared.play("say")
+                    Task {
+                        await refreshAmbience()
+                        await refreshRoomTone()
+                    }
+                } else {
+                    WorldTones.shared.setAmbience(key: nil, fileURL: nil)
+                    WorldTones.shared.setRoomTone(key: nil, fileURL: nil)
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Earcons that mark movement, pickups, speech, and arrivals.")
+            if soundProblem && soundsOn {
+                Button("Retry sounds") {
+                    Task { WorldTones.shared.activate(); await loadWorldSounds() }
+                }.buttonStyle(.bordered)
+                .accessibilityHint("Try loading the sounds for your current place again")
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
     }
 
     private var worldControls: some View {
@@ -443,7 +447,7 @@ struct WorldView: View {
         }
     }
 
-    /// Build 195 — the sound manifest lands on native (the queued "195
+    /// Build 195 â€” the sound manifest lands on native (the queued "195
     /// material"): fetch once per screen open, cache files locally, swap
     /// synth earcons for her real sounds where they exist, and start the
     /// ward-bed ambience for wherever she is standing.
