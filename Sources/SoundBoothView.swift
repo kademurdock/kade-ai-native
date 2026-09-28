@@ -2635,9 +2635,17 @@ struct SoundBoothView: View {
         return "Download my voice on its own"
     }
 
+    /// The library's words for the voice with its vocal effect.
+    private var uploadVocalFxWords: String {
+        if let key = uploadEngineKey, let words = guide?.engines[key]?.ui?.vocalFx, !words.isEmpty { return words }
+        return "Download my voice with the effect"
+    }
+
     /// Under a take: the word about its automatic voice version ("A version
     /// in your voice is being made."), and on a voice version the button for
-    /// the voice with no music. Nothing for any other take.
+    /// the voice with no music (always dry), then, when a vocal effect was
+    /// used on a song, the button for the voice with that effect. Nothing for
+    /// any other take.
     @ViewBuilder
     private func voiceTakeExtras(_ take: SoundBoothTake, title: String, number: Int) -> some View {
         if let note = take.voiceNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
@@ -2647,9 +2655,9 @@ struct SoundBoothView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel("Take \(number). \(note)")
         }
-        if take.vocalUrl != nil {
+        if let link = take.vocalUrl, !link.isEmpty {
             Button {
-                Task { await saveVocal(take: take, title: title) }
+                Task { await saveVocal(take: take, link: link, title: "\(title) (voice only)") }
             } label: {
                 Label(uploadVocalWords, systemImage: "square.and.arrow.up")
             }
@@ -2658,14 +2666,31 @@ struct SoundBoothView: View {
             .accessibilityLabel("\(uploadVocalWords), take \(number)")
             .accessibilityHint("Downloads the voice with no music and opens the share sheet. Save to Files keeps a copy on this phone.")
         }
+        /* Sep 27 2026, her ask for reverb and echo on her voice: with a vocal
+         * effect on a song, the server keeps the voice with the effect as a
+         * third file beside the dry one. With just a vocal the take itself is
+         * the voice with the effect, and the server sends no second link. */
+        if let link = take.vocalFxUrl, !link.isEmpty {
+            Button {
+                Task { await saveVocal(take: take, link: link, title: "\(title) (voice with effect)") }
+            } label: {
+                Label(uploadVocalFxWords, systemImage: "square.and.arrow.up")
+            }
+            .font(.footnote)
+            .disabled(savingTakeId != nil)
+            .accessibilityLabel("\(uploadVocalFxWords), take \(number)")
+            .accessibilityHint("Downloads your voice with its vocal effect and no music, and opens the share sheet. The dry voice stays its own download.")
+        }
     }
 
-    private func saveVocal(take: SoundBoothTake, title: String) async {
-        guard savingTakeId == nil, let link = take.vocalUrl else { return }
+    /// Fetches one of a voice version's own files (the dry voice, or the
+    /// voice with its effect) for the share sheet.
+    private func saveVocal(take: SoundBoothTake, link: String, title: String) async {
+        guard savingTakeId == nil else { return }
         savingTakeId = take.id
         defer { savingTakeId = nil }
         do {
-            let fileURL = try await service.downloadVocal(from: link, title: "\(title) (voice only)")
+            let fileURL = try await service.downloadVocal(from: link, title: title)
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()
             activeSheet = .share(ShareItem(fileURL: fileURL))

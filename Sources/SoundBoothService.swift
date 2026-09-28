@@ -39,6 +39,12 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     /// a YuE2 take a word about its automatic voice version. The server sends
     /// them only on the takes of an account with a voice model.
     let vocalUrl: String?
+    /// Sep 27 2026, vocal effects: on a voice version of a song sung with a
+    /// vocal effect, the voice with that effect on its own (a signed storage
+    /// link). `vocalUrl` stays the dry voice. Absent with no effect, with
+    /// just a vocal (the take itself is then the voice with the effect), and
+    /// from a server without vocal effects.
+    let vocalFxUrl: String?
     let voiceOf: String?
     let voiceNote: String?
     let description: String?
@@ -380,6 +386,8 @@ struct SoundBoothGuide: Decodable {
         let useTake: String?
         /// The library button for the converted voice on its own.
         let vocal: String?
+        /// The library button for the voice with its vocal effect.
+        let vocalFx: String?
         /// In front of the imported recording's name: "Singing: ".
         let clip: String?
     }
