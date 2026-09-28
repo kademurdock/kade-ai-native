@@ -401,26 +401,14 @@ struct SoundBoothGuide: Decodable {
         let ui: UploadWords?
         /// The engines whose finished takes this one can sing again.
         let takesFrom: [String]?
-        /// The keys of the settings the guide marks `advanced` (its one
-        /// collapsed "More settings" group). Read beside the settings, from
-        /// the same list, so the Setting type itself is unchanged.
-        let advancedKeys: Set<String>
+        // Which settings sit in the one collapsed "More settings" group is
+        // each Setting's own `advanced` (Part 296), shared with every engine.
 
         /// The card, as one spoken paragraph.
         var spoken: String {
             "\(name). \(tagline) \(`where`) \(cost) Best for: \(bestFor.joined(separator: "; ")). Not for: \(notFor.joined(separator: "; "))."
         }
 
-        private struct Mark: Decodable {
-            let key: String?
-            let advanced: Bool?
-            private enum CodingKeys: String, CodingKey { case key, advanced }
-            init(from decoder: Decoder) throws {
-                let c = try? decoder.container(keyedBy: CodingKeys.self)
-                key = (try? c?.decodeIfPresent(String.self, forKey: .key)) ?? nil
-                advanced = (try? c?.decodeIfPresent(Bool.self, forKey: .advanced)) ?? nil
-            }
-        }
         private enum CodingKeys: String, CodingKey {
             case name, tagline, `where`, cost, bestFor, notFor, howToWrite, settings, recipes, flow, ui, takesFrom
         }
@@ -439,8 +427,6 @@ struct SoundBoothGuide: Decodable {
             flow = try? c.decodeIfPresent(String.self, forKey: .flow)
             ui = try? c.decodeIfPresent(UploadWords.self, forKey: .ui)
             takesFrom = try? c.decodeIfPresent([String].self, forKey: .takesFrom)
-            let marks: [Mark] = (try? c.decode([Mark].self, forKey: .settings)) ?? []
-            advancedKeys = Set(marks.compactMap { mark in mark.advanced == true ? mark.key : nil })
         }
     }
     let chooser: Chooser

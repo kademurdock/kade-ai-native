@@ -764,7 +764,9 @@ struct DescribedVideoView: View {
         for item in lines where !item.label.isEmpty {
             if item.included {
                 let platform = item.usd >= 0.005 ? " (\(Self.cents(item.usd)), paid by the platform)" : ""
-                free.append(item.label.lowercased() + platform)
+                // Only the first letter is lowered (the website's rule), so
+                // "The Kade-AI credit" reads "the Kade-AI credit".
+                free.append(Self.lowerFirst(item.label) + platform)
                 continue
             }
             if item.part == "voice" { voicePaid = true }

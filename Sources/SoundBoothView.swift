@@ -427,7 +427,7 @@ struct SoundBoothView: View {
         readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
         inputMode = draft.inputMode; values = draft.values; clips = draft.clips; importError = draft.importError
         currentProjectId = draft.projectId; newVoice = draft.newVoice
-        starterId = ""; showHowTo = false; showEngineDetails = false; showMoreSettings = false
+        starterId = ""; showHowTo = false; showEngineDetails = false; showMoreSettings = false; showUploadMore = false
         invalidateQuote()
         settleGoal(on: next)
     }
@@ -2402,8 +2402,8 @@ struct SoundBoothView: View {
     /// collapsed More settings group.
     @ViewBuilder
     private func uploadSettings(_ g: SoundBoothGuide.Engine) -> some View {
-        let main: [SoundBoothGuide.Setting] = g.settings.filter { !g.advancedKeys.contains($0.key) }
-        let more: [SoundBoothGuide.Setting] = g.settings.filter { g.advancedKeys.contains($0.key) }
+        let main: [SoundBoothGuide.Setting] = g.settings.filter { $0.advanced != true }
+        let more: [SoundBoothGuide.Setting] = g.settings.filter { $0.advanced == true }
         ForEach(main) { st in
             uploadSettingRow(st)
         }
@@ -2526,7 +2526,7 @@ struct SoundBoothView: View {
             let low: Double = st.min ?? -Double.greatestFiniteMagnitude
             let high: Double = st.max ?? Double.greatestFiniteMagnitude
             if let n = Double(raw), n.isFinite, n >= low, n <= high, st.step != 1 || n.rounded() == n { continue }
-            if g.advancedKeys.contains(st.key) { showUploadMore = true }
+            if st.advanced == true { showUploadMore = true }
             return "Check \(st.label). \(st.hint)"
         }
         return nil
