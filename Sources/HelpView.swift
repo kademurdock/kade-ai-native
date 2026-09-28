@@ -232,7 +232,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build: steadier screens, and Describe again",
+                title: "Newest build: a Library like the Files app",
+                body: "The Library works one screen at a time now, like the Files app. Its first screen is a short list that never moves: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Talk to the Librarian, and Add and requests. Every shelf and the player open as their own screen, with Back at the top left, and Back from the player leaves your book playing. A shelf says how many shelves and items it holds, a count is only said once it is real, and a long shelf shows 60 items, then Show 60 more. Every item says what it is after its title, like Described audio movie, Described audio episode, Full movie or Movie trailer. In the Sound Booth, the settings most people leave alone sit in one closed More settings group for each engine, and choices read the way they are written. YuE2's Style choice, Kids and Soul, is part of the Family feature pack; on other accounts it is dimmed with that reason, and songs use plain YuE2. When YuE2 leaves a note on a take, like no chords heard, it shows under that take. An account with its own singing voice also gets Sing it in my voice: import a song or a vocal and hear it sung in that voice, or choose Sing this take in my voice on a YuE2 or Lyria take. Marketplace pictures fill in quickly, top rows first, and at once on your next visit. A described video's details now say what the run has spent so far, apart from the most the look in progress can cost, and you pay only what it really costs; a finished run lists what each part cost, adding up to its total, and what was included. In Kade's Clubhouse, Back while you're recording a tape asks first: stop the tape and keep it, go back and lose it, or keep recording."
+            ),
+            HelpEntry(
+                title: "The build before: steadier screens, and Describe again",
                 body: "Reverie, in the Parlor, no longer freezes after a long visit with VoiceOver on, and its World log shows the newest 80 entries, with a button for earlier ones. The Marketplace opens faster: each category shows its first few characters and a Show more button, every category heading is still in the Headings rotor, and a search shows the first 25 matches, then Show more results. After a Show more, VoiceOver says how many arrived, then moves to the first new one. Described videos keep VoiceOver quiet over the film for the whole playback, even a film with no dialogue; Read captions with VoiceOver still reads the captions when you want them. Describe again, near the end of a finished or stopped video's screen, writes fresh descriptions from the copy already on the server, so nothing is downloaded again; it is also in each video's Actions rotor in Your videos. Pasting a YouTube link for a video you already brought in opens that video instead of downloading it again."
             ),
             HelpEntry(
@@ -458,7 +462,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "The price",
-                body: "Nothing is spent until you choose. The confirmation gives an estimate and the maximum charge you approve. Metered analysis uses your account balance, with unused reserved money returned when it stops or finishes. Narration and voice samples are included. Admin processing is paid by the platform. While it works you hear the stage and the percent now and then, the Lock Screen shows its progress, and a notification says when it's done."
+                body: "Nothing is spent until you choose. The confirmation gives an estimate and the maximum charge you approve. Metered analysis uses your account balance, with unused reserved money returned when it stops or finishes. Narration and voice samples are included. Admin processing is paid by the platform. While it runs, the video's details say what it has spent so far and, apart from that, the most the look in progress can cost; each look is charged only what it really cost. When it finishes or stops, the details list what each part cost, like closer looks or second looks at rushed parts, in whole cents that add up to the total, then what was included. While it works you hear the stage and the percent now and then, the Lock Screen shows its progress, and a notification says when it's done."
             ),
             HelpEntry(
                 title: "When it's done",
@@ -505,6 +509,10 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "The shared jukebox",
                 body: "One music player for the whole room, and everybody holds the remote: anyone can play, pause, skip ahead, jump back, or stop it, and it changes for everyone, like a real living-room stereo. Add a song from your files, or paste a song link: a YouTube or Spotify song, SoundCloud, Bandcamp, or a link to an audio file, up to 15 minutes. Then add it politely with Add it to the queue, or rudely with Cut in and play it now. A song link you copied in another app fills in by itself when you're in a room. Your iPhone may ask before Kade-AI reads a copied link. To stop the asking, open the Settings app, then Kade-AI, then Paste from Other Apps, and choose Allow. When YouTube is blocking the server, the Clubhouse says so, quietly tries again every three minutes for up to an hour, and tells the room when the song lands; Stop knocking cancels it. If somebody skips your song, hit Back a song and take it back; radio fights are allowed. Your music volume is yours alone: it starts low so talk carries over the music, and the volume slider changes only your ears. Voices always come through at full volume."
+            ),
+            HelpEntry(
+                title: "Taping a room",
+                body: "Record this conversation, inside a room, tapes the room until you stop it. The tape is kept only while the Clubhouse is open, so Back asks first while you're recording: Stop the tape, keep it, then leave the room; Go back and lose the tape; or Keep recording. A kept tape waits on the Clubhouse front page under Your last tape, where Share the recording sends it anywhere or saves it to Files."
             ),
             HelpEntry(
                 title: "The Hotel: private rooms",

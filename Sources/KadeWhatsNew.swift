@@ -14,14 +14,20 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: steadier screens, and Describe again"
-    static let body = "Reverie no longer freezes with VoiceOver, and the Marketplace shows each category's first characters with a Show more button. Described videos keep VoiceOver quiet over the film, and Describe again writes fresh descriptions from the copy already on the server."
+    static let title = "What's new: a Library like the Files app"
+    static let body = "The Library is one screen at a time, with Back at the top left, real counts, and items that say what they are, like Described audio episode. The Sound Booth keeps less-used settings under More settings, a described video lists what its run really cost, and the Clubhouse asks before Back throws away a tape you're recording."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false
 
+    /// What "seen" means: this version AND these words. Sep 27 2026: 2.2.1
+    /// reached TestFlight twice (build 317, then the Library build), so a
+    /// card keyed on the version alone never showed the second build's news
+    /// to anyone who had put the first one away. New words show once more;
+    /// the same words never do.
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return "\(short) \(Self.title)"
     }
 
     private init() {
