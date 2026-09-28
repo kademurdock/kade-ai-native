@@ -28,8 +28,11 @@ struct ClubhouseView: View {
     @State private var showCompanionPicker = false
     @State private var songLink = ""
     @State private var showLinkChoice = false
+    /// Sep 27 2026: the top-left Back pressed while a tape is running.
+    @State private var showBackWhileTaping = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
 
     init(apiClient: KadeAPIClient) {
         _service = StateObject(wrappedValue: ClubhouseService(client: apiClient))
@@ -45,6 +48,41 @@ struct ClubhouseView: View {
         }
         .navigationTitle("Kade's Clubhouse")
         .navigationBarTitleDisplayMode(.inline)
+        /* Sep 27 2026 (flagged earlier): the top-left Back closed the
+         * Clubhouse in the middle of a tape, and closing it leaves the room
+         * (onDisappear), so the tape was thrown away without a word. While a
+         * tape is running, the system Back (and its swipe) steps aside for
+         * one that asks first. The tape lives only while this screen does, so
+         * the question offers the same way out as Leave the room: keep the
+         * tape and land on the front page ("Your last tape"), or lose it and
+         * go back, or keep recording. */
+        .navigationBarBackButtonHidden(service.recording)
+        .toolbar {
+            if service.recording {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showBackWhileTaping = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.backward")
+                                .accessibilityHidden(true)
+                            Text("Back")
+                        }
+                    }
+                    .accessibilityLabel("Back")
+                    .accessibilityHint("You're recording. Asks first, because going back loses the tape unless you keep it.")
+                    // The scrub with focus up here in the bar asks too.
+                    .accessibilityAction(.escape) { showBackWhileTaping = true }
+                }
+            }
+        }
+        .confirmationDialog("You're still taping this room.", isPresented: $showBackWhileTaping, titleVisibility: .visible) {
+            Button("Stop the tape, keep it, then leave the room") { service.stopRecordingThenLeave() }
+            Button("Go back and lose the tape", role: .destructive) { discardTapeAndGoBack() }
+            Button("Keep recording", role: .cancel) {}
+        } message: {
+            Text("Going back closes the Clubhouse, and the tape is lost unless you keep it first. Keeping it takes you to the Clubhouse front page, where you can share it or save it to Files.")
+        }
         .background(
             EngineHostView(engine: service.engine, up: service.engineUp)
                 .frame(width: 1, height: 1)
@@ -77,6 +115,21 @@ struct ClubhouseView: View {
                 Text(service.statusLine)
                     .font(.callout)
                     .accessibilityAddTraits(.updatesFrequently)
+            }
+            /* Sep 27 2026: "Stop the tape, keep it, then leave" kept the tape
+             * but landed here, where it could not be reached until another
+             * room was joined. It waits here now, until this screen closes. */
+            if let url = service.recFileURL {
+                Section {
+                    ShareLink("Share the recording", item: url)
+                    Text(service.recFileLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Your last tape")
+                } footer: {
+                    Text("Share it or save it to Files before closing the Clubhouse. The tape is kept only while this screen is open.")
+                }
             }
             Section {
                 if service.publicRooms.isEmpty {
@@ -451,6 +504,8 @@ struct ClubhouseView: View {
                 Text("Invite one character as a guest. Press their talk button when it's their turn and they answer out loud in their own voice; between turns they follow along by rough transcription. Anyone can show them the door.")
             }
         }
+        // VoiceOver's two-finger scrub is a Back too: it asks first while taping.
+        .accessibilityAction(.escape) { backFromRoom() }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.audio]) { result in
             if case let .success(url) = result {
                 pendingSongURL = url
@@ -491,6 +546,24 @@ struct ClubhouseView: View {
         .sheet(isPresented: $showCompanionPicker) {
             CompanionPickerSheet(agents: service.agents, selectedId: $pickedAgentId)
         }
+    }
+
+    /// Back from inside a room: asks first while a tape is running, since
+    /// leaving this screen throws the tape away; otherwise just goes back.
+    private func backFromRoom() {
+        if service.recording {
+            showBackWhileTaping = true
+        } else {
+            dismiss()
+        }
+    }
+
+    /// Go back and lose the tape, chosen in the Back question: the room is left
+    /// (which ends the tape unsaved, as Leave and lose the tape does) and the
+    /// screen closes.
+    private func discardTapeAndGoBack() {
+        service.leave()
+        dismiss()
     }
 
     private func timeString(_ t: Double) -> String {

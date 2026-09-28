@@ -34,6 +34,13 @@ struct SoundBoothTake: Decodable, Identifiable, Equatable {
     let url: String
     let backupUrl: String?
     let masterUrl: String?
+    /// Sep 27 2026, Sing it in my voice: the converted voice on its own (a
+    /// signed storage link), the take a voice version was made from, and on
+    /// a YuE2 take a word about its automatic voice version. The server sends
+    /// them only on the takes of an account with a voice model.
+    let vocalUrl: String?
+    let voiceOf: String?
+    let voiceNote: String?
     let description: String?
     let seconds: Double?
     let costUSD: Double?
@@ -103,6 +110,9 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     let updatedAt: String?
     let takes: [SoundBoothTake]?
     let hasRecoverableAudio: Bool?
+    /// The server's own line for what made the row and why ("Sung in my voice
+    /// — a song with music"). Read for Sing it in my voice rows only.
+    let why: String?
 
     var engineLabel: String {
         switch engine {
@@ -110,8 +120,17 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
         case "lyria": return "Lyria"
         case "yue2": return "YuE2"
         case "stable": return "Stable Audio"
+        case "myvoice": return "Sing it in my voice"
         default: return "AuK HQ"
         }
+    }
+    /// What the row says made it. Sep 27 2026: a Sing it in my voice row says
+    /// what went in (a song with music, or a vocal on its own), from the
+    /// server; it used to fall through to "AuK HQ". Every other row keeps its
+    /// engine's name.
+    var rowLabel: String {
+        let said = (why ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return engine == "myvoice" && !said.isEmpty ? said : engineLabel
     }
     var isWorking: Bool { state == "queued" || state == "running" }
     var stateWord: String {
@@ -127,10 +146,10 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     /// The row, as one spoken sentence — the info block is one element and the
     /// buttons stay their own siblings (the Amber rule).
     var summary: String {
-        var parts = [title, engineLabel, stateWord]
+        var parts = [title, rowLabel, stateWord]
         if let t = takes, !t.isEmpty { parts.append("\(t.count) take\(t.count == 1 ? "" : "s")") }
         if let c = costUSD, c > 0 { parts.append("about \(max(1, Int((c * 100).rounded()))) cents") }
-        if engine == "yue2" { parts.append("Execution cost only; startup and idle time are extra") }
+        if engine == "yue2" || engine == "myvoice" { parts.append("Execution cost only; startup and idle time are extra") }
         let r = (readback ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !r.isEmpty { parts.append(r) }
         return parts.joined(separator: ". ")
@@ -344,6 +363,26 @@ struct SoundBoothGuide: Decodable {
         let task: String
         let text: String
     }
+    /// Sep 27 2026, Sing it in my voice: the words an upload engine's screen
+    /// says, from its guide entry (myVoice.ts `ui`), so a wording fix is a
+    /// deploy, not a build. Every field is optional; the booth has its own
+    /// words for any that are missing.
+    struct UploadWords: Decodable, Hashable {
+        /// The one button: "Sing it in my voice".
+        let render: String?
+        /// Said when the engine is chosen.
+        let select: String?
+        /// Said when a library take has just been attached to sing.
+        let fromTake: String?
+        /// Said when the button is pressed with nothing imported.
+        let needClip: String?
+        /// The library button on a take it can sing: "Sing this take in my voice".
+        let useTake: String?
+        /// The library button for the converted voice on its own.
+        let vocal: String?
+        /// In front of the imported recording's name: "Singing: ".
+        let clip: String?
+    }
     struct Engine: Decodable {
         let name: String
         let tagline: String
@@ -354,9 +393,54 @@ struct SoundBoothGuide: Decodable {
         let howToWrite: [String]
         let settings: [Setting]
         let recipes: [Recipe]?
+        /// Sep 27 2026: "upload" for an engine with no script box, where the
+        /// imported recording is the input (Sing it in my voice). Nil for
+        /// every other engine. Only an account the server gives such an
+        /// engine to ever sees one.
+        let flow: String?
+        let ui: UploadWords?
+        /// The engines whose finished takes this one can sing again.
+        let takesFrom: [String]?
+        /// The keys of the settings the guide marks `advanced` (its one
+        /// collapsed "More settings" group). Read beside the settings, from
+        /// the same list, so the Setting type itself is unchanged.
+        let advancedKeys: Set<String>
+
         /// The card, as one spoken paragraph.
         var spoken: String {
             "\(name). \(tagline) \(`where`) \(cost) Best for: \(bestFor.joined(separator: "; ")). Not for: \(notFor.joined(separator: "; "))."
+        }
+
+        private struct Mark: Decodable {
+            let key: String?
+            let advanced: Bool?
+            private enum CodingKeys: String, CodingKey { case key, advanced }
+            init(from decoder: Decoder) throws {
+                let c = try? decoder.container(keyedBy: CodingKeys.self)
+                key = (try? c?.decodeIfPresent(String.self, forKey: .key)) ?? nil
+                advanced = (try? c?.decodeIfPresent(Bool.self, forKey: .advanced)) ?? nil
+            }
+        }
+        private enum CodingKeys: String, CodingKey {
+            case name, tagline, `where`, cost, bestFor, notFor, howToWrite, settings, recipes, flow, ui, takesFrom
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            tagline = try c.decode(String.self, forKey: .tagline)
+            self.`where` = try c.decode(String.self, forKey: .`where`)
+            cost = try c.decode(String.self, forKey: .cost)
+            bestFor = try c.decode([String].self, forKey: .bestFor)
+            notFor = try c.decode([String].self, forKey: .notFor)
+            howToWrite = try c.decode([String].self, forKey: .howToWrite)
+            settings = try c.decode([Setting].self, forKey: .settings)
+            recipes = try c.decodeIfPresent([Recipe].self, forKey: .recipes)
+            // The Sep 27 fields are read leniently: an odd value never breaks the guide.
+            flow = try? c.decodeIfPresent(String.self, forKey: .flow)
+            ui = try? c.decodeIfPresent(UploadWords.self, forKey: .ui)
+            takesFrom = try? c.decodeIfPresent([String].self, forKey: .takesFrom)
+            let marks: [Mark] = (try? c.decode([Mark].self, forKey: .settings)) ?? []
+            advancedKeys = Set(marks.compactMap { mark in mark.advanced == true ? mark.key : nil })
         }
     }
     let chooser: Chooser
@@ -576,6 +660,16 @@ final class SoundBoothService: ObservableObject {
         try await post("api/kade/sound-booth/render", body: body, timeout: 240, fallback: "That render could not start.")
     }
 
+    /// Sep 27 2026: what a render would cost, asked without starting it
+    /// (`estimateOnly`), for Sing it in my voice, whose price follows the
+    /// recording's length. The same estimate the render answers with, the
+    /// web page's quoteUpload. Nothing is made or spent.
+    func quote(body: [String: Any]) async throws -> SoundBoothRenderResult {
+        var asked = body
+        asked["estimateOnly"] = true
+        return try await post("api/kade/sound-booth/render", body: asked, timeout: 60, fallback: "Couldn't price that recording.")
+    }
+
     func status(jobId: String) async throws -> SoundBoothStatus {
         try await get("api/kade/sound-booth/status/\(jobId)", fallback: "Couldn't read that render.")
     }
@@ -687,7 +781,9 @@ final class SoundBoothService: ObservableObject {
     /// the service rather than the view so every call to the API client goes
     /// through one main-actor-isolated owner — the same reason this whole
     /// file exists.
-    struct ImportedReference { let url: String; let name: String; let spoken: String }
+    /// `seconds`: the recording's length when the server measured it (Sep 27
+    /// 2026, so Sing it in my voice can show "3:12" beside the name).
+    struct ImportedReference { let url: String; let name: String; let spoken: String; var seconds: Double? = nil }
 
 
     func importReference(data: Data, fileName: String, mimeType: String, engine: String) async throws -> ImportedReference {
@@ -704,7 +800,7 @@ final class SoundBoothService: ObservableObject {
         )
         req.timeoutInterval = 180
         let (respData, http) = try await client.send(req)
-        struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let error: String?; let ext: String? }
+        struct Resp: Decodable { let url: String?; let name: String?; let spoken: String?; let error: String?; let ext: String?; let seconds: Double? }
         let r = try? JSONDecoder().decode(Resp.self, from: respData)
         guard http.statusCode == 200, let remote = r?.url, !remote.isEmpty else {
             throw BoothError(message: r?.error ?? "That clip could not be imported.")
@@ -712,7 +808,8 @@ final class SoundBoothService: ObservableObject {
         return ImportedReference(
             url: remote,
             name: r?.name ?? fileName,
-            spoken: r?.spoken ?? "Clip imported. It will be used as the voice to clone."
+            spoken: r?.spoken ?? "Clip imported. It will be used as the voice to clone.",
+            seconds: r?.seconds
         )
     }
 
@@ -782,6 +879,33 @@ final class SoundBoothService: ObservableObject {
         try? FileManager.default.removeItem(at: url)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// Sep 27 2026, Sing it in my voice: the converted voice on its own, from
+    /// the take's signed storage link (the web page's "Download my voice on
+    /// its own"). The gallery download lane has no way to ask for it, and a
+    /// signed link carries its own permission, so this request carries no
+    /// sign-in: storage refuses a request that brings a second one. Lands in
+    /// a temp file for the share sheet, like `download`.
+    func downloadVocal(from link: String, title: String) async throws -> URL {
+        guard let url = URL(string: link, relativeTo: client.baseURL)?.absoluteURL, url.scheme == "https" else {
+            throw BoothError(message: "Couldn't fetch the voice on its own. Try again.")
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 120
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200, !data.isEmpty else {
+            throw BoothError(message: "Couldn't fetch the voice on its own. Open the Sound Booth again and retry.")
+        }
+        let found = url.pathExtension.lowercased()
+        let ext = ["mp3", "wav", "m4a", "flac", "ogg"].contains(found) ? found : "mp3"
+        let name = safeFileName(title)
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(name.isEmpty ? "kade-ai-voice" : name)
+            .appendingPathExtension(ext)
+        try? FileManager.default.removeItem(at: file)
+        try data.write(to: file, options: .atomic)
+        return file
     }
 
     /// A file name a person would recognise in Files, built from the project's

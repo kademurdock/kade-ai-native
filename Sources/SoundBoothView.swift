@@ -56,7 +56,9 @@ struct SoundBoothView: View {
     }
     @State private var writingUndo: (engine: String, script: String, lyrics: String)?
     private var isEffects: Bool { engine == "stable" }
-    private var usesDirectPrompt: Bool { isMusic || isEffects }
+    /// Sep 27 2026: Sing it in my voice (an upload engine) counts too, so its
+    /// form never gets the writing desk.
+    private var usesDirectPrompt: Bool { isMusic || isEffects || isUpload }
     private var isMusic: Bool { engine == "lyria" || engine == "yue2" }
     @State private var engine = "scenema"
     @State private var mode = "easy"
@@ -151,6 +153,12 @@ struct SoundBoothView: View {
     @State private var showChooser = false
     @State private var showHowTo = false
     @State private var catalog: VoiceCatalog.Snapshot = .empty
+    /// Sep 27 2026, Sing it in my voice: the server's price for the imported
+    /// recording, filed under what it priced (`uploadQuoteKey`), so a quote
+    /// for another recording or another What is in the file is never shown.
+    @State private var uploadQuote: (key: String, spoken: String)?
+    /// Its one collapsed More settings group.
+    @State private var showUploadMore = false
 
     @AccessibilityFocusState private var focusStatus: Bool
     /// B8: where VoiceOver lands after the goal changes.
@@ -192,12 +200,15 @@ struct SoundBoothView: View {
     /// voice. Every engine belongs to exactly one goal, so the heading above
     /// the form always matches the form.
     private enum BoothGoal: String, CaseIterable, Identifiable {
-        case song, scene, sounds, reading
+        /// Sep 27 2026: `myVoice` (Sing it in my voice) is listed only for an
+        /// account the server gives that engine to (`availableGoals`).
+        case song, myVoice = "myvoice", scene, sounds, reading
         var id: String { rawValue }
 
         var engines: [String] {
             switch self {
             case .song: return ["lyria", "yue2"]
+            case .myVoice: return ["myvoice"]
             case .scene: return ["seed"]
             case .sounds: return ["stable"]
             case .reading: return ["scenema"]
@@ -209,6 +220,7 @@ struct SoundBoothView: View {
         var title: String {
             switch self {
             case .song: return "A song"
+            case .myVoice: return "Sing it in my voice"
             case .scene: return "A scene or story with voices"
             case .sounds: return "Music or sound effects"
             case .reading: return "Reading something in a voice"
@@ -218,6 +230,7 @@ struct SoundBoothView: View {
         var caption: String {
             switch self {
             case .song: return "Words and music, sung."
+            case .myVoice: return "A song or a vocal, sung again in your own voice."
             case .scene: return "Several voices, music and sound effects."
             case .sounds: return "No singing."
             case .reading: return "One voice performing your words."
@@ -226,6 +239,7 @@ struct SoundBoothView: View {
         var spokenLabel: String {
             switch self {
             case .song: return "Make a song"
+            case .myVoice: return "Sing it in my voice"
             case .scene: return "Make a scene or story with voices"
             case .sounds: return "Make music or sound effects"
             case .reading: return "Read something in a voice"
@@ -234,6 +248,7 @@ struct SoundBoothView: View {
         var hint: String {
             switch self {
             case .song: return "Opens the song form. Describe a song, or bring your own words, and a singer performs it with music."
+            case .myVoice: return "Opens the Sing it in my voice form. Import a song or a vocal, and hear it sung in your own voice."
             case .scene: return "Opens the scene form. Several people talk, with music and sound effects around them, like a radio play."
             case .sounds: return "Opens the sound form. Describe the music or sounds you want. Nobody sings or speaks."
             case .reading: return "Opens the reading form. Type your words, and one voice performs them with real acting."
@@ -243,6 +258,7 @@ struct SoundBoothView: View {
         var making: String {
             switch self {
             case .song: return "Making a song"
+            case .myVoice: return "Singing it in your voice"
             case .scene: return "Making a scene or story with voices"
             case .sounds: return "Making music or sound effects"
             case .reading: return "Reading something in a voice"
@@ -251,6 +267,7 @@ struct SoundBoothView: View {
         var symbol: String {
             switch self {
             case .song: return "music.mic"
+            case .myVoice: return "mic.fill"
             case .scene: return "theatermasks.fill"
             case .sounds: return "waveform"
             case .reading: return "book.fill"
@@ -259,6 +276,7 @@ struct SoundBoothView: View {
         var tint: Color {
             switch self {
             case .song: return .pink
+            case .myVoice: return .indigo
             case .scene: return .orange
             case .sounds: return .teal
             case .reading: return .purple
@@ -279,7 +297,7 @@ struct SoundBoothView: View {
                 statusBlock
                 if let goal {
                     goalHeader(goal)
-                    scriptSection
+                    if isUpload { uploadSection } else { scriptSection }
                     if !usesDirectPrompt {
                         DisclosureGroup("Voice, references, and writing desk") {
                             /* Part 296: when the guide groups this engine's
@@ -326,9 +344,7 @@ struct SoundBoothView: View {
          * sentence that says so, rather than rendering without the clone. */
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: engine == "seed" || engine == "yue2"
-                ? [.wav, .mp3, .mpeg4Audio, .init(filenameExtension: "ogg") ?? .audio]
-                : [.wav, .mp3, .mpeg4Audio],
+            allowedContentTypes: importTypes,
             allowsMultipleSelection: false
         ) { result in
             Task { await handleImport(result) }
@@ -341,6 +357,13 @@ struct SoundBoothView: View {
         .onChange(of: script) { _, _ in invalidateQuote() }
         .onChange(of: values) { _, _ in invalidateQuote() }
         .onChange(of: clips.map { $0.url }) { _, _ in invalidateQuote() }
+        /* Sep 27 2026, Sing it in my voice: the price of the imported
+         * recording, asked of the server once it is in and again when What is
+         * in the file changes (the web page's quoteUpload). Shown, never said. */
+        .onChange(of: uploadQuoteKey) { _, key in
+            guard !key.isEmpty else { return }
+            Task { await quoteUpload(key) }
+        }
         .onChange(of: inputMode) { _, _ in
             if engine != "lyria", let m = currentInput { announce("\(m.boxLabel). \(m.boxHint)") }
         }
@@ -421,7 +444,7 @@ struct SoundBoothView: View {
                 .font(.title3.bold())
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused($boothFocus, equals: .question)
-            ForEach(BoothGoal.allCases) { g in
+            ForEach(availableGoals) { g in
                 Button { chooseGoal(g) } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
@@ -463,7 +486,7 @@ struct SoundBoothView: View {
         .accessibilityValue(g.title)
         .accessibilityHint(workspaceBusy
             ? "Available once the current job finishes or is stopped."
-            : "Goes back to the four choices: a song, a scene or story with voices, music or sound effects, or reading something in a voice. Your work here is kept while this screen is open.")
+            : "Goes back to the choices: \(goalChoiceWords). Your work here is kept while this screen is open.")
     }
 
     /// The top of a goal's form: what she is making, which engine is making
@@ -471,11 +494,18 @@ struct SoundBoothView: View {
     private func goalHeader(_ g: BoothGoal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(g.title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
-            Text("\(g.caption) Made with \(Self.engineName(engine)).")
+            Text(goalLine(g))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             engineSection
         }
+    }
+
+    /// The line under a goal's heading. Sing it in my voice says the server's
+    /// own tagline here, once; its form below does not repeat it.
+    private func goalLine(_ g: BoothGoal) -> String {
+        if g == .myVoice { return currentEngine?.tagline ?? g.caption }
+        return "\(g.caption) Made with \(Self.engineName(engine))."
     }
 
     /// A goal picks its engine (the booth's own pick for it, or the engine
@@ -513,20 +543,23 @@ struct SoundBoothView: View {
 
     private var starterSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Start something").font(.headline)
-            Picker(isEffects ? "A sound starting point" : isMusic ? "A music starting point" : engine == "seed" ? "A scene starting point" : "A performance starting point", selection: $starterId) {
-                Text("Choose a starting point").tag("")
-                ForEach((guide?.starters ?? []).filter { $0.engine == engine }) { item in Text(item.title).tag(item.id) }
+            // Sep 27 2026: Sing it in my voice has no starting points; New blank project still clears it.
+            if !isUpload {
+                Text("Start something").font(.headline)
+                Picker(isEffects ? "A sound starting point" : isMusic ? "A music starting point" : engine == "seed" ? "A scene starting point" : "A performance starting point", selection: $starterId) {
+                    Text("Choose a starting point").tag("")
+                    ForEach((guide?.starters ?? []).filter { $0.engine == engine }) { item in Text(item.title).tag(item.id) }
+                }
+                Button("Start a new project from this") {
+                    guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
+                    currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false
+                    trackTitle = starter.title; script = starter.script; text = ""; readback = ""; mood = ""
+                    if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
+                    invalidateQuote()
+                    announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
+                }.disabled(starterId.isEmpty || workspaceBusy)
+                Text("Free to load. These replace the current editor; finish or save your work first. Generation starts with one press; cost information is shown by the button.").font(.caption)
             }
-            Button("Start a new project from this") {
-                guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
-                currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false
-                trackTitle = starter.title; script = starter.script; text = ""; readback = ""; mood = ""
-                if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
-                invalidateQuote()
-                announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
-            }.disabled(starterId.isEmpty || workspaceBusy)
-            Text("Free to load. These replace the current editor; finish or save your work first. Generation starts with one press; cost information is shown by the button.").font(.caption)
             Button("New blank project") {
                 currentProjectId = nil; trackTitle = ""; script = ""; text = ""; readback = ""; mood = ""
                 voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false
@@ -576,9 +609,10 @@ struct SoundBoothView: View {
             DisclosureGroup("Advanced: choose the engine", isExpanded: $showEngineChoice) {
                 engineCards.padding(.top, 6)
             }
-            .accessibilityHint("Shows all five engines, with what each is for, where it runs and what it costs. What you chose to make has already picked one.")
+            .accessibilityHint("Shows every engine, with what each is for, where it runs and what it costs. What you chose to make has already picked one.")
 
-            if guide != nil {
+            // Sep 27 2026: Sing it in my voice has no text to pick from.
+            if guide != nil && !isUpload {
                 Button {
                     Task { await suggestEngine() }
                 } label: {
@@ -600,7 +634,8 @@ struct SoundBoothView: View {
                  * Her ask: "people will not know the difference." Each card
                  * says what it is, where it runs, what it costs, what it is
                  * for and not for — as one spoken element, then a button. */
-                ForEach(["scenema", "lyria", "yue2", "stable", "seed"], id: \.self) { key in
+                // Sep 27 2026: "myvoice" is in the guide only for an account with a voice model.
+                ForEach(["scenema", "lyria", "yue2", "stable", "seed", "myvoice"], id: \.self) { key in
                     if let g = guide.engines[key] {
                         Button {
                             KadeHaptics.press()
@@ -701,6 +736,7 @@ struct SoundBoothView: View {
         case "lyria": return "Lyria"
         case "yue2": return "YuE2"
         case "stable": return "Stable Audio"
+        case "myvoice": return "Sing it in my voice"
         default: return "AuK HQ"
         }
     }
@@ -1100,6 +1136,8 @@ struct SoundBoothView: View {
     /// "Cloning: " for an AuK voice.
     private func clipPrefix(max: Int, index: Int) -> String {
         if max > 1 { return "@Audio\(index + 1): " }
+        // Sep 27 2026: "Singing: " for Sing it in my voice, in its guide's words.
+        if isUpload { return currentEngine?.ui?.clip ?? "Singing: " }
         return engine == "yue2" ? "Covering: " : "Cloning: "
     }
 
@@ -1354,7 +1392,7 @@ struct SoundBoothView: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(p.title).font(.subheadline.bold())
-                Text("\(p.engineLabel) · \(p.stateWord)")
+                Text("\(p.rowLabel) · \(p.stateWord)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let r = p.readback, !r.isEmpty {
@@ -1423,10 +1461,18 @@ struct SoundBoothView: View {
 
                             Spacer()
                         }
+                        // Sep 27 2026: a voice version's voice on its own, and a take's word about its version.
+                        voiceTakeExtras(take, title: p.title, number: takes.count - idx)
                         HStack {
                             if p.engine == "lyria" || p.engine == "yue2" {
                                 Button("Cover this take") { prepareCover(take, project: p) }
-                            } else if p.engine != "stable" {
+                                if let words = singTakeWords(take, project: p) {
+                                    Button(words) { prepareSingTake(take, project: p) }
+                                        // Which take, as its Play and Save buttons say.
+                                        .accessibilityLabel("\(words), take \(takes.count - idx)")
+                                        .accessibilityHint("Attaches this take to Sing it in my voice, above. Nothing is made until you choose Sing it in my voice there. The original is kept.")
+                                }
+                            } else if p.engine != "stable" && p.engine != "myvoice" {
                                 Button("Use this voice") { prepareTake(take, title: p.title, editing: false) }
                                 Button("Edit this take") { prepareTake(take, title: p.title, editing: true) }
                             }
@@ -1452,7 +1498,7 @@ struct SoundBoothView: View {
                     renameProject = p; renameTitle = p.title; showRename = true
                 }.accessibilityLabel("Rename \(p.title)")
                 Button("Open in the booth") { openInBooth(p) }
-                    .accessibilityHint(p.engine == "stable" ? "Loads this sound description and settings so you can make another take." : p.engine == "lyria" ? "Loads this music direction, lyrics and song settings so you can edit them and make another take." : "Loads this script, its voice and its settings back into the boxes above so you can change it and render again.")
+                    .accessibilityHint(openInBoothHint(p))
                 Spacer()
                 Button(role: .destructive) {
                     Task { await remove(p) }
@@ -1479,6 +1525,9 @@ struct SoundBoothView: View {
             let h = try await service.health()
             health = h
             guide = h.guide
+            // Sep 27 2026: reopened on Sing it in my voice, which this account no longer has.
+            // Never while a job or an import is running: the form stays with its work.
+            if engine == "myvoice" && h.guide?.engines["myvoice"] == nil && !workspaceBusy { leaveUnavailableUpload() }
             let scenemaOK = h.engines["scenema"]?.configured ?? false
             let seedOK = h.engines["seed"]?.configured ?? false
             let lyriaOK = h.engines["lyria"]?.configured ?? false
@@ -1551,7 +1600,9 @@ struct SoundBoothView: View {
             do {
                 let data = try Data(contentsOf: url)
                 guard data.count <= 20 * 1024 * 1024 else {
-                    importError = "That clip is bigger than twenty megabytes. Ten to twenty seconds is all it needs."
+                    importError = isUpload
+                        ? "That recording is bigger than twenty megabytes. A whole song fits as an MP3, so export an MP3 and import that."
+                        : "That clip is bigger than twenty megabytes. Ten to twenty seconds is all it needs."
                     announce(importError)
                     return
                 }
@@ -1561,7 +1612,7 @@ struct SoundBoothView: View {
                     mimeType: mimeType(for: url),
                     engine: engine
                 )
-                clips.append((url: imported.url, name: imported.name))
+                clips.append((url: imported.url, name: isUpload ? Self.withLength(imported.name, seconds: imported.seconds) : imported.name))
                 Earcons.shared.play(.actionDone)
                 KadeHaptics.success()
                 announce(imported.spoken + (engine == "seed" ? " It is @Audio\(clips.count). Name it in the script." : ""))
@@ -2145,6 +2196,11 @@ struct SoundBoothView: View {
 
     private func openInBooth(_ p: SoundBoothProject) {
         guard !workspaceBusy else { announce("Finish the current operation first."); return }
+        // Sep 27 2026: a Sing it in my voice row outlives the engine on an account that no longer has it.
+        if p.engine == "myvoice" && guide?.engines["myvoice"] == nil {
+            announce("Sing it in my voice is not available on this account right now. The recording stays in your library.")
+            return
+        }
         selectEngine(p.engine)
         trackTitle = p.title
         currentProjectId = p.id
@@ -2178,6 +2234,454 @@ struct SoundBoothView: View {
             await loadProjects()
         } catch {
             announce((error as? LocalizedError)?.errorDescription ?? "Couldn't remove that.")
+        }
+    }
+
+    // MARK: - Sing it in my voice (Sep 27 2026)
+    //
+    // Her ask, after hearing her voice model sing: "at the very least just
+    // create a section on the booth that is sing it in my voice and I would
+    // just upload a file." The server (fork packages/api music/myVoice.ts and
+    // routes/kadeSoundBooth.js) offers the engine "myvoice" only to an account
+    // with a voice model. Its guide entry says flow "upload": no script box,
+    // the imported recording is the input, and the words on this form come
+    // from that entry. Everyone else, App Review included, never gets the
+    // entry, so none of this ever shows for them.
+    //
+    // The form follows the web page: the recording and What is in the file in
+    // view, every other knob in one collapsed More settings group at the
+    // server's defaults, the server's price for this recording under the one
+    // button, and a render sent as the web sends it (no script, the recording
+    // as reference_voice_url). It draws its own rows, so pitch gets a keyboard
+    // with a minus sign and the extractor names are shown as written.
+
+    /// An engine whose guide entry says flow "upload" (Sing it in my voice).
+    /// "myvoice" counts before the guide arrives, so a booth reopened on it
+    /// never shows the script form while it loads.
+    private var isUpload: Bool {
+        engine == "myvoice" || currentEngine?.flow == "upload"
+    }
+
+    /// The engine this account sings library takes with, or nil.
+    private var uploadEngineKey: String? {
+        guard let engines = guide?.engines else { return nil }
+        return engines.keys.sorted().first { engines[$0]?.flow == "upload" }
+    }
+
+    /// The four goals for everyone, and Sing it in my voice only where the
+    /// server offers it. It is a personal feature, not a Family pack one, so
+    /// for everyone else it is left out, as on the web page.
+    private var availableGoals: [BoothGoal] {
+        BoothGoal.allCases.filter { $0 != .myVoice || guide?.engines["myvoice"] != nil }
+    }
+
+    /// The choices, as Change what you're making's hint says them.
+    private var goalChoiceWords: String {
+        availableGoals.contains(.myVoice)
+            ? "a song, singing a recording in your voice, a scene or story with voices, music or sound effects, or reading something in a voice"
+            : "a song, a scene or story with voices, music or sound effects, or reading something in a voice"
+    }
+
+    /// What Files offers for the engine in use. Sing it in my voice reads
+    /// FLAC as well (the server's ENGINE_REF_FORMATS for it).
+    private var importTypes: [UTType] {
+        let ogg: UTType = UTType(filenameExtension: "ogg") ?? .audio
+        if isUpload { return [.wav, .mp3, .mpeg4Audio, ogg, UTType(filenameExtension: "flac") ?? .audio] }
+        if engine == "seed" || engine == "yue2" { return [.wav, .mp3, .mpeg4Audio, ogg] }
+        return [.wav, .mp3, .mpeg4Audio]
+    }
+
+    /// "Song title (3:12)" when the length is known.
+    private static func withLength(_ name: String, seconds: Double?) -> String {
+        guard let seconds, seconds > 0 else { return name }
+        let total: Int = Swift.max(0, Int(seconds.rounded()))
+        let clock: String = "\(total / 60):" + String(format: "%02d", total % 60)
+        return "\(name) (\(clock))"
+    }
+
+    /// What the price on screen was asked for: the recording and What is in
+    /// the file, the two things the server's estimate reads. Empty when there
+    /// is nothing to price.
+    private var uploadQuoteKey: String {
+        guard isUpload, importError.isEmpty, let url = clips.first?.url else { return "" }
+        return "\(engine)|\(url)|\(values["voice_source"] ?? "")"
+    }
+
+    /// A Sing it in my voice request as the web page sends it: the guide's
+    /// settings, the recording as reference_voice_url, no script and no
+    /// voice gender.
+    private func uploadBody(reference: String) -> [String: Any] {
+        var body = collectedSettings()
+        body.removeValue(forKey: "gender")
+        body["engine"] = engine
+        body["mode"] = mode
+        body["reference_voice_url"] = reference
+        body["referenceExpected"] = true
+        return body
+    }
+
+    /// The server's price for this recording (its estimate, nothing made).
+    /// Kept only while the recording and What is in the file are unchanged.
+    private func quoteUpload(_ key: String) async {
+        guard let recording = clips.first, key == uploadQuoteKey else { return }
+        let body = uploadBody(reference: recording.url)
+        let answer = try? await service.quote(body: body)
+        guard key == uploadQuoteKey, let spoken = answer?.estimate?.spoken, !spoken.isEmpty else { return }
+        uploadQuote = (key: key, spoken: spoken)
+    }
+
+    private func uploadCostLine(_ g: SoundBoothGuide.Engine) -> String {
+        if let quote = uploadQuote, quote.key == uploadQuoteKey { return quote.spoken }
+        return g.cost
+    }
+
+    private func uploadRenderHint(_ g: SoundBoothGuide.Engine) -> String {
+        if clips.isEmpty { return g.ui?.needClip ?? "Import the recording to sing first, under Recording to sing." }
+        return "Starts right away with this recording and these settings. " + uploadCostLine(g)
+    }
+
+    private func uploadMoreHint(count: Int) -> String {
+        let noun: String = count == 1 ? "setting" : "settings"
+        if showUploadMore { return "Hides these \(count) \(noun) again." }
+        return "Shows \(count) more \(noun). Most people leave them as they are."
+    }
+
+    /// The form: its name, how to use it, the title, the settings (More
+    /// settings closed), the one button and its price. No script box, no
+    /// writing desk, no voice preview.
+    private var uploadSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            /* Not the engine's name: the goal's heading just above already says
+             * "Sing it in my voice", and two headings with the same words in a
+             * row read as one repeated on the headings rotor. */
+            Text("What to sing")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            if let g = currentEngine {
+                DisclosureGroup(isExpanded: $showHowTo) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(g.howToWrite.enumerated()), id: \.offset) { _, tip in
+                            Text(tip).font(.footnote)
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Text("How to use \(g.name)").font(.subheadline.bold())
+                }
+                .accessibilityHint("Opens the steps for a good result.")
+            }
+            TextField("Track title (optional)", text: $trackTitle)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Track title")
+                .accessibilityHint("Up to 80 characters. Left blank, it is called Sung in my voice. You can rename it in the library.")
+                // B8: where a goal pick lands, as on every other form.
+                .accessibilityFocused($boothFocus, equals: .firstField)
+            if let g = currentEngine {
+                uploadSettings(g)
+                Button {
+                    KadeHaptics.press()
+                    Task { await renderUpload() }
+                } label: {
+                    Text(g.ui?.render ?? g.name).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(KadeHeroButtonStyle())
+                .disabled(workspaceBusy || !importError.isEmpty)
+                .accessibilityHint(uploadRenderHint(g))
+                Text(uploadCostLine(g)).font(.footnote)
+            } else {
+                // While the booth loads, or when it could not (the status line above says which).
+                Text("Sing it in my voice appears here once the Sound Booth has loaded.")
+                    .font(.footnote)
+            }
+            stopRenderButton
+        }
+    }
+
+    /// The settings in the guide's order: the recording and What is in the
+    /// file first, then the ones the guide marks advanced inside ONE
+    /// collapsed More settings group.
+    @ViewBuilder
+    private func uploadSettings(_ g: SoundBoothGuide.Engine) -> some View {
+        let main: [SoundBoothGuide.Setting] = g.settings.filter { !g.advancedKeys.contains($0.key) }
+        let more: [SoundBoothGuide.Setting] = g.settings.filter { g.advancedKeys.contains($0.key) }
+        ForEach(main) { st in
+            uploadSettingRow(st)
+        }
+        if !more.isEmpty {
+            DisclosureGroup(isExpanded: $showUploadMore) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(more) { st in
+                        uploadSettingRow(st)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                // The hint on the header only, never read on the rows inside.
+                Text("More settings")
+                    .font(.subheadline.bold())
+                    .accessibilityHint(uploadMoreHint(count: more.count))
+            }
+        }
+    }
+
+    /// One Sing it in my voice setting. The recording row is the booth's own
+    /// import row; the rest are drawn here. Each hint is VoiceOver's hint and
+    /// the visible footnote, the same sentence.
+    @ViewBuilder
+    private func uploadSettingRow(_ st: SoundBoothGuide.Setting) -> some View {
+        switch st.kind {
+        case "choice": uploadChoiceRow(st)
+        case "toggle": uploadToggleRow(st)
+        case "range": uploadRangeRow(st)
+        case "number": uploadNumberRow(st)
+        default: settingRow(st)
+        }
+    }
+
+    /// The options exactly as the server wrote them ("BS-RoFormer HyperACE
+    /// v2", "Just a vocal"). The label is also shown, for the eye.
+    private func uploadChoiceRow(_ st: SoundBoothGuide.Setting) -> some View {
+        let options: [String] = st.options ?? []
+        let fallback: String = st.defaultString ?? options.first ?? ""
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(st.label).font(.subheadline).accessibilityHidden(true)
+            Picker(st.label, selection: Binding(
+                get: { values[st.key] ?? fallback },
+                set: { values[st.key] = $0 }
+            )) {
+                ForEach(options, id: \.self) { option in
+                    Text(option.isEmpty ? "None" : option).tag(option)
+                }
+            }
+            .accessibilityLabel(st.label)
+            .accessibilityHint(st.hint)
+            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    private func uploadToggleRow(_ st: SoundBoothGuide.Setting) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(st.label, isOn: Binding(
+                get: { values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false },
+                set: { values[st.key] = $0 ? "1" : "" }
+            ))
+            .accessibilityHint(st.hint)
+            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    private func uploadRangeRow(_ st: SoundBoothGuide.Setting) -> some View {
+        let low: Double = st.min ?? 0
+        let high: Double = Swift.max(low + 0.01, st.max ?? 1)
+        let given: Double = st.step ?? 0
+        let step: Double = given > 0 ? given : 0.01
+        let shown: Double = uploadNumber(st, low: low, high: high)
+        return VStack(alignment: .leading, spacing: 4) {
+            // The slider says its own name and value; this line is for the eye.
+            Text("\(st.label): \(shown.formatted())").font(.subheadline).accessibilityHidden(true)
+            Slider(value: Binding(
+                get: { uploadNumber(st, low: low, high: high) },
+                set: { values[st.key] = String(($0 * 100).rounded() / 100) }
+            ), in: low...high, step: step)
+            .accessibilityLabel(st.label)
+            .accessibilityValue(shown.formatted())
+            .accessibilityHint(st.hint)
+            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    /// A range setting's number: what she set, else the guide's default, kept inside its rails.
+    private func uploadNumber(_ st: SoundBoothGuide.Setting, low: Double, high: Double) -> Double {
+        let value: Double = Double(values[st.key] ?? "") ?? st.defaultNumber ?? low
+        return Swift.min(high, Swift.max(low, value))
+    }
+
+    /// Pitch: empty for automatic, or whole semitones. A keyboard with a
+    /// minus sign, since -12 is an octave down.
+    private func uploadNumberRow(_ st: SoundBoothGuide.Setting) -> some View {
+        let prompt: String = st.key == "pitch"
+            ? "Empty for automatic"
+            : (st.defaultNumber.map { "Normal is \($0.formatted())" } ?? "Leave empty for the usual")
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(st.label).font(.subheadline).accessibilityHidden(true)
+            TextField(prompt, text: Binding(
+                get: { values[st.key] ?? "" },
+                set: { values[st.key] = $0 }
+            ))
+            .keyboardType(.numbersAndPunctuation)
+            .autocorrectionDisabled()
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel(st.label)
+            .accessibilityHint(st.hint)
+            Text(st.hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
+    /// A number the server would refuse, said before anything is sent. Opens
+    /// More settings when that is where the number is.
+    private func uploadSettingsProblem(_ g: SoundBoothGuide.Engine) -> String? {
+        for st in g.settings where st.kind == "number" || st.kind == "range" {
+            let raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty { continue }
+            let low: Double = st.min ?? -Double.greatestFiniteMagnitude
+            let high: Double = st.max ?? Double.greatestFiniteMagnitude
+            if let n = Double(raw), n.isFinite, n >= low, n <= high, st.step != 1 || n.rounded() == n { continue }
+            if g.advancedKeys.contains(st.key) { showUploadMore = true }
+            return "Check \(st.label). \(st.hint)"
+        }
+        return nil
+    }
+
+    /// The one button. Sent the way the web page sends it; the server checks
+    /// the account owns a voice model every time. It queues like YuE2, so the
+    /// booth's own polling, lock-screen card and Stop button take it from here.
+    private func renderUpload() async {
+        guard !isWriting else { announce("Wait for the writing draft to finish."); return }
+        guard !isImporting, !isImportingLink else { announce("Wait for the recording to finish importing."); return }
+        guard importError.isEmpty else { announce("The import failed. Retry it, or choose Discard failed import first."); return }
+        guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
+        guard let g = currentEngine else { announce("Sing it in my voice has not loaded yet."); return }
+        guard let recording = clips.first else {
+            announce(g.ui?.needClip ?? "Import the recording to sing first, under Recording to sing.")
+            return
+        }
+        let title = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.count <= 80 else { announce("Use a title up to 80 characters."); return }
+        if let problem = uploadSettingsProblem(g) { announce(problem); return }
+        var body = uploadBody(reference: recording.url)
+        body["title"] = title
+        if let pid = currentProjectId { body["projectId"] = pid }
+        isRendering = true
+        defer { isRendering = false }
+        let cardTitle: String = title.isEmpty ? "Your song in your voice" : "Your song in your voice: \(title)"
+        do {
+            confirmArmed = false
+            announce("Sending the recording…")
+            let r = try await service.render(body: body)
+            currentProjectId = r.projectId ?? currentProjectId
+            if r.queued == true, let job = r.jobId {
+                currentJobId = job
+                Earcons.shared.play(.actionStart)
+                let card = service.startRenderCard(kind: "song", title: cardTitle, status: "Waiting its turn")
+                service.fileRenderCard(card, under: currentProjectId ?? job, showing: "Waiting its turn")
+                let estimateWords: String = r.estimate?.spoken ?? ""
+                announce("Queued. " + estimateWords + " You can leave this screen. A notification will open the Sound Booth when it is ready.")
+                startPolling(job)
+            } else {
+                Earcons.shared.play(.actionDone)
+                KadeHaptics.success()
+                let serverWords = (r.spoken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                announce((serverWords.isEmpty ? "" : serverWords + " ") + "Ready. It is in your library below.")
+                await loadProjects()
+            }
+        } catch {
+            Earcons.shared.play(.error)
+            announce((error as? LocalizedError)?.errorDescription ?? "The request could not be confirmed. Check the library before trying again.")
+        }
+    }
+
+    /// The booth reopened on Sing it in my voice for an account the server no
+    /// longer gives it to (the voice model was removed, or the feature is
+    /// off): back to the choices, quietly, with nothing of it kept.
+    private func leaveUnavailableUpload() {
+        quietEngineChange = true
+        engine = "lyria"
+        values = [:]
+        clips = []
+        importError = ""
+        choosingGoal = true
+        savedGoal = ""
+        savedEngine = ""
+    }
+
+    /// "Sing this take in my voice" on a YuE2 or Lyria take, for an account
+    /// with the voice engine. Nil on a take that is already a voice version,
+    /// and for everyone else.
+    private func singTakeWords(_ take: SoundBoothTake, project: SoundBoothProject) -> String? {
+        guard take.voiceOf == nil, let key = uploadEngineKey, let g = guide?.engines[key],
+              (g.takesFrom ?? []).contains(project.engine) else { return nil }
+        return g.ui?.useTake ?? "Sing this take in my voice"
+    }
+
+    /// Attaches a library take to Sing it in my voice, as the web page does:
+    /// a fresh project, What is in the file at its default, the title with
+    /// "(in my voice)", and the take's listening file (not the WAV master:
+    /// the server reads a recording's length, up to twenty megabytes). The
+    /// original is untouched.
+    private func prepareSingTake(_ take: SoundBoothTake, project: SoundBoothProject) {
+        guard !workspaceBusy else { announce("Finish the current operation first."); return }
+        guard let key = uploadEngineKey, let g = guide?.engines[key] else { return }
+        // Its own sentence follows, so the engine card's does not talk over it.
+        quietEngineChange = engine != key
+        selectEngine(key)
+        guard engine == key else { quietEngineChange = false; return }
+        currentProjectId = nil
+        values = [:]
+        if let first = g.settings.first(where: { $0.kind == "choice" }), let chosen = first.defaultString {
+            values[first.key] = chosen
+        }
+        trackTitle = String((project.title + " (in my voice)").prefix(80))
+        importError = ""
+        clips = [(url: take.url, name: Self.withLength(project.title, seconds: take.seconds))]
+        invalidateQuote()
+        announce(g.ui?.fromTake ?? g.ui?.select ?? "The take is attached to sing. The original is kept.")
+        focusStatus = true
+    }
+
+    /// The library's words for the converted voice on its own.
+    private var uploadVocalWords: String {
+        if let key = uploadEngineKey, let words = guide?.engines[key]?.ui?.vocal, !words.isEmpty { return words }
+        return "Download my voice on its own"
+    }
+
+    /// Under a take: the word about its automatic voice version ("A version
+    /// in your voice is being made."), and on a voice version the button for
+    /// the voice with no music. Nothing for any other take.
+    @ViewBuilder
+    private func voiceTakeExtras(_ take: SoundBoothTake, title: String, number: Int) -> some View {
+        if let note = take.voiceNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("Take \(number). \(note)")
+        }
+        if take.vocalUrl != nil {
+            Button {
+                Task { await saveVocal(take: take, title: title) }
+            } label: {
+                Label(uploadVocalWords, systemImage: "square.and.arrow.up")
+            }
+            .font(.footnote)
+            .disabled(savingTakeId != nil)
+            .accessibilityLabel("\(uploadVocalWords), take \(number)")
+            .accessibilityHint("Downloads the voice with no music and opens the share sheet. Save to Files keeps a copy on this phone.")
+        }
+    }
+
+    private func saveVocal(take: SoundBoothTake, title: String) async {
+        guard savingTakeId == nil, let link = take.vocalUrl else { return }
+        savingTakeId = take.id
+        defer { savingTakeId = nil }
+        do {
+            let fileURL = try await service.downloadVocal(from: link, title: "\(title) (voice only)")
+            Earcons.shared.play(.actionDone)
+            KadeHaptics.success()
+            activeSheet = .share(ShareItem(fileURL: fileURL))
+        } catch {
+            Earcons.shared.play(.error)
+            KadeHaptics.error()
+            announce((error as? LocalizedError)?.errorDescription ?? "Couldn't fetch the voice on its own. Try again.")
+        }
+    }
+
+    /// Open in the booth's hint, per engine.
+    private func openInBoothHint(_ p: SoundBoothProject) -> String {
+        switch p.engine {
+        case "stable": return "Loads this sound description and settings so you can make another take."
+        case "lyria": return "Loads this music direction, lyrics and song settings so you can edit them and make another take."
+        case "myvoice": return "Loads this recording and its settings back into Sing it in my voice so you can sing it again."
+        default: return "Loads this script, its voice and its settings back into the boxes above so you can change it and render again."
         }
     }
 }
