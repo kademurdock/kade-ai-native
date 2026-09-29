@@ -229,9 +229,6 @@ final class WorldTones {
     /// call setActive twice; now it runs on activate(), after an
     /// interruption or media reset, or after a category change.
     private var sessionReady = false
-    /// Sep 29 2026: the next time an earcon may ask for the session back
-    /// while interrupted (see prepareSession).
-    private var interruptedRetryAfter = Date.distantPast
     /// Sep 29 2026: headphones or a Bluetooth device went away. The loops
     /// stay paused until she comes back to the screen or a new device
     /// arrives, so an earcon never restarts them on the loudspeaker.
@@ -379,26 +376,24 @@ final class WorldTones {
         active = true
         // Sep 29 2026: coming back to the screen or the app starts clean. A
         // .began that never got its .ended, or headphones pulled earlier,
-        // must not keep the world silent. If a call really is still going,
-        // setActive throws and nothing plays.
+        // must not keep the world silent. Known cost: World's session mixes,
+        // and a mixing session can usually be activated during a phone call,
+        // so coming back to the app mid-call may bring the loops back under
+        // the call (build 319 kept them paused until .ended).
         interrupted = false
         pausedForRoute = false
         sessionReady = false
         resumeLoops()
     }
 
-    /// `probeInterruption`: only an earcon passes true. iOS does not promise
-    /// an .ended for every .began, so while interrupted an earcon may ask
-    /// for the session back, at most every two seconds (Sep 29 2026). During
-    /// a real call setActive throws and nothing plays. The loops never probe.
-    private func prepareSession(probeInterruption: Bool = false) -> Bool {
-        guard active else { return false }
-        if interrupted {
-            guard probeInterruption, Date() >= interruptedRetryAfter else { return false }
-            interruptedRetryAfter = Date().addingTimeInterval(2)
-        } else if sessionReady {
-            return true
-        }
+    /// Sets the session up once; later calls return at once until
+    /// sessionReady is cleared. While interrupted nothing asks for the
+    /// session back (Sep 29 2026): a mixing session can usually be activated
+    /// during a phone call, so asking would play the world under the call.
+    /// .ended, activate() and a media reset clear `interrupted`.
+    private func prepareSession() -> Bool {
+        guard active, !interrupted else { return false }
+        if sessionReady { return true }
         let session = AVAudioSession.sharedInstance()
         do {
             // Sep 29 2026: only the untouched default (.soloAmbient) or
@@ -409,7 +404,6 @@ final class WorldTones {
                 try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             }
             try session.setActive(true)
-            interrupted = false
             sessionReady = true
             return true
         } catch {
@@ -475,15 +469,14 @@ final class WorldTones {
     }
 
     func play(_ kind: String) {
-        /* Sep 29 2026: an earcon no longer calls resumeLoops() on every
-         * play. That restarted the loops on the loudspeaker after headphones
-         * came out; now only activate() or a new device does. After an
-         * interruption, .ended with shouldResume or her next move (the same
-         * key in setAmbience) resumes them, and so does an earcon that finds
-         * a stale interruption over. */
-        let wasInterrupted = interrupted
-        guard prepareSession(probeInterruption: true) else { return }
-        if wasInterrupted { resumeLoops() }
+        /* Sep 29 2026: while interrupted an earcon stays quiet and does not
+         * ask for the session back (see prepareSession). Once the session
+         * is ready it restarts the loops, as in build 319, so an .ended
+         * without shouldResume does not leave the world bare. resumeLoops()
+         * waits while headphones are out (pausedForRoute), so it never
+         * starts the loops on the loudspeaker. */
+        guard prepareSession() else { return }
+        resumeLoops()
         // Real file first: independent player, immune to engine state.
         if let file = filePlayers[kind] {
             file.currentTime = 0
