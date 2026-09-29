@@ -162,6 +162,8 @@ private struct CreationPlayerSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .onAppear {
                     player.replaceCurrentItem(with: AVPlayerItem(url: url))
+                    // Sep 29 2026 (known bug #2): never play over a running book.
+                    LibraryNowPlaying.shared.pauseForOtherAudio("a creation")
                     player.play()
                 }
                 .onDisappear { player.pause() }

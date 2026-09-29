@@ -37,7 +37,8 @@ struct RoomDetailView: View {
 
     init(apiClient: KadeAPIClient, room: DebateRoom) {
         _service = StateObject(wrappedValue: RoomService(client: apiClient))
-        _voiceService = StateObject(wrappedValue: VoiceService(client: apiClient))
+        // Sep 29 2026 (known bug #2): a spoken line pauses a running book.
+        _voiceService = StateObject(wrappedValue: VoiceService(client: apiClient, libraryPauseReason: "the Debate Room"))
         _room = State(initialValue: room)
         _voicesOn = State(initialValue: UserDefaults.standard.object(forKey: "kade.room.voicesOn") as? Bool ?? true)
         _deepThinkOn = State(initialValue: UserDefaults.standard.bool(forKey: "kade.room.deepThink.\(room.id)"))

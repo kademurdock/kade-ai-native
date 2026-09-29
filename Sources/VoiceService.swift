@@ -52,6 +52,11 @@ final class VoiceService: NSObject, ObservableObject {
     @Published var recordError: String?
 
     private let client: KadeAPIClient
+    /// Sep 29 2026 (known bug #2): what the Library bar says paused the book
+    /// when THIS service plays a clip ("Paused for a voice sample"). Every
+    /// VoiceService pauses a running book now, not only the chat's, which is
+    /// the one LibraryNowPlaying.bind watches.
+    private let libraryPauseReason: String
     private var recorder: AVAudioRecorder?
     /// Session 23 (Kade: "I don't think I want an auto stop if you mean a
     /// limit to how long you can record. But if you mean between recording
@@ -339,8 +344,9 @@ final class VoiceService: NSObject, ObservableObject {
         let message: String
     }
 
-    init(client: KadeAPIClient) {
+    init(client: KadeAPIClient, libraryPauseReason: String = "a voice message") {
         self.client = client
+        self.libraryPauseReason = libraryPauseReason
         super.init()
         voiceChangeObserver = NotificationCenter.default.addObserver(
             forName: AgentBuilderService.agentsChanged, object: nil, queue: .main
@@ -480,6 +486,9 @@ final class VoiceService: NSObject, ObservableObject {
             recorder = newRecorder
             recordingURL = url
             isRecording = true
+            // Known bug #2: any microphone pauses a running book, only once
+            // it has really started (a failed start leaves the book alone).
+            LibraryNowPlaying.shared.pauseForOtherAudio("a recording")
             if let window = silenceStopAfter { startSilenceWatch(window: window) }
             return true
         } catch {
@@ -754,12 +763,16 @@ final class VoiceService: NSObject, ObservableObject {
             prepareOutputSession()
             streamingPlayer.resume()
             isPaused = false
+            // Known bug #2: the book may have been resumed while this clip
+            // was paused; a clip coming back pauses it again.
+            LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
             return
         }
         guard let player = currentPlayer, isPaused else { return }
         prepareOutputSession()
         if player.play() {
             isPaused = false
+            LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
         }
     }
 
@@ -993,6 +1006,10 @@ final class VoiceService: NSObject, ObservableObject {
                     streamedOK = await streamingPlayer.play(fetch: fetch, rate: Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor), onPlaybackStarted: { [weak self] in
                         guard let self else { return }
                         self.isClipPlaying = true
+                        // Known bug #2: pause a running book the moment this
+                        // clip is really audible (any VoiceService, not only
+                        // the chat's).
+                        LibraryNowPlaying.shared.pauseForOtherAudio(self.libraryPauseReason)
                         self.isPaused = false
                         self.nowPlayingKey = current.item.key ?? self.streamedTurnKey
                         self.nowPlayingAgentID = current.item.agentId
@@ -1251,6 +1268,9 @@ final class VoiceService: NSObject, ObservableObject {
                     continuation.resume()
                 } else {
                     isClipPlaying = true
+                    // Known bug #2: only after play() really started, so the
+                    // bar never says "Paused for" a clip that never played.
+                    LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
                     isPaused = false
                     nowPlayingKey = key
                     nowPlayingAgentID = agentID
