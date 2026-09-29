@@ -142,7 +142,7 @@ final class LibraryNowPlaying: ObservableObject {
         guard let player, player.book != nil else { return }
         // Sep 29 2026 (bug 1): a skip in flight pauses the book for a moment
         // and plays it again when it lands, so it counts as playing here.
-        if player.isPlaying || player.resumesAfterSkip {
+        if player.isPlayingOrResuming {
             player.pause()
             pausedFor = reason
             pausedBookID = player.book?.id
@@ -219,7 +219,8 @@ final class LibraryNowPlaying: ObservableObject {
     private func refresh() {
         var next: LibraryNowPlayingItem?
         if let player, let book = player.book {
-            next = LibraryNowPlayingItem(book: book, part: player.s, isPlaying: player.isPlaying)
+            // A skip still loading counts as playing, so the bar says Pause.
+            next = LibraryNowPlayingItem(book: book, part: player.s, isPlaying: player.isPlayingOrResuming)
         }
         // Any play, or a different item (or none), ends the automatic pause.
         if pausedFor != nil && (next == nil || next?.id != pausedBookID || next?.isPlaying == true) {

@@ -615,7 +615,14 @@ final class ReadingRoomPlayer: ObservableObject {
     /// whether the book was playing before the first tap (Play and Pause
     /// pressed meanwhile change it).
     private struct PendingSkip { var s: Int; var c: Int; var offset: Double; var total: Double; var resume: Bool }
-    private var pendingSkip: PendingSkip?
+    private var pendingSkip: PendingSkip? {
+        // Sep 29 2026: publishes the resume flag, so Play/Pause labels change
+        // when only it does (a Pause pressed during a skip).
+        didSet {
+            let resumes = pendingSkip?.resume ?? false
+            if resumes != resumesAfterSkip { resumesAfterSkip = resumes }
+        }
+    }
     private var audioCache: [String: Data] = [:]
     private var cacheOrder: [String] = []
 
@@ -656,7 +663,11 @@ final class ReadingRoomPlayer: ObservableObject {
         return resume
     }
     /// True while a skip is fetching and the book will play when it lands.
-    var resumesAfterSkip: Bool { pendingSkip?.resume ?? false }
+    /// Kept in step with `pendingSkip` by its didSet.
+    @Published private(set) var resumesAfterSkip = false
+    /// Playing, or paused for a skip that will play again when it lands.
+    /// Play/Pause buttons and the headphone press go by this.
+    var isPlayingOrResuming: Bool { isPlaying || resumesAfterSkip }
 
     func skip(seconds: Double) {
         guard let book, seconds.isFinite else { return }
@@ -798,7 +809,9 @@ final class ReadingRoomPlayer: ObservableObject {
 
     // MARK: transport
 
-    func togglePlay() { isPlaying ? pause() : play() }
+    /// Sep 29 2026: a skip still loading counts as playing, so one press
+    /// (button, Now Playing bar, headphones) pauses it instead of doing nothing.
+    func togglePlay() { isPlayingOrResuming ? pause() : play() }
 
     func play() {
         guard let book else { return }

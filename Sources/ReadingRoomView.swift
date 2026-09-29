@@ -298,7 +298,7 @@ struct ReadingRoomView: View {
             if route.autoplay && !player.isPlaying { player.play() }
             // Let the push settle, or VoiceOver drops the line.
             try? await Task.sleep(nanoseconds: 450_000_000)
-            sayThenFocusPlay(current.title + ". " + player.positionSpoken + (player.isPlaying ? "." : ". Press Play."))
+            sayThenFocusPlay(current.title + ". " + player.positionSpoken + (player.isPlayingOrResuming ? "." : ". Press Play."))
         } else {
             await open(id: route.id, track: route.track, autoplay: route.autoplay)
         }
@@ -649,13 +649,14 @@ struct ReadingRoomView: View {
                 seekButton(backward: true)
                 Button { player.togglePlay() } label: {
                     VStack(spacing: 4) {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").font(.title)
-                        Text(player.isPlaying ? "Pause" : "Play").font(.footnote.bold())
+                        // A skip still loading counts as playing (it plays when it lands).
+                        Image(systemName: player.isPlayingOrResuming ? "pause.fill" : "play.fill").font(.title)
+                        Text(player.isPlayingOrResuming ? "Pause" : "Play").font(.footnote.bold())
                     }
                     .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 .buttonStyle(.borderedProminent)
-                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .accessibilityLabel(player.isPlayingOrResuming ? "Pause" : "Play")
                 .accessibilityFocused($focus, equals: .play)
                 .accessibilityActions { if let book = openBook { bookActions(book) } }
                 seekButton(backward: false)
