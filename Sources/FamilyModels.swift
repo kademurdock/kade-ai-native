@@ -270,13 +270,14 @@ struct FHDuplicate: Decodable, Equatable {
     var name: String? = nil
     var text: String? = nil
 
-    enum CodingKeys: String, CodingKey { case id, name, text }
+    enum CodingKeys: String, CodingKey { case id, mainId, name, text }
 }
 
 extension FHDuplicate {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = c.fhString(.id)
+        // "id" in the design, "mainId" on the server.
+        id = c.fhString(.id) ?? c.fhString(.mainId)
         name = c.fhString(.name)
         text = c.fhString(.text)
     }
@@ -391,6 +392,9 @@ struct FHImage: Decodable, Equatable, Identifiable {
     /// On a restored copy: the original's id (the second version's name for
     /// `restoredFrom`).
     var original: String? = nil
+    /// A plain file name for Save and Share ("Photo of Ada Example, about
+    /// 1920"); a restored copy's says "restored with AI".
+    var shareName: String? = nil
     // A gallery page adds these.
     var caption: String? = nil
     var people: [FHPerson] = []
@@ -398,7 +402,7 @@ struct FHImage: Decodable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, category, w, h, year, thumb, face, short, alt, description, date, place, described, hasText, textAuto, shareable
-        case restored, restoredLabel, restoredFrom, sizes, text, showing, original, caption, people, index
+        case restored, restoredLabel, restoredFrom, sizes, text, showing, original, shareName, caption, people, index
     }
 
     var categoryKind: FHImageCategory { FHImageCategory(raw: category) }
@@ -436,6 +440,43 @@ struct FHImage: Decodable, Equatable, Identifiable {
         }
         return fallbacks.first(where: { has($0) }) ?? wanted
     }
+
+    /// The server adds this to a restored copy's full label.
+    static let restoredNote = " Restored with AI."
+
+    /// The same picture's other copy (the restored one, or the original), for
+    /// the Original/Restored switch: its id, which copy it is, and the full
+    /// label the server gives that copy (" Restored with AI." added or taken
+    /// away). Its sizes and links are not known yet, so the loader signs it
+    /// fresh; the viewer reads its own words from /media/:id/info. Nil when
+    /// the picture has no other copy.
+    func otherCopyImage() -> FHImage? {
+        guard let other = otherCopy, !other.isEmpty, other != id else { return nil }
+        var copy = self
+        copy.id = other
+        copy.thumb = nil
+        copy.face = nil
+        copy.sizes = []
+        copy.shareName = nil
+        if isRestoredCopy {
+            copy.showing = "original"
+            copy.restored = id
+            copy.original = nil
+            copy.restoredFrom = nil
+            if categoryKind == .restored { copy.category = FHImageCategory.photo.rawValue }
+            if let full = alt, full.hasSuffix(Self.restoredNote) {
+                copy.alt = String(full.dropLast(Self.restoredNote.count))
+            }
+        } else {
+            copy.showing = "restored"
+            copy.restored = nil
+            copy.original = id
+            if let full = alt, !full.hasSuffix(Self.restoredNote) {
+                copy.alt = full + Self.restoredNote
+            }
+        }
+        return copy
+    }
 }
 
 extension FHImage {
@@ -464,6 +505,7 @@ extension FHImage {
         text = c.fhString(.text)
         showing = c.fhString(.showing)
         original = c.fhString(.original)
+        shareName = c.fhString(.shareName)
         caption = c.fhString(.caption)
         people = c.fhList(.people)
         index = c.fhInt(.index)

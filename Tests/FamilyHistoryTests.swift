@@ -245,6 +245,19 @@ import Foundation
         check(restoredCopy.isRestoredCopy && restoredCopy.otherCopy == "m1", "a restored copy names its original")
         let faceRef = try decode(FHImage.self, #"{"id":"m2","face":"https://example.com/f.jpg","thumb":null,"alt":"Portrait: Ada Example","showing":"original"}"#)
         check(faceRef.sizes.isEmpty && faceRef.has(.f) && faceRef.face != nil && faceRef.label == "Portrait: Ada Example", "a person's face reads as a picture")
+        check(faceRef.otherCopyImage() == nil, "a picture with no other copy has no switch")
+        let labelled = try decode(FHImage.self, #"{"id":"m1","category":"photo","alt":"Photo: Ada Example.","restored":"m1r","sizes":["t"],"shareName":"Photo of Ada Example"}"#)
+        let toRestored = labelled.otherCopyImage()
+        check(toRestored?.id == "m1r" && toRestored?.isRestoredCopy == true && toRestored?.otherCopy == "m1", "the switch finds the restored copy")
+        check(toRestored?.alt == "Photo: Ada Example. Restored with AI." && toRestored?.sizes.isEmpty == true && toRestored?.shareName == nil, "the restored copy says so, and is signed fresh")
+        let backAgain = toRestored?.otherCopyImage()
+        check(backAgain?.id == "m1" && backAgain?.isRestoredCopy == false && backAgain?.alt == "Photo: Ada Example.", "and back to the original")
+        let demoRestored = try decode(FHImage.self, FamilyDemoData.photoDanRestored)
+        check(demoRestored.otherCopyImage()?.id == "m-tree1" && demoRestored.otherCopyImage()?.isRestoredCopy == false, "a restored-kind copy switches to a plain original")
+        let scanned = try decode(FHRecord.self, #"{"title":"An invented census","scan":{"id":"m9","category":"record"},"wrong":"another Ada","wrongText":"Attached to this person by mistake: another Ada"}"#)
+        check(scanned.image?.id == "m9" && scanned.wrongWords == "Attached to this person by mistake: another Ada", "a record's scan and warning read under either name")
+        let dup = try decode(FHDuplicate.self, #"{"mainId":"@X2@","text":"This is a second copy of Ada Example in the tree"}"#)
+        check(dup.id == "@X2@", "a duplicate names its main entry")
 
         // MARK: Who may open it (GET /me), and what the Library row says.
 

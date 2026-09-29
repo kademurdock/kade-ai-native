@@ -440,20 +440,26 @@ extension FHPictures {
 /// "1880: counted in the census in {place}, age 34".
 struct FHLifeRow: Decodable, Equatable {
     var year: Int? = nil
+    /// The fact's own date ("3 Oct 1891"), when it has one.
+    var date: String? = nil
     var text: String? = nil
     var spoken: String? = nil
     var records: [String] = []
+    /// "2 sources".
+    var sources: String? = nil
 
-    enum CodingKeys: String, CodingKey { case year, text, spoken, records }
+    enum CodingKeys: String, CodingKey { case year, date, text, spoken, records, sources }
 }
 
 extension FHLifeRow {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         year = c.fhInt(.year)
+        date = c.fhString(.date)
         text = c.fhString(.text)
         spoken = c.fhString(.spoken)
         records = c.fhList(.records)
+        sources = c.fhString(.sources)
     }
 }
 
@@ -485,12 +491,21 @@ struct FHRecord: Decodable, Equatable {
     var fields: [[String]] = []
     var household: [[String]] = []
     var url: URL? = nil
-    /// "Attached to this person by mistake: {why}".
+    /// Why it was attached to this person by mistake.
     var wrong: String? = nil
+    /// "Attached to this person by mistake: {why}", as the server words it.
+    var wrongText: String? = nil
     /// Addresses and phone numbers were taken out of it.
     var scrubbed: Bool? = nil
 
-    enum CodingKeys: String, CodingKey { case key, title, spoken, image, fields, household, url, wrong, scrubbed }
+    enum CodingKeys: String, CodingKey { case key, title, spoken, image, scan, fields, household, url, wrong, wrongText, scrubbed }
+
+    /// The warning to show, in the server's words when it sent them.
+    var wrongWords: String? {
+        if let said = wrongText, !said.isEmpty { return said }
+        guard let why = wrong, !why.isEmpty else { return nil }
+        return "Attached to this person by mistake: " + why
+    }
 }
 
 extension FHRecord {
@@ -499,11 +514,15 @@ extension FHRecord {
         key = c.fhString(.key)
         title = c.fhString(.title)
         spoken = c.fhString(.spoken)
-        image = c.fh(.image)
+        // The scan: "image" in the design, "scan" on the server.
+        let named: FHImage? = c.fh(.image)
+        let scanned: FHImage? = c.fh(.scan)
+        image = named ?? scanned
         fields = c.fhRows(.fields)
         household = c.fhRows(.household)
         url = c.fhURL(.url)
         wrong = c.fhString(.wrong)
+        wrongText = c.fhString(.wrongText)
         scrubbed = c.fhBool(.scrubbed)
     }
 }
@@ -571,14 +590,17 @@ extension FHWithheld {
 
 struct FHShare: Decodable, Equatable {
     var allowed: Bool? = nil
+    /// Sent along with a shared picture ("From our family history").
+    var text: String? = nil
 
-    enum CodingKeys: String, CodingKey { case allowed }
+    enum CodingKeys: String, CodingKey { case allowed, text }
 }
 
 extension FHShare {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         allowed = c.fhBool(.allowed)
+        text = c.fhString(.text)
     }
 }
 
@@ -779,12 +801,23 @@ struct FHMediaInfo: Decodable, Equatable {
     var caption: String? = nil
     var description: String? = nil
     var described: String? = nil
+    /// "Described automatically".
+    var describedNote: String? = nil
     var text: String? = nil
     var textAuto: Bool? = nil
+    /// "Read automatically".
+    var textNote: String? = nil
+    /// On a restored copy: what the restoring changed.
+    var restoredNotes: String? = nil
     var people: [FHPerson] = []
     var source: FHSourceLabel? = nil
+    /// Whether "Ask for this photo to be restored" makes sense here (an old
+    /// photograph with no restored copy yet; never a record).
+    var canAskRestore: Bool? = nil
 
-    enum CodingKeys: String, CodingKey { case image, caption, description, described, text, textAuto, people, source }
+    enum CodingKeys: String, CodingKey {
+        case image, caption, description, described, describedNote, text, textAuto, textNote, restoredNotes, people, source, canAskRestore
+    }
 }
 
 extension FHMediaInfo {
@@ -794,10 +827,14 @@ extension FHMediaInfo {
         caption = c.fhString(.caption)
         description = c.fhString(.description)
         described = c.fhString(.described)
+        describedNote = c.fhString(.describedNote)
         text = c.fhString(.text)
         textAuto = c.fhBool(.textAuto)
+        textNote = c.fhString(.textNote)
+        restoredNotes = c.fhString(.restoredNotes)
         people = c.fhList(.people)
         source = c.fh(.source)
+        canAskRestore = c.fhBool(.canAskRestore)
     }
 }
 

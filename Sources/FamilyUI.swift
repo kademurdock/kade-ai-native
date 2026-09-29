@@ -166,14 +166,27 @@ struct FamilyTryAgain: View {
 /// One tile or plain row from the server: `{key, title, detail, spoken,
 /// hint, enabled, reason, open}`. ONE element: "{title}, {detail}" (or the
 /// server's sentence) with its hint. A dimmed row says why (its `reason`).
-/// Voice Control answers to the title.
+/// Voice Control answers to the title. A row that opens the note sheet
+/// ("Add a memory") calls `onNote` with the person it is about, if any.
 struct FamilyTileRow: View {
     let tile: FHTile
     var icon: String = "chevron.right.circle"
+    var onNote: ((String?) -> Void)? = nil
+    /// Home's two-up tiles rather than a plain row.
+    var big: Bool = false
 
     var body: some View {
         if tile.isEnabled, let route = tile.open?.route {
             NavigationLink(value: HomeRoute.library(.family(route))) {
+                label
+            }
+            .accessibilityLabel(spoken)
+            .accessibilityHint(tile.hint ?? "")
+            .accessibilityInputLabels(inputLabels)
+        } else if tile.isEnabled, case .note(let personId)? = tile.open?.target, let onNote {
+            Button {
+                onNote(personId)
+            } label: {
                 label
             }
             .accessibilityLabel(spoken)
@@ -207,7 +220,17 @@ struct FamilyTileRow: View {
         title.isEmpty ? [] : [title]
     }
 
+    /// A dimmed tile is drawn dimmed too (a custom button style would not).
+    @ViewBuilder
     private var label: some View {
+        if big {
+            bigLabel.opacity(tile.isEnabled ? 1 : 0.55)
+        } else {
+            rowLabel.opacity(tile.isEnabled ? 1 : 0.55)
+        }
+    }
+
+    private var rowLabel: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.title3)
@@ -215,13 +238,35 @@ struct FamilyTileRow: View {
                 .frame(width: 40)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
+                Text(title).font(.headline).foregroundStyle(.primary)
                 if let detail {
                     Text(detail).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Home's big tiles: the picture word above, the title, then the detail.
+    private var bigLabel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: icon)
+                .font(.title)
+                .foregroundStyle(.brown)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
     }
 }
 
