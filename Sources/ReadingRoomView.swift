@@ -713,8 +713,9 @@ struct ReadingRoomView: View {
     private var voiceAndSpeed: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                let was = player.isPlaying
-                if was { player.pause() }
+                // Sep 29 2026: pause() also cancels a skip that would resume the
+                // book under the voice picker; it is safe when nothing is playing.
+                player.pause()
                 showVoicePicker = true
             } label: {
                 HStack {

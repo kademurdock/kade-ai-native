@@ -4105,6 +4105,8 @@ struct ConversationDetailView: View {
         let attachmentNow: ChatAttachment? = attempt.includeAttachment ? pendingAttachment : nil
         let unchanged = selectedAgentId == attempt.agentId && attachmentNow == attempt.attachment
         if unchanged {
+            // Sep 29 2026: the check can take a while on a bad connection; say what is happening.
+            UIAccessibility.post(notification: .announcement, argument: "Checking whether your message arrived.")
             switch await messageSendingService.checkReceipt(requestId: attempt.requestId) {
             case .notFound, .arrived:
                 reuseRequestId = attempt.requestId
