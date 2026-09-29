@@ -2731,7 +2731,7 @@ private struct BoothPlayerSheet: View {
                 .onAppear {
                     player.replaceCurrentItem(with: AVPlayerItem(url: url))
                     // Sep 29 2026 (known bug #2): never play over a running book.
-                    LibraryNowPlaying.shared.pauseForOtherAudio("a Sound Booth song")
+                    LibraryNowPlaying.shared.pauseForOtherAudio("the Sound Booth")
                     player.play()
                 }
                 .onDisappear { player.pause() }

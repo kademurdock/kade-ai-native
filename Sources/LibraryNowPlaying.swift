@@ -43,7 +43,7 @@ final class LibraryNowPlaying: ObservableObject {
     /// changes only, never on the player's twice-a-second clock.
     @Published private(set) var current: LibraryNowPlayingItem?
     /// Why the book paused itself ("a voice message", "a recording", "a
-    /// call", "a voice sample", "the Debate Room", "a Sound Booth song"...).
+    /// call", "a voice sample", "the Debate Room", "the Sound Booth"...).
     /// Cleared by any play, and when the item changes or closes.
     @Published private(set) var pausedFor: String?
     /// True while a Library screen on display is showing its player screen.
