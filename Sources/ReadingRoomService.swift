@@ -347,7 +347,12 @@ final class ReadingRoomService: ObservableObject {
         return try await json(post("api/kade/reading-room/book/\(bookId)/share", body), as: ShareResult.self)
     }
     func returnBook(bookId: String) async throws {
-        _ = try await client.send(post("api/kade/reading-room/book/\(bookId)/return", [:]))
+        // Bug 3 (Sep 29 2026): a server error was said as "Returned."
+        let (data, http) = try await client.send(post("api/kade/reading-room/book/\(bookId)/return", [:]))
+        guard http.statusCode == 200 else {
+            let e = try? JSONDecoder().decode(ErrBody.self, from: data)
+            throw RRError(message: e?.error ?? "Could not return it.")
+        }
     }
     func withdraw(bookId: String) async throws {
         let req = client.request(path: "api/kade/reading-room/book/\(bookId)", method: "DELETE", authorized: true)
