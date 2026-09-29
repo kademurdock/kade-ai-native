@@ -137,7 +137,9 @@ final class LibraryNowPlaying: ObservableObject {
     /// pause the book and remember why. Never resumes by itself.
     func pauseForOtherAudio(_ reason: String) {
         guard let player, player.book != nil else { return }
-        if player.isPlaying {
+        // Sep 29 2026 (bug 1): a skip in flight pauses the book for a moment
+        // and plays it again when it lands, so it counts as playing here.
+        if player.isPlaying || player.resumesAfterSkip {
             player.pause()
             pausedFor = reason
             pausedBookID = player.book?.id
