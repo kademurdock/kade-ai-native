@@ -76,4 +76,46 @@ struct ClubLibraryState: Decodable {
     func skipTarget(by seconds: Double, after elapsed: Double) -> Double {
         max(begin ?? 0, min(end ?? 604800, target(after: elapsed) + seconds))
     }
+
+    /// What she hears when the room's playback changes. Sep 29 2026: after
+    /// her phone gave up on a recording that would not load, it no longer
+    /// claims "Playing" while she hears nothing.
+    func playbackLine(failedHere: Bool = false) -> String {
+        let name = title ?? "Library recording"
+        guard failedHere else { return (playing == true ? "Playing: " : "Paused: ") + name }
+        return (playing == true ? "Playing for the room: " : "Paused for the room: ") + name + ". It could not play on this phone. Try Rejoin playback."
+    }
+}
+
+/// Failed loads of the shared recording on this phone (Sep 29 2026). One
+/// fresh link, then stop and say so once, instead of signing and
+/// downloading a file that can never play every 2 seconds. A failure more
+/// than 5 minutes after the last one, with playback in between, is a new
+/// network drop in a long film, so it starts over rather than needing Rejoin.
+struct ClubLoadFailures {
+    enum Next: Equatable { case retry, giveUp, quiet }
+    private(set) var count = 0
+    private(set) var gaveUp = false
+    private var failedAt = Date.distantPast
+    private var readyAt = Date.distantPast
+
+    mutating func failed(at now: Date) -> Next {
+        if readyAt > failedAt && now.timeIntervalSince(failedAt) > 300 { count = 0 }
+        count += 1; failedAt = now
+        if count < 2 { return .retry }
+        if gaveUp { return .quiet }
+        gaveUp = true
+        return .giveUp
+    }
+
+    /// An item became ready to play. True when it had given up before, so
+    /// the failure notice can be replaced.
+    @discardableResult mutating func ready(at now: Date) -> Bool {
+        readyAt = now
+        let wasGivenUp = gaveUp
+        gaveUp = false
+        return wasGivenUp
+    }
+
+    mutating func reset() { self = ClubLoadFailures() }
 }

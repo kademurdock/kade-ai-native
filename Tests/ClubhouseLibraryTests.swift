@@ -37,6 +37,48 @@ import Foundation
         precondition(parts.readyLine == "Home movies has 2 parts, listed just above the recordings.")
         let single = ClubLibraryTracks(id: "c", title: "A song", tracks: [parts.tracks[0]])
         precondition(single.readyLine == "A song is ready to choose, just above the recordings.")
-        print("20 Clubhouse library model and timeline checks passed")
+        // After her phone gives up on a recording it never claims "Playing"
+        // (Sep 29 2026).
+        room.title = "A movie"; room.playing = true
+        precondition(room.playbackLine() == "Playing: A movie")
+        precondition(room.playbackLine(failedHere: true) == "Playing for the room: A movie. It could not play on this phone. Try Rejoin playback.")
+        room.title = nil; room.playing = false
+        precondition(room.playbackLine() == "Paused: Library recording")
+        precondition(room.playbackLine(failedHere: true) == "Paused for the room: Library recording. It could not play on this phone. Try Rejoin playback.")
+        // A file that never plays: one fresh link, give up once, then stay
+        // quiet through the half-hourly link; loading after all clears it.
+        // (Results are taken outside precondition, which -Ounchecked skips.)
+        let t0 = Date(timeIntervalSince1970: 0)
+        var broken = ClubLoadFailures()
+        var steps = [broken.failed(at: t0)]
+        precondition(steps == [.retry] && !broken.gaveUp)
+        steps.append(broken.failed(at: t0 + 3))
+        precondition(steps == [.retry, .giveUp] && broken.gaveUp)
+        steps.append(broken.failed(at: t0 + 1803))
+        precondition(steps == [.retry, .giveUp, .quiet] && broken.gaveUp)
+        let loadedAfterAll = broken.ready(at: t0 + 3605), readyAgain = broken.ready(at: t0 + 3606)
+        precondition(loadedAfterAll && !readyAgain && !broken.gaveUp)
+        // Ready, then failing again seconds later, still gives up.
+        var loop = ClubLoadFailures()
+        loop.ready(at: t0)
+        let loopFirst = loop.failed(at: t0 + 60)
+        loop.ready(at: t0 + 62)
+        let loopSecond = loop.failed(at: t0 + 64)
+        precondition(loopFirst == .retry && loopSecond == .giveUp)
+        // Two network drops an hour apart in a long film each get a fresh
+        // link without Rejoin.
+        var film = ClubLoadFailures()
+        film.ready(at: t0)
+        let firstDrop = film.failed(at: t0 + 3600)
+        film.ready(at: t0 + 3603)
+        let secondDrop = film.failed(at: t0 + 7200)
+        precondition(firstDrop == .retry && secondDrop == .retry && film.count == 1)
+        // With no playback in between, time alone does not start over.
+        var stuck = ClubLoadFailures()
+        let stuckSteps = [stuck.failed(at: t0), stuck.failed(at: t0 + 600)]
+        precondition(stuckSteps == [.retry, .giveUp])
+        stuck.reset()
+        precondition(stuck.count == 0 && !stuck.gaveUp)
+        print("32 Clubhouse library model and timeline checks passed")
     }
 }

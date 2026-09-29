@@ -38,7 +38,7 @@ final class ClubhouseLibraryService: ObservableObject {
     /// said once her phone follows it.
     private var announced: Int?
     /// Failed loads of the current recording; one fresh link, then stop.
-    private var failures = 0
+    private var loads = ClubLoadFailures()
     /// A poll has failed since the last good one.
     private var troubled = false
     /// "Playback connection lost" was already said for this outage.
@@ -87,7 +87,7 @@ final class ClubhouseLibraryService: ObservableObject {
         locallyPaused = false
         // Sep 29 2026: Rejoin says where the room is, and a recording that
         // gave up after failing to load gets a fresh link.
-        announced = nil; failures = 0
+        announced = nil; loads.reset()
         if player.currentItem?.status == .failed { urlAt = .distantPast }
         await refresh(forceURL: true)
         synchronize()
@@ -98,9 +98,22 @@ final class ClubhouseLibraryService: ObservableObject {
     /// downloaded again every 2 seconds for as long as she stayed.
     private func loadFailed() {
         player.pause()
-        failures += 1
-        if failures < 2 { urlAt = .distantPast }
-        else if failures == 2 { announce("This recording could not play. Try Rejoin playback.") }
+        switch loads.failed(at: Date()) {
+        case .retry: urlAt = .distantPast
+        case .giveUp: announce("This recording could not play. Try Rejoin playback.")
+        case .quiet: break
+        }
+    }
+
+    private func loadReady() {
+        // Sep 29 2026: a recording that had given up but then loaded after
+        // all (the half-hourly fresh link) says so, so the failure notice
+        // does not linger while it plays.
+        if loads.ready(at: Date()) && !locallyPaused && state.active {
+            announced = state.revision
+            announce(state.playbackLine())
+        }
+        synchronize()
     }
 
     func start(proof: String?) {
@@ -126,7 +139,7 @@ final class ClubhouseLibraryService: ObservableObject {
         observer = nil; seeking = false
         proof = ""; mediaID = ""; connected = false
         locallyPaused = false
-        announced = nil; failures = 0; troubled = false; lostAnnounced = false
+        announced = nil; loads.reset(); troubled = false; lostAnnounced = false
         state = ClubLibraryState(); items = []; tracks = nil
         urlAt = .distantPast
         status = "Choose a recording from the shared library."
@@ -198,7 +211,12 @@ final class ClubhouseLibraryService: ObservableObject {
             // Sep 29 2026: her own play, seek or load brings her own phone
             // along. After a local pause the room used to follow her command
             // while she stayed silent.
-            if action == "load" || action == "play" || action == "seek" { locallyPaused = false }
+            if action == "load" || action == "play" || action == "seek" {
+                locallyPaused = false
+                // ...and a recording that failed to load gets a fresh link,
+                // as Rejoin does, instead of staying silent under her command.
+                if player.currentItem?.status == .failed { loads.reset(); urlAt = .distantPast }
+            }
             if action == "load" || action == "play" { onStarted?() }
             onChanged?()
             await refresh(forceURL: true)
@@ -257,7 +275,7 @@ final class ClubhouseLibraryService: ObservableObject {
                 player.pause(); player.replaceCurrentItem(with: nil); observer = nil; mediaID = ""
                 // Sep 29 2026: a share that ends is said aloud, and a local
                 // pause ends with it, so the next share is not silent for her.
-                locallyPaused = false; announced = nil
+                locallyPaused = false; announced = nil; loads.reset()
                 if result.unavailable == true {
                     let line = "This room’s recording is unavailable to your account. You can still join the conversation."
                     if previous.active { announce(line) } else { status = line }
@@ -281,7 +299,7 @@ final class ClubhouseLibraryService: ObservableObject {
                     }
                     mediaID = ""; return
                 }
-                if result.mediaID != mediaID { failures = 0 }
+                if result.mediaID != mediaID { loads.reset() }
                 player.pause()
                 let item = AVPlayerItem(url: url)
                 if let end = result.end { item.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600) }
@@ -289,7 +307,7 @@ final class ClubhouseLibraryService: ObservableObject {
                     let status = item.status
                     Task { @MainActor in
                         guard let self, self.generation == current else { return }
-                        if status == .readyToPlay { self.synchronize() }
+                        if status == .readyToPlay { self.loadReady() }
                         if status == .failed { self.loadFailed() }
                     }
                 }
@@ -297,7 +315,7 @@ final class ClubhouseLibraryService: ObservableObject {
                 mediaID = result.mediaID; urlAt = Date(); seeking = false
             }
             synchronize()
-            let line = (result.playing == true ? "Playing: " : "Paused: ") + (result.title ?? "Library recording")
+            let line = result.playbackLine(failedHere: loads.gaveUp)
             if !locallyPaused && announced != result.revision {
                 announced = result.revision
                 announce(line)
@@ -308,12 +326,14 @@ final class ClubhouseLibraryService: ObservableObject {
         } catch {
             guard generation == current else { return }
             troubled = true
-            let message = "Playback connection lost. " + error.localizedDescription
+            // With nothing shared there is no playback to lose.
+            let message = (state.active ? "Playback connection lost. " : "Library connection lost. ") + error.localizedDescription
             if Date().timeIntervalSince(lastGood) > 10 {
                 player.pause()
                 // Sep 29 2026: said once, when her media actually stops (not
                 // on every retry); the room's state is said again on return.
-                if !lostAnnounced && !locallyPaused { lostAnnounced = true; announced = nil; announce(message); return }
+                // Only shown, not said, when nothing is shared.
+                if !lostAnnounced && !locallyPaused && state.active { lostAnnounced = true; announced = nil; announce(message); return }
             }
             status = message
         }
