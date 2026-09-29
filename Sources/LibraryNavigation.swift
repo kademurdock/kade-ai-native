@@ -31,6 +31,9 @@ enum LibraryRoute: Hashable {
     case item(LibraryItemRoute)
     case collection(RRCollectionRow)
     case page(LibraryPage)
+    /// Sep 29 2026: a Family history screen (FamilyNavigation.swift), in
+    /// this same stack, so Back at the top left goes up one level.
+    case family(FamilyRoute)
 
     var id: String {
         switch self {
@@ -38,6 +41,7 @@ enum LibraryRoute: Hashable {
         case .item(let item): return "item-\(item.id)-\(item.track ?? -1)-\(item.autoplay)-\(item.addRecordings)"
         case .collection(let row): return "collection-\(row.id)"
         case .page(let page): return "page-\(page.rawValue)"
+        case .family(let route): return "family-\(route.id)"
         }
     }
 }
@@ -552,6 +556,9 @@ struct LibraryDestination: View {
             case .collections: LibraryCollectionsScreen(apiClient: apiClient)
             case .add: ReadingRoomView(apiClient: apiClient)
             }
+        case .family(let family):
+            // Gated inside: an account that may not open it meets the locked view.
+            FamilyDestination(route: family, apiClient: apiClient)
         }
     }
 }
