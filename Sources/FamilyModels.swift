@@ -380,6 +380,17 @@ struct FHImage: Decodable, Equatable, Identifiable {
     var restoredLabel: String? = nil
     /// On a restored copy: the original's id.
     var restoredFrom: String? = nil
+    /// The sizes this picture has ("t", "s", "l", "f"; "o" for a scan's
+    /// original). Empty when the answer did not say (a face on a person
+    /// card): then the links it carries are what there is.
+    var sizes: [String] = []
+    /// Words in the picture (a clipping, a stone), written in advance.
+    var text: String? = nil
+    /// "original" or "restored": which copy this reference shows.
+    var showing: String? = nil
+    /// On a restored copy: the original's id (the second version's name for
+    /// `restoredFrom`).
+    var original: String? = nil
     // A gallery page adds these.
     var caption: String? = nil
     var people: [FHPerson] = []
@@ -387,17 +398,43 @@ struct FHImage: Decodable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, category, w, h, year, thumb, face, short, alt, description, date, place, described, hasText, textAuto, shareable
-        case restored, restoredLabel, restoredFrom, caption, people, index
+        case restored, restoredLabel, restoredFrom, sizes, text, showing, original, caption, people, index
     }
 
     var categoryKind: FHImageCategory { FHImageCategory(raw: category) }
     /// Never unlabelled: the full label, the short one, the caption, the kind.
     var label: String { alt ?? short ?? caption ?? "" }
-    var isRestoredCopy: Bool { restoredFrom != nil || categoryKind == .restored }
+    var isRestoredCopy: Bool {
+        restoredFrom != nil || original != nil || showing == "restored" || categoryKind == .restored
+    }
+    /// The id of the other copy (restored or original), when there is one.
+    var otherCopy: String? { isRestoredCopy ? (original ?? restoredFrom) : restored }
     /// Width over height, when both are known.
     var aspect: Double? {
         guard let w, let h, w > 0, h > 0 else { return nil }
         return w / h
+    }
+
+    /// Whether the picture has this size. An answer that did not list its
+    /// sizes is taken at its word for every size.
+    func has(_ size: FHSize) -> Bool {
+        sizes.isEmpty || sizes.contains(size.rawValue)
+    }
+
+    /// The size to ask for when `wanted` is drawn: that one when the picture
+    /// has it, else the nearest it has (a thumbnail stands in for a missing
+    /// face crop, the screen size for a missing large scan).
+    func best(_ wanted: FHSize) -> FHSize {
+        if has(wanted) { return wanted }
+        let fallbacks: [FHSize]
+        switch wanted {
+        case .t: fallbacks = [.s, .f]
+        case .s: fallbacks = [.l, .t]
+        case .l: fallbacks = [.s, .t]
+        case .f: fallbacks = [.t, .s]
+        case .o: fallbacks = [.l, .s, .t]
+        }
+        return fallbacks.first(where: { has($0) }) ?? wanted
     }
 }
 
@@ -423,6 +460,10 @@ extension FHImage {
         restored = c.fhString(.restored)
         restoredLabel = c.fhString(.restoredLabel)
         restoredFrom = c.fhString(.restoredFrom)
+        sizes = c.fhList(.sizes)
+        text = c.fhString(.text)
+        showing = c.fhString(.showing)
+        original = c.fhString(.original)
         caption = c.fhString(.caption)
         people = c.fhList(.people)
         index = c.fhInt(.index)
@@ -494,6 +535,12 @@ struct FHOpen: Decodable, Equatable {
         case "note": return .note(personId: someId)
         default: return nil
         }
+    }
+
+    /// The screen it pushes, when it pushes one (not the note sheet).
+    var route: FamilyRoute? {
+        if case .route(let route)? = target { return route }
+        return nil
     }
 }
 

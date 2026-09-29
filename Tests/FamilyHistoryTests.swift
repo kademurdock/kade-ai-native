@@ -4,11 +4,13 @@ import Foundation
 //
 //   ./run-family-tests.sh
 //
-// Builds FamilyModels, FamilyPayloads, FamilyGeometry and the made-up demo
-// family (FamilyDemoData, compiled with -D DEBUG) with swiftc, then checks
-// that every demo answer decodes, that a bad field or element costs only
-// itself, that the first version's answers still read, the drawing maths,
-// and that every "open" key the server may send reaches a screen.
+// Builds FamilyModels, FamilyPayloads, FamilyGeometry, FamilyRules and the
+// made-up demo family (FamilyDemoData, compiled with -D DEBUG) with swiftc,
+// then checks that every demo answer decodes, that a bad field or element
+// costs only itself, that the first version's answers still read, the
+// drawing maths, that every "open" key the server may send reaches a screen,
+// who may open the section and what the Library row says, and the phone's
+// own rules for caches, signed-link batches and paging.
 // Everything here is fictional ("Ada Example"); this repository is public.
 
 @main enum FamilyHistoryTests {
@@ -227,8 +229,117 @@ import Foundation
             .story(slug: "the-farm", title: ""), .discoveries, .mysteries, .people, .play, .locked,
         ]
         check(Set(routes.map { $0.id }).count == routes.count, "every route has its own id")
+        check(FHOpen(to: "person", id: "@X1@", name: "Ada").route == .person(FamilyPersonRoute(id: "@X1@", name: "Ada")), "an open names its screen")
+        check(FHOpen(to: "note", id: "@X1@").route == nil && FHOpen(to: "sky").route == nil, "the note sheet and unknown opens push nothing")
+        check(!FamilyRoute.locked.needsAccess && routes.filter { $0 != .locked }.allSatisfy { $0.needsAccess }, "every family screen but the locked one needs access")
+        check(FamilyRoute.person(FamilyPersonRoute(id: "@X1@", name: "Ada Example")).fallbackTitle == "Ada Example"
+              && FamilyRoute.play.fallbackTitle == "Family history", "a pushed screen is titled at once")
 
-        print("Family history: \(passed) checks passed. This checks decoding, routes and drawing maths, not SwiftUI or VoiceOver.")
+        // MARK: Pictures name their sizes and their other copy.
+
+        let sized = try decode(FHImage.self, #"{"id":"m1","category":"photo","sizes":["t","s","x",3],"restored":"m1r","showing":"original","text":"Made up."}"#)
+        check(sized.sizes == ["t", "s", "x"] && sized.has(.s) && !sized.has(.l), "a picture lists its sizes, a bad one dropped")
+        check(sized.best(.l) == .s && sized.best(.f) == .t && sized.best(.t) == .t, "a missing size falls back to the nearest one")
+        check(!sized.isRestoredCopy && sized.otherCopy == "m1r" && sized.text == "Made up.", "an original names its restored copy")
+        let restoredCopy = try decode(FHImage.self, #"{"id":"m1r","showing":"restored","original":"m1"}"#)
+        check(restoredCopy.isRestoredCopy && restoredCopy.otherCopy == "m1", "a restored copy names its original")
+        let faceRef = try decode(FHImage.self, #"{"id":"m2","face":"https://example.com/f.jpg","thumb":null,"alt":"Portrait: Ada Example","showing":"original"}"#)
+        check(faceRef.sizes.isEmpty && faceRef.has(.f) && faceRef.face != nil && faceRef.label == "Portrait: Ada Example", "a person's face reads as a picture")
+
+        // MARK: Who may open it (GET /me), and what the Library row says.
+
+        let meData = Data(FamilyDemoData.me.utf8)
+        check(FamilyAccessRules.decide(status: 200, body: meData)?.isOpen == true, "the demo /me opens the family history")
+        let v1open = Data(#"{"access":true,"viewer":{"personId":"@X1@"},"mode":"owner","isOwner":true,"version":"v1"}"#.utf8)
+        check(FamilyAccessRules.decide(status: 200, body: v1open) == .unavailable, "a first-version /me does not open these screens")
+        check(FamilyAccessRules.decide(status: 200, body: Data("<html>".utf8)) == .unavailable, "a page instead of an answer is not available yet")
+        check(FamilyAccessRules.decide(status: 404, body: Data()) == .unavailable, "no route yet is not available yet")
+        let trouble = [401, 429, 500, 502, 503].map { FamilyAccessRules.decide(status: $0, body: Data()) }
+        check(trouble.allSatisfy { $0 == nil }, "trouble decides nothing, so the remembered row stays")
+
+        let unmatchedBody = Data(#"{"access":false,"reason":"unmatched","error":"Private.","detail":"Not linked to the tree yet","hint":"Ask the tree's owner to match your account.","canAsk":true,"askedAt":null}"#.utf8)
+        let unmatched = FamilyAccessRules.decide(status: 403, body: unmatchedBody)
+        check(unmatched?.lock?.reasonKind == .unmatched, "a 403 locks with its reason")
+        let unmatchedWords = FamilyAccessRules.rowWords(unmatched ?? .unknown)
+        check(!unmatchedWords.enabled && unmatchedWords.detail == "Not linked to the tree yet" && unmatchedWords.ask == .ask, "an unmatched account sees the reason and Ask to be added")
+        let askedBody = FamilyAccessRules.withAskedAt(unmatchedBody, askedAt: "2026-09-29T12:00:00.000Z")
+        let askedWords = FamilyAccessRules.rowWords(FamilyAccessRules.decide(status: 403, body: askedBody) ?? .unknown)
+        if case .asked(let when) = askedWords.ask {
+            check(when.hasPrefix("Asked on ") && when.contains("2026"), "after asking, the row says when")
+        } else {
+            check(false, "after asking, the row says when")
+        }
+        let reviewBody = Data(#"{"access":false,"reason":"review","detail":"Private to one family","hint":"Photos, records and stories from one family's research.","canAsk":false}"#.utf8)
+        let review = FamilyAccessRules.rowWords(FamilyAccessRules.decide(status: 403, body: reviewBody) ?? .unknown)
+        check(review.detail == "Private to one family" && review.ask == .hidden && !review.hint.isEmpty && !review.enabled, "the review seat sees why, and no Ask")
+        let v1refusal = FamilyAccessRules.rowWords(FamilyAccessRules.decide(status: 403, body: Data(#"{"access":false,"error":"The family history is private to the family."}"#.utf8)) ?? .unknown)
+        check(v1refusal.detail == "Private to one family" && v1refusal.hint == "The family history is private to the family." && v1refusal.ask == .hidden, "a first-version refusal still says why")
+        check(FamilyAccessRules.decide(status: 403, body: Data("oops".utf8))?.lock != nil, "an unreadable refusal is still a refusal")
+        let familyWords = FamilyAccessRules.rowWords(FamilyAccessRules.decide(status: 200, body: meData) ?? .unknown)
+        check(familyWords.enabled && familyWords.detail == "Ada's brother" && familyWords.ask == .hidden, "the family's row opens with the server's words")
+        check(FamilyAccessRules.rowWords(.unknown) == FamilyRowWords(enabled: false, detail: "Checking", hint: "", ask: .hidden), "before an answer the row says Checking")
+        check(FamilyAccessRules.rowWords(.unavailable).detail == "Not available yet", "no family history yet says so")
+        check(!FamilyAccessRules.revokes(FHLocked(reason: "guest")) && FamilyAccessRules.revokes(FHLocked(reason: "unmatched"))
+              && FamilyAccessRules.revokes(FHLocked()), "only a guest's closed game keeps access")
+
+        let memo = FamilyAccessMemo(status: 403, body: unmatchedBody, at: 1)
+        let memoBack = try JSONDecoder().decode(FamilyAccessMemo.self, from: JSONEncoder().encode(memo))
+        check(memoBack == memo && FamilyAccessRules.decide(status: memoBack.status, body: memoBack.body) == unmatched, "a remembered answer decides the same way")
+
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        check(FamilyRecheck.due(last: nil, now: t0, force: false), "the first check is due")
+        check(!FamilyRecheck.due(last: t0, now: t0.addingTimeInterval(29), force: false)
+              && FamilyRecheck.due(last: t0, now: t0.addingTimeInterval(30), force: false), "never twice in half a minute")
+        check(FamilyRecheck.due(last: t0, now: t0.addingTimeInterval(1), force: true), "a pull asks anyway")
+        check(FamilyDemoSwitch.isOn(arguments: ["app", "-KadeFamilyDemo"], environment: [:])
+              && FamilyDemoSwitch.isOn(arguments: [], environment: ["KADE_FAMILY_DEMO": "1"]), "the demo switch")
+        check(!FamilyDemoSwitch.isOn(arguments: ["app"], environment: ["KADE_FAMILY_DEMO": "0"]), "the demo is off unless asked for")
+
+        // MARK: Failures keep the server's words.
+
+        check(FamilyFailure.from(status: 204, body: Data()) == nil, "a 2xx is no failure")
+        check(FamilyFailure.from(status: 404, body: Data(#"{"error":"Not built yet.","missing":"places"}"#.utf8)) == .missing("places"), "a part not built yet")
+        check(FamilyFailure.from(status: 503, body: Data(#"{"error":"Updating."}"#.utf8))?.message == "Updating.", "the server's words come first")
+        check(FamilyFailure.from(status: 500, body: Data("<html>".utf8)) == .server(500, nil) && !FamilyFailure.offline.message.isEmpty, "other trouble")
+        if case .locked(let guestLock)? = FamilyFailure.from(status: 403, body: Data(#"{"reason":"guest","error":"For family members in the tree."}"#.utf8)) {
+            check(!FamilyAccessRules.revokes(guestLock) && FamilyFailure.locked(guestLock).message == "For family members in the tree.", "a guest's closed game keeps access and says why")
+        } else {
+            check(false, "a 403 is a refusal")
+        }
+        check(FamilyDates.parse("2026-09-29T12:00:00.000Z") != nil && FamilyDates.parse("2026-09-29T12:00:00Z") != nil
+              && FamilyDates.parse("soon") == nil && FamilyDates.askedOn(nil) == nil, "server dates read")
+
+        // MARK: Caches, signed links and pages.
+
+        check(!FamilyCacheNames.safe("../../etc").contains("/") && !FamilyCacheNames.safe("../../etc").contains(".")
+              && FamilyCacheNames.safe("") == "_", "a cache name never leaves its folder")
+        check(FamilyCacheNames.imageFile(mediaId: "a1b2", size: .s) == "a1b2.s.jpg"
+              && FamilyCacheNames.memoryKey(userId: "u1", mediaId: "a1b2", size: .t, pixels: 132) == "u1/a1b2.t.132", "a picture is named by account, id and size")
+        check(FamilyCacheNames.accessKey(userId: "u1") == "kade.family.access.u1", "access is remembered per account")
+        let files = [
+            FamilyCachedFile(name: "a.t.jpg", bytes: 100, used: t0),
+            FamilyCachedFile(name: "b.t.jpg", bytes: 100, used: t0.addingTimeInterval(10)),
+            FamilyCachedFile(name: "c.t.jpg", bytes: 100, used: t0.addingTimeInterval(5)),
+        ]
+        check(FamilyDiskTrim.victims(files, limit: 300).isEmpty, "a cache that fits keeps everything")
+        check(FamilyDiskTrim.victims(files, limit: 150) == ["a.t.jpg", "c.t.jpg"], "the least recently used pictures go first")
+        check(FamilyBatches.chunks(["a", "b", "a", "", "c"], size: 2) == [["a", "b"], ["c"]], "each picture is signed once, in batches")
+        check(FamilyBatches.chunks(Array(repeating: "x", count: 5), size: 100) == [["x"]] && FamilyBatches.chunks([], size: 100).isEmpty, "batch edges")
+        var lru = FamilyLRU<Int>(capacity: 2)
+        lru.set("a", 1)
+        lru.set("b", 2)
+        _ = lru.get("a")
+        lru.set("c", 3)
+        let lruB = lru.get("b")
+        let lruA = lru.get("a")
+        let lruC = lru.get("c")
+        check(lruB == nil && lruA == 1 && lruC == 3 && lru.count == 2, "the least recently used page goes first")
+        check(FamilyPaging.window(total: 250, page: 1, size: 48) == 48..<96
+              && FamilyPaging.spoken(48..<96, total: 250) == "Showing 49 to 96 of 250", "a page and its words")
+        check(FamilyPaging.window(total: 250, page: 99, size: 48) == 240..<250 && FamilyPaging.pages(total: 250, size: 48) == 6, "the last page is clamped")
+        check(FamilyPaging.window(total: 0, page: 0, size: 48).isEmpty && FamilyPaging.pages(total: 0, size: 48) == 1, "an empty list is one empty page")
+
+        print("Family history: \(passed) checks passed. This checks decoding, routes, access rules and drawing maths, not SwiftUI or VoiceOver.")
     }
 
     /// A face of this radius centred here fits the frame.
