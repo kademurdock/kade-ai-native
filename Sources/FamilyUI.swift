@@ -72,7 +72,7 @@ struct FamilyHeading: View {
 
     var body: some View {
         Text(text)
-            .font(font)
+            .font(headingFont)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
             .accessibilityHeading(level)
@@ -86,7 +86,7 @@ struct FamilyHeading: View {
             }
     }
 
-    private var font: Font {
+    private var headingFont: Font {
         switch level {
         case .h1: return .title2.bold()
         case .h2: return .title3.bold()
