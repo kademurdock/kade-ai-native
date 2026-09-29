@@ -139,6 +139,11 @@ targets:
         # Spotter" (CameraCaptureController.start()), never on a plain voice call.
         NSCameraUsageDescription: "Kade-AI uses your camera so your Spotter can see what's around you and describe it during a call."
         NSLocationWhenInUseUsageDescription: "Kade-AI uses your location, only while the app is open and only when you turn on Share my location, so your characters can tell you where you are, what's nearby, and how to walk there."
+        # Sep 29 2026 (Family history, her yes to saving and sharing photos):
+        # the share sheet's Save Image, and Save to Photos, add a picture to
+        # the photo library. iOS crashes the app on that first save without
+        # this key. Add-only: the app never reads the photo library.
+        NSPhotoLibraryAddUsageDescription: "Kade-AI adds a picture to your Photos only when you choose Save Image or Save to Photos, for example a family photo."
         # Session 14 (lock-screen call controls). Two things need this:
         # a call must keep its audio engine running when the screen locks or
         # the app goes to the background -- otherwise hanging up from the

@@ -195,6 +195,7 @@ struct HelpPlace: Identifiable {
     static let all: [HelpPlace] = [
         HelpPlace(thing: "Your conversations", whereItIs: "Talk tab, under Call your Spotter", route: .conversations),
         HelpPlace(thing: "Your books, tapes and radio", whereItIs: "Library tab", route: .readingRoom),
+        HelpPlace(thing: "Your family history", whereItIs: "Library tab, Family history, after Collections", route: .library(.family(.home))),
         HelpPlace(thing: "Making a song or a scene", whereItIs: "Create tab, Sound Booth", route: .soundBooth),
         HelpPlace(thing: "Making a described video", whereItIs: "Create tab, Described video", route: .describedVideo(DescribedVideoStart())),
         HelpPlace(thing: "Things you've made", whereItIs: "Create tab, My Creations", route: .myCreations),
@@ -380,7 +381,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "The Library", entries: [
             HelpEntry(
                 title: "One screen at a time",
-                body: "The Library works like the Files app. Its first screen is a short list that never changes order: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Talk to the Librarian, and Add and requests. Each one opens its own screen, and so does every shelf and the player, with Back at the top left. Tapping the Library tab again comes back to the first screen."
+                body: "The Library works like the Files app. Its first screen is a short list that never changes order: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Family history, Talk to the Librarian, and Add and requests. Each one opens its own screen, and so does every shelf and the player, with Back at the top left. Tapping the Library tab again comes back to the first screen."
             ),
             HelpEntry(
                 title: "Shelves and counts",
@@ -401,6 +402,29 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "It keeps playing",
                 body: "A book or recording keeps playing while you use the rest of the app. A small Now Playing bar sits above the tabs with the title, Play or Pause, and Stop and close; tap the title to go back to the full player. Back from the player leaves it playing. A voice message or a call pauses the book by itself, and the bar then offers Resume. The lock screen and your headphone buttons keep working the whole time."
+            ),
+        ]),
+        // Sep 29 2026: generic words only (this repository is public).
+        HelpSection(title: "Family history", entries: [
+            HelpEntry(
+                title: "What it is",
+                body: "Family history holds one family's research: a family tree, photos, records, graves, stories and research findings, all said from your own place in the family, like your great-grandmother, Mom's side. It is on the Library tab, right after Collections, and Search everything finds it too."
+            ),
+            HelpEntry(
+                title: "Who can open it",
+                body: "It opens only for accounts the family has matched to a person in its tree. Every other account still sees the row, dimmed, with the reason, like Not linked to the tree yet or Private to one family. Until the answer is in, the row says Checking; after that your phone remembers it, so the row is ready when the app opens."
+            ),
+            HelpEntry(
+                title: "Asking to be added",
+                body: "If your account is not linked to the tree yet, a row under Family history says Ask to be added. One tap sends the tree's owner your request; after that the row says when you asked. The tree's owner decides who is matched."
+            ),
+            HelpEntry(
+                title: "Research findings",
+                body: "Some conclusions come from DNA or careful guessing rather than records. Those always carry the word Research and say how sure they are, like Strong DNA evidence or Best guess, so nothing unproven sounds like a fact."
+            ),
+            HelpEntry(
+                title: "On a shared phone",
+                body: "Family pictures and answers are kept on this phone only for the account that opened them, and signing out removes them all."
             ),
         ]),
         HelpSection(title: "Transcribe", entries: [

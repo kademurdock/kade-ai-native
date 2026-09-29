@@ -74,15 +74,7 @@ struct KadeSearchView: View {
                 if !placeMatches.isEmpty {
                     Section {
                         ForEach(placeMatches) { place in
-                            Button {
-                                nav.open(place.route)
-                            } label: {
-                                Label(place.title, systemImage: place.symbol)
-                            }
-                            .buttonStyle(.plain)
-                            .labelStyle(KadeRowLabelStyle(tint: place.tint, caption: place.caption))
-                            .accessibilityLabel("\(place.title). \(place.caption)")
-                            .accessibilityHint("Takes you there.")
+                            placeRow(place)
                         }
                         Button {
                             nav.open(.settingsSearch(trimmed))
@@ -222,6 +214,25 @@ struct KadeSearchView: View {
         }
     }
 
+    /// One place in the app. Family history is live for the family and
+    /// dimmed with the Library row's reason for everyone else (FamilyNavigation).
+    @ViewBuilder
+    private func placeRow(_ place: KadeSearchPlace) -> some View {
+        if place.isFamilyHistory {
+            FamilySearchRow(place: place)
+        } else {
+            Button {
+                nav.open(place.route)
+            } label: {
+                Label(place.title, systemImage: place.symbol)
+            }
+            .buttonStyle(.plain)
+            .labelStyle(KadeRowLabelStyle(tint: place.tint, caption: place.caption))
+            .accessibilityLabel("\(place.title). \(place.caption)")
+            .accessibilityHint("Takes you there.")
+        }
+    }
+
     // MARK: - Matching
 
     private func heading(_ text: String) -> some View {
@@ -344,12 +355,20 @@ struct KadeSearchPlace: Identifiable {
         return false
     }
 
+    /// Sep 29 2026: Family history is listed for every account (greyed,
+    /// never hidden); its row says whether this account may open it.
+    var isFamilyHistory: Bool {
+        if case .library(.family(_)) = route { return true }
+        return false
+    }
+
     static let all: [KadeSearchPlace] = [
         KadeSearchPlace(title: "Your conversations", caption: "Talk tab", symbol: "bubble.left.and.bubble.right", tint: .blue, route: .conversations, keywords: "chats chat messages history talk list"),
         KadeSearchPlace(title: "Describe", caption: "Photos, videos and papers read to you", symbol: "plus.viewfinder", tint: .teal, route: .describe, keywords: "camera picture photo image document letter mail menu read describe see video"),
         KadeSearchPlace(title: "Transcribe", caption: "Turn your voice into text", symbol: "waveform", tint: .purple, route: .transcribe, keywords: "dictate dictation voice memo record recording text speech notes"),
         KadeSearchPlace(title: "Quick Dictate", caption: "Talk, and the words land on your clipboard", symbol: "mic.badge.plus", tint: .purple, route: .quickDictate, keywords: "dictate clipboard quick voice type"),
         KadeSearchPlace(title: "The Library", caption: "Books read aloud, tapes, radio and TV", symbol: "books.vertical", tint: .brown, route: .readingRoom, keywords: "books book audiobook read reading listen radio tape cassette commercials movies tv video archive donate library"),
+        KadeSearchPlace(title: "Family history", caption: "Library tab: a family tree, photos, records and stories", symbol: "person.3", tint: .brown, route: .library(.family(.home)), keywords: "family history tree ancestors ancestry genealogy relatives grandparents grandmother grandfather cousins photos pictures records graves cemetery census dna stories roots heritage"),
         KadeSearchPlace(title: "The Sound Booth", caption: "Songs, scenes with voices, sound effects", symbol: "mic.square", tint: .indigo, route: .soundBooth, keywords: "song songs music sing singing make create record voice scene story sound effects audio booth"),
         KadeSearchPlace(title: "Make a described video", caption: "A narrator describes what happens on screen", symbol: "film", tint: .teal, route: .describedVideo(DescribedVideoStart()), keywords: "described video audio description narrate narration narrator movie film tv show commercial vhs youtube accessible blind"),
         KadeSearchPlace(title: "My Creations", caption: "Everything you've made", symbol: "photo.stack", tint: .yellow, route: .myCreations, keywords: "creations made pictures images songs videos mine save"),
