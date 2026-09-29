@@ -148,9 +148,17 @@ final class FamilyImageLoader {
         return file
     }
 
-    /// "Family photo", "Grave photo", "Record scan"; a restored copy adds
-    /// "(restored with AI)".
+    /// The server's own file name when it sent one ("Photo of Ada Example,
+    /// about 1920", with "restored with AI" on a restored copy), made safe
+    /// for a file; else "Family photo", "Grave photo", "Record scan", and a
+    /// restored copy adds "(restored with AI)".
     static func shareName(_ image: FHImage) -> String {
+        if let said = FamilyAccessRules.nonEmpty(image.shareName) {
+            let bad = Set("/\\:?*\"<>|")
+            let cleaned = String(said.map { bad.contains($0) ? "-" : $0 }).trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = String(cleaned.prefix(120))
+            if !trimmed.isEmpty { return trimmed }
+        }
         let base: String
         switch image.categoryKind {
         case .portrait, .photo, .restored, .other: base = "Family photo"
