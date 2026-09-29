@@ -127,9 +127,26 @@ final class ClubhouseLibraryService: ObservableObject {
             while !Task.isCancelled {
                 guard let self, self.generation == current else { return }
                 await self.refresh()
-                do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
+                // Waits in half-second steps and reads the delay again each
+                // step, so a share that starts during a 10-second wait moves
+                // to the 2-second pace straight away.
+                var waited: UInt64 = 0
+                repeat {
+                    do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                    waited += 500_000_000
+                } while self.generation == current && waited < self.pollDelay
             }
         }
+    }
+
+    /// Sep 29 2026: every app request queues at KadeAPIClient's 1.5 s pacing
+    /// gate, so polling every 2 s with nothing shared made house voices and
+    /// bot calls wait behind it. The poll keeps 2 s while a recording is
+    /// shared or her load or seek is under way, and slows to 10 s otherwise.
+    /// Her own commands, a library-changed message from the room and coming
+    /// back to the app still refresh at once (refresh(forceURL: true)).
+    private var pollDelay: UInt64 {
+        (state.active || busy || seeking) ? 2_000_000_000 : 10_000_000_000
     }
 
     func stop() {
@@ -243,7 +260,7 @@ final class ClubhouseLibraryService: ObservableObject {
         if polling {
             // Sep 29 2026: a forced refresh (her own command, a
             // library-changed message, coming back to the app) was dropped
-            // whenever the 2-second poll was in flight. Wait for that poll to
+            // whenever the regular poll was in flight. Wait for that poll to
             // land, then fetch again.
             guard forceURL else { return }
             let asked = generation
