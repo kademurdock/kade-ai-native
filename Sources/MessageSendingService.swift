@@ -59,12 +59,18 @@ import Foundation
 /// again with a fresh POST) and, worse, the caller had a real bug that
 /// made Retry silently do nothing at all (see
 /// `ConversationDetailView.retry()`/`FailedAttempt`, fixed this session).
-/// The real, current behavior: Retry resends the identical text to the
-/// identical parent as a genuinely new attempt, which can create a
-/// duplicate turn in the rare case the original request actually reached
-/// the server and only the confirm-the-reply half failed -- accepted
-/// deliberately, since a visible duplicate is a far better failure mode
-/// than a Retry button that does nothing.
+///
+/// **Bug #6 (Sep 29 2026): Retry no longer posts the message twice.** Until
+/// now every attempt minted a fresh `messageId`, so when the first POST had
+/// reached the server and only the reply half failed, Retry made a second
+/// copy of her message and a second reply. The fork already de-duplicates:
+/// a plain send is claimed as a request receipt under its `messageId`
+/// (`controllers/agents/request.js`), and a repeat POST with the same id and
+/// the same input answers `status: "existing"` and starts nothing new. So
+/// the caller now keeps the id of the failed attempt, asks
+/// `checkReceipt(requestId:)` what happened to it, and resends under that
+/// SAME id unless the server says the original failed or was stopped (then
+/// a fresh id is a deliberate new attempt, the old behavior).
 @MainActor
 final class MessageSendingService: ObservableObject {
     enum SendError: Error {
@@ -96,7 +102,9 @@ final class MessageSendingService: ObservableObject {
     /// created comes back here, since the caller has no other way to learn
     /// it. Callers should re-fetch messages afterward to render the result
     /// (see type doc for why this method hands back no message content
-    /// itself).
+    /// itself). `requestId` becomes the POST's `messageId`, which the server
+    /// uses as the request receipt's id; `nil` mints a fresh one (Bug #6,
+    /// Sep 29 2026 -- Retry passes the failed attempt's id back in).
     @discardableResult
     func send(
         text: String,
@@ -105,6 +113,7 @@ final class MessageSendingService: ObservableObject {
         agentId: String?,
         files: [[String: Any]]? = nil,
         inputSource: String? = nil,
+        requestId: String? = nil,
         onText: ((String) -> Void)? = nil,
         onThink: ((String) -> Void)? = nil,
         onTool: ((String) -> Void)? = nil
@@ -115,7 +124,8 @@ final class MessageSendingService: ObservableObject {
             parentMessageId: parentMessageId,
             agentId: agentId,
             files: files,
-            inputSource: inputSource
+            inputSource: inputSource,
+            requestId: requestId
         )
         /* Build 212: the second half of the send-prologue bisect (see the
          * long note in ConversationDetailView.performSend). startGeneration
@@ -161,11 +171,12 @@ final class MessageSendingService: ObservableObject {
         parentMessageId: String?,
         agentId: String?,
         files: [[String: Any]]? = nil,
-        inputSource: String? = nil
+        inputSource: String? = nil,
+        requestId: String? = nil
     ) async throws -> StartResponse {
         var body: [String: Any] = [
             "text": text,
-            "messageId": UUID().uuidString,
+            "messageId": requestId ?? UUID().uuidString,
             "endpoint": "agents",
         ]
         if inputSource == "voice_transcript" { body["kadeInputSource"] = inputSource }
@@ -223,11 +234,48 @@ final class MessageSendingService: ObservableObject {
 
         var req = client.request(path: "api/agents/chat/agents", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Bug #6 (Sep 29 2026): sorted keys. The server fingerprints a
+        // receipt with `JSON.stringify(req.body.files)`, which keeps the
+        // wire order of each file's keys, and a Swift Dictionary promises no
+        // order -- so a retried attachment could fingerprint differently
+        // under the same id and be refused with a 409.
+        req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else { throw SendError.server(http.statusCode) }
         return try decoder.decode(StartResponse.self, from: data)
+    }
+
+    // MARK: - Request receipts (Bug #6, Sep 29 2026)
+
+    /// What the server knows about an earlier POST, read from its request
+    /// receipt (`GET /api/agents/chat/tasks/:taskId` -- the same receipts
+    /// the Agent work page lists, same status words as `AgentWorkItem`).
+    enum ReceiptCheck {
+        /// No receipt: the POST never reached the server.
+        case notFound
+        /// Starting, working, or the reply is saved.
+        case arrived
+        /// It reached the server but failed, was stopped, or was cut off.
+        case failed
+        /// No answer we can trust (offline, signed out, server trouble).
+        case unknown
+    }
+
+    private struct ReceiptBody: Decodable { let status: String }
+
+    /// Never throws and never resends anything -- it only reads.
+    func checkReceipt(requestId: String) async -> ReceiptCheck {
+        let req = client.request(path: "api/agents/chat/tasks/\(requestId)", authorized: true)
+        guard let (data, http) = try? await client.send(req) else { return .unknown }
+        if http.statusCode == 404 { return .notFound }
+        guard http.statusCode == 200,
+              let receipt = try? decoder.decode(ReceiptBody.self, from: data) else { return .unknown }
+        switch receipt.status {
+        case "starting", "running", "completed": return .arrived
+        case "failed", "stopped", "interrupted": return .failed
+        default: return .unknown
+        }
     }
 
     // MARK: - Phase B: subscribe until `final`
