@@ -141,6 +141,8 @@ struct ContentView: View {
                 // Settled once per sign-in; this only asks again after a
                 // network failure left it undecided.
                 Task { await DescribedVideoAccess.shared.check(client: apiClient) }
+                // Sep 29 2026: Family history's row (never twice in half a minute).
+                Task { await FamilyHistoryAccess.shared.check(client: apiClient) }
             }
         }
         .onAppear {
@@ -980,6 +982,10 @@ struct ContentView: View {
                         go(.conversations)
                     }
                 }),
+                // Sep 29 2026: Family history. The test seat meets the locked
+                // view (its reason, no Ask); with KADE_FAMILY_DEMO=1 (or
+                // -KadeFamilyDemo) the made-up family opens instead.
+                ("family-history", { go(.library(.family(.home))) }),
             ]
             for (index, stop) in stops.enumerated() {
                 stop.1()
@@ -1152,6 +1158,14 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 await DescribedVideoAccess.shared.check(client: apiClient)
             }
+            // Sep 29 2026: Family history. This account's remembered answer
+            // at once (the family's row is live from the first moment), then
+            // asked again once the launch chat has settled.
+            FamilyHistoryAccess.shared.signedIn(userId: user.id)
+            Task {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                await FamilyHistoryAccess.shared.check(client: apiClient)
+            }
             // Session 26 chat-first launch: the moment a session lands
             // (cold-start restore or a fresh sign-in), open the main-agent
             // chat on the Talk tab — unless a Siri intent is already waiting
@@ -1174,6 +1188,13 @@ struct ContentView: View {
             LibraryNowPlaying.shared.stop()
             KadeUnread.shared.reset()
             DescribedVideoAccess.shared.reset()
+            // Sep 29 2026: nothing of the family stays on a shared phone:
+            // the row's state, every cached answer, and every family picture
+            // in memory and on disk. The made-up demo family ends too.
+            FamilyHistoryAccess.shared.reset()
+            FamilyHistoryService.shared.reset()
+            FamilyImageLoader.shared.wipe()
+            if previous.hasPrefix("signedIn") { FamilyDemo.end() }
             talkPath = []
             libraryPath = []
             createPath = []

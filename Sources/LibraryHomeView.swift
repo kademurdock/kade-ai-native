@@ -19,14 +19,18 @@ struct LibraryHomeView: View {
     @ObservedObject private var shelves = LibraryShelves.shared
     @ObservedObject private var requests = LibraryRequestsModel.shared
     @ObservedObject private var uploads = LibraryUploadState.shared
+    /// Sep 29 2026: the Family history row's state (FamilyHistoryAccess).
+    @ObservedObject private var family = FamilyHistoryAccess.shared
     @StateObject private var actions: LibraryRowActions
     @AppStorage(LibraryWords.hasLocalKey) private var rememberedLocal = false
     @State private var collectionCount: Int?
     @State private var lastLoad: Date?
+    private let apiClient: KadeAPIClient
 
     init(apiClient: KadeAPIClient) {
         let shared = LibraryNowPlaying.shared
         let pair = shared.ensure(client: apiClient)
+        self.apiClient = apiClient
         _service = ObservedObject(wrappedValue: pair.service)
         _nowPlaying = ObservedObject(wrappedValue: shared)
         _actions = StateObject(wrappedValue: LibraryRowActions(service: pair.service))
@@ -54,6 +58,8 @@ struct LibraryHomeView: View {
                              hint: "Everything you added, on its shelves.")
                     countRow("Collections", icon: "text.badge.plus", detail: collectionsDetail, route: .page(.collections),
                              hint: "Your playlists, and the ones shared with you.")
+                    familyRow
+                    familyAskRow
                 }
                 Group {
                     librarianRow
@@ -231,6 +237,57 @@ struct LibraryHomeView: View {
         return n == 0 ? "none yet" : n.formatted()
     }
 
+    /// Sep 29 2026: Family history, after Collections, always in this place.
+    /// The family's account opens it ("Ada's brother", the server's words);
+    /// every other account, the App Review seat included, sees it greyed with
+    /// the server's reason (her rule: greyed, never hidden). "Checking" until
+    /// the first answer; the last one is remembered per account, so for the
+    /// family it is live at launch.
+    @ViewBuilder
+    private var familyRow: some View {
+        let words: FamilyRowWords = family.words
+        if words.enabled {
+            linkRow("Family history", icon: "person.3", detail: words.detail, route: .family(.home), hint: words.hint)
+                .accessibilityInputLabels(["Family history"])
+        } else {
+            Button {} label: {
+                rowLabel("Family history", icon: "person.3", detail: words.detail)
+            }
+            .disabled(true)
+            .accessibilityLabel("Family history, \(words.detail)")
+            .accessibilityHint(words.hint)
+            .accessibilityInputLabels(["Family history"])
+        }
+    }
+
+    /// Under the greyed row, for an account not linked to the tree yet: one
+    /// tap asks the tree's owner (POST /ask). Afterwards it stays, dimmed,
+    /// "Asked on {date}". Review and test seats never get it.
+    @ViewBuilder
+    private var familyAskRow: some View {
+        switch family.words.ask {
+        case .hidden:
+            EmptyView()
+        case .ask:
+            Button { Task { await askToJoinFamily() } } label: {
+                rowLabel(family.asking ? "Asking…" : "Ask to be added", icon: "hand.raised", detail: nil)
+            }
+            .disabled(family.asking)
+            .accessibilityHint("Asks the tree's owner to match your account to your place in the family tree.")
+        case .asked(let when):
+            Button {} label: {
+                rowLabel("Ask to be added", icon: "hand.raised", detail: when)
+            }
+            .disabled(true)
+            .accessibilityLabel("Ask to be added, \(when)")
+        }
+    }
+
+    private func askToJoinFamily() async {
+        let said = await family.ask()
+        if !said.isEmpty { KadeAnnounce.high(said) }
+    }
+
     private var librarianRow: some View {
         Button { Task { await actions.talkToLibrarian() } } label: {
             HStack(spacing: 12) {
@@ -308,6 +365,9 @@ struct LibraryHomeView: View {
         async let tree: Void = shelves.refresh(service, force: force)
         await shelf
         await tree
+        // Sep 29 2026: may this account open Family history? (Its own
+        // half-minute rule; a pull asks outright.)
+        await family.check(client: apiClient, force: force)
         await requests.reload(service)
         if let c = try? await service.collections() { collectionCount = c.mine.count + c.shared.count }
         // Opening a row (or another tab) before this finished cancels it
