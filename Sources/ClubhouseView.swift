@@ -97,6 +97,7 @@ struct ClubhouseView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, service.phase == .inRoom { fillCopiedSongLink(after: 0.5) }
+            if phase == .active, service.phase == .inRoom { Task { await service.library.refresh(forceURL: true) } }
         }
         .onDisappear { service.leave() }
     }
@@ -315,6 +316,7 @@ struct ClubhouseView: View {
             } footer: {
                 Text("Tapes the whole room — every voice, the jukebox, the bot — into one audio file you can share or save, like a Parlor transcript. The room is always told when a tape starts and stops.")
             }
+            ClubhouseLibrarySection(service: service.library)
             Section {
                 HStack(spacing: 10) {
                     Text(service.nowPlayingLine)
