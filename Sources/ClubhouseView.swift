@@ -366,6 +366,7 @@ struct ClubhouseView: View {
                     .disabled(service.songLinksLock != nil)
                     .accessibilityLabel("Song link")
                     .accessibilityHint(service.songLinksLock ?? "A YouTube or Spotify song, SoundCloud, Bandcamp, or a link to an audio file. A song link you copied fills in by itself.")
+                songPasteButton
                 Button("Fetch from the link") { showLinkChoice = true }
                     .disabled(service.songLinksLock != nil || songLink.trimmingCharacters(in: .whitespaces).isEmpty)
                     .accessibilityHint(service.songLinksLock ?? "The server pulls the song, up to 15 minutes long, then you choose to cut in or queue it.")
@@ -576,12 +577,38 @@ struct ClubhouseView: View {
         Task {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             // A greyed-out box (no Family feature pack) is never filled in.
-            guard songLink.isEmpty, service.phase == .inRoom, service.songLinksLock == nil,
-                  let link = await CopiedLink.take("clubhouse-song-link", where: CopiedLink.isSongLink),
-                  songLink.isEmpty else { return }
-            songLink = link
-            service.say("Filled in the song link you copied. Choose Fetch from the link to play it or queue it.")
+            guard songLink.isEmpty, service.phase == .inRoom, service.songLinksLock == nil else { return }
+            let copied = await CopiedLink.look("clubhouse-song-link", where: CopiedLink.isSongLink)
+            guard songLink.isEmpty else { return }
+            if let link = copied.link {
+                songLink = link
+                service.say("Filled in the song link you copied. Choose Fetch from the link to play it or queue it.")
+            } else if copied.refused {
+                // Sep 29 2026 (bug 8): iOS may have just asked to paste; say why the box stayed empty.
+                service.say("The link you copied is not a song link the jukebox can play, so the song box stays empty.")
+            }
         }
+    }
+
+    /// Sep 29 2026 (bug 8): the Paste button under the song box. A system
+    /// control, so pasting with it never brings up iOS's Allow Paste question.
+    /// Its own property keeps the room's long Form quick to type-check.
+    private var songPasteButton: some View {
+        let lock = service.songLinksLock
+        let pasteHint: String = lock ?? "Puts the song link you copied into the song link box."
+        return PasteButton(payloadType: String.self) { strings in
+            let pasted = strings.first ?? ""
+            Task { @MainActor in pasteSongLink(pasted) }
+        }
+        .disabled(lock != nil)
+        .accessibilityHint(pasteHint)
+    }
+
+    private func pasteSongLink(_ pasted: String) {
+        let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { service.say("There is no link to paste. Copy the song's link first."); return }
+        songLink = text
+        service.say("Link pasted. Choose Fetch from the link to play it or queue it.")
     }
 
     private func clock(_ t: TimeInterval) -> String {
