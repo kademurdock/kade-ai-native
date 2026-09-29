@@ -41,6 +41,8 @@ workflows:
           bash ./run-character-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
+          # Sep 29 2026: Family history models, demo family and drawing maths.
+          bash ./run-family-tests.sh
           python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -249,6 +251,7 @@ workflows:
           bash ./run-push-tests.sh
           bash ./run-character-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
           bash ./run-world-tests.sh
+          bash ./run-family-tests.sh
           python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -268,8 +271,14 @@ workflows:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-long-expression-type-checking=150' \
             build 2>&1 | tee "$CM_BUILD_DIR/compile.log"
           STATUS=$?
+          # Sep 29 2026 (Family history): expressions that took the type
+          # checker more than 150 ms, listed after the errors, so a slow view
+          # body is split before it becomes a timeout on the TestFlight lane.
+          grep -E 'warning: expression took [0-9]+ms to type-check' "$CM_BUILD_DIR/compile.log" \
+            | sort -u | head -n 20 > "$CM_BUILD_DIR/slow-type-checks.txt" || true
           # THE GATE'S OWN DOCTRINE: say the FIRST REAL ERROR with its file and
           # line, never "looks good" and never a wall of log. This file is what
           # the harness reads back to Forge, and Forge reads it to Kade out loud.
@@ -281,9 +290,13 @@ workflows:
           else
             echo "Compiled clean." > "$CM_BUILD_DIR/first-errors.txt"
           fi
+          if [ -s "$CM_BUILD_DIR/slow-type-checks.txt" ]; then
+            { echo "--- slow type checks (over 150 ms) ---"; cat "$CM_BUILD_DIR/slow-type-checks.txt"; } >> "$CM_BUILD_DIR/first-errors.txt"
+          fi
           exit $STATUS
     artifacts:
       - first-errors.txt
+      - slow-type-checks.txt
       - compile.log
       - speech-tests.log
 
