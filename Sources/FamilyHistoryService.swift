@@ -133,9 +133,9 @@ final class FamilyHistoryService {
     /// The family-history version the caches came from.
     private(set) var version: String?
 
-    private var home: FHHome?
+    private var lastHome: FHHome?
     private var trees = FamilyLRU<FHTree>(capacity: 12)
-    private var people = FamilyLRU<FHPersonPage>(capacity: 30)
+    private var personPages = FamilyLRU<FHPersonPage>(capacity: 30)
     private var galleries = FamilyLRU<FHGallery>(capacity: 12)
     private var timelines = FamilyLRU<FHTimeline>(capacity: 2)
     private var placeSets = FamilyLRU<FHPlaces>(capacity: 2)
@@ -162,9 +162,9 @@ final class FamilyHistoryService {
     }
 
     private func clearMemory() {
-        home = nil
+        lastHome = nil
         trees.removeAll()
-        people.removeAll()
+        personPages.removeAll()
         galleries.removeAll()
         timelines.removeAll()
         placeSets.removeAll()
@@ -266,11 +266,11 @@ final class FamilyHistoryService {
 
     /// The last /home, from memory or this account's disk, to draw at once.
     func cachedHome() -> FHHome? {
-        if let home { return home }
+        if let lastHome { return lastHome }
         guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId),
               let data = FamilyDiskStore.load(file),
               let value = try? JSONDecoder().decode(FHHome.self, from: data) else { return nil }
-        home = value
+        lastHome = value
         return value
     }
 
@@ -280,7 +280,7 @@ final class FamilyHistoryService {
         let query: [URLQueryItem] = [Self.item("since", since)].compactMap { $0 }
         let (value, data): (FHHome, Data) = try await fetch("home", query: query)
         noteVersion(value.version)
-        home = value
+        lastHome = value
         if let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId) {
             FamilyDiskStore.save(data, to: file)
         }
@@ -308,13 +308,13 @@ final class FamilyHistoryService {
     }
 
     func cachedPerson(_ id: String) -> FHPersonPage? {
-        people.get(id)
+        personPages.get(id)
     }
 
     /// GET /person/:id.
     func person(_ id: String) async throws -> FHPersonPage {
         let (value, _): (FHPersonPage, Data) = try await fetch("person/" + Self.segment(id))
-        people.set(id, value)
+        personPages.set(id, value)
         return value
     }
 
