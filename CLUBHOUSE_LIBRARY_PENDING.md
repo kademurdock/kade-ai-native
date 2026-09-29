@@ -6,7 +6,9 @@ Prepared September 28, 2026. Kade explicitly requested iPhone coding but **no Co
 
 The web/server counterpart is the September 28 public-home/Clubhouse release. Existing installed apps tolerate the extra optional token field. Public web publishing and dashboard family flags already work through their web pages; the new native playback controls require a future app build.
 
-`run-clubhouse-tests.sh` tests decoding, permissions-denied state, and shared timeline bounds with Foundation. Added to the existing Codemagic test gate for the next authorized build. These Swift tests and a full iOS compile have not been run on this Windows workstation.
+September 29 review fixes (still unbuilt): video keeps playing when the phone locks (`.continuesIfPossible`, as in DescribedVideoPlayer); VoiceOver now hears local pauses, load failures, a lost connection (once, when media stops), sharing stopped, search results and a chosen recording's parts; Back/Ahead 30 use the room's timeline, not the local player; her own play/seek/load clears a local pause; a forced refresh waits for an in-flight poll instead of being dropped; a failed load gets one fresh link, then stops until Rejoin; the round-trip estimate leaves out the API client's pacing wait (`KadeAPIClient.pacingWaitRemaining`).
+
+`run-clubhouse-tests.sh` tests decoding, permissions-denied state, shared timeline bounds, skip targets and the spoken search/parts lines with Foundation. Added to the existing Codemagic test gate for the next authorized build. These Swift tests and a full iOS compile have not been run on this Windows workstation.
 
 Before a later release, run the existing CI gates and the new gate, then verify two real devices: simultaneous playback, late join, pause/seek, host leaving/takeover, revoked library access, VoiceOver, background/foreground, headphones disconnection, Bluetooth, and AirPlay while the microphone remains in a call. Hiding video keeps the file's sound; it is not an audio-only transcode. This is not an Apple SharePlay implementation. Room recordings do not include the direct Library player.
 

@@ -32,12 +32,28 @@ final class ClubhouseLibraryService: ObservableObject {
     private var seeking = false
     private var locallyPaused = false
     private var audioObservers: [NSObjectProtocol] = []
+    /// The revision she last heard announced (Sep 29 2026). Compared instead
+    /// of the previous poll's revision, so a change first seen while its
+    /// link was still on the way, or while she was paused here, is still
+    /// said once her phone follows it.
+    private var announced: Int?
+    /// Failed loads of the current recording; one fresh link, then stop.
+    private var failures = 0
+    /// A poll has failed since the last good one.
+    private var troubled = false
+    /// "Playback connection lost" was already said for this outage.
+    private var lostAnnounced = false
 
     init(client: KadeAPIClient) {
         self.client = client
         player.volume = 0.5
         player.allowsExternalPlayback = true
         player.automaticallyWaitsToMinimizeStalling = true
+        // Sep 29 2026: the default .automatic policy pauses a player showing a
+        // picture when the phone locks or she leaves the app, so a shared
+        // video went silent for her while the room played on. Same fix as
+        // DescribedVideoPlayer.
+        player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         let center = NotificationCenter.default
         audioObservers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init(rawValue:))
@@ -53,17 +69,38 @@ final class ClubhouseLibraryService: ObservableObject {
 
     deinit { for observer in audioObservers { NotificationCenter.default.removeObserver(observer) } }
 
+    /// Status lines she has to hear, not only find (Sep 29 2026).
+    private func announce(_ text: String) {
+        status = text
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
     private func pauseLocally(_ message: String) {
-        guard connected else { return }
+        // Nothing shared means nothing to pause, and nothing to Rejoin.
+        guard connected, state.active else { return }
         locallyPaused = true
         player.pause()
-        status = message
+        announce(message)
     }
 
     func rejoin() async {
         locallyPaused = false
+        // Sep 29 2026: Rejoin says where the room is, and a recording that
+        // gave up after failing to load gets a fresh link.
+        announced = nil; failures = 0
+        if player.currentItem?.status == .failed { urlAt = .distantPast }
         await refresh(forceURL: true)
         synchronize()
+    }
+
+    /// Sep 29 2026: one fresh link after a failed load, then stop and say
+    /// so. Before, a file that could never play was signed again and
+    /// downloaded again every 2 seconds for as long as she stayed.
+    private func loadFailed() {
+        player.pause()
+        failures += 1
+        if failures < 2 { urlAt = .distantPast }
+        else if failures == 2 { announce("This recording could not play. Try Rejoin playback.") }
     }
 
     func start(proof: String?) {
@@ -89,6 +126,7 @@ final class ClubhouseLibraryService: ObservableObject {
         observer = nil; seeking = false
         proof = ""; mediaID = ""; connected = false
         locallyPaused = false
+        announced = nil; failures = 0; troubled = false; lostAnnounced = false
         state = ClubLibraryState(); items = []; tracks = nil
         urlAt = .distantPast
         status = "Choose a recording from the shared library."
@@ -134,8 +172,8 @@ final class ClubhouseLibraryService: ObservableObject {
             guard generation == current else { return }
             items = next ? items + result.items : result.items
             more = result.more; page = wantedPage
-            status = items.isEmpty ? "No shared recordings matched your search." : "Choose a recording below."
-        } catch { if generation == current { status = error.localizedDescription } }
+            announce(ClubLibrarySearch.statusLine(count: items.count))
+        } catch { if generation == current { announce(error.localizedDescription) } }
     }
 
     func choose(_ item: ClubLibraryItem) async {
@@ -144,7 +182,8 @@ final class ClubhouseLibraryService: ObservableObject {
             let result = try JSONDecoder().decode(ClubLibraryTracks.self, from: await request("tracks/" + item.id))
             guard generation == current else { return }
             tracks = result
-        } catch { if generation == current { status = error.localizedDescription } }
+            announce(result.readyLine)
+        } catch { if generation == current { announce(error.localizedDescription) } }
     }
 
     func command(_ action: String, extra: [String: Any] = [:]) async {
@@ -156,6 +195,10 @@ final class ClubhouseLibraryService: ObservableObject {
             for (key, value) in extra { body[key] = value }
             _ = try await request("playback", body: body)
             guard generation == current else { return }
+            // Sep 29 2026: her own play, seek or load brings her own phone
+            // along. After a local pause the room used to follow her command
+            // while she stayed silent.
+            if action == "load" || action == "play" || action == "seek" { locallyPaused = false }
             if action == "load" || action == "play" { onStarted?() }
             onChanged?()
             await refresh(forceURL: true)
@@ -163,41 +206,82 @@ final class ClubhouseLibraryService: ObservableObject {
         } catch {
             guard generation == current else { return }
             await refresh()
-            status = error.localizedDescription
-            UIAccessibility.post(notification: .announcement, argument: status)
+            announce(error.localizedDescription)
         }
     }
 
     func skip(_ seconds: Double) async {
-        let position = player.currentTime().seconds
+        // Sep 29 2026: from the room's timeline, not this phone's player. Its
+        // clock stops at a local pause, a stall or a failed load, and Back 30
+        // from a player stuck at 12:00 would pull a room at 20:00 back to 11:30.
+        guard state.active else { return }
+        let position = state.skipTarget(by: seconds, after: ProcessInfo.processInfo.systemUptime - receivedAt + halfTrip)
         guard position.isFinite else { return }
-        await command("seek", extra: ["position": max(state.begin ?? 0, min(state.end ?? 604800, position + seconds))])
+        await command("seek", extra: ["position": position])
     }
 
     func refresh(forceURL: Bool = false) async {
-        guard connected, !polling else { return }
+        guard connected else { return }
+        if polling {
+            // Sep 29 2026: a forced refresh (her own command, a
+            // library-changed message, coming back to the app) was dropped
+            // whenever the 2-second poll was in flight. Wait for that poll to
+            // land, then fetch again.
+            guard forceURL else { return }
+            let asked = generation
+            while polling && connected && generation == asked {
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+            }
+            guard connected, generation == asked, !polling else { return }
+        }
         polling = true; defer { polling = false }
         let current = generation
-        let started = ProcessInfo.processInfo.systemUptime
+        // Sep 29 2026: start the clock after the app-wide pacing gate. Right
+        // after one of her own commands that gate waits up to 1.5 s; counted
+        // as network delay it put her up to 0.7 s ahead of the room, just
+        // inside the 0.8 s the drift check lets pass, so it stayed.
+        let started = ProcessInfo.processInfo.systemUptime + client.pacingWaitRemaining
         do {
             let needsURL = forceURL || mediaID.isEmpty || Date().timeIntervalSince(urlAt) > 1800
             let data = try await request("playback" + (needsURL ? "?url=1" : ""))
             let result = try JSONDecoder().decode(ClubLibraryState.self, from: data)
             guard generation == current else { return }
             lastGood = Date()
+            let recovered = troubled
+            troubled = false; lostAnnounced = false
             let previous = state
             state = result
             receivedAt = ProcessInfo.processInfo.systemUptime
-            halfTrip = (receivedAt - started) / 2
+            halfTrip = max(0, receivedAt - started) / 2
             guard result.active else {
                 player.pause(); player.replaceCurrentItem(with: nil); observer = nil; mediaID = ""
-                status = result.unavailable == true ? "This room’s recording is unavailable to your account. You can still join the conversation." : "Choose a recording from the shared library."
+                // Sep 29 2026: a share that ends is said aloud, and a local
+                // pause ends with it, so the next share is not silent for her.
+                locallyPaused = false; announced = nil
+                if result.unavailable == true {
+                    let line = "This room’s recording is unavailable to your account. You can still join the conversation."
+                    if previous.active { announce(line) } else { status = line }
+                } else if previous.active {
+                    announce("Shared playback stopped. Choose a recording from the shared library.")
+                } else if recovered || previous.unavailable == true {
+                    // only a stale notice is replaced; search results stay
+                    status = "Choose a recording from the shared library."
+                }
                 return
             }
             if result.mediaID != mediaID || (needsURL && Date().timeIntervalSince(urlAt) > 1800) {
                 guard let source = result.url, let url = URL(string: source), url.scheme == "https" else {
+                    // Sep 29 2026: a poll that did not ask for a link saw a new
+                    // recording. Stop the old file now instead of letting it
+                    // play on under the new title, and fetch the link straight
+                    // away rather than a poll later.
+                    if result.mediaID != mediaID {
+                        player.pause(); player.replaceCurrentItem(with: nil); observer = nil
+                        if !needsURL { Task { [weak self] in await self?.refresh(forceURL: true) } }
+                    }
                     mediaID = ""; return
                 }
+                if result.mediaID != mediaID { failures = 0 }
                 player.pause()
                 let item = AVPlayerItem(url: url)
                 if let end = result.end { item.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600) }
@@ -206,21 +290,32 @@ final class ClubhouseLibraryService: ObservableObject {
                     Task { @MainActor in
                         guard let self, self.generation == current else { return }
                         if status == .readyToPlay { self.synchronize() }
-                        if status == .failed { self.player.pause(); self.urlAt = .distantPast; self.status = "This recording could not play. Try Rejoin playback." }
+                        if status == .failed { self.loadFailed() }
                     }
                 }
                 player.replaceCurrentItem(with: item)
                 mediaID = result.mediaID; urlAt = Date(); seeking = false
             }
             synchronize()
-            if !locallyPaused && (previous.revision != result.revision || !previous.active) {
-                status = (result.playing == true ? "Playing: " : "Paused: ") + (result.title ?? "Library recording")
-                UIAccessibility.post(notification: .announcement, argument: status)
+            let line = (result.playing == true ? "Playing: " : "Paused: ") + (result.title ?? "Library recording")
+            if !locallyPaused && announced != result.revision {
+                announced = result.revision
+                announce(line)
+            } else if recovered {
+                // a poll or two failed and came back: clear the stale notice
+                status = locallyPaused ? "Playback is paused on this phone. Tap Rejoin playback to continue." : line
             }
         } catch {
             guard generation == current else { return }
-            if Date().timeIntervalSince(lastGood) > 10 { player.pause() }
-            status = "Playback connection lost. " + error.localizedDescription
+            troubled = true
+            let message = "Playback connection lost. " + error.localizedDescription
+            if Date().timeIntervalSince(lastGood) > 10 {
+                player.pause()
+                // Sep 29 2026: said once, when her media actually stops (not
+                // on every retry); the room's state is said again on return.
+                if !lostAnnounced && !locallyPaused { lostAnnounced = true; announced = nil; announce(message); return }
+            }
+            status = message
         }
     }
 

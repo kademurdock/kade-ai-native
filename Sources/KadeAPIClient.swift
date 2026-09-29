@@ -70,6 +70,14 @@ final class KadeAPIClient: ObservableObject {
         await waitForPacingGate()
     }
 
+    /// How long a send started right now would wait at the pacing gate.
+    /// Read-only. The Clubhouse library player (Sep 29 2026) starts its
+    /// round-trip clock after this wait, so the gate is not mistaken for
+    /// network delay when it lines the room's timeline up.
+    var pacingWaitRemaining: TimeInterval {
+        max(0, minGap - Date().timeIntervalSince(lastRequestAt))
+    }
+
     /// The one choke point every buffered request goes through: enforce the
     /// pacing gate, then send. Auth calls and data calls share the same
     /// clock. See `streamBytes(_:)` for the long-lived-connection variant
