@@ -219,8 +219,20 @@ final class WorldTones {
     /// on top of a real neighbourhood.
     private var roomTonePlayer: AVAudioPlayer?
     private var roomToneKey: String?
+    /// Sep 29 2026: which file (url plus revision) each installed event
+    /// player came from, so a repeat earcon plays the loaded player instead
+    /// of re-checking the cache and building a new one on the main thread.
+    private var eventSources: [String: String] = [:]
     private var active = false
     private var interrupted = false
+    /// Sep 29 2026: the session is set up and active. Every earcon used to
+    /// call setActive twice; now it runs on activate(), after an
+    /// interruption or media reset, or after a category change.
+    private var sessionReady = false
+    /// Sep 29 2026: headphones or a Bluetooth device went away. The loops
+    /// stay paused until she comes back to the screen or a new device
+    /// arrives, so an earcon never restarts them on the loudspeaker.
+    private var pausedForRoute = false
 
     private init() {
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
@@ -247,12 +259,28 @@ final class WorldTones {
         ) { [weak self] note in
             guard let self, let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
-            self.interrupted = type == .began
             self.engineReset()
+            self.sessionReady = false
             if type == .began {
+                /* Sep 29 2026: a .began that only reports the app was
+                 * suspended (phone locked, app switched) arrives late, on
+                 * the way back, and never gets a matching .ended. Taking it
+                 * as a real interruption kept the world silent for good.
+                 * The session was only deactivated while suspended, so set
+                 * it up again. Reason 1 is .appWasSuspended, matched by raw
+                 * value because that case is deprecated; the old boolean key
+                 * is read by its name for the same reason. */
+                let reason = note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt
+                let wasSuspended = note.userInfo?["AVAudioSessionInterruptionWasSuspendedKey"] as? Bool ?? false
+                if reason == 1 || wasSuspended {
+                    self.resumeLoops()
+                    return
+                }
+                self.interrupted = true
                 self.ambiencePlayer?.pause()
                 self.roomTonePlayer?.pause()
             } else {
+                self.interrupted = false
                 let rawOptions = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 if AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume) {
                     self.resumeLoops()
@@ -266,9 +294,19 @@ final class WorldTones {
             self.engineReset()
             let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue {
+                self.pausedForRoute = true
                 self.ambiencePlayer?.pause()
                 self.roomTonePlayer?.pause()
-            } else { self.resumeLoops() }
+                return
+            }
+            if reason == AVAudioSession.RouteChangeReason.categoryChange.rawValue {
+                // Sep 29 2026: a call, the Library or a voice note changed
+                // the shared session; set it up again before the next sound.
+                self.sessionReady = false
+            } else if reason == AVAudioSession.RouteChangeReason.newDeviceAvailable.rawValue {
+                self.pausedForRoute = false
+            }
+            self.resumeLoops()
         }
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -277,7 +315,12 @@ final class WorldTones {
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.engineReset()
+            // Sep 29 2026: the old session is gone, and with it any
+            // interruption it was in; WorldView calls activate() next.
+            self?.interrupted = false
+            self?.sessionReady = false
             self?.filePlayers.removeAll()
+            self?.eventSources.removeAll()
             self?.ambiencePlayer = nil
             self?.ambienceKey = nil
             self?.roomTonePlayer = nil
@@ -331,33 +374,62 @@ final class WorldTones {
 
     func activate() {
         active = true
+        // Sep 29 2026: coming back to the screen or the app starts clean. A
+        // .began that never got its .ended, or headphones pulled earlier,
+        // must not keep the world silent. Known cost: World's session mixes,
+        // and a mixing session can usually be activated during a phone call,
+        // so coming back to the app mid-call may bring the loops back under
+        // the call (build 319 kept them paused until .ended).
+        interrupted = false
+        pausedForRoute = false
+        sessionReady = false
         resumeLoops()
     }
 
+    /// Sets the session up once; later calls return at once until
+    /// sessionReady is cleared. While interrupted nothing asks for the
+    /// session back (Sep 29 2026): a mixing session can usually be activated
+    /// during a phone call, so asking would play the world under the call.
+    /// .ended, activate() and a media reset clear `interrupted`.
     private func prepareSession() -> Bool {
         guard active, !interrupted else { return false }
+        if sessionReady { return true }
         let session = AVAudioSession.sharedInstance()
         do {
-            // A running voice call owns its recording category and route.
-            if session.category != .playAndRecord && (session.category != .playback || !session.categoryOptions.contains(.mixWithOthers)) {
+            // Sep 29 2026: only the untouched default (.soloAmbient) or
+            // .ambient is switched. A voice call's .playAndRecord and the
+            // Library's or a described video's own .playback stay theirs;
+            // the earcons play inside whatever session is already there.
+            if session.category == .soloAmbient || session.category == .ambient {
                 try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             }
             try session.setActive(true)
+            sessionReady = true
             return true
-        } catch { return false }
+        } catch {
+            sessionReady = false
+            return false
+        }
     }
 
     private func resumeLoops() {
-        guard prepareSession() else { return }
+        guard !pausedForRoute, prepareSession() else { return }
         if let ambiencePlayer, !ambiencePlayer.isPlaying { ambiencePlayer.play() }
         if let roomTonePlayer, !roomTonePlayer.isPlaying { roomTonePlayer.play() }
     }
 
+    /// True when `kind` already has a player loaded from this exact source
+    /// (url plus revision), so the caller can play it straight away.
+    func hasEventSound(kind: String, source: String) -> Bool {
+        filePlayers[kind] != nil && eventSources[kind] == source
+    }
+
     /// Swap a synth earcon for one of her real sounds (the manifest lane).
-    func installEventSound(kind: String, fileURL: URL) {
+    func installEventSound(kind: String, fileURL: URL, source: String? = nil) {
         guard let p = try? AVAudioPlayer(contentsOf: fileURL) else { return }
         p.prepareToPlay()
         filePlayers[kind] = p
+        eventSources[kind] = source
     }
 
     /// The ward bed — one low looping ambience for the district she stands
@@ -371,7 +443,9 @@ final class WorldTones {
         p.numberOfLoops = -1
         p.volume = 0.22
         p.prepareToPlay()
-        if prepareSession() { p.play() }
+        // Sep 29 2026: after headphones come out a new place's bed waits,
+        // paused, like the old one (resumeLoops starts it later).
+        if !pausedForRoute && prepareSession() { p.play() }
         ambiencePlayer = p
         ambienceKey = key
     }
@@ -389,18 +463,32 @@ final class WorldTones {
         // the ward, so it must never drown the neighbourhood out.
         p.volume = 0.16
         p.prepareToPlay()
-        if prepareSession() { p.play() }
+        if !pausedForRoute && prepareSession() { p.play() }
         roomTonePlayer = p
         roomToneKey = key
     }
 
     func play(_ kind: String) {
+        /* Sep 29 2026: while interrupted an earcon stays quiet and does not
+         * ask for the session back (see prepareSession). Once the session
+         * is ready it restarts the loops, as in build 319, so an .ended
+         * without shouldResume does not leave the world bare. resumeLoops()
+         * waits while headphones are out (pausedForRoute), so it never
+         * starts the loops on the loudspeaker. */
         guard prepareSession() else { return }
         resumeLoops()
         // Real file first: independent player, immune to engine state.
         if let file = filePlayers[kind] {
             file.currentTime = 0
-            file.play()
+            if file.play() { return }
+            // Sep 29 2026: sessionReady can be stale if another part of the
+            // app deactivated the shared session. Set it up once more; a
+            // player that still will not start is dropped, so the next
+            // earcon of this kind loads the file fresh.
+            sessionReady = false
+            if prepareSession(), file.play() { return }
+            filePlayers[kind] = nil
+            eventSources[kind] = nil
             return
         }
         let fallback = kind.hasPrefix("move.step.") ? "move" : kind.hasPrefix("ui.") ? "look" : kind.hasPrefix("social.") ? "emote" : kind
@@ -411,10 +499,13 @@ final class WorldTones {
             started = false
             do {
                 try engine.start()
-                started = true
             } catch {
-                return
+                // Sep 29 2026: same stale-session retry as the file lane.
+                sessionReady = false
+                guard prepareSession() else { return }
+                do { try engine.start() } catch { return }
             }
+            started = true
         }
         guard engine.isRunning else { return }
         player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
@@ -424,6 +515,7 @@ final class WorldTones {
 
     func stop() {
         active = false
+        sessionReady = false
         for file in filePlayers.values { file.stop() }
         ambiencePlayer?.stop()
         ambiencePlayer = nil
