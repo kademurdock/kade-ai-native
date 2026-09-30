@@ -1,10 +1,12 @@
 import SwiftUI
 
-// MARK: - Family history: the lists (placeholder)
+// MARK: - Family history: the lists (Sep 29 2026)
 //
-// DESIGN 1.9 to 1.11: everyone in the tree (with search), Discoveries,
-// Family mysteries (behind their heads-up) and the stories list are a later
-// step of the build.
+// One route per list, each its own screen (so any can move to a later
+// build without touching the others):
+// - Everyone in the tree (DESIGN 1.11), with search;
+// - Stories (1.9);
+// - Discoveries and Family mysteries (1.10), FamilyFindingsScreen.swift.
 
 /// Which list the screen shows.
 enum FamilyListMode: String, Hashable {
@@ -16,15 +18,15 @@ struct FamilyListScreen: View {
     let mode: FamilyListMode
 
     var body: some View {
-        FamilyPlaceholderScreen(title: route.fallbackTitle)
-    }
-
-    private var route: FamilyRoute {
         switch mode {
-        case .people: return .people
-        case .stories: return .stories
-        case .discoveries: return .discoveries
-        case .mysteries: return .mysteries
+        case .people:
+            FamilyPlaceholderScreen(title: FamilyRoute.people.fallbackTitle)
+        case .stories:
+            FamilyPlaceholderScreen(title: FamilyRoute.stories.fallbackTitle)
+        case .discoveries:
+            FamilyFindingsScreen(apiClient: apiClient, mysteries: false)
+        case .mysteries:
+            FamilyFindingsScreen(apiClient: apiClient, mysteries: true)
         }
     }
 }

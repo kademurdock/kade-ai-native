@@ -619,8 +619,12 @@ struct FHFinding: Decodable, Equatable {
     var spoken: String? = nil
     /// The first version's one line.
     var summary: String? = nil
+    /// "Research finding, strong DNA evidence, ... not proven by records".
+    var proofSpoken: String? = nil
 
-    enum CodingKeys: String, CodingKey { case key, title, text, proof, proofText, people, evidence, storySlug, dna, spoken, summary }
+    enum CodingKeys: String, CodingKey {
+        case key, title, text, proof, proofText, people, evidence, storySlug, dna, spoken, summary, proofSpoken
+    }
 }
 
 extension FHFinding {
@@ -637,6 +641,7 @@ extension FHFinding {
         dna = c.fhBool(.dna)
         spoken = c.fhString(.spoken)
         summary = c.fhString(.summary)
+        proofSpoken = c.fhString(.proofSpoken)
     }
 }
 
@@ -1759,14 +1764,18 @@ extension FHMysteriesLink {
 }
 
 /// GET /findings (discoveries plus the mysteries row) and
-/// GET /findings?group=mysteries (the heads-up and the mysteries).
+/// GET /findings?group=mysteries (its title, the heads-up, whether this
+/// account may see them, and the mysteries).
 struct FHFindings: Decodable, Equatable {
     var discoveries: [FHFinding] = []
     var mysteries: FHMysteriesLink? = nil
+    var title: String? = nil
     var headsUp: String? = nil
+    /// False when the family mysteries are switched off for this account.
+    var available: Bool? = nil
     var findings: [FHFinding] = []
 
-    enum CodingKeys: String, CodingKey { case discoveries, mysteries, headsUp, findings }
+    enum CodingKeys: String, CodingKey { case discoveries, mysteries, title, headsUp, available, findings }
 }
 
 extension FHFindings {
@@ -1774,13 +1783,17 @@ extension FHFindings {
         if let c = try? decoder.container(keyedBy: CodingKeys.self) {
             discoveries = c.fhList(.discoveries)
             mysteries = c.fh(.mysteries)
+            title = c.fhString(.title)
             headsUp = c.fhString(.headsUp)
+            available = c.fhBool(.available)
             findings = c.fhList(.findings)
         } else {
             // The first version answered with a bare list.
             discoveries = []
             mysteries = nil
+            title = nil
             headsUp = nil
+            available = nil
             findings = (try? LossyArray<FHFinding>(from: decoder))?.elements ?? []
         }
     }

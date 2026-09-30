@@ -136,6 +136,10 @@ import Foundation
         check(findings.discoveries.count == 1 && findings.mysteries?.count == 1, "discoveries and the mysteries row read")
         let mysteries = try decode(FHFindings.self, FamilyDemoData.mysteries)
         check(mysteries.findings.first?.proof == "dna" && mysteries.headsUp != nil, "the mysteries read")
+        let mysteriesV2 = try decode(FHFindings.self, #"{"title":"Family mysteries","headsUp":"This part may be news.","available":false,"findings":[]}"#)
+        check(mysteriesV2.title == "Family mysteries" && mysteriesV2.available == false && mysteriesV2.findings.isEmpty, "switched-off mysteries say so")
+        let proofWords = try decode(FHFinding.self, #"{"key":"f1","title":"Made up.","proof":"dna","proofText":"Strong DNA evidence","proofSpoken":"Research finding, strong DNA evidence, not proven by records","dna":true}"#)
+        check(proofWords.proofSpoken?.hasPrefix("Research finding") == true && proofWords.dna == true, "a finding's spoken proof words read")
 
         let play = try decode(FHPlay.self, FamilyDemoData.play)
         check(play.rounds.count == 3 && play.rounds.allSatisfy { $0.playable }, "every game round is playable")

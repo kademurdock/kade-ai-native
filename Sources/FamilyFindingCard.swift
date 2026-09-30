@@ -164,8 +164,11 @@ struct FamilyHeadsUpGate: View {
     let headsUp: String
     let findings: [FHFinding]
     var level: AccessibilityHeadingLevel = .h2
-    /// Open from the start (the Family mysteries screen, after its own Show).
+    /// Open from the start.
     var startsOpen: Bool = false
+    /// The heading is the screen's own (the Family mysteries screen): VoiceOver
+    /// starts on it after the push.
+    var focusOnArrival: Bool = false
 
     @State private var shown: Bool?
     @AccessibilityFocusState private var focusKey: String?
@@ -174,7 +177,7 @@ struct FamilyHeadsUpGate: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            FamilyHeading(text: title, level: level)
+            FamilyHeading(text: title, level: level, focusOnArrival: focusOnArrival)
             Text(headsUp)
                 .fixedSize(horizontal: false, vertical: true)
             toggle
