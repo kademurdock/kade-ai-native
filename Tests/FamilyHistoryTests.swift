@@ -148,6 +148,8 @@ import Foundation
         check(people.sections.count == 3 && people.total == 8, "everyone in the tree reads")
         let search = try decode(FHPeople.self, FamilyDemoData.search)
         check(search.people.count == 1 && search.spoken == "1 person found", "search results read")
+        let searchV2 = try decode(FHPeople.self, #"{"query":"example","total":13,"text":"13 people found","spoken":"13 people found","people":[{"id":"@X1@","name":"Ada Example"}]}"#)
+        check(searchV2.text == "13 people found" && searchV2.query == "example" && searchV2.total == 13, "a search says what was asked and how many were found")
         let note = try decode(FHNoteSent.self, FamilyDemoData.noteSent)
         check(note.ok == true && note.text?.isEmpty == false, "a sent note reads")
 

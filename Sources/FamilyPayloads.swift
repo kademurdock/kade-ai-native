@@ -1878,12 +1878,17 @@ struct FHPeople: Decodable, Equatable {
     var prev: Int? = nil
     var next: Int? = nil
     var pageSpoken: String? = nil
-    /// "12 people found".
+    /// Search: "12 people found", to show and to say.
+    var text: String? = nil
     var spoken: String? = nil
+    /// Search: what was asked.
+    var query: String? = nil
     var sections: [FHPeopleSection] = []
     var people: [FHPerson] = []
 
-    enum CodingKeys: String, CodingKey { case group, title, total, from, count, prev, next, pageSpoken, spoken, sections, people }
+    enum CodingKeys: String, CodingKey {
+        case group, title, total, from, count, prev, next, pageSpoken, text, spoken, query, sections, people
+    }
 }
 
 extension FHPeople {
@@ -1897,7 +1902,9 @@ extension FHPeople {
             prev = c.fhInt(.prev)
             next = c.fhInt(.next)
             pageSpoken = c.fhString(.pageSpoken)
+            text = c.fhString(.text)
             spoken = c.fhString(.spoken)
+            query = c.fhString(.query)
             sections = c.fhList(.sections)
             people = c.fhList(.people)
         } else {

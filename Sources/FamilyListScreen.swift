@@ -20,7 +20,7 @@ struct FamilyListScreen: View {
     var body: some View {
         switch mode {
         case .people:
-            FamilyPlaceholderScreen(title: FamilyRoute.people.fallbackTitle)
+            FamilyPeopleScreen(apiClient: apiClient)
         case .stories:
             FamilyPlaceholderScreen(title: FamilyRoute.stories.fallbackTitle)
         case .discoveries:
