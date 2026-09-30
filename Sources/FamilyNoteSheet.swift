@@ -9,6 +9,11 @@ import UIKit
 // thanks ("Sent to Ada. Thank you."), then it closes. Only the tree's owner
 // reads notes. "Ask for this photo to be restored" is the same route with
 // kind "restore-request", sent in one tap from the viewer (no sheet).
+//
+// DESIGN 2.0: when a note cannot be sent, the server's words and a Try
+// again button appear, are said, and take VoiceOver focus (the words she
+// wrote stay). Words that are not sent are never lost by accident: the
+// swipe down is off while there are any, and Cancel asks first.
 
 /// What a note is about, and the sheet's words.
 struct FamilyNoteRequest: Identifiable {
@@ -29,8 +34,14 @@ struct FamilyNoteSheet: View {
     @State private var text = ""
     @State private var sending = false
     @State private var problem: String?
+    @State private var askDiscard = false
     @AccessibilityFocusState private var fieldFocused: Bool
     private let limit = 2000
+
+    /// Words written and not sent yet.
+    private var hasWords: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
@@ -39,9 +50,16 @@ struct FamilyNoteSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarButtons }
         }
-        .accessibilityAction(.escape) { dismiss() }
+        .interactiveDismissDisabled(hasWords || sending)
+        .accessibilityAction(.escape) { cancel() }
         .onChange(of: text) { _, newValue in
             if newValue.count > limit { text = String(newValue.prefix(limit)) }
+        }
+        .confirmationDialog("Discard this note?", isPresented: $askDiscard, titleVisibility: .visible) {
+            Button("Discard", role: .destructive) { dismiss() }
+            Button("Keep writing", role: .cancel) {}
+        } message: {
+            Text("What you wrote has not been sent.")
         }
         .task {
             try? await Task.sleep(nanoseconds: 650_000_000)
@@ -65,8 +83,9 @@ struct FamilyNoteSheet: View {
             }
             if let problem {
                 Section {
-                    Text(problem)
-                        .foregroundStyle(.red)
+                    FamilyTryAgain(message: problem) {
+                        Task { await send() }
+                    }
                 }
             }
         }
@@ -75,7 +94,8 @@ struct FamilyNoteSheet: View {
     @ToolbarContentBuilder
     private var toolbarButtons: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel") { dismiss() }
+            Button("Cancel") { cancel() }
+                .disabled(sending)
         }
         ToolbarItem(placement: .confirmationAction) {
             Button(sending ? "Sending…" : "Send") {
@@ -86,7 +106,17 @@ struct FamilyNoteSheet: View {
     }
 
     private var canSend: Bool {
-        !sending && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !sending && hasWords
+    }
+
+    /// Cancel, or the escape gesture: asks first when words would be lost.
+    private func cancel() {
+        guard !sending else { return }
+        if hasWords {
+            askDiscard = true
+        } else {
+            dismiss()
+        }
     }
 
     @MainActor
@@ -105,10 +135,9 @@ struct FamilyNoteSheet: View {
         } catch {
             sending = false
             if LibraryLoad.cancelled(error) { return }
-            let message: String = (error as? FamilyFailure)?.message ?? FamilyFailure.offline.message
-            problem = message
+            // FamilyTryAgain says it and takes VoiceOver focus as it appears.
+            problem = (error as? FamilyFailure)?.message ?? FamilyFailure.offline.message
             Earcons.shared.play(.error)
-            FamilyAnnounce.say(message)
         }
     }
 }
