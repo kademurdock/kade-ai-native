@@ -107,6 +107,42 @@ enum FamilyGeometry {
         }
     }
 
+    /// A point on a circle round `center`, `degrees` from the right and
+    /// growing clockwise on screen (y grows downwards), so 270 is straight up.
+    static func point(center: FHPoint, radius: Double, degrees: Double) -> FHPoint {
+        let radians: Double = degrees * Double.pi / 180
+        return FHPoint(x: center.x + radius * cos(radians), y: center.y + radius * sin(radians))
+    }
+
+    /// One wedge of a ring as a closed outline: out along the outer arc from
+    /// its start to its end, then back along the inner arc. Points, never an
+    /// arc call, so which way "clockwise" means can never flip the drawing.
+    static func wedgeOutline(center: FHPoint, inner: Double, outer: Double, arc: FHArc, steps: Int = 12) -> [FHPoint] {
+        let n: Int = max(1, steps)
+        var out: [FHPoint] = []
+        for i in 0...n {
+            let t: Double = Double(i) / Double(n)
+            out.append(point(center: center, radius: outer, degrees: arc.start + arc.sweep * t))
+        }
+        for i in 0...n {
+            let t: Double = Double(i) / Double(n)
+            out.append(point(center: center, radius: max(0, inner), degrees: arc.end - arc.sweep * t))
+        }
+        return out
+    }
+
+    /// How big a face sits in each wedge: big for parents and grandparents,
+    /// small further out, none past 16 wedges (the list names them).
+    static func fanFaceSize(slots: Int) -> Double {
+        switch slots {
+        case ...2: return 64
+        case 3...4: return 56
+        case 5...8: return 36
+        case 9...16: return 22
+        default: return 0
+        }
+    }
+
     // MARK: Where and when: a decade's band
 
     /// The middle of lane `lane` of `lanes` across a band `width` wide.

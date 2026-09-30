@@ -840,6 +840,27 @@ extension FHMediaInfo {
 
 // MARK: - GET /dna
 
+/// One DNA match in a cluster, when the export sends them (the family sees
+/// the research as the owner does): a name, the shared cM, the segments.
+struct FHMatch: Decodable, Equatable {
+    var name: String? = nil
+    var cM: Double? = nil
+    var segments: Int? = nil
+    var note: String? = nil
+
+    enum CodingKeys: String, CodingKey { case name, cM, cm, segments, note }
+}
+
+extension FHMatch {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.fhString(.name)
+        cM = c.fhDouble(.cM) ?? c.fhDouble(.cm)
+        segments = c.fhInt(.segments)
+        note = c.fhString(.note)
+    }
+}
+
 struct FHDNACard: Decodable, Equatable {
     var key: String? = nil
     var title: String? = nil
@@ -849,8 +870,19 @@ struct FHDNACard: Decodable, Equatable {
     var proofText: String? = nil
     var storySlug: String? = nil
     var spoken: String? = nil
+    /// "about 90 to 400 cM", for Details for DNA fans.
+    var band: String? = nil
+    /// How many DNA cousins are in the cluster.
+    var members: Int? = nil
+    var matches: [FHMatch] = []
 
-    enum CodingKeys: String, CodingKey { case key, title, text, people, proof, proofText, storySlug, spoken }
+    enum CodingKeys: String, CodingKey { case key, title, text, people, proof, proofText, storySlug, spoken, band, members, matches }
+
+    /// The same card as a finding, so it draws with the finding card.
+    var asFinding: FHFinding {
+        FHFinding(key: key, title: title, text: text, proof: proof, proofText: proofText, people: people,
+                  storySlug: storySlug, spoken: spoken)
+    }
 }
 
 extension FHDNACard {
@@ -864,6 +896,31 @@ extension FHDNACard {
         proofText = c.fhString(.proofText)
         storySlug = c.fhString(.storySlug)
         spoken = c.fhString(.spoken)
+        band = c.fhString(.band)
+        members = c.fhInt(.members)
+        matches = c.fhList(.matches)
+    }
+}
+
+/// A cluster of DNA cousins, for Details for DNA fans.
+struct FHCluster: Decodable, Equatable {
+    var key: String? = nil
+    var title: String? = nil
+    var band: String? = nil
+    var members: Int? = nil
+    var matches: [FHMatch] = []
+
+    enum CodingKeys: String, CodingKey { case key, title, band, members, matches }
+}
+
+extension FHCluster {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = c.fhString(.key)
+        title = c.fhString(.title)
+        band = c.fhString(.band)
+        members = c.fhInt(.members)
+        matches = c.fhList(.matches)
     }
 }
 
@@ -887,8 +944,10 @@ extension FHMysteries {
 struct FHDetails: Decodable, Equatable {
     var title: String? = nil
     var rows: [String] = []
+    var caveats: [String] = []
+    var clusters: [FHCluster] = []
 
-    enum CodingKeys: String, CodingKey { case title, rows }
+    enum CodingKeys: String, CodingKey { case title, rows, caveats, clusters }
 }
 
 extension FHDetails {
@@ -896,6 +955,8 @@ extension FHDetails {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         title = c.fhString(.title)
         rows = c.fhList(.rows)
+        caveats = c.fhList(.caveats)
+        clusters = c.fhList(.clusters)
     }
 }
 
@@ -904,36 +965,48 @@ extension FHDetails {
 struct FHDNATest: Decodable, Equatable {
     /// self, fullSibling, halfSibling, sharedLine.
     var applies: String? = nil
+    /// "Ada's DNA test counts for you too".
+    var title: String? = nil
     var intro: String? = nil
     var cards: [FHDNACard] = []
     var mysteries: FHMysteries? = nil
     var details: FHDetails? = nil
+    /// "Full siblings share about half their DNA, but not the same half. ..."
+    var footnote: String? = nil
 
-    enum CodingKeys: String, CodingKey { case applies, intro, cards, mysteries, details }
+    enum CodingKeys: String, CodingKey { case applies, title, intro, cards, mysteries, details, footnote }
 }
 
 extension FHDNATest {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         applies = c.fhString(.applies)
+        title = c.fhString(.title)
         intro = c.fhString(.intro)
         cards = c.fhList(.cards)
         mysteries = c.fh(.mysteries)
         details = c.fh(.details)
+        footnote = c.fhString(.footnote)
     }
 }
 
 /// One slot of the paper fan: an ancestor's place in one generation.
 struct FHWedge: Decodable, Equatable {
     var ahnen: Int? = nil
-    /// known, living, unknown, research.
+    /// known, unknown, research (unknown values draw as unknown).
     var state: String? = nil
     var side: String? = nil
+    /// A living relative (drawn as known: a name is a name).
+    var living: Bool? = nil
     var person: FHPerson? = nil
     /// "1 in 4".
     var share: String? = nil
 
-    enum CodingKeys: String, CodingKey { case ahnen, state, side, person, share }
+    enum CodingKeys: String, CodingKey { case ahnen, state, side, living, person, share }
+
+    var isResearch: Bool { state == "research" }
+    /// A slot with somebody in it (known, living or research).
+    var isNamed: Bool { person != nil && state != "unknown" }
 }
 
 extension FHWedge {
@@ -942,6 +1015,7 @@ extension FHWedge {
         ahnen = c.fhInt(.ahnen)
         state = c.fhString(.state)
         side = c.fhString(.side)
+        living = c.fhBool(.living)
         person = c.fh(.person)
         share = c.fhString(.share)
     }
@@ -974,17 +1048,23 @@ extension FHGeneration {
 
 /// "Where your DNA comes from, on paper".
 struct FHPaper: Decodable, Equatable {
+    /// "Where your DNA comes from, on paper".
+    var title: String? = nil
     var startGen: Int? = nil
+    /// One side only (a half fan): the tree follows one parent's family.
+    var half: Bool? = nil
     var note: String? = nil
     var generations: [FHGeneration] = []
 
-    enum CodingKeys: String, CodingKey { case startGen, note, generations }
+    enum CodingKeys: String, CodingKey { case title, startGen, half, note, generations }
 }
 
 extension FHPaper {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = c.fhString(.title)
         startGen = c.fhInt(.startGen)
+        half = c.fhBool(.half)
         note = c.fhString(.note)
         generations = c.fhList(.generations)
     }
@@ -992,30 +1072,38 @@ extension FHPaper {
 
 struct FHBirthplaceRow: Decodable, Equatable {
     var place: String? = nil
+    /// "state" or "country".
+    var kind: String? = nil
     var count: Int? = nil
     var people: [String] = []
 
-    enum CodingKeys: String, CodingKey { case place, count, people }
+    enum CodingKeys: String, CodingKey { case place, kind, count, people }
 }
 
 extension FHBirthplaceRow {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         place = c.fhString(.place)
+        kind = c.fhString(.kind)
         count = c.fhInt(.count)
         people = c.fhList(.people)
     }
 }
 
-/// Birthplaces in counts, never percentages.
+/// Birthplaces in counts, never percentages: the server's chosen generation,
+/// and every generation that has any (`byGen`, the same shape).
 struct FHBirthplaces: Decodable, Equatable {
     var gen: Int? = nil
     var title: String? = nil
     var rows: [FHBirthplaceRow] = []
     var unknown: Int? = nil
+    /// "9 in {state}, 7 in {state}. 14 not known yet."
+    var text: String? = nil
+    var spoken: String? = nil
     var note: String? = nil
+    var byGen: [FHBirthplaces] = []
 
-    enum CodingKeys: String, CodingKey { case gen, title, rows, unknown, note }
+    enum CodingKeys: String, CodingKey { case gen, title, rows, unknown, text, spoken, note, byGen }
 }
 
 extension FHBirthplaces {
@@ -1025,7 +1113,10 @@ extension FHBirthplaces {
         title = c.fhString(.title)
         rows = c.fhList(.rows)
         unknown = c.fhInt(.unknown)
+        text = c.fhString(.text)
+        spoken = c.fhString(.spoken)
         note = c.fhString(.note)
+        byGen = c.fhList(.byGen)
     }
 }
 
@@ -1046,52 +1137,74 @@ extension FHAbroadRow {
 
 struct FHAbroad: Decodable, Equatable {
     var text: String? = nil
+    var spoken: String? = nil
     var rows: [FHAbroadRow] = []
 
-    enum CodingKeys: String, CodingKey { case text, rows }
+    enum CodingKeys: String, CodingKey { case text, spoken, rows }
 }
 
 extension FHAbroad {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         text = c.fhString(.text)
+        spoken = c.fhString(.spoken)
         rows = c.fhList(.rows)
     }
 }
 
 /// "About 12.5% on average" for one kind of relative.
 struct FHAverage: Decodable, Equatable {
+    var key: String? = nil
     var relationClass: String? = nil
     var percent: String? = nil
+    /// "With a first cousin: about 12.5% on average."
+    var text: String? = nil
     var details: String? = nil
 
-    enum CodingKeys: String, CodingKey { case relationClass = "class", percent, details }
+    enum CodingKeys: String, CodingKey { case key, relationClass = "class", percent, text, details }
+
+    /// The row's words: the server's sentence, else the kind and the share.
+    var shownText: String {
+        if let text, !text.isEmpty { return text }
+        let parts: [String] = [relationClass, percent].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.joined(separator: ": ")
+    }
 }
 
 extension FHAverage {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = c.fhString(.key)
         relationClass = c.fhString(.relationClass)
         percent = c.fhString(.percent)
+        text = c.fhString(.text)
         details = c.fhString(.details)
     }
 }
 
 struct FHCompare: Decodable, Equatable {
+    var title: String? = nil
     var averages: [FHAverage] = []
+    var note: String? = nil
 
-    enum CodingKeys: String, CodingKey { case averages }
+    enum CodingKeys: String, CodingKey { case title, averages, note }
 }
 
 extension FHCompare {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = c.fhString(.title)
         averages = c.fhList(.averages)
+        note = c.fhString(.note)
     }
 }
 
 struct FHDNA: Decodable, Equatable {
     var title: String? = nil
+    /// Whose paper this is (the viewer, a spouse or a child), and their name
+    /// when it is not the viewer.
+    var forId: String? = nil
+    var forName: String? = nil
     var follows: String? = nil
     var test: FHDNATest? = nil
     var paper: FHPaper? = nil
@@ -1099,13 +1212,17 @@ struct FHDNA: Decodable, Equatable {
     var abroad: FHAbroad? = nil
     var compare: FHCompare? = nil
 
-    enum CodingKeys: String, CodingKey { case title, follows, test, paper, birthplaces, abroad, compare }
+    enum CodingKeys: String, CodingKey {
+        case title, forId = "for", forName, follows, test, paper, birthplaces, abroad, compare
+    }
 }
 
 extension FHDNA {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         title = c.fhString(.title)
+        forId = c.fhString(.forId)
+        forName = c.fhString(.forName)
         follows = c.fhString(.follows)
         test = c.fh(.test)
         paper = c.fh(.paper)

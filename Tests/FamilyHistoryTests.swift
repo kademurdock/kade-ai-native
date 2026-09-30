@@ -81,6 +81,38 @@ import Foundation
         check(dna.paper?.generations.map { $0.wedges.count } == [4, 8], "the paper fan's generations read")
         check(dna.compare?.averages.first?.relationClass == "first cousin", "\"class\" reads as relationClass")
         check(dna.birthplaces?.rows.first?.count == 3 && dna.abroad?.rows.count == 1, "birthplaces and abroad read")
+        let dnaV2 = try decode(FHDNA.self, #"""
+        {"title":"Ada's DNA test counts for you too","for":"@X1@","forName":null,
+         "test":{"applies":"fullSibling","title":"Ada's DNA test counts for you too","intro":"Made up.",
+          "cards":[{"key":"c1","title":"The family of your grandparents","text":"12 of Ada's DNA cousins descend from this family.","people":[],"proof":"records","proofText":"Proven by records","storySlug":null,"spoken":"The family of your grandparents.","band":"about 90 to 400 cM","members":12,"matches":[{"name":"Invented Match One","cM":120,"segments":6},{"name":"Invented Match Two","cM":"95.5"}]}],
+          "mysteries":null,
+          "details":{"title":"Details for DNA fans","rows":["Invented method."],"caveats":["An invented caveat."],"clusters":[{"key":"c1","title":"The family of your grandparents","band":"about 90 to 400 cM","members":12,"matches":[{"name":"Invented Match One","cM":120,"segments":6}]}]},
+          "footnote":"Full siblings share about half their DNA, but not the same half."},
+         "paper":{"title":"Where your DNA comes from, on paper","startGen":2,"half":true,"note":"Averages.",
+          "generations":[{"gen":1,"name":"parents","slots":1,"named":1,"text":"Your mother has a name.","spoken":"Generation 1, parents: 1 of 1 known",
+           "wedges":[{"ahnen":3,"state":"known","side":"mother","living":true,"person":{"id":"@X2@","name":"Cora Example"},"share":"1 in 2"}]}]},
+         "birthplaces":{"gen":3,"title":"Where your 8 great-grandparents were born","rows":[{"place":"Invented Land","kind":"country","count":1,"people":["@X4@"]}],"unknown":7,"text":"1 in Invented Land. 7 not known yet.","spoken":"Where your 8 great-grandparents were born: 1 in Invented Land. 7 not known yet.","note":"Not an ethnicity estimate.",
+          "byGen":[{"gen":2,"title":"Where your 4 grandparents were born","rows":[],"unknown":4},{"gen":3,"title":"Where your 8 great-grandparents were born","rows":[{"place":"Invented Land","count":1}],"unknown":7}]},
+         "abroad":{"text":"1 of your ancestors was born outside the United States.","spoken":"1 of your ancestors was born outside the United States.","rows":[]},
+         "compare":{"title":"How much DNA you share with a relative","averages":[{"key":"firstCousin","class":"a first cousin","percent":"about 12.5%","text":"With a first cousin: about 12.5% on average.","details":null},{"class":"a parent or child","percent":"about 50%"}],"note":"On paper, on average."}}
+        """#)
+        check(dnaV2.forId == "@X1@" && dnaV2.test?.title == dnaV2.title && dnaV2.test?.footnote != nil, "the DNA answer names whose paper it is, and the test's own title")
+        let clusterCard: FHDNACard? = dnaV2.test?.cards.first
+        check(clusterCard?.members == 12 && clusterCard?.band == "about 90 to 400 cM" && clusterCard?.matches.count == 2, "a card carries its cluster's size, band and matches")
+        check(clusterCard?.matches.last?.cM == 95.5 && clusterCard?.matches.first?.segments == 6, "a match's shared cM reads, also as text")
+        check(clusterCard?.asFinding.title == clusterCard?.title && clusterCard?.asFinding.proof == "records", "a DNA card draws as a finding")
+        check(dnaV2.test?.details?.caveats.count == 1 && dnaV2.test?.details?.clusters.first?.matches.count == 1, "the details carry caveats and clusters")
+        check(dnaV2.paper?.half == true && dnaV2.paper?.title != nil, "a half fan says so")
+        let onlyWedge: FHWedge? = dnaV2.paper?.generations.first?.wedges.first
+        check(onlyWedge?.living == true && onlyWedge?.isNamed == true && onlyWedge?.isResearch == false, "a living relative's slot counts as named")
+        check(dnaV2.birthplaces?.byGen.count == 2 && dnaV2.birthplaces?.byGen.last?.rows.first?.count == 1, "birthplaces come for every generation")
+        check(dnaV2.birthplaces?.rows.first?.kind == "country" && dnaV2.birthplaces?.text != nil, "a birthplace row says whether it is a country")
+        check(dnaV2.abroad?.spoken != nil && dnaV2.compare?.title != nil && dnaV2.compare?.note != nil, "abroad and compare carry their words")
+        check(dnaV2.compare?.averages.first?.shownText == "With a first cousin: about 12.5% on average."
+              && dnaV2.compare?.averages.last?.shownText == "a parent or child: about 50%", "an average's words, or its kind and share")
+        let unknownSlot = try decode(FHWedge.self, #"{"ahnen":9,"state":"unknown","side":"father","person":null}"#)
+        let researchSlot = try decode(FHWedge.self, #"{"ahnen":12,"state":"research","side":"mother","person":{"id":"@X7@"}}"#)
+        check(!unknownSlot.isNamed && researchSlot.isNamed && researchSlot.isResearch, "unknown and research slots")
 
         let timeline = try decode(FHTimeline.self, FamilyDemoData.timeline)
         check(timeline.decades.map { $0.decade ?? 0 } == [1950, 1900, 1870], "decades run newest first")
@@ -185,6 +217,15 @@ import Foundation
             check(zip(whole, whole.dropFirst()).allSatisfy { abs($0.end - $1.start) < 1e-9 }, "\(count) wedges leave no gaps")
             check(whole.first?.start == 180 && half.first?.start == 270, "a fan starts at the left, a right half fan at the top")
         }
+        let hub = FHPoint(x: 100, y: 100)
+        let up = FamilyGeometry.point(center: hub, radius: 50, degrees: 270)
+        let left = FamilyGeometry.point(center: hub, radius: 50, degrees: 180)
+        check(abs(up.x - 100) < 1e-9 && abs(up.y - 50) < 1e-9 && abs(left.x - 50) < 1e-9, "270 degrees is straight up, 180 is left")
+        let outline = FamilyGeometry.wedgeOutline(center: hub, inner: 20, outer: 50, arc: FHArc(start: 180, end: 270), steps: 4)
+        check(outline.count == 10 && outline.allSatisfy { $0.y <= 100 + 1e-9 }, "a wedge of the upper half stays above its centre")
+        check(abs(outline[0].x - 50) < 1e-9 && abs(outline[4].y - 50) < 1e-9 && abs(outline[9].x - 80) < 1e-9, "a wedge runs out along the outer arc and back along the inner")
+        check(FamilyGeometry.fanFaceSize(slots: 4) > FamilyGeometry.fanFaceSize(slots: 16)
+              && FamilyGeometry.fanFaceSize(slots: 32) == 0, "faces shrink further out and stop past 16")
         let normal = FamilyTreeMetrics()
         for scale in FamilyTreeScale.allCases {
             let scaled = normal.scaled(scale)
