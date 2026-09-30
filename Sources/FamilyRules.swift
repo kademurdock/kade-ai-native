@@ -290,6 +290,9 @@ enum FamilyDates {
 enum FamilyCacheNames {
     static let folder = "FamilyHistory"
     static let homeFile = "home.json"
+    /// Kept alongside pictures so archive updates can invalidate them even
+    /// when no home screen has been loaded during this launch.
+    static let versionFile = "version.txt"
     /// Pictures on disk, all accounts together: 250 MB, least recently used out first.
     static let diskLimit = 250 * 1024 * 1024
 

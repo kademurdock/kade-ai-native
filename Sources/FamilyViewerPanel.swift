@@ -31,6 +31,7 @@ struct FamilyViewerPanel: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @KadeContrastPolicy private var highContrast: Bool
     @State private var showText = false
+    @State private var showSource = false
 
     private var solid: Bool { reduceTransparency || highContrast }
 
@@ -43,6 +44,7 @@ struct FamilyViewerPanel: View {
                 dateLine
                 descriptionBox
                 textBox
+                sourceBox
                 actions
                 if let said {
                     Text(said)
@@ -215,6 +217,38 @@ struct FamilyViewerPanel: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
+            }
+        }
+    }
+
+    // MARK: Source
+
+    /// The saved citation remains readable even after a provider membership
+    /// ends; visiting the source website is a separate optional action.
+    @ViewBuilder
+    private var sourceBox: some View {
+        if let source = info?.source {
+            let title = FamilyAccessRules.nonEmpty(source.title)
+            let citation = FamilyAccessRules.nonEmpty(source.citation)
+            if title != nil || citation != nil || source.website != nil {
+                DisclosureGroup("Source", isExpanded: $showSource) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let title {
+                            Text(title).fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let citation, citation != (title ?? "") {
+                            Text(citation)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                        if let website = source.website {
+                            Link("Open source website", destination: website)
+                                .accessibilityHint("Opens the source provider's website.")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                }
             }
         }
     }

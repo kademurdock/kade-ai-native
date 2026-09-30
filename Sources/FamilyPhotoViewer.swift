@@ -73,8 +73,8 @@ struct FamilyPhotoViewer: View {
     /// (with that copy's own words once /media/:id/info has answered).
     private var shown: FHImage? {
         guard let item else { return nil }
-        guard swapped.contains(item.id), let other = item.otherCopyImage() else { return item }
-        return infos[other.id]?.image ?? other
+        let reference = swapped.contains(item.id) ? (item.otherCopyImage() ?? item) : item
+        return infos[reference.id]?.image ?? reference
     }
 
     private var info: FHMediaInfo? {

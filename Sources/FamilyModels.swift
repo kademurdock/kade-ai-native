@@ -458,6 +458,16 @@ struct FHImage: Decodable, Equatable, Identifiable {
         copy.face = nil
         copy.sizes = []
         copy.shareName = nil
+        // These words and dimensions belong to the previous copy. Wait for
+        // the selected copy's /info rather than describe a colourised photo
+        // as black-and-white, or attribute repaired writing to an original.
+        copy.description = nil
+        copy.described = nil
+        copy.text = nil
+        copy.hasText = nil
+        copy.textAuto = nil
+        copy.w = nil
+        copy.h = nil
         if isRestoredCopy {
             copy.showing = "original"
             copy.restored = id

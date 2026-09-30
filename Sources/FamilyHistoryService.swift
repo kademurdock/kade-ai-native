@@ -14,7 +14,7 @@ import Foundation
 //   gallery pages, the timeline, the places and the DNA answer;
 // - on disk: /home at Caches/FamilyHistory/<account>/home.json (Caches, so
 //   it is never backed up to iCloud), so Home draws at once next time.
-// A new family-history version clears the memory; sign-out and a lost
+// A new family-history version clears payload and picture caches; sign-out and a lost
 // access clear everything (reset() here, FamilyImageLoader.wipe()).
 //
 // DEBUG builds with -KadeFamilyDemo (or KADE_FAMILY_DEMO=1) answer from the
@@ -157,9 +157,31 @@ final class FamilyHistoryService {
 
     /// A new version of the family history: everything cached is from the old one.
     func noteVersion(_ newVersion: String?) {
-        guard let newVersion, !newVersion.isEmpty else { return }
-        if let version, version != newVersion { clearMemory() }
+        guard let newVersion = FamilyAccessRules.nonEmpty(newVersion) else { return }
+        let previous = version ?? persistedVersion()
+        if let previous, previous != newVersion {
+            // Do not let answers or picture downloads from the previous
+            // archive finish into the newly cleared caches.
+            generation += 1
+            clearMemory()
+            FamilyImageLoader.shared.wipe()
+        }
         version = newVersion
+        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: FamilySession.shared.userId) {
+            FamilyDiskStore.save(Data(newVersion.utf8), to: file)
+        }
+    }
+
+    private func persistedVersion() -> String? {
+        let userId = FamilySession.shared.userId
+        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: userId),
+           let data = FamilyDiskStore.load(file), let text = String(data: data, encoding: .utf8),
+           let version = FamilyAccessRules.nonEmpty(text) { return version }
+        // Migrate existing phone caches, which only kept the version in home.json.
+        guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: userId),
+              let data = FamilyDiskStore.load(file),
+              let home = try? JSONDecoder().decode(FHHome.self, from: data) else { return nil }
+        return FamilyAccessRules.nonEmpty(home.version)
     }
 
     private func clearMemory() {

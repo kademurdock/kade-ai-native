@@ -788,8 +788,19 @@ extension FHSigned {
 struct FHSourceLabel: Decodable, Equatable {
     var kind: String? = nil
     var title: String? = nil
+    /// The saved source citation; it can be read without opening its provider.
+    var citation: String? = nil
+    var url: URL? = nil
 
-    enum CodingKeys: String, CodingKey { case kind, title }
+    enum CodingKeys: String, CodingKey { case kind, title, citation, url, sourceUrl }
+
+    /// Only a web link is offered as the source website. A malformed or
+    /// non-web URL does not prevent the saved citation from being read.
+    var website: URL? {
+        guard let url, let scheme = url.scheme?.lowercased(),
+              ["https", "http"].contains(scheme), url.host?.isEmpty == false else { return nil }
+        return url
+    }
 }
 
 extension FHSourceLabel {
@@ -797,6 +808,8 @@ extension FHSourceLabel {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = c.fhString(.kind)
         title = c.fhString(.title)
+        citation = c.fhString(.citation)
+        url = c.fhURL(.url) ?? c.fhURL(.sourceUrl)
     }
 }
 

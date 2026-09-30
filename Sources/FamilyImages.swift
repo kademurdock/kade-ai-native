@@ -275,12 +275,16 @@ final class FamilyImageLoader {
     }
 
     private func signNow() async {
+        let asked = generation
         signScheduled = false
         let wanted = signWanted
         signWanted = [:]
         for (size, ids) in wanted {
             for chunk in FamilyBatches.chunks(ids, size: 100) {
                 let answer: FHSigned? = try? await FamilyHistoryService.shared.sign(ids: chunk, size: size)
+                // A prior account/archive must not consume the new sign
+                // waiters that may now use the same media ids.
+                guard asked == generation else { return }
                 let now = Date()
                 for id in chunk {
                     let key = Self.linkKey(id, size)
