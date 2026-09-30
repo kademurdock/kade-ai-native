@@ -255,8 +255,8 @@ import Foundation
         check(v1me.access == true && !v1me.isCurrent && v1me.viewer?.label != nil, "a first-version /me reads, and is known to be old")
         let v1locked = try decode(FHLocked.self, #"{"access":false,"error":"The family history is private to the family."}"#)
         check(v1locked.error != nil && v1locked.reasonKind == .unknown && !v1locked.mayAsk, "a first-version 403 reads")
-        let unmatched = try decode(FHLocked.self, #"{"access":false,"reason":"unmatched","error":"Private.","detail":"Not linked to the tree yet","hint":"Ask the tree's owner to match your account.","canAsk":true,"askedAt":null}"#)
-        check(unmatched.reasonKind == .unmatched && unmatched.mayAsk, "an unmatched account may ask")
+        let unmatchedLock = try decode(FHLocked.self, #"{"access":false,"reason":"unmatched","error":"Private.","detail":"Not linked to the tree yet","hint":"Ask the tree's owner to match your account.","canAsk":true,"askedAt":null}"#)
+        check(unmatchedLock.reasonKind == .unmatched && unmatchedLock.mayAsk, "an unmatched account may ask")
         let asked = try decode(FHLocked.self, #"{"reason":"unmatched","canAsk":true,"askedAt":"2026-09-29T12:00:00.000Z"}"#)
         check(!asked.mayAsk, "an account that asked may not ask again")
         let v1stories = try decode(FHStories.self, #"[{"slug":"the-farm","title":"The farm on Example Road","words":14},{"title":"no slug"}]"#)
@@ -267,7 +267,7 @@ import Foundation
         check(v1search.people.first?.lifespan == "born 1990", "a first-version search reads")
         let v1tree = try decode(FHTree.self, #"{"focus":"@X1@","nodes":[{"id":"@X1@"}],"links":[],"couples":[]}"#)
         check(v1tree.focus == "@X1@" && v1tree.layout == nil, "a first-version tree reads with no layout")
-        let v1story = try decode(FHStory.self, #"{"slug":"the-farm","title":"The farm","markdown":"# The farm"}"#)
+        let v1story = try decode(FHStory.self, ##"{"slug":"the-farm","title":"The farm","markdown":"# The farm"}"##)
         check(v1story.markdown == "# The farm" && v1story.blocks.isEmpty, "a first-version story reads")
 
         // MARK: Drawing maths.
