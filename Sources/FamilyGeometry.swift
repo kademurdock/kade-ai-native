@@ -206,6 +206,69 @@ enum FamilyGeometry {
         return abs(last.end - 1) <= tolerance
     }
 
+    /// A part's cues in seconds: the server's own when it sent them, else
+    /// the fraction cues stretched over the part's length.
+    static func cuesInSeconds(_ timed: [FHCue], fractions: [FHCue], duration: Double) -> [FHCue] {
+        if !timed.isEmpty { return timed }
+        let length: Double = max(0, duration)
+        return fractions.map { (cue: FHCue) -> FHCue in
+            FHCue(text: cue.text, start: cue.start * length, end: cue.end * length)
+        }
+    }
+
+    /// Letters and digits only, lower case: how a sentence is found in the
+    /// paragraph it came from (spaces, chips and punctuation aside).
+    static func sentenceKey(_ text: String) -> String {
+        String(text.lowercased().filter { $0.isLetter || $0.isNumber })
+    }
+
+    /// For every part and every sentence in it, the story block it is read
+    /// from (-1 when it cannot be found). It reads on from where the last
+    /// sentence was found (the rest of that block, then the blocks after),
+    /// so a sentence that appears twice is found in reading order.
+    static func cueBlocks(chunks: [FHChunk], blocks: [FHBlock]) -> [[Int]] {
+        let keys: [String] = blocks.map { sentenceKey($0.plainText) }
+        var at = 0
+        var from: String.Index? = keys.first?.startIndex
+        var out: [[Int]] = []
+        for chunk in chunks {
+            var row: [Int] = []
+            for cue in chunk.cues {
+                let needle: String = sentenceKey(cue.text)
+                var found = -1
+                if needle.isEmpty {
+                    row.append(found)
+                    continue
+                }
+                if at < keys.count, let start = from, start <= keys[at].endIndex,
+                   let hit = keys[at].range(of: needle, range: start..<keys[at].endIndex) {
+                    found = at
+                    from = hit.upperBound
+                } else {
+                    var b = at + 1
+                    while b < keys.count {
+                        if let hit = keys[b].range(of: needle) {
+                            found = b
+                            at = b
+                            from = hit.upperBound
+                            break
+                        }
+                        b += 1
+                    }
+                    if found < 0, let first = keys.firstIndex(where: { $0.contains(needle) }),
+                       let hit = keys[first].range(of: needle) {
+                        found = first
+                        at = first
+                        from = hit.upperBound
+                    }
+                }
+                row.append(found)
+            }
+            out.append(row)
+        }
+        return out
+    }
+
     // MARK: Climb: the trail of faces back to you
 
     /// Keeps the first (you) and the last `keep - 1` steps, so the trail fits.

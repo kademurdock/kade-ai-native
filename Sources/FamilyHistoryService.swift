@@ -240,11 +240,11 @@ final class FamilyHistoryService {
     /// A family answer, decoded. A 403 that means the account lost the
     /// family history wipes and greys the row before it is thrown.
     private func fetch<T: Decodable>(_ path: String, method: String = "GET", body: [String: Any]? = nil,
-                                     query: [URLQueryItem]? = nil) async throws -> (T, Data) {
+                                     query: [URLQueryItem]? = nil, timeout: TimeInterval = 45) async throws -> (T, Data) {
         let asked = generation
         let answer: (Data, Int)
         do {
-            answer = try await raw(path, method: method, body: body, query: query)
+            answer = try await raw(path, method: method, body: body, query: query, timeout: timeout)
         } catch {
             if LibraryLoad.cancelled(error) { throw error }
             throw FamilyFailure.offline
@@ -436,6 +436,15 @@ final class FamilyHistoryService {
 
     func story(_ slug: String) async throws -> FHStory {
         let (value, _): (FHStory, Data) = try await fetch("story/" + Self.segment(slug))
+        return value
+    }
+
+    /// GET /story/:slug/audio/:i: one part of a story in the Library's voice
+    /// (voiced the first time anyone asks, which can take a while), as a
+    /// signed link with its cues in seconds.
+    func storyAudio(slug: String, part: Int) async throws -> FHStoryAudio {
+        let path: String = try "story/" + Self.segment(slug) + "/audio/" + String(max(0, part))
+        let (value, _): (FHStoryAudio, Data) = try await fetch(path, timeout: 120)
         return value
     }
 

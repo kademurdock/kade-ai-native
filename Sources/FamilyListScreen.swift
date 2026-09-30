@@ -22,7 +22,7 @@ struct FamilyListScreen: View {
         case .people:
             FamilyPeopleScreen(apiClient: apiClient)
         case .stories:
-            FamilyPlaceholderScreen(title: FamilyRoute.stories.fallbackTitle)
+            FamilyStoriesScreen(apiClient: apiClient)
         case .discoveries:
             FamilyFindingsScreen(apiClient: apiClient, mysteries: false)
         case .mysteries:

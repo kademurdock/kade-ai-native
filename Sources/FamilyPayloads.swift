@@ -1639,10 +1639,13 @@ extension FHRun {
 struct FHBlock: Decodable, Equatable {
     var type: String? = nil
     var runs: [FHRun] = []
+    /// A numbered list item's number.
+    var n: Int? = nil
 
-    enum CodingKeys: String, CodingKey { case type, runs }
+    enum CodingKeys: String, CodingKey { case type, runs, n }
 
-    var plainText: String { runs.map { $0.text }.joined() }
+    /// The words, without the source chips.
+    var plainText: String { runs.filter { $0.source == nil }.map { $0.text }.joined() }
 }
 
 extension FHBlock {
@@ -1650,14 +1653,16 @@ extension FHBlock {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = c.fhString(.type)
         runs = c.fhList(.runs)
+        n = c.fhInt(.n)
     }
 }
 
 struct FHSourceNote: Decodable, Equatable {
     var n: Int? = nil
     var title: String? = nil
+    var url: URL? = nil
 
-    enum CodingKeys: String, CodingKey { case n, title }
+    enum CodingKeys: String, CodingKey { case n, title, url }
 }
 
 extension FHSourceNote {
@@ -1665,6 +1670,7 @@ extension FHSourceNote {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         n = c.fhInt(.n)
         title = c.fhString(.title)
+        url = c.fhURL(.url)
     }
 }
 
@@ -1686,13 +1692,15 @@ extension FHCue {
     }
 }
 
-/// One part read aloud (about 450 characters), with its sentence cues.
+/// One part read aloud (about 450 characters), with its sentence cues as
+/// fractions of the part.
 struct FHChunk: Decodable, Equatable {
     var i: Int? = nil
     var text: String = ""
     var cues: [FHCue] = []
-    /// A signed link to the part's audio, when the server has made it.
-    var audio: URL? = nil
+    /// The route that voices the part ("/story/<slug>/audio/<i>"): asked
+    /// for, it answers a signed link (FHStoryAudio).
+    var audio: String? = nil
 
     enum CodingKeys: String, CodingKey { case i, text, cues, audio }
 }
@@ -1703,7 +1711,43 @@ extension FHChunk {
         i = c.fhInt(.i)
         text = c.fhString(.text) ?? ""
         cues = c.fhList(.cues)
-        audio = c.fhURL(.audio)
+        audio = c.fhString(.audio)
+    }
+}
+
+/// GET /story/:slug/audio/:i: one part in the Library's voice, voiced the
+/// first time anyone asks and kept after that. The link is signed for an
+/// hour; the cues here are in seconds.
+struct FHStoryAudio: Decodable, Equatable {
+    var slug: String? = nil
+    var i: Int? = nil
+    var count: Int? = nil
+    var text: String? = nil
+    var mime: String? = nil
+    /// Seconds.
+    var duration: Double? = nil
+    var url: URL? = nil
+    var expires: String? = nil
+    var cues: [FHCue] = []
+    /// The next part's number, or nil at the end.
+    var next: Int? = nil
+
+    enum CodingKeys: String, CodingKey { case slug, i, count, text, mime, duration, url, expires, cues, next }
+}
+
+extension FHStoryAudio {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slug = c.fhString(.slug)
+        i = c.fhInt(.i)
+        count = c.fhInt(.count)
+        text = c.fhString(.text)
+        mime = c.fhString(.mime)
+        duration = c.fhDouble(.duration)
+        url = c.fhURL(.url)
+        expires = c.fhString(.expires)
+        cues = c.fhList(.cues)
+        next = c.fhInt(.next)
     }
 }
 

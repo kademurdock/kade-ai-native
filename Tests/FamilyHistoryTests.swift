@@ -131,6 +131,33 @@ import Foundation
         for chunk in story.chunks {
             check(FamilyGeometry.cuesInOrder(chunk.cues), "part \(chunk.i ?? -1)'s cues are in order and end at 1")
         }
+        let storyV2 = try decode(FHStory.self, #"""
+        {"slug":"the-farm","title":"The farm on Example Road","detail":"Under a minute","listen":true,
+         "blocks":[{"type":"p","runs":[{"text":"We lived on an invented farm on Example Road"},{"text":"","source":1},{"text":". Grandpa Dan kept bees there. Every summer the family came back."}]},
+          {"type":"h2","runs":[{"text":"Later"}]},
+          {"type":"li","n":2,"runs":[{"text":"Then the family moved to an invented town."}]}],
+         "sources":[{"n":1,"title":"Invented Census 1940","url":"https://example.com/records/c1-r1"}],
+         "chunks":[{"i":0,"text":"We lived on an invented farm on Example Road. Grandpa Dan kept bees there.","audio":"/story/the-farm/audio/0",
+                    "cues":[{"text":"We lived on an invented farm on Example Road.","start":0,"end":0.6},{"text":"Grandpa Dan kept bees there.","start":0.6,"end":1}]},
+                   {"i":1,"text":"Every summer the family came back. Later. Then the family moved to an invented town.","audio":"/story/the-farm/audio/1",
+                    "cues":[{"text":"Every summer the family came back.","start":0,"end":0.4},{"text":"Later.","start":0.4,"end":0.5},{"text":"Then the family moved to an invented town.","start":0.5,"end":1}]}]}
+        """#)
+        check(storyV2.blocks[0].plainText == "We lived on an invented farm on Example Road. Grandpa Dan kept bees there. Every summer the family came back.", "a block's words leave out its source chips")
+        check(storyV2.blocks[2].n == 2 && storyV2.sources.first?.url != nil, "a list item's number and a source's link read")
+        check(storyV2.chunks[1].audio == "/story/the-farm/audio/1", "a part names the route that voices it")
+        check(FamilyGeometry.cueBlocks(chunks: storyV2.chunks, blocks: storyV2.blocks) == [[0, 0], [0, 1, 2]], "each sentence is found in its paragraph, in reading order")
+        let twice = [FHBlock(type: "p", runs: [FHRun(text: "It rained.")]), FHBlock(type: "p", runs: [FHRun(text: "It rained.")])]
+        let twiceParts = [FHChunk(i: 0, text: "", cues: [FHCue(text: "It rained.", start: 0, end: 0.5), FHCue(text: "It rained.", start: 0.5, end: 1)])]
+        check(FamilyGeometry.cueBlocks(chunks: twiceParts, blocks: twice) == [[0, 1]], "a sentence said twice is found twice, in order")
+        let lost = [FHChunk(i: 0, text: "", cues: [FHCue(text: "Not in the story.", start: 0, end: 1), FHCue(text: "...", start: 0, end: 1)])]
+        check(FamilyGeometry.cueBlocks(chunks: lost, blocks: twice) == [[-1, -1]] && FamilyGeometry.cueBlocks(chunks: twiceParts, blocks: []) == [[-1, -1]], "a sentence that cannot be found is -1")
+        let voiced = try decode(FHStoryAudio.self, #"{"slug":"the-farm","i":0,"count":2,"text":"Made up.","mime":"audio/wav","duration":"4.5","url":"https://example.com/a.wav","expires":"2026-09-29T13:00:00.000Z","cues":[{"text":"Made up.","start":0,"end":4.5}],"next":1}"#)
+        check(voiced.duration == 4.5 && voiced.url != nil && voiced.next == 1 && voiced.cues.last?.end == 4.5, "a voiced part reads, with its cues in seconds")
+        let lastPart = try decode(FHStoryAudio.self, #"{"i":1,"count":2,"url":null,"next":null}"#)
+        check(lastPart.next == nil && lastPart.url == nil, "the last part has no next")
+        let stretched = FamilyGeometry.cuesInSeconds([], fractions: [FHCue(text: "A.", start: 0, end: 0.25), FHCue(text: "B.", start: 0.25, end: 1)], duration: 8)
+        check(stretched.map { $0.end } == [2, 8] && FamilyGeometry.cuesInSeconds(voiced.cues, fractions: stretched, duration: 99) == voiced.cues, "fraction cues stretch over the part; the server's seconds win")
+        check(FamilyGeometry.sentenceKey("Later.") == "later" && FamilyGeometry.sentenceKey("Dan's 1954 farm!") == "dans1954farm", "a sentence's key is its letters and digits")
 
         let findings = try decode(FHFindings.self, FamilyDemoData.findings)
         check(findings.discoveries.count == 1 && findings.mysteries?.count == 1, "discoveries and the mysteries row read")

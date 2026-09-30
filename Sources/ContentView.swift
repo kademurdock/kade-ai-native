@@ -1190,7 +1190,9 @@ struct ContentView: View {
             DescribedVideoAccess.shared.reset()
             // Sep 29 2026: nothing of the family stays on a shared phone:
             // the row's state, every cached answer, and every family picture
-            // in memory and on disk. The made-up demo family ends too.
+            // in memory and on disk. The made-up demo family ends too, and a
+            // family story being read aloud stops.
+            FamilyStoryPlayer.shared.stop()
             FamilyHistoryAccess.shared.reset()
             FamilyHistoryService.shared.reset()
             FamilyImageLoader.shared.wipe()
