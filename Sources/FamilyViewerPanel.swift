@@ -221,11 +221,23 @@ struct FamilyViewerPanel: View {
 
     // MARK: Notes to the owner
 
+    /// The server says whether asking makes sense; without its word, only an
+    /// old photograph or grave photo with no restored copy yet (never a
+    /// record or a document, whose writing restoring could change).
+    private var mayAskRestore: Bool {
+        if let said = info?.canAskRestore { return said }
+        guard let image, !image.isRestoredCopy, image.restored == nil else { return false }
+        switch image.categoryKind {
+        case .portrait, .photo, .grave: return true
+        case .record, .document, .story, .restored, .other: return false
+        }
+    }
+
     private var actions: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button("Do you know who this is?") { onWho() }
                 .accessibilityHint("Sends a note to the tree's owner.")
-            if info?.canAskRestore == true {
+            if mayAskRestore {
                 Button(busy ? "Asking…" : "Ask for this photo to be restored") { onRestore() }
                     .disabled(busy)
                     .accessibilityHint("Adds a request to the tree's owner's notes. Nothing is changed on this phone.")

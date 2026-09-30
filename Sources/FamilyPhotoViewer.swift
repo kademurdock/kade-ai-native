@@ -444,6 +444,7 @@ final class FamilyPhotoSaver: NSObject {
     static let shared = FamilyPhotoSaver()
     private var done: ((Error?) -> Void)?
 
+    @MainActor
     func save(_ picture: UIImage, done: @escaping (Error?) -> Void) {
         self.done = done
         UIImageWriteToSavedPhotosAlbum(picture, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
