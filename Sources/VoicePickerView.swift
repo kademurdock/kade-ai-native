@@ -182,7 +182,8 @@ struct VoicePickerView: View {
         self.onToggleFavorite = onToggleFavorite
         self.defaultVoice = defaultVoice
         self.onMakeDefault = onMakeDefault
-        _voice = StateObject(wrappedValue: VoiceService(client: apiClient))
+        // Sep 29 2026 (known bug #2): an audition pauses a running book.
+        _voice = StateObject(wrappedValue: VoiceService(client: apiClient, libraryPauseReason: "a voice sample"))
     }
 
     /// Mirror of the web builder's `extractAgentLines` (fork,

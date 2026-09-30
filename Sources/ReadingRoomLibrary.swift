@@ -53,6 +53,13 @@ extension ReadingRoomService {
         guard http.statusCode == 200 else { throw RRError(message: (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "The library answered \(http.statusCode).") }
         return try JSONDecoder().decode(T.self, from: data)
     }
+    /// A DELETE that throws on a 4xx or 5xx, like `get`/`postJSON` (bug 3,
+    /// Sep 29 2026: `client.send` alone counted a 404 or a 500 as done).
+    private func deleteChecked(_ path: String) async throws -> Data {
+        let (data, http) = try await client.send(client.request(path: path, method: "DELETE", authorized: true))
+        guard http.statusCode == 200 else { throw RRError(message: (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "The library answered \(http.statusCode).") }
+        return data
+    }
     struct OK: Decodable { let ok: Bool? }
 
     /// One shelf's level (its shelves and a page of its items). `deep`
@@ -92,7 +99,7 @@ extension ReadingRoomService {
         if let remove { b["remove"] = remove }
         _ = try await postJSON("api/kade/reading-room/collections/\(id)/edit", b, as: CollWrap.self)
     }
-    func deleteCollection(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/collections/\(id)", method: "DELETE", authorized: true)) }
+    func deleteCollection(_ id: String) async throws { _ = try await deleteChecked("api/kade/reading-room/collections/\(id)") }
 
     struct Estimate: Decodable { let enabled: Bool?; let seconds: Double?; let usd: Double?; let hasSeconds: Bool?; let state: String? }
     func describeEstimate(book: String, t: Int) async throws -> Estimate { try await get("api/kade/reading-room/book/\(book)/describe/\(t)/estimate", as: Estimate.self) }
@@ -123,7 +130,15 @@ extension ReadingRoomService {
     func decide(_ id: String, approved: Bool, note: String) async throws { _ = try await postJSON("api/kade/reading-room/submissions/\(id)/decide", ["status": approved ? "approved" : "rejected", "note": note], as: SubWrap.self) }
     struct Applied: Decodable { let applied: Bool? }
     func reportShelf(book: String, path: String, note: String) async throws -> Bool { try await postJSON("api/kade/reading-room/book/\(book)/report", ["path": path, "note": note], as: Applied.self).applied ?? false }
-    func withdrawSubmission(_ id: String) async throws { _ = try await client.send(client.request(path: "api/kade/reading-room/submissions/\(id)", method: "DELETE", authorized: true)) }
+    struct Removed: Decodable { let removed: Int? }
+    /// The server answers 200 with removed 0 once the librarian has decided
+    /// on it (it is no longer waiting), so that is not a withdrawal either.
+    func withdrawSubmission(_ id: String) async throws {
+        let data = try await deleteChecked("api/kade/reading-room/submissions/\(id)")
+        if ((try? JSONDecoder().decode(Removed.self, from: data))?.removed ?? 1) == 0 {
+            throw RRError(message: "It could not be withdrawn. The librarian may have already decided on it.")
+        }
+    }
 
     /// Library requests (Part 289's route): GET lists, POST runs one action
     /// (create, details, note, cancel).
@@ -465,8 +480,8 @@ struct CollectionScreen: View {
                     if let desc = d.description, !desc.isEmpty { Text(desc) }
                     Button("Play all, in order") { if let first = d.items.first { play(first, Array(d.items.dropFirst())) } }.disabled(d.items.isEmpty)
                     if d.mine {
-                        Button(d.shared ? "Make it private" : "Share it with the family") { Task { try? await service.editCollection(row.id, shared: !d.shared); await load() } }
-                        Button("Delete this collection", role: .destructive) { Task { try? await service.deleteCollection(row.id); back() } }
+                        Button(d.shared ? "Make it private" : "Share it with the family") { Task { await toggleShare(d) } }
+                        Button("Delete this collection", role: .destructive) { Task { await deleteIt() } }
                     }
                 }
                 Section("Items") {
@@ -499,6 +514,23 @@ struct CollectionScreen: View {
         .task { await load() }
     }
     private func load() async { do { detail = try await service.collection(row.id); status = "" } catch { if !LibraryLoad.cancelled(error) { status = error.localizedDescription } } }
+    // Bug 3 (Sep 29 2026): these two were silent `try?`, and Delete left the
+    // screen even when nothing was deleted. Now each says what happened, and
+    // a failed delete stays here.
+    private func toggleShare(_ d: RRCollectionDetail) async {
+        do {
+            try await service.editCollection(row.id, shared: !d.shared)
+            UIAccessibility.post(notification: .announcement, argument: d.shared ? "Made private." : "Shared with the family.")
+            await load()
+        } catch { UIAccessibility.post(notification: .announcement, argument: error.localizedDescription) }
+    }
+    private func deleteIt() async {
+        do {
+            try await service.deleteCollection(row.id)
+            UIAccessibility.post(notification: .announcement, argument: "Deleted \(row.title).")
+            back()
+        } catch { UIAccessibility.post(notification: .announcement, argument: error.localizedDescription) }
+    }
     private func remove(_ it: RRCollectionItem) async {
         do {
             try await service.editCollection(row.id, remove: it.n)
@@ -581,7 +613,7 @@ struct SubmissionsSection: View {
                     Button(sb.type == "report" ? "Move it there" : "Approve") { decisionApprove = true; decisionNote = ""; deciding = sb }.font(.footnote)
                     Button(sb.type == "report" ? "Leave it" : "Decline") { decisionApprove = false; decisionNote = ""; deciding = sb }.font(.footnote).foregroundStyle(.red)
                 } else if !review, sb.status == "pending" {
-                    Button("Withdraw") { Task { try? await service.withdrawSubmission(sb.id); await reload(); announce("Withdrawn.") } }.font(.footnote)
+                    Button("Withdraw") { Task { await withdraw(sb) } }.font(.footnote)
                 }
             }
         }
@@ -594,6 +626,18 @@ struct SubmissionsSection: View {
             announce("Submitted. The librarian will look at it and you will be told.")
             await reload()
         } catch { announce(error.localizedDescription) }
+    }
+    /// Bug 3 (Sep 29 2026): "Withdrawn." only when it was. Either way the
+    /// list reloads first, then the one line is said.
+    private func withdraw(_ sb: RRSubmission) async {
+        do {
+            try await service.withdrawSubmission(sb.id)
+            await reload()
+            announce("Withdrawn.")
+        } catch {
+            await reload()
+            announce(error.localizedDescription)
+        }
     }
     private func decide() async {
         guard let sb = deciding else { return }

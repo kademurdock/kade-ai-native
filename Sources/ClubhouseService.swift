@@ -134,6 +134,7 @@ final class ClubhouseService: NSObject, ObservableObject {
 
     private let client: KadeAPIClient
     let engine = ClubhouseEngine()
+    let library: ClubhouseLibraryService
 
     private var room: Room?
     private var myIdentity = ""
@@ -203,7 +204,10 @@ final class ClubhouseService: NSObject, ObservableObject {
         paVolume = pv.map { max(0, min(1, $0)) } ?? 0.9
         pa = ClubPA(client: client)
         self.client = client
+        library = ClubhouseLibraryService(client: client)
         super.init()
+        library.onStarted = { [weak self] in self?.clubCmd("pause") }
+        library.onChanged = { [weak self] in self?.sendData(["t": "library-changed"]) }
         pa.volume = paVolume
         pa.onFallback = { text in
             // the PA lost power on this clip — VoiceOver takes it, nothing missed
@@ -846,6 +850,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     // ── the room ──
     private struct Mint {
         let token: String
+        let mediaToken: String?
         let url: String
         let room: String
         let identity: String
@@ -867,6 +872,7 @@ final class ClubhouseService: NSObject, ObservableObject {
             throw ClubError.server(Self.explain(data, fallback: "Could not get a room key."))
         }
         return Mint(token: token,
+                    mediaToken: j["mediaToken"] as? String,
                     url: url,
                     room: (j["room"] as? String) ?? roomKey,
                     identity: (j["identity"] as? String) ?? "Me",
@@ -1068,6 +1074,7 @@ final class ClubhouseService: NSObject, ObservableObject {
         leaveAfterRec = false
         engineRebuildTried = []
         phase = .inRoom
+        library.start(proof: mint.mediaToken)
         rebuildRoster()
         rebuildUI()
         let others = roster.count - 1
@@ -1314,6 +1321,7 @@ final class ClubhouseService: NSObject, ObservableObject {
     }
 
     func leave() {
+        library.stop()
         roomGeneration += 1
         restoreAudioProfile()
         pa.stop()
@@ -1687,6 +1695,8 @@ final class ClubhouseService: NSObject, ObservableObject {
         guard let msg = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let t = msg["t"] as? String else { return }
         switch t {
+        case "library-changed":
+            Task { await library.refresh(forceURL: true) }
         case "state":
             adoptState(msg)
         case "hello":

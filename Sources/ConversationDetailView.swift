@@ -399,10 +399,23 @@ struct ConversationDetailView: View {
     /// which is a particularly bad failure mode for someone navigating by
     /// ear with no visual cue that "nothing happened" is even what
     /// happened. See `retry()` below.
+    ///
+    /// Bug #6 (Sep 29 2026): it also keeps the request id the attempt went
+    /// out under, the agent and attachment it carried (a retry may reuse
+    /// the id only for the SAME input -- the server refuses anything else
+    /// under it), whether it was a Regenerate (`includeAttachment` false,
+    /// which Retry used to drop, letting a re-ask swallow a file meant for
+    /// the next message), and the row already showing her message, so a
+    /// retry does not add a second bubble beside it.
     private struct FailedAttempt {
         let text: String
         let parentId: String?
         let inputSource: String?
+        let includeAttachment: Bool
+        let requestId: String
+        let agentId: String?
+        let attachment: ChatAttachment?
+        let pendingRowId: String
     }
     @State private var failedAttempt: FailedAttempt?
 
@@ -3503,10 +3516,29 @@ struct ConversationDetailView: View {
     /// The shared guts of every send -- a plain Send tap (via `send()`
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
-    private func performSend(text: String, parentId: String?, includeAttachment: Bool = true, inputSource: String? = nil) async {
+    private func performSend(
+        text: String,
+        parentId: String?,
+        includeAttachment: Bool = true,
+        inputSource: String? = nil,
+        requestId: String? = nil,
+        reusePendingRowId: String? = nil
+    ) async {
         failedAttempt = nil
+        // Bug #6 (Sep 29 2026): this turn's request id, agent and attachment
+        // are fixed here, once, so a failure can hand the exact same three
+        // to Retry. A plain send passes no id and gets a fresh one, exactly
+        // as before. A retry whose earlier row is still showing reuses that
+        // row instead of appending a second copy of her message.
+        let turnRequestId = requestId ?? UUID().uuidString
+        let turnAgentId = selectedAgentId
+        let sentAttachment = includeAttachment ? pendingAttachment : nil
+        var reusedRowId: String? = nil
+        if let rowId = reusePendingRowId, messages.contains(where: { $0.messageId == rowId }) {
+            reusedRowId = rowId
+        }
         let optimisticMessage = KadeMessage(
-            messageId: "pending-\(UUID().uuidString)",
+            messageId: reusedRowId ?? "pending-\(UUID().uuidString)",
             conversationId: conversationId ?? "pending",
             createdAt: KadeDateFormatting.isoNow(),
             isCreatedByUser: true,
@@ -3554,7 +3586,9 @@ struct ConversationDetailView: View {
          * Re-entry stays safe for the same reason 207's yield is safe: the
          * draft was already cleared before this function was reached, so a
          * double-tap in either window hits the empty-draft guard in send(). */
-        messages.append(optimisticMessage)
+        if reusedRowId == nil {
+            messages.append(optimisticMessage)
+        }
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("optimistic row painted")
         /* Build 220 put VoiceOver on the row she just sent; BUILD 254 moves
@@ -3602,7 +3636,7 @@ struct ConversationDetailView: View {
             // already, at pick time). Regenerate passes
             // includeAttachment:false -- a re-ask of an OLD question must
             // never quietly consume a file meant for the NEXT message.
-            let files = includeAttachment ? pendingAttachment.map { [$0.asMessagePayload] } : nil
+            let files = sentAttachment.map { [$0.asMessagePayload] }
             /* ⭐ BUILD 212 -- BISECTING WHAT 211 NARROWED.
              *
              * Build 211's crumbs did their job and CLEARED two suspects. Her
@@ -3648,9 +3682,10 @@ struct ConversationDetailView: View {
                 text: text,
                 conversationId: conversationId,
                 parentMessageId: parentId,
-                agentId: selectedAgentId,
+                agentId: turnAgentId,
                 files: files,
                 inputSource: inputSource,
+                requestId: turnRequestId,
                 onText: { chunk in
                     guard !chunk.isEmpty else { return }
                     if speechWorkPhase != .reply { speechWorkPhase = .reply }
@@ -3998,7 +4033,22 @@ struct ConversationDetailView: View {
             } else {
                 sendState = .failed("Didn't get a reply. Check your connection and try again.")
             }
-            failedAttempt = FailedAttempt(text: text, parentId: parentId, inputSource: inputSource)
+            // Bug #6 (Sep 29 2026): a 409 means the server would not take
+            // this request under this id (a clash, or the chat was deleted).
+            // Reusing the id would be refused the same way on every tap, so
+            // the next Retry goes out under a fresh one.
+            var nextRequestId = turnRequestId
+            if case .server(409) = error { nextRequestId = UUID().uuidString }
+            failedAttempt = FailedAttempt(
+                text: text,
+                parentId: parentId,
+                inputSource: inputSource,
+                includeAttachment: includeAttachment,
+                requestId: nextRequestId,
+                agentId: turnAgentId,
+                attachment: sentAttachment,
+                pendingRowId: optimisticMessage.messageId
+            )
             a11yFocus = .composerError
         } catch {
             KadeBreadcrumbs.drop("send failed: \(type(of: error))")
@@ -4012,32 +4062,71 @@ struct ConversationDetailView: View {
             // sent from the user's point of view, only the "did the reply
             // come back" half failed.
             sendState = .failed("Didn't get a reply. Check your connection and try again.")
-            failedAttempt = FailedAttempt(text: text, parentId: parentId, inputSource: inputSource)
+            failedAttempt = FailedAttempt(
+                text: text,
+                parentId: parentId,
+                inputSource: inputSource,
+                includeAttachment: includeAttachment,
+                requestId: turnRequestId,
+                agentId: turnAgentId,
+                attachment: sentAttachment,
+                pendingRowId: optimisticMessage.messageId
+            )
             a11yFocus = .composerError
         }
     }
 
     /// Resends the EXACT (text, parent) pair a failed send was trying to
     /// deliver -- see `failedAttempt`'s own doc comment for the dead-button
-    /// bug this replaces. Accepts a small, deliberate trade-off: if the
-    /// original attempt actually reached the server and only the
-    /// confirm-the-reply half failed (a real possibility --
-    /// `MessageSendingService`'s own type doc describes exactly this
-    /// class of failure), this creates a genuine duplicate turn rather
-    /// than silently recovering the original. That's judged the better
-    /// failure mode -- a visible, easy-to-ignore duplicate beats a Retry
-    /// button that does nothing and leaves no path forward except backing
-    /// out of the screen. A safer "just re-fetch and see if it already
-    /// landed" alternative was considered and rejected for now: with no
-    /// compiler and no reliable way to simulate a genuinely dropped
-    /// connection against the live server this session, a fetch-first
-    /// retry risks a worse bug -- silently REPLACING `messages` with the
-    /// server's list and dropping the still-visible optimistic bubble if
-    /// the original send in fact never went through at all.
+    /// bug this replaces.
+    ///
+    /// Bug #6 (Sep 29 2026, from the Sep 25 known-bugs list): after "didn't
+    /// get a reply", Retry could post her message twice and get two replies,
+    /// because every attempt went out under a brand-new id. The old
+    /// trade-off (a duplicate beats a dead button) is gone: Retry now asks
+    /// the server's request receipt what happened to the failed attempt
+    /// first, and it never replaces `messages` on a guess (the worry that
+    /// kept a fetch-first retry out before).
+    ///   - No receipt: the POST never landed. Send under the SAME id.
+    ///   - Starting, working or saved: send under the SAME id. The server
+    ///     answers "existing" and starts nothing new; `performSend` then
+    ///     follows that reply's stream (a finished one reads as done) and
+    ///     reloads, so the real reply shows up once.
+    ///   - Failed, stopped or cut off: a fresh id -- a deliberate new try.
+    ///   - No trustworthy answer: send nothing, keep Retry, and say so.
+    /// If she changed the agent or the attachment since, it is a different
+    /// message, so it goes out fresh without asking. A new chat that failed
+    /// still has no conversation id, so the same id also gets her the chat
+    /// the first attempt made instead of a second one.
     private func retry() async {
         guard let attempt = failedAttempt else { return }
         failedAttempt = nil
-        await performSend(text: attempt.text, parentId: attempt.parentId, inputSource: attempt.inputSource)
+        var reuseRequestId: String? = nil
+        let attachmentNow: ChatAttachment? = attempt.includeAttachment ? pendingAttachment : nil
+        let unchanged = selectedAgentId == attempt.agentId && attachmentNow == attempt.attachment
+        if unchanged {
+            // Sep 29 2026: the check can take a while on a bad connection; say what is happening.
+            UIAccessibility.post(notification: .announcement, argument: "Checking whether your message arrived.")
+            switch await messageSendingService.checkReceipt(requestId: attempt.requestId) {
+            case .notFound, .arrived:
+                reuseRequestId = attempt.requestId
+            case .failed:
+                reuseRequestId = nil
+            case .unknown:
+                failedAttempt = attempt
+                sendState = .failed("Couldn't check whether your message arrived, so it wasn't sent again. Try Retry in a moment.")
+                a11yFocus = .composerError
+                return
+            }
+        }
+        await performSend(
+            text: attempt.text,
+            parentId: attempt.parentId,
+            includeAttachment: attempt.includeAttachment,
+            inputSource: attempt.inputSource,
+            requestId: reuseRequestId,
+            reusePendingRowId: attempt.pendingRowId
+        )
     }
 
     // MARK: - Voice input (Phase 5)

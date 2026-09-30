@@ -43,6 +43,7 @@ workflows:
           bash ./run-world-tests.sh
           # Sep 29 2026: Family history models, demo family and drawing maths.
           bash ./run-family-tests.sh
+          bash ./run-clubhouse-tests.sh
           python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |

@@ -549,6 +549,7 @@ struct DescribedVideoView: View {
         let lock = linkLock
         let fieldHint: String = lock ?? "One finished video, not a channel or playlist."
         let buttonHint: String = lock ?? "Checks the video for free. If YouTube refuses the server, save the video and choose it from Files instead."
+        let pasteHint: String = lock ?? "Puts the link you copied into the YouTube link box."
         return VStack(alignment: .leading, spacing: 6) {
             Text("Or a YouTube link")
                 .font(.subheadline)
@@ -561,10 +562,19 @@ struct DescribedVideoView: View {
                 .disabled(lock != nil)
                 .accessibilityLabel("YouTube video link")
                 .accessibilityHint(fieldHint)
-            Button("Import from YouTube") { Task { await importYouTube() } }
-                .buttonStyle(.bordered)
-                .disabled(choosingDisabled || lock != nil || youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityHint(buttonHint)
+            HStack {
+                // A system control: pasting with it never brings up iOS's Allow Paste question.
+                PasteButton(payloadType: String.self) { strings in
+                    let pasted = strings.first ?? ""
+                    Task { @MainActor in pasteYouTubeLink(pasted) }
+                }
+                .disabled(choosingDisabled || lock != nil)
+                .accessibilityHint(pasteHint)
+                Button("Import from YouTube") { Task { await importYouTube() } }
+                    .buttonStyle(.bordered)
+                    .disabled(choosingDisabled || lock != nil || youtubeLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityHint(buttonHint)
+            }
             if let lock {
                 Text(lock)
                     .font(.footnote)
@@ -3053,12 +3063,26 @@ struct DescribedVideoView: View {
     private func fillCopiedYouTubeLink() {
         Task {
             // A greyed-out box (no Family feature pack) is never filled in.
-            guard youtubeLink.isEmpty, !choosingDisabled, linkLock == nil,
-                  let link = await CopiedLink.take("described-video-youtube", where: CopiedLink.isYouTube),
-                  youtubeLink.isEmpty else { return }
-            youtubeLink = link
-            announce("Filled in the YouTube link you copied. Choose Import from YouTube to check it.")
+            guard youtubeLink.isEmpty, !choosingDisabled, linkLock == nil else { return }
+            let copied = await CopiedLink.look("described-video-youtube", where: CopiedLink.isYouTube)
+            guard youtubeLink.isEmpty else { return }
+            if let link = copied.link {
+                youtubeLink = link
+                announce("Filled in the YouTube link you copied. Choose Import from YouTube to check it.")
+            } else if copied.refused {
+                // Sep 29 2026 (bug 8): iOS may have just asked to paste; say why the box stayed empty.
+                announce("The link you copied is not a YouTube link, so the link box stays empty.")
+            }
         }
+    }
+
+    /// Sep 29 2026 (bug 8): the Paste button under the link box, which never
+    /// brings up iOS's Allow Paste question.
+    private func pasteYouTubeLink(_ pasted: String) {
+        let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { announce("There is no link to paste. Copy the video's link first."); return }
+        youtubeLink = text
+        announce("Link pasted. Choose Import from YouTube to check it.")
     }
 
     private func importYouTube() async {

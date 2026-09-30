@@ -26,7 +26,9 @@ import UIKit
 ///
 /// Her Library rule (Part 181) holds: nothing auto-plays. The book only ever
 /// pauses BY ITSELF — for a voice message, a recording or a call — and never
-/// resumes by itself; "Resume" is always her press.
+/// resumes by itself; "Resume" is always her press. Sep 29 2026 (known bug
+/// #2): every VoiceService pauses it too (voice samples, the Debate Room,
+/// dictation), and so do the Sound Booth and Creations players.
 ///
 /// One speaker for the player's announcements (chapter changes, errors, "the
 /// end"): the Library screen on display says them, exactly as before. With no
@@ -41,7 +43,8 @@ final class LibraryNowPlaying: ObservableObject {
     /// changes only, never on the player's twice-a-second clock.
     @Published private(set) var current: LibraryNowPlayingItem?
     /// Why the book paused itself ("a voice message", "a recording", "a
-    /// call"). Cleared by any play, and when the item changes or closes.
+    /// call", "a voice sample", "the Debate Room", "the Sound Booth"...).
+    /// Cleared by any play, and when the item changes or closes.
     @Published private(set) var pausedFor: String?
     /// True while a Library screen on display is showing its player screen.
     /// The Now Playing bar steps aside then (the full transport is right there).
@@ -137,7 +140,9 @@ final class LibraryNowPlaying: ObservableObject {
     /// pause the book and remember why. Never resumes by itself.
     func pauseForOtherAudio(_ reason: String) {
         guard let player, player.book != nil else { return }
-        if player.isPlaying {
+        // Sep 29 2026 (bug 1): a skip in flight pauses the book for a moment
+        // and plays it again when it lands, so it counts as playing here.
+        if player.isPlayingOrResuming {
             player.pause()
             pausedFor = reason
             pausedBookID = player.book?.id
@@ -214,7 +219,8 @@ final class LibraryNowPlaying: ObservableObject {
     private func refresh() {
         var next: LibraryNowPlayingItem?
         if let player, let book = player.book {
-            next = LibraryNowPlayingItem(book: book, part: player.s, isPlaying: player.isPlaying)
+            // A skip still loading counts as playing, so the bar says Pause.
+            next = LibraryNowPlayingItem(book: book, part: player.s, isPlaying: player.isPlayingOrResuming)
         }
         // Any play, or a different item (or none), ends the automatic pause.
         if pausedFor != nil && (next == nil || next?.id != pausedBookID || next?.isPlaying == true) {

@@ -347,7 +347,12 @@ final class ReadingRoomService: ObservableObject {
         return try await json(post("api/kade/reading-room/book/\(bookId)/share", body), as: ShareResult.self)
     }
     func returnBook(bookId: String) async throws {
-        _ = try await client.send(post("api/kade/reading-room/book/\(bookId)/return", [:]))
+        // Bug 3 (Sep 29 2026): a server error was said as "Returned."
+        let (data, http) = try await client.send(post("api/kade/reading-room/book/\(bookId)/return", [:]))
+        guard http.statusCode == 200 else {
+            let e = try? JSONDecoder().decode(ErrBody.self, from: data)
+            throw RRError(message: e?.error ?? "Could not return it.")
+        }
     }
     func withdraw(bookId: String) async throws {
         let req = client.request(path: "api/kade/reading-room/book/\(bookId)", method: "DELETE", authorized: true)
@@ -605,6 +610,19 @@ final class ReadingRoomPlayer: ObservableObject {
     private var textOffset: Double = 0
     private var seekTask: Task<Void, Never>?
     private var seekGeneration = 0
+    /// Sep 29 2026 (bug 1): a text-book skip still fetching. Taps made before
+    /// it lands add to `total` from the same starting spot, and `resume` keeps
+    /// whether the book was playing before the first tap (Play and Pause
+    /// pressed meanwhile change it).
+    private struct PendingSkip { var s: Int; var c: Int; var offset: Double; var total: Double; var resume: Bool }
+    private var pendingSkip: PendingSkip? {
+        // Sep 29 2026: publishes the resume flag, so Play/Pause labels change
+        // when only it does (a Pause pressed during a skip).
+        didSet {
+            let resumes = pendingSkip?.resume ?? false
+            if resumes != resumesAfterSkip { resumesAfterSkip = resumes }
+        }
+    }
     private var audioCache: [String: Data] = [:]
     private var cacheOrder: [String] = []
 
@@ -636,6 +654,20 @@ final class ReadingRoomPlayer: ObservableObject {
         remember(data, key: key)
         return data
     }
+    /// Drops any skip in flight. Returns true when the book was due to play
+    /// again once it landed, so the caller can play it instead.
+    @discardableResult private func cancelSeek() -> Bool {
+        let resume = pendingSkip?.resume ?? false
+        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        pendingSkip = nil
+        return resume
+    }
+    /// True while a skip is fetching and the book will play when it lands.
+    /// Kept in step with `pendingSkip` by its didSet.
+    @Published private(set) var resumesAfterSkip = false
+    /// Playing, or paused for a skip that will play again when it lands.
+    /// Play/Pause buttons and the headphone press go by this.
+    var isPlayingOrResuming: Bool { isPlaying || resumesAfterSkip }
 
     func skip(seconds: Double) {
         guard let book, seconds.isFinite else { return }
@@ -644,18 +676,24 @@ final class ReadingRoomPlayer: ObservableObject {
             announcement = "\(seconds < 0 ? "Back" : "Forward") \(Int(abs(seconds))) seconds."
             return
         }
-        let resume = isPlaying
-        let original = (s: s, c: c, offset: textOffset)
+        // Sep 29 2026 (bug 1): a second tap used to cancel the first jump,
+        // start again from the old spot and leave the book paused. Now taps
+        // add up from the spot before the first one. `start` is read before
+        // pause(), which clears a pending resume.
+        let start = pendingSkip ?? PendingSkip(s: s, c: c, offset: textOffset, total: 0, resume: isPlaying)
         pause()
         seekTask?.cancel(); seekGeneration += 1
         let generation = seekGeneration
+        let total = start.total + seconds
+        pendingSkip = PendingSkip(s: start.s, c: start.c, offset: start.offset, total: total, resume: start.resume)
         seekTask = Task { [weak self] in
             guard let self else { return }
-            var q = (s: original.s, c: original.c)
-            var offset = original.offset + seconds
+            var q = (s: start.s, c: start.c)
+            var offset = start.offset + total
+            var edge: String? = nil
             do {
                 while offset < 0 {
-                    guard let prev = self.previous(s: q.s, c: q.c) else { offset = 0; break }
+                    guard let prev = self.previous(s: q.s, c: q.c) else { offset = 0; edge = "At the start of the book."; break }
                     q = prev
                     let data = try await self.seekAudio(q, bookId: book.id)
                     offset += try self.duration(data)
@@ -664,21 +702,30 @@ final class ReadingRoomPlayer: ObservableObject {
                     let data = try await self.seekAudio(q, bookId: book.id)
                     let length = try self.duration(data)
                     if offset < length { break }
-                    guard let next = self.next(s: q.s, c: q.c) else { offset = max(0, length - 0.05); break }
+                    guard let next = self.next(s: q.s, c: q.c) else { offset = max(0, length - 0.05); edge = "At the end of the book."; break }
                     offset -= length; q = next
                 }
                 guard !Task.isCancelled, self.seekGeneration == generation, self.book?.id == book.id else { return }
+                // No await from here on, so a tap cannot land in the middle.
                 self.s = q.s; self.c = q.c; self.textOffset = max(0, offset)
-                await self.refreshText()
+                let resumeNow = self.pendingSkip?.resume ?? false
+                self.pendingSkip = nil
+                Task { await self.refreshText() }
                 self.scheduleSave()
-                self.announcement = "\(seconds < 0 ? "Back" : "Forward") \(Int(abs(seconds))) seconds."
+                // One line for the whole jump, so it says what really happened.
+                let n = Int(abs(total).rounded())
+                let jumped: String = n == 0 ? "Back where you were." : "\(total < 0 ? "Back" : "Forward") \(n) seconds."
+                self.announcement = edge ?? jumped
                 self.seekTask = nil
-                if resume { self.play() }
+                self.updateNowPlaying()
+                if resumeNow { self.play() }
             } catch {
                 guard !Task.isCancelled, self.seekGeneration == generation else { return }
+                let resumeNow = self.pendingSkip?.resume ?? false
+                self.pendingSkip = nil
                 self.announcement = error.localizedDescription
                 self.seekTask = nil
-                if resume { self.play() }
+                if resumeNow { self.play() }
             }
         }
     }
@@ -733,7 +780,7 @@ final class ReadingRoomPlayer: ObservableObject {
     }
 
     func close() {
-        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        cancelSeek()
         let wasPlaying = isPlaying
         pause()
         if !wasPlaying { saveNow() }
@@ -762,10 +809,15 @@ final class ReadingRoomPlayer: ObservableObject {
 
     // MARK: transport
 
-    func togglePlay() { isPlaying ? pause() : play() }
+    /// Sep 29 2026: a skip still loading counts as playing, so one press
+    /// (button, Now Playing bar, headphones) pauses it instead of doing nothing.
+    func togglePlay() { isPlayingOrResuming ? pause() : play() }
 
     func play() {
-        guard let book, seekTask == nil else { return }
+        guard let book else { return }
+        // Sep 29 2026 (bug 1): Play pressed while a skip is still fetching
+        // used to do nothing. It now plays as soon as the jump lands.
+        if seekTask != nil { pendingSkip?.resume = true; return }
         prepareSession()
         // Sep 23 2026 (A2): takes the lock-screen buttons back after a call
         // (see yieldRemoteControls). A no-op while they are still wired.
@@ -786,6 +838,9 @@ final class ReadingRoomPlayer: ObservableObject {
     }
 
     func pause() {
+        // Sep 29 2026 (bug 1): a Pause (or a call) during a skip keeps the
+        // book paused when the jump lands.
+        pendingSkip?.resume = false
         guard isPlaying else { return }
         isPlaying = false
         if isAudio {
@@ -834,18 +889,18 @@ final class ReadingRoomPlayer: ObservableObject {
     var here: (s: Int, c: Int, pos: Double) { (s, c, isAudio ? filePosition : textOffset) }
 
     func changeVoice(_ v: String) {
-        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        let resumeSkip = cancelSeek()
         voice = v
         let was = isPlaying
         if was { pause() }
         saveNow()
-        if was { play() }
+        if was || resumeSkip { play() }
     }
     func changeSpeed(_ sp: Double) {
-        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        let resumeSkip = cancelSeek()
         speed = sp
         if isAudio { if isPlaying { avPlayer?.rate = Float(sp) } }
-        else { let was = isPlaying; if was { pause(); play() } }
+        else { let was = isPlaying; if was { pause() }; if was || resumeSkip { play() } }
         saveNow()
     }
 
@@ -860,7 +915,9 @@ final class ReadingRoomPlayer: ObservableObject {
     }
 
     private func seek(s ns: Int, c nc: Int, offset: Double = 0) {
-        seekTask?.cancel(); seekTask = nil; seekGeneration += 1
+        // A chapter or bookmark jump replaces a skip in flight; the book
+        // plays on if that skip was going to play it.
+        let resumeSkip = cancelSeek()
         textOffset = max(0, offset)
         let was = isPlaying
         if was { playToken += 1; stopNode(); isPlaying = false }
@@ -868,7 +925,7 @@ final class ReadingRoomPlayer: ObservableObject {
         Task { await refreshText() }
         scheduleSave()
         updateNowPlaying()
-        if was { play() }
+        if was || resumeSkip { play() }
     }
 
     /// Stops everything scheduled and cancels the stream. Position is kept.

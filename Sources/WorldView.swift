@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 import AVFoundation
 
-/// Aug 8 2026 â€” THE WORLD SCREEN: her MUSHclient on the phone. A scrolling
-/// log, a command line, quick buttons, earcons and haptics per event kind â€”
+/// Aug 8 2026 — THE WORLD SCREEN: her MUSHclient on the phone. A scrolling
+/// log, a command line, quick buttons, earcons and haptics per event kind —
 /// and no model between her and the ground (POST /api/world/command hits the
 /// deterministic engine raw). VoiceOver-first the BASSLINE way: each reply
 /// is announced ONCE as a compact sentence, the log stays quiet history for
@@ -41,10 +41,10 @@ struct WorldView: View {
     private let logWindowStep = 80
     @State private var isVisible = false
     @AccessibilityFocusState private var focusedChoice: String?
-    /// Build 195: the sound manifest â€” district (ward-bed) ambience urls and
+    /// Build 195: the sound manifest — district (ward-bed) ambience urls and
     /// the district she currently stands in.
     @State private var districtSounds: [String: String] = [:]
-    /// Build 197 â€” layer two: room-scoped tones, keyed by the roomId the
+    /// Build 197 — layer two: room-scoped tones, keyed by the roomId the
     /// engine now sends. The manifest has always had this scope; nothing
     /// could reach it until the room started saying its own name.
     @State private var roomSounds: [String: String] = [:]
@@ -72,9 +72,9 @@ struct WorldView: View {
         ("My notebook", "notebook", "Continue the free canal trail and your projects"),
         ("Inventory", "inventory", "What you are carrying"),
         ("Who", "who", "Who is here with you"),
-        // Build 195 â€” the Reverie verbs, one tap each (Aug 10 city).
+        // Build 195 — the Reverie verbs, one tap each (Aug 10 city).
         ("Map", "map", "How this ward hangs together"),
-        ("Status", "status", "How you are doing â€” fed, rested, coin"),
+        ("Status", "status", "How you are doing, fed, rested, coin"),
         ("Weather", "weather", "What the sky is doing"),
         ("Recap", "recap", "Replay your last meanwhile"),
     ]
@@ -141,7 +141,7 @@ struct WorldView: View {
             worldToolbar
 
             HStack(spacing: 8) {
-                TextField("Command â€” look, n, take lantern, say hello", text: $command)
+                TextField("Command, look, n, take lantern, say hello", text: $command)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                     .autocorrectionDisabled(true)
@@ -447,7 +447,7 @@ struct WorldView: View {
         }
     }
 
-    /// Build 195 â€” the sound manifest lands on native (the queued "195
+    /// Build 195 — the sound manifest lands on native (the queued "195
     /// material"): fetch once per screen open, cache files locally, swap
     /// synth earcons for her real sounds where they exist, and start the
     /// ward-bed ambience for wherever she is standing.
@@ -470,7 +470,12 @@ struct WorldView: View {
         let room = currentRoomId
         let specific = picture?.room.sensory?.ambience
         let scope = specific.flatMap { eventSounds[$0] == nil ? nil : "event:" + $0 } ?? "district:" + d
-        guard let urlStr = specific.flatMap({ eventSounds[$0] }) ?? districtSounds[d] else { return }
+        guard let urlStr = specific.flatMap({ eventSounds[$0] }) ?? districtSounds[d] else {
+            // Sep 29 2026: a place with no bed of its own is quiet; the last
+            // ward's loop used to keep playing here.
+            WorldTones.shared.setAmbience(key: nil, fileURL: nil)
+            return
+        }
         let revision = soundVersions[scope]
         let local = await WorldService.cachedSoundFile(for: urlStr, revision: revision)
         guard soundsOn, ambienceOn, isVisible, scenePhase == .active, currentRoomId == room, currentDistrict == d else { return }
@@ -497,18 +502,27 @@ struct WorldView: View {
         guard isVisible, scenePhase == .active else { return }
         if soundsOn {
             if let url = eventSounds[kind] {
-                let requested = Date()
-                let room = currentRoomId
-                Task {
-                    let local = await WorldService.cachedSoundFile(for: url, revision: soundVersions["event:" + kind])
-                    guard isVisible, scenePhase == .active, soundsOn, room == currentRoomId else { return }
-                    if let local {
-                        WorldTones.shared.installEventSound(kind: kind, fileURL: local)
-                        if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
-                        await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
-                    } else {
-                        soundProblem = true
-                        if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
+                let revision = soundVersions["event:" + kind]
+                let source = url + "\n" + (revision ?? "")
+                // Sep 29 2026: this exact file is already loaded, so play it
+                // now. Every earcon used to re-check the cache, build a new
+                // player on the main thread and re-measure the haptics.
+                if WorldTones.shared.hasEventSound(kind: kind, source: source) {
+                    WorldTones.shared.play(kind)
+                } else {
+                    let requested = Date()
+                    let room = currentRoomId
+                    Task {
+                        let local = await WorldService.cachedSoundFile(for: url, revision: revision)
+                        guard isVisible, scenePhase == .active, soundsOn, room == currentRoomId else { return }
+                        if let local {
+                            WorldTones.shared.installEventSound(kind: kind, fileURL: local, source: source)
+                            if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
+                            await WorldHapticsEngine.shared.installEnvelope(kind: kind, fileURL: local)
+                        } else {
+                            soundProblem = true
+                            if Date().timeIntervalSince(requested) < 2.5 { WorldTones.shared.play(kind) }
+                        }
                     }
                 }
             } else { WorldTones.shared.play(kind) }

@@ -18,13 +18,22 @@ enum CopiedLink {
 
     /// The link copied since `box` last looked, when `accept` likes it; nil otherwise.
     static func take(_ box: String, where accept: (URL) -> Bool) async -> String? {
+        await look(box, where: accept).link
+    }
+
+    /// Like `take`, and also says when a copied web link was read but turned
+    /// away by `accept`, so the box can say why it stayed empty after iOS asked.
+    /// Sep 29 2026 (bug 8): the silent check cannot see a link's host, so a
+    /// link the box can't use still brings up iOS's question, and was then
+    /// dropped without a word. Don't Allow reads nothing, so it stays silent.
+    static func look(_ box: String, where accept: (URL) -> Bool) async -> (link: String?, refused: Bool) {
         let board = UIPasteboard.general
         let count = board.changeCount
-        guard seen[box] != count else { return nil }
+        guard seen[box] != count else { return (nil, false) }
         seen[box] = count
-        guard let link = await copiedLink(board, count: count),
-              let url = URL(string: link), accept(url) else { return nil }
-        return link
+        guard let link = await copiedLink(board, count: count) else { return (nil, false) }
+        guard let url = URL(string: link), accept(url) else { return (nil, true) }
+        return (link, false)
     }
 
     /// The first web link in copy `count`, reading the clipboard at most once per copy.

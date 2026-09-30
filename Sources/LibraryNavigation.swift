@@ -396,8 +396,12 @@ final class LibraryRowActions: ObservableObject {
 
     func delete(_ item: RRItem) async {
         do {
-            _ = try await service.batch(ids: [item.id], action: "delete")
-            say("Deleted \(item.title).")
+            // Bug 3 (Sep 29 2026): the server answers changed 0 for an item
+            // already gone (deleted from TubeVault, the web or another phone),
+            // so "Deleted" is said only when something was. The reload still
+            // runs, so a stale row disappears.
+            let n = try await service.batch(ids: [item.id], action: "delete")
+            say(n > 0 ? "Deleted \(item.title)." : "Nothing was deleted. \(item.title) may already be gone.")
             changes += 1
         } catch { say(error.localizedDescription) }
     }
