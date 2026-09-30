@@ -1872,13 +1872,26 @@ struct FHRound: Decodable, Equatable {
     var answer: Int? = nil
     var explain: String? = nil
     var spokenExplain: String? = nil
+    /// "Right. He is your uncle."
+    var right: String? = nil
+    /// "Not quite. He is your uncle."
+    var wrong: String? = nil
 
-    enum CodingKeys: String, CodingKey { case kind, prompt, spoken, people, image, choices, answer, explain, spokenExplain }
+    enum CodingKeys: String, CodingKey { case kind, prompt, spoken, people, image, choices, answer, explain, spokenExplain, right, wrong }
 
     /// A round the app can play: a question, two or more choices, an answer among them.
     var playable: Bool {
         guard let answer, choices.count >= 2 else { return false }
         return answer >= 0 && answer < choices.count
+    }
+
+    /// What is said after a choice: the server's words for right or wrong,
+    /// else "Right." or "Not quite." and the explanation.
+    func result(correct: Bool) -> String {
+        if let said = correct ? right : wrong, !said.isEmpty { return said }
+        let lead: String = correct ? "Right." : "Not quite."
+        guard let why = explain, !why.isEmpty else { return lead }
+        return lead + " " + why
     }
 }
 
@@ -1894,19 +1907,59 @@ extension FHRound {
         answer = c.fhInt(.answer)
         explain = c.fhString(.explain)
         spokenExplain = c.fhString(.spokenExplain)
+        right = c.fhString(.right)
+        wrong = c.fhString(.wrong)
     }
 }
 
 struct FHPlay: Decodable, Equatable {
+    /// The same seed plays the same game.
+    var seed: Int? = nil
     var rounds: [FHRound] = []
 
-    enum CodingKeys: String, CodingKey { case rounds }
+    enum CodingKeys: String, CodingKey { case seed, rounds }
 }
 
 extension FHPlay {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        seed = c.fhInt(.seed)
         rounds = c.fhList(.rounds)
+    }
+}
+
+/// The game's score, and the best one kept for each account ("3/5").
+struct FamilyPlayScore: Equatable {
+    var right: Int
+    var total: Int
+
+    /// "3 of 5".
+    var words: String { "\(right) of \(total)" }
+
+    /// "3/5", as it is kept.
+    var stored: String { "\(right)/\(total)" }
+
+    init(right: Int, total: Int) {
+        self.right = max(0, right)
+        self.total = max(0, total)
+    }
+
+    init?(stored text: String?) {
+        guard let text else { return nil }
+        let parts: [Substring] = text.split(separator: "/")
+        guard parts.count == 2, let r = Int(parts[0]), let t = Int(parts[1]), t > 0, r >= 0, r <= t else { return nil }
+        self.init(right: r, total: t)
+    }
+
+    /// Whether this score beats another (a bigger share right; a tie goes
+    /// to the longer game).
+    func beats(_ other: FamilyPlayScore?) -> Bool {
+        guard total > 0 else { return false }
+        guard let other, other.total > 0 else { return true }
+        let mine: Int = right * other.total
+        let theirs: Int = other.right * total
+        if mine != theirs { return mine > theirs }
+        return total > other.total
     }
 }
 

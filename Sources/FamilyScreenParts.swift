@@ -46,6 +46,8 @@ enum FamilyMemory {
     static let seenVersion = "seen"
     /// Climb, Chart or List.
     static let treeMode = "treeMode"
+    /// The game's best score ("3/5").
+    static let playBest = "playBest"
 }
 
 // MARK: - Saying things

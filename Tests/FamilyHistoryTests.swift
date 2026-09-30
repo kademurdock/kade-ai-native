@@ -170,6 +170,15 @@ import Foundation
 
         let play = try decode(FHPlay.self, FamilyDemoData.play)
         check(play.rounds.count == 3 && play.rounds.allSatisfy { $0.playable }, "every game round is playable")
+        let playV2 = try decode(FHPlay.self, #"{"seed":7,"rounds":[{"kind":"relation","prompt":"Who is Ned Example to you?","choices":[{"text":"your uncle"},{"text":"your grandfather"}],"answer":0,"explain":"He is your uncle.","right":"Right. He is your uncle.","wrong":"Not quite. He is your uncle."},{"kind":"year","prompt":"Guess this picture's decade.","choices":[{"text":"The 1950s"}],"answer":0},{"kind":"side","prompt":"Mom's side or Dad's side?","choices":[{"text":"Mom's side"},{"text":"Dad's side"}],"answer":5}],"score":"0 of 3"}"#)
+        check(playV2.seed == 7 && playV2.rounds.filter { $0.playable }.count == 1, "a round with one choice or an answer out of range is not played")
+        check(playV2.rounds[0].result(correct: true) == "Right. He is your uncle." && playV2.rounds[0].result(correct: false) == "Not quite. He is your uncle.", "the server says right and wrong")
+        check(FHRound(explain: "She is your aunt.").result(correct: false) == "Not quite. She is your aunt." && FHRound().result(correct: true) == "Right.", "without the server's words, the explanation follows")
+        check(FamilyPlayScore(right: 3, total: 5).words == "3 of 5" && FamilyPlayScore(stored: "3/5") == FamilyPlayScore(right: 3, total: 5), "a score reads and is kept")
+        check(FamilyPlayScore(stored: "6/5") == nil && FamilyPlayScore(stored: "x") == nil && FamilyPlayScore(stored: nil) == nil, "a broken kept score is ignored")
+        check(FamilyPlayScore(right: 4, total: 5).beats(FamilyPlayScore(right: 3, total: 5)) && !FamilyPlayScore(right: 3, total: 5).beats(FamilyPlayScore(right: 4, total: 5))
+              && FamilyPlayScore(right: 1, total: 1).beats(nil) && FamilyPlayScore(right: 4, total: 4).beats(FamilyPlayScore(right: 2, total: 2))
+              && !FamilyPlayScore(right: 0, total: 0).beats(nil), "the best score is the bigger share right")
 
         let people = try decode(FHPeople.self, FamilyDemoData.people)
         check(people.sections.count == 3 && people.total == 8, "everyone in the tree reads")
