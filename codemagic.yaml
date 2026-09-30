@@ -44,6 +44,7 @@ workflows:
           # Sep 29 2026: Family history models, demo family and drawing maths.
           bash ./run-family-tests.sh
           bash ./run-clubhouse-tests.sh
+          bash ./run-caption-tests.sh
           python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -100,7 +101,10 @@ workflows:
       - name: Auto-increment the TestFlight build number (floor 100 for native)
         script: |
           set -e
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID")
+          case "$LATEST" in
+            ''|*[!0-9]*) echo "Could not read a valid latest TestFlight build number." >&2; exit 1 ;;
+          esac
           NEXT=$(($LATEST + 1)); [ $NEXT -lt 100 ] && NEXT=100
           agvtool new-version -all $NEXT
       - name: Build signed .ipa
@@ -236,7 +240,7 @@ workflows:
     max_build_duration: 25
     instance_type: mac_mini_m2
     environment:
-      xcode: latest
+      xcode: "26.4"
     scripts:
       # PART 92.12 — the speech suite runs HERE TOO, and this is the lane that
       # matters most: no ASC integration, no signing, no path to her phone, so a
@@ -251,8 +255,11 @@ workflows:
           ./run-speech-tests.sh
           bash ./run-push-tests.sh
           bash ./run-character-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
+          python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
           bash ./run-family-tests.sh
+          bash ./run-clubhouse-tests.sh
+          bash ./run-caption-tests.sh
           python3 dev/art-check.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -261,6 +268,8 @@ workflows:
           xcodegen generate
       - name: Compile for the simulator (no signing)
         script: |
+          # Capture the first real compiler errors before returning its status.
+          set +e
           set -o pipefail
           # -sdk iphonesimulator + CODE_SIGNING_ALLOWED=NO is what makes this
           # need no certificate at all. A device build would demand signing and

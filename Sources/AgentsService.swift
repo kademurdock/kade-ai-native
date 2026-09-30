@@ -196,7 +196,7 @@ final class AgentsService: ObservableObject {
         struct Row: Decodable { let agentId: String; let count: Int? }
         let top: [Row]
         /// Sep 20 2026: a main agent Kade picked FOR this person on the server
-        /// ("make it Holly Murdock's default agent"). `stamp` changes each time
+        /// ("make it this person's default agent"). `stamp` changes each time
         /// she assigns, so a phone applies an assignment once and the person's
         /// own later choice in Settings is never overwritten by the same one.
         struct Assigned: Decodable { let agentId: String; let stamp: String }

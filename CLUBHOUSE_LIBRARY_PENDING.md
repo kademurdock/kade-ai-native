@@ -1,6 +1,6 @@
 # Clubhouse library playback — source prepared, no build
 
-Prepared September 28, 2026. Kade explicitly requested iPhone coding but **no Codemagic build yet**. This branch is held locally; do not trigger a build or release merely to finish this work.
+Originally prepared September 28, 2026 with a build hold. Kade authorized the accumulated public and beta app release on September 29. The combined candidate remains unbuilt until the root task finishes review and starts the existing compile gate; see `docs/native-release-2026-09-30.md`.
 
 `ClubhouseLibraryService` streams shared Library audio/video directly with AVPlayer. The existing Clubhouse token response now supplies a separate media proof. Server state controls the room's host, revision, play/pause, seeks, and late arrivals. The UI has shared-media search, host controls, takeover after an absent host, local media volume, optional picture, and Rejoin playback. It keeps the current call audio session. Interruptions and a disconnected audio device pause locally until Rejoin.
 

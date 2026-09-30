@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CryptoKit
 import UIKit
+import CallKit
 
 /// Aug 8 2026 — THE WORLD CLIENT (native). The direct lane into the city
 /// beyond the Threshold Gate: POST /api/world/command with one engine
@@ -226,6 +227,7 @@ final class WorldTones {
     private var eventSources: [String: String] = [:]
     private var active = false
     private var interrupted = false
+    private let phoneCalls = CXCallObserver()
     /// Sep 29 2026: the session is set up and active. Every earcon used to
     /// call setActive twice; now it runs on activate(), after an
     /// interruption or media reset, or after a category change.
@@ -375,13 +377,9 @@ final class WorldTones {
 
     func activate() {
         active = true
-        // Sep 29 2026: coming back to the screen or the app starts clean. A
-        // .began that never got its .ended, or headphones pulled earlier,
-        // must not keep the world silent. Known cost: World's session mixes,
-        // and a mixing session can usually be activated during a phone call,
-        // so coming back to the app mid-call may bring the loops back under
-        // the call (build 319 kept them paused until .ended).
-        interrupted = false
+        // Clear a stale suspension interruption on return, while an active
+        // system phone call continues to keep World audio paused.
+        interrupted = phoneCalls.calls.contains { !$0.hasEnded }
         pausedForRoute = false
         sessionReady = false
         resumeLoops()
@@ -393,7 +391,7 @@ final class WorldTones {
     /// during a phone call, so asking would play the world under the call.
     /// .ended, activate() and a media reset clear `interrupted`.
     private func prepareSession() -> Bool {
-        guard active, !interrupted else { return false }
+        guard active, !interrupted, !phoneCalls.calls.contains(where: { !$0.hasEnded }) else { return false }
         if sessionReady { return true }
         let session = AVAudioSession.sharedInstance()
         do {

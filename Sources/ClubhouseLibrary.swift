@@ -430,39 +430,41 @@ struct ClubhouseLibrarySection: View {
                 }
                 Button("Choose from the library") { choosing = true }
                     .disabled(service.state.active && service.state.controlling != true)
+                    .sheet(isPresented: $choosing) { libraryPicker }
                 Text("Room recordings include the conversation and jukebox. This library player is not included.").font(.footnote)
             }
-            .sheet(isPresented: $choosing) {
-                NavigationStack {
-                    List {
-                        Section {
-                            TextField("Search shared audio and video", text: $query).onSubmit { Task { await service.search(query) } }
-                            Button(service.searching ? "Searching…" : "Search") { Task { await service.search(query) } }.disabled(service.searching)
-                            Text(service.status).font(.callout)
-                        }
-                        if let chosen = service.tracks {
-                            Section(chosen.title) {
-                                ForEach(chosen.tracks) { track in
-                                    Button("Choose \(track.title)") {
-                                        Task {
-                                            await service.command("load", extra: ["book": chosen.id, "track": track.index])
-                                            if service.state.book == chosen.id && service.state.track == track.index { choosing = false }
-                                        }
-                                    }.disabled(service.busy)
+        }
+    }
+
+    private var libraryPicker: some View {
+        NavigationStack {
+            List {
+                Section {
+                    TextField("Search shared audio and video", text: $query).onSubmit { Task { await service.search(query) } }
+                    Button(service.searching ? "Searching…" : "Search") { Task { await service.search(query) } }.disabled(service.searching)
+                    Text(service.status).font(.callout)
+                }
+                if let chosen = service.tracks {
+                    Section(chosen.title) {
+                        ForEach(chosen.tracks) { track in
+                            Button("Choose \(track.title)") {
+                                Task {
+                                    await service.command("load", extra: ["book": chosen.id, "track": track.index])
+                                    if service.state.book == chosen.id && service.state.track == track.index { choosing = false }
                                 }
-                            }
-                        }
-                        Section("Recordings") {
-                            ForEach(service.items) { item in
-                                Button(item.title) { Task { await service.choose(item) } }
-                            }
-                            if service.more { Button("More results") { Task { await service.search(query, next: true) } }.disabled(service.searching) }
+                            }.disabled(service.busy)
                         }
                     }
-                    .navigationTitle("Play from Library")
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { choosing = false } } }
+                }
+                Section("Recordings") {
+                    ForEach(service.items) { item in
+                        Button(item.title) { Task { await service.choose(item) } }
+                    }
+                    if service.more { Button("More results") { Task { await service.search(query, next: true) } }.disabled(service.searching) }
                 }
             }
+            .navigationTitle("Play from Library")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { choosing = false } } }
         }
     }
 }
