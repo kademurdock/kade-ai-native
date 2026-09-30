@@ -112,7 +112,7 @@ struct FamilyStoryScreen: View {
             }
         }
         if !story.blocks.isEmpty {
-            FamilyStoryBlocks(blocks: story.blocks, active: activeBlock)
+            FamilyStoryBlocks(blocks: story.blocks, active: activeBlock, sentence: listening ? player.caption : "")
                 .environment(\.openURL, OpenURLAction { (url: URL) -> OpenURLAction.Result in
                     guard let n = FamilyStoryText.sourceNumber(url) else { return .systemAction }
                     showSource(n, proxy: proxy)

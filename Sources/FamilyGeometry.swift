@@ -22,6 +22,19 @@ struct FHArc: Equatable {
     var middle: Double { (start + end) / 2 }
 }
 
+/// Part of a text, as character offsets: `start` up to (not including) `end`.
+struct FHSpan: Equatable {
+    var start: Int
+    var end: Int
+}
+
+/// A text with its spaces made loose (FamilyGeometry.loose), and where each
+/// kept character was in the original.
+struct FHLoose: Equatable {
+    var chars: [Character]
+    var offsets: [Int]
+}
+
 /// A map view: its middle and how many degrees it spans.
 struct FHMapFit: Equatable {
     var lat: Double
@@ -235,6 +248,62 @@ enum FamilyGeometry {
             previousEnd = cue.end
         }
         return abs(last.end - 1) <= tolerance
+    }
+
+    /// Where a sentence sits in a paragraph's words, as character offsets,
+    /// or nil. Spaces are compared loosely (a run of spaces counts as one,
+    /// and none before punctuation), the way the server cut the sentence; a
+    /// sentence that gained a closing full stop (a heading, a list item) is
+    /// found without it.
+    static func sentenceSpan(_ sentence: String, in paragraph: String) -> FHSpan? {
+        let hay: FHLoose = loose(paragraph)
+        let full: [Character] = loose(sentence).chars
+        if let found = find(full, in: hay) { return found }
+        var trimmed: [Character] = full
+        while let last = trimmed.last, ".!?;:".contains(last) {
+            trimmed.removeLast()
+        }
+        guard trimmed.count < full.count else { return nil }
+        return find(trimmed, in: hay)
+    }
+
+    private static func find(_ needle: [Character], in hay: FHLoose) -> FHSpan? {
+        guard !needle.isEmpty, needle.count <= hay.chars.count else { return nil }
+        let last: Int = hay.chars.count - needle.count
+        var i = 0
+        while i <= last {
+            var j = 0
+            while j < needle.count && hay.chars[i + j] == needle[j] {
+                j += 1
+            }
+            if j == needle.count {
+                return FHSpan(start: hay.offsets[i], end: hay.offsets[i + needle.count - 1] + 1)
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// The text with its spaces made loose, and where each kept character
+    /// was in the original.
+    static func loose(_ text: String) -> FHLoose {
+        var chars: [Character] = []
+        var offsets: [Int] = []
+        var spaceAt: Int? = nil
+        for (offset, ch) in text.enumerated() {
+            if ch.isWhitespace {
+                if !chars.isEmpty && spaceAt == nil { spaceAt = offset }
+                continue
+            }
+            if let at = spaceAt, !",.;:!?".contains(ch) {
+                chars.append(" ")
+                offsets.append(at)
+            }
+            spaceAt = nil
+            chars.append(ch)
+            offsets.append(offset)
+        }
+        return FHLoose(chars: chars, offsets: offsets)
     }
 
     /// A part's cues in seconds: the server's own when it sent them, else

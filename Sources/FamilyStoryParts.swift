@@ -29,28 +29,52 @@ enum FamilyStoryText {
         return Int(host)
     }
 
-    /// One block's runs as one Text: emphasis, links, and source chips.
-    static func text(_ block: FHBlock) -> Text {
+    /// One block's runs as one Text: emphasis, links, and source chips. The
+    /// sentence being read (`mark`, character offsets in the block's words)
+    /// is underlined in the accent colour, which never moves the text.
+    static func text(_ block: FHBlock, mark: FHSpan? = nil) -> Text {
         var out = Text(verbatim: "")
+        var at = 0
         for run in block.runs {
-            out = out + piece(run)
+            if run.source != nil {
+                out = out + piece(run)
+                continue
+            }
+            let count: Int = run.text.count
+            let start: Int = at
+            at += count
+            guard let mark, mark.end > start, mark.start < start + count else {
+                out = out + piece(run)
+                continue
+            }
+            let chars: [Character] = Array(run.text)
+            let from: Int = min(count, max(0, mark.start - start))
+            let upTo: Int = max(from, min(count, mark.end - start))
+            let before = String(chars[0..<from])
+            let inside = String(chars[from..<upTo])
+            let after = String(chars[upTo..<count])
+            if !before.isEmpty { out = out + piece(run, before) }
+            if !inside.isEmpty { out = out + piece(run, inside).underline(true, color: Color.accentColor) }
+            if !after.isEmpty { out = out + piece(run, after) }
         }
         return out
     }
 
-    static func piece(_ run: FHRun) -> Text {
+    /// One run (or part of one: `words`) with its emphasis and link.
+    static func piece(_ run: FHRun, _ words: String? = nil) -> Text {
         if let n = run.source {
             var chip = AttributedString(" [" + String(n) + "]")
             chip.link = sourceLink(n)
             return Text(chip).font(.caption)
         }
+        let shown: String = words ?? run.text
         var made: Text
         if let link = run.link {
-            var linked = AttributedString(run.text)
+            var linked = AttributedString(shown)
             linked.link = link
             made = Text(linked)
         } else {
-            made = Text(verbatim: run.text)
+            made = Text(verbatim: shown)
         }
         if run.strong == true { made = made.bold() }
         if run.em == true { made = made.italic() }
@@ -62,10 +86,18 @@ struct FamilyStoryBlocks: View {
     let blocks: [FHBlock]
     /// The block being read aloud, if any.
     let active: Int?
+    /// The sentence being read, underlined inside that block when found.
+    var sentence: String = ""
 
     @KadeContrastPolicy private var highContrast: Bool
 
     static func blockId(_ index: Int) -> String { "story-block-\(index)" }
+
+    /// The sentence's place in block `index`, when that block is being read.
+    private func mark(_ block: FHBlock, index: Int) -> FHSpan? {
+        guard index == active, !sentence.isEmpty else { return nil }
+        return FamilyGeometry.sentenceSpan(sentence, in: block.plainText)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -84,10 +116,10 @@ struct FamilyStoryBlocks: View {
         case "h3":
             FamilyHeading(text: block.plainText, level: .h3)
         case "li":
-            listItem(block)
+            listItem(block, mark: mark(block, index: index))
                 .modifier(FamilyReadingHighlight(on: index == active, contrast: highContrast))
         case "quote":
-            FamilyStoryText.text(block)
+            FamilyStoryText.text(block, mark: mark(block, index: index))
                 .italic()
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 12)
@@ -96,18 +128,18 @@ struct FamilyStoryBlocks: View {
                 }
                 .modifier(FamilyReadingHighlight(on: index == active, contrast: highContrast))
         default:
-            FamilyStoryText.text(block)
+            FamilyStoryText.text(block, mark: mark(block, index: index))
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .modifier(FamilyReadingHighlight(on: index == active, contrast: highContrast))
         }
     }
 
-    private func listItem(_ block: FHBlock) -> some View {
+    private func listItem(_ block: FHBlock, mark: FHSpan?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(verbatim: block.n.map { String($0) + "." } ?? "\u{2022}")
                 .accessibilityHidden(block.n == nil)
-            FamilyStoryText.text(block)
+            FamilyStoryText.text(block, mark: mark)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

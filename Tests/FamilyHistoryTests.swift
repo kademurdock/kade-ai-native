@@ -173,6 +173,12 @@ import Foundation
         let stretched = FamilyGeometry.cuesInSeconds([], fractions: [FHCue(text: "A.", start: 0, end: 0.25), FHCue(text: "B.", start: 0.25, end: 1)], duration: 8)
         check(stretched.map { $0.end } == [2, 8] && FamilyGeometry.cuesInSeconds(voiced.cues, fractions: stretched, duration: 99) == voiced.cues, "fraction cues stretch over the part; the server's seconds win")
         check(FamilyGeometry.sentenceKey("Later.") == "later" && FamilyGeometry.sentenceKey("Dan's 1954 farm!") == "dans1954farm", "a sentence's key is its letters and digits")
+        let paragraph = "We lived on an invented farm on Example Road. Grandpa Dan kept bees there."
+        let second = FamilyGeometry.sentenceSpan("Grandpa Dan kept bees there.", in: paragraph)
+        check(second == FHSpan(start: 46, end: 74) && String(Array(paragraph)[46..<74]) == "Grandpa Dan kept bees there.", "the sentence being read is found in its paragraph")
+        check(FamilyGeometry.sentenceSpan("Example Road.", in: "Example Road . Grandpa  Dan") == FHSpan(start: 0, end: 14), "loose spaces and a space before a full stop still match")
+        check(FamilyGeometry.sentenceSpan("Later.", in: "Later") == FHSpan(start: 0, end: 5), "a heading's added full stop is ignored")
+        check(FamilyGeometry.sentenceSpan("Not in it.", in: paragraph) == nil && FamilyGeometry.sentenceSpan("", in: paragraph) == nil, "a sentence that is not there is nil")
 
         let findings = try decode(FHFindings.self, FamilyDemoData.findings)
         check(findings.discoveries.count == 1 && findings.mysteries?.count == 1, "discoveries and the mysteries row read")
