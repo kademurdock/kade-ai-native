@@ -124,6 +124,18 @@ import Foundation
         let places = try decode(FHPlaces.self, FamilyDemoData.places)
         check(places.places.count == 2 && places.decades[0].counts["p1"] == 3, "places and their counts read")
         check(places.ocean.first?.from?.lat == 54.0 && places.journeys.count == 1, "the ocean crossing reads")
+        check(places.startIndex == 0, "the map opens on the richest decade")
+        let placesV2 = try decode(FHPlaces.self, #"{"scope":"ancestors","places":[{"id":"p1","short":"Invented County, IS","lat":10.123,"lon":-20.456,"precision":"county"}],"people":{},"start":1920,"decades":[{"decade":1900,"counts":{}},{"decade":1920,"counts":{"p1":1}}],"ocean":[{"personId":"@X4@","text":"Made up.","spoken":"Made up, said.","from":{"lat":61.9,"lon":25.7},"to":{"lat":10.123,"lon":-20.456}}],"journeys":[{"personId":"@X3@","text":"Born in Invented County.","spoken":"Born in Invented County, said."}],"note":"Places come from records."}"#)
+        check(placesV2.startIndex == 1 && placesV2.note != nil && placesV2.scope == "ancestors", "the map opens on the server's start decade, with its note")
+        check(placesV2.ocean.first?.spoken == "Made up, said." && placesV2.journeys.first?.spoken != nil, "crossings and journeys carry their spoken words")
+        check(FHPlaces(start: 1990).startIndex == 0, "a start decade that is missing opens the first")
+        let fit = FamilyGeometry.mapFit(latitudes: [10, 20], longitudes: [-40, -20])
+        check(fit?.lat == 15 && fit?.lon == -30 && abs((fit?.latDelta ?? 0) - 14) < 1e-9 && abs((fit?.lonDelta ?? 0) - 28) < 1e-9, "the map fits every place, with room around")
+        check(FamilyGeometry.mapFit(latitudes: [10.123], longitudes: [-20.456])?.latDelta == 3 && FamilyGeometry.mapFit(latitudes: [], longitudes: []) == nil, "one place gets a small area; none gets none")
+        let crossing: Double = FamilyGeometry.bearing(fromLat: 61.9, fromLon: 25.7, toLat: 10.123, toLon: -20.456)
+        check(abs(FamilyGeometry.bearing(fromLat: 0, fromLon: 0, toLat: 0, toLon: 10) - 90) < 1e-6
+              && abs(FamilyGeometry.bearing(fromLat: 0, fromLon: 0, toLat: 10, toLon: 0)) < 1e-6
+              && crossing > 180 && crossing < 270, "headings: east is 90, north is 0, the made-up crossing heads south-west")
 
         let stories = try decode(FHStories.self, FamilyDemoData.stories)
         check(stories.stories.first?.slug == "the-farm" && stories.clippings.count == 1, "the stories list reads")

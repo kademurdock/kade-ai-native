@@ -1491,10 +1491,11 @@ extension FHGeoPoint {
 struct FHOceanCrossing: Decodable, Equatable {
     var personId: String? = nil
     var text: String? = nil
+    var spoken: String? = nil
     var from: FHGeoPoint? = nil
     var to: FHGeoPoint? = nil
 
-    enum CodingKeys: String, CodingKey { case personId, text, from, to }
+    enum CodingKeys: String, CodingKey { case personId, text, spoken, from, to }
 }
 
 extension FHOceanCrossing {
@@ -1502,6 +1503,7 @@ extension FHOceanCrossing {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         personId = c.fhString(.personId)
         text = c.fhString(.text)
+        spoken = c.fhString(.spoken)
         from = c.fh(.from)
         to = c.fh(.to)
     }
@@ -1510,8 +1512,9 @@ extension FHOceanCrossing {
 struct FHJourney: Decodable, Equatable {
     var personId: String? = nil
     var text: String? = nil
+    var spoken: String? = nil
 
-    enum CodingKeys: String, CodingKey { case personId, text }
+    enum CodingKeys: String, CodingKey { case personId, text, spoken }
 }
 
 extension FHJourney {
@@ -1519,25 +1522,37 @@ extension FHJourney {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         personId = c.fhString(.personId)
         text = c.fhString(.text)
+        spoken = c.fhString(.spoken)
     }
 }
 
 struct FHPlaces: Decodable, Equatable {
+    var scope: String? = nil
     var places: [FHPlace] = []
     var people: [String: FHPerson] = [:]
     /// The richest decade, where the map opens.
     var start: Int? = nil
+    /// Oldest first.
     var decades: [FHPlaceDecade] = []
     var ocean: [FHOceanCrossing] = []
     var journeys: [FHJourney] = []
     var unplaced: String? = nil
+    /// "Places come from records. Some records give only a state."
+    var note: String? = nil
 
-    enum CodingKeys: String, CodingKey { case places, people, start, decades, ocean, journeys, unplaced }
+    enum CodingKeys: String, CodingKey { case scope, places, people, start, decades, ocean, journeys, unplaced, note }
+
+    /// Where the map opens: the richest decade, else the first.
+    var startIndex: Int {
+        guard let start, let found = decades.firstIndex(where: { $0.decade == start }) else { return 0 }
+        return found
+    }
 }
 
 extension FHPlaces {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        scope = c.fhString(.scope)
         places = c.fhList(.places)
         people = c.fhMap(.people)
         start = c.fhInt(.start)
@@ -1545,6 +1560,7 @@ extension FHPlaces {
         ocean = c.fhList(.ocean)
         journeys = c.fhList(.journeys)
         unplaced = c.fhString(.unplaced)
+        note = c.fhString(.note)
     }
 }
 

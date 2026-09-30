@@ -10,8 +10,8 @@ import UIKit
 // and one line ("41 of your ancestors were alive"), the context lines ("12
 // of your ancestors were adults during the Civil War"), a thin band of
 // lifelines, and its events, 12 at a time. Ancestors, or all relatives.
-// The map is a later step of the build; until it is in, "On a map" says it
-// is coming soon.
+// On a map (FamilyMapScreen.swift) shows the same people by place, decade by
+// decade; it says "coming soon" until the export has found the places.
 //
 // VoiceOver: the decade headings are always there (the Headings rotor walks
 // the centuries). Each band is ONE element with the server's summary ("1880s:
@@ -41,6 +41,11 @@ struct FamilyTimelineScreen: View {
                     Text("On a map").tag(true)
                 }
                 .pickerStyle(.segmented)
+                Picker("Who", selection: $scope) {
+                    Text("Ancestors").tag("ancestors")
+                    Text("All relatives").tag("all")
+                }
+                .pickerStyle(.segmented)
                 if showMap {
                     mapPart
                 } else {
@@ -65,20 +70,13 @@ struct FamilyTimelineScreen: View {
     // MARK: On a map
 
     private var mapPart: some View {
-        Text("The map is coming soon. Through the years shows the same family, decade by decade.")
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        FamilyMapSection(apiClient: apiClient, scope: scope, ready: timeline?.mapReady)
     }
 
     // MARK: Through the years
 
     @ViewBuilder
     private var yearsPart: some View {
-        Picker("Who", selection: $scope) {
-            Text("Ancestors").tag("ancestors")
-            Text("All relatives").tag("all")
-        }
-        .pickerStyle(.segmented)
         if let timeline {
             years(timeline)
         } else if let failure {

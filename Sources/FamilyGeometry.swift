@@ -22,6 +22,14 @@ struct FHArc: Equatable {
     var middle: Double { (start + end) / 2 }
 }
 
+/// A map view: its middle and how many degrees it spans.
+struct FHMapFit: Equatable {
+    var lat: Double
+    var lon: Double
+    var latDelta: Double
+    var lonDelta: Double
+}
+
 /// The tree chart's three size steps. A bigger step lays the tree out again
 /// with bigger boxes (text stays sharp), rather than zooming a picture of it.
 enum FamilyTreeScale: String, CaseIterable {
@@ -181,6 +189,29 @@ enum FamilyGeometry {
         guard count > 0, maxCount > 0 else { return (minSize, 0) }
         let ratio = min(1, Double(count) / Double(maxCount))
         return (minSize + (maxSize - minSize) * ratio.squareRoot(), 0.55 + 0.45 * ratio)
+    }
+
+    /// A map view that shows every point given: the middle, and a span a
+    /// little bigger than the points need (never smaller than `least`
+    /// degrees, never more than the whole world). Nil with no points.
+    static func mapFit(latitudes: [Double], longitudes: [Double], pad: Double = 1.4, least: Double = 3) -> FHMapFit? {
+        guard let south = latitudes.min(), let north = latitudes.max(),
+              let west = longitudes.min(), let east = longitudes.max() else { return nil }
+        let latDelta: Double = min(170, max(least, (north - south) * pad))
+        let lonDelta: Double = min(350, max(least, (east - west) * pad))
+        return FHMapFit(lat: (south + north) / 2, lon: (west + east) / 2, latDelta: latDelta, lonDelta: lonDelta)
+    }
+
+    /// The compass heading from one place to another, in degrees (0 north,
+    /// 90 east), for the flight across the ocean.
+    static func bearing(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double) -> Double {
+        let p1: Double = fromLat * Double.pi / 180
+        let p2: Double = toLat * Double.pi / 180
+        let dl: Double = (toLon - fromLon) * Double.pi / 180
+        let y: Double = sin(dl) * cos(p2)
+        let x: Double = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)
+        let degrees: Double = atan2(y, x) * 180 / Double.pi
+        return (degrees + 360).truncatingRemainder(dividingBy: 360)
     }
 
     // MARK: Listen: the sentence being read
