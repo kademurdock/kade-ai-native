@@ -42,6 +42,9 @@ struct FamilyViewerPanel: View {
                 copySwitch
                 peopleLinks
                 dateLine
+                if let warning = FamilyAccessRules.nonEmpty(info?.evidenceWarning) {
+                    FamilyEvidenceWarning(words: warning)
+                }
                 descriptionBox
                 textBox
                 sourceBox
@@ -126,6 +129,11 @@ struct FamilyViewerPanel: View {
     private var peopleLinks: some View {
         if !people.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
+                if info?.newspaperSource != nil || image?.categoryKind == .record {
+                    Text("People linked to this record")
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                }
                 ForEach(people) { person in
                     Button {
                         onPerson(person)
@@ -227,10 +235,13 @@ struct FamilyViewerPanel: View {
     /// ends; visiting the source website is a separate optional action.
     @ViewBuilder
     private var sourceBox: some View {
-        if let source = info?.source {
+        let newspaper = info?.newspaperSource
+        let source = info?.source ?? newspaper.map { FHSourceLabel(citation: $0.citation, url: $0.sourceUrl) }
+        if source != nil || newspaper != nil {
+            let source = source ?? FHSourceLabel()
             let title = FamilyAccessRules.nonEmpty(source.title)
             let citation = FamilyAccessRules.nonEmpty(source.citation)
-            if title != nil || citation != nil || source.website != nil {
+            if title != nil || citation != nil || source.website != nil || newspaper != nil {
                 DisclosureGroup("Source", isExpanded: $showSource) {
                     VStack(alignment: .leading, spacing: 6) {
                         if let title {
@@ -244,6 +255,9 @@ struct FamilyViewerPanel: View {
                         if let website = source.website {
                             Link("Open source website", destination: website)
                                 .accessibilityHint("Opens the source provider's website.")
+                        }
+                        if let newspaper {
+                            FamilyNewspaperDetails(source: newspaper, showIndexedPersonRole: false)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -278,5 +292,53 @@ struct FamilyViewerPanel: View {
             }
         }
         .buttonStyle(.bordered)
+    }
+}
+
+/// A visible, readable caution; the words come from the source review.
+struct FamilyEvidenceWarning: View {
+    let words: String
+
+    var body: some View {
+        Label {
+            Text(words).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct FamilyNewspaperDetails: View {
+    let source: FHNewspaperSource
+    var showIndexedPersonRole = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            line("Saved coverage", source.coverage)
+            line("Main article subject", source.principalArticleSubject)
+            if showIndexedPersonRole {
+                line("Indexed person's role", source.indexedPersonRole)
+            }
+            line("Identity review", source.identityReview?.note)
+            if source.linkedTreeIdentityVerified == false {
+                Text("The indexed name has not been verified as the linked person in this family tree.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Array(source.limitations.enumerated()), id: \.offset) { pair in
+                if let words = FamilyAccessRules.nonEmpty(pair.element) {
+                    Text(words).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func line(_ label: String, _ words: String?) -> some View {
+        if let words = FamilyAccessRules.nonEmpty(words) {
+            Text(label + ": " + words).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

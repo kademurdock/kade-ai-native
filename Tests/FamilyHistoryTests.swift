@@ -373,6 +373,25 @@ import Foundation
         check(nonWebSource.website == nil && nonWebSource.citation == "A saved citation.", "non-web source links leave the citation readable without a website action")
         let scanned = try decode(FHRecord.self, #"{"title":"An invented census","scan":{"id":"m9","category":"record"},"wrong":"another Ada","wrongText":"Attached to this person by mistake: another Ada"}"#)
         check(scanned.image?.id == "m9" && scanned.wrongWords == "Attached to this person by mistake: another Ada", "a record's scan and warning read under either name")
+        let newspaperRecord = try decode(FHRecord.self, #"{"title":"Invented obituary index","spoken":"Invented obituary index.","evidenceWarning":"An index mention does not prove the tree identity.","sourceExcerpt":"Ada attended the service.","sourceExcerptCoverage":"excerpt only","sourceCitation":"Invented Gazette, 3 May 1920, page 2.","sourceUrl":"https://example.com/page/2","newspaperSource":{"coverage":"whole page saved","indexedPersonRole":"surviving niece","principalArticleSubject":"Pat Example","identityReview":{"status":"not-verified","note":"The shared name needs corroboration."},"linkedTreeIdentityVerified":false,"limitations":["No funeral date in this excerpt."]}}"#)
+        check(newspaperRecord.sourceExcerpt == "Ada attended the service." && newspaperRecord.sourceExcerptCoverage == "excerpt only",
+              "a saved article excerpt retains its stated scope")
+        check(newspaperRecord.newspaperSource?.principalArticleSubject == "Pat Example"
+              && newspaperRecord.newspaperSource?.indexedPersonRole == "surviving niece"
+              && newspaperRecord.newspaperSource?.linkedTreeIdentityVerified == false,
+              "an indexed relative is kept separate from the article subject and identity proof")
+        check(newspaperRecord.newspaperSource?.identityReview?.note == "The shared name needs corroboration."
+              && newspaperRecord.newspaperSource?.limitations == ["No funeral date in this excerpt."],
+              "source review notes and limitations remain readable")
+        check(newspaperRecord.spokenWords.contains("An index mention does not prove the tree identity.")
+              && newspaperRecord.sourceLabel?.website?.host == "example.com", "record summaries speak evidence warnings and source links stay optional")
+        let repeatedWarning = try decode(FHRecord.self, #"{"title":"A record","spoken":"A record. Limited evidence.","evidenceWarning":"Limited evidence."}"#)
+        check(repeatedWarning.spokenWords == "A record. Limited evidence.", "a server-spoken warning is not repeated")
+        let mediaEvidence = try decode(FHMediaInfo.self, #"{"evidenceWarning":"Identity not verified.","newspaperSource":{"identityReview":{"status":"unverified"},"limitations":["Excerpt only.",false],"sourceUrl":"https://example.com/original"}}"#)
+        check(mediaEvidence.evidenceWarning == "Identity not verified." && mediaEvidence.newspaperSource?.limitations == ["Excerpt only."],
+              "media reviews decode independently and malformed optional limitation entries are ignored")
+        check(scanned.evidenceWarning == nil && scanned.newspaperSource == nil && scanned.sourceExcerpt == nil,
+              "older record payloads need no new evidence fields")
         let dup = try decode(FHDuplicate.self, #"{"mainId":"@X2@","text":"This is a second copy of Ada Example in the tree"}"#)
         check(dup.id == "@X2@", "a duplicate names its main entry")
 
@@ -446,6 +465,24 @@ import Foundation
         check(FamilyCacheNames.imageFile(mediaId: "a1b2", size: .s) == "a1b2.s.jpg"
               && FamilyCacheNames.memoryKey(userId: "u1", mediaId: "a1b2", size: .t, pixels: 132) == "u1/a1b2.t.132", "a picture is named by account, id and size")
         check(FamilyCacheNames.accessKey(userId: "u1") == "kade.family.access.u1", "access is remembered per account")
+        let archiveCatalog = try decode(FHArchiveCatalog.self, #"{"archives":[{"id":"default","title":"The Example archive"},{"id":"second-family","title":"A separate Example archive"},{"id":"second-family","title":"Duplicate"},{"id":"../private","title":"Invalid"}],"defaultArchive":"second-family"}"#)
+        check(archiveCatalog.archives.map { $0.id } == ["default", "second-family"] && archiveCatalog.defaultArchive == "second-family",
+              "authorized archive choices have stable unique slugs and preserve their titles")
+        let unknownDefault = try decode(FHArchiveCatalog.self, #"{"archives":[{"id":"default","title":"An archive"}],"defaultArchive":"not-listed"}"#)
+        check(unknownDefault.defaultArchive == nil, "an unlisted preferred archive never becomes a choice")
+        check(FamilyArchiveRules.validId("second-family") && !FamilyArchiveRules.validId("Family Name")
+              && !FamilyArchiveRules.validId("../private") && !FamilyArchiveRules.validId(String(repeating: "a", count: 49)),
+              "archive identifiers match the server contract")
+        let oldQuery = [URLQueryItem(name: "v", value: "2"), URLQueryItem(name: "q", value: "Ada")]
+        check(FamilyArchiveRules.query(oldQuery, archiveId: nil) == oldQuery
+              && FamilyArchiveRules.query(oldQuery, archiveId: "default") == oldQuery, "default archive requests keep their existing query")
+        let scopedQuery = FamilyArchiveRules.query(oldQuery + [URLQueryItem(name: "archive", value: "other")], archiveId: "second-family")
+        check(scopedQuery.filter { $0.name == "archive" }.map { $0.value } == ["second-family"],
+              "only the selected archive is included, even if another query item was supplied")
+        check(FamilyCacheNames.memoryKey(userId: "u1", mediaId: "same-id", size: .t, pixels: 100)
+              != FamilyCacheNames.memoryKey(userId: "u1", mediaId: "same-id", size: .t, pixels: 100, archiveId: "second-family")
+              && FamilyCacheNames.accessKey(userId: "u1") != FamilyCacheNames.accessKey(userId: "u1", archiveId: "second-family"),
+              "identical person or media IDs in separate archives cannot share account caches or access memos")
         let files = [
             FamilyCachedFile(name: "a.t.jpg", bytes: 100, used: t0),
             FamilyCachedFile(name: "b.t.jpg", bytes: 100, used: t0.addingTimeInterval(10)),

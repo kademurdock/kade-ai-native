@@ -85,21 +85,14 @@ struct FamilyRecordCard: View {
 
     /// The server's sentence, with the mistake warning if it left it out.
     private var spoken: String {
-        let said: String = FamilyAccessRules.nonEmpty(record.spoken) ?? title
-        guard let wrong = record.wrongWords, !said.contains(wrong) else { return said }
-        return said + " " + wrong
+        record.spokenWords
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             summary
-            if let wrong = record.wrongWords {
-                Label {
-                    Text(wrong).fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                }
-                .font(.subheadline)
+            ForEach(record.warnings, id: \.self) { warning in
+                FamilyEvidenceWarning(words: warning)
                 .accessibilityHidden(true)
             }
             if showing {
@@ -182,6 +175,31 @@ struct FamilyTranscription: View {
                         .font(pair.offset == 0 ? Font.caption.weight(.semibold) : Font.caption)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            if let excerpt = FamilyAccessRules.nonEmpty(record.sourceExcerpt) {
+                FamilyHeading(text: "Saved article text", level: .h3)
+                if let coverage = FamilyAccessRules.nonEmpty(record.sourceExcerptCoverage) {
+                    Text("Text coverage: " + coverage)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(excerpt)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if let source = record.sourceLabel {
+                FamilyHeading(text: "Source", level: .h3)
+                if let citation = FamilyAccessRules.nonEmpty(source.citation) {
+                    Text(citation)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                if let website = source.website {
+                    Link("Open source website", destination: website)
+                }
+            }
+            if let newspaper = record.newspaperSource {
+                FamilyNewspaperDetails(source: newspaper)
             }
         }
         .padding(.leading, 4)

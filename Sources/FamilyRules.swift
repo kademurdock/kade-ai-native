@@ -285,6 +285,29 @@ enum FamilyDates {
 
 // MARK: - Caches on the phone
 
+enum FamilyArchiveRules {
+    static let defaultId = "default"
+
+    /// The API's slug contract, never a tree person ID or a display name.
+    static func validId(_ id: String) -> Bool {
+        guard !id.isEmpty, id.count <= 48, let first = id.first,
+              Set("abcdefghijklmnopqrstuvwxyz").contains(first) else { return false }
+        return id.allSatisfy { Set("abcdefghijklmnopqrstuvwxyz0123456789-").contains($0) }
+    }
+
+    static func identity(_ id: String?) -> String { id ?? defaultId }
+
+    /// Default requests remain byte-for-byte compatible in their query.
+    /// A caller cannot override the selected archive with another query item.
+    static func query(_ items: [URLQueryItem]?, archiveId: String?) -> [URLQueryItem] {
+        var scoped = (items ?? []).filter { $0.name != "archive" }
+        if let archiveId, archiveId != defaultId, validId(archiveId) {
+            scoped.append(URLQueryItem(name: "archive", value: archiveId))
+        }
+        return scoped
+    }
+}
+
 /// Names inside Caches/FamilyHistory. The identity of a picture is the
 /// account, the media id and the size, never its signed link.
 enum FamilyCacheNames {
@@ -304,8 +327,8 @@ enum FamilyCacheNames {
         return trimmed.isEmpty ? "_" : trimmed
     }
 
-    static func memoryKey(userId: String, mediaId: String, size: FHSize, pixels: Int) -> String {
-        "\(safe(userId))/\(safe(mediaId)).\(size.rawValue).\(pixels)"
+    static func memoryKey(userId: String, mediaId: String, size: FHSize, pixels: Int, archiveId: String? = nil) -> String {
+        "\(safe(userId))\(archiveSuffix(archiveId))/\(safe(mediaId)).\(size.rawValue).\(pixels)"
     }
 
     static func imageFile(mediaId: String, size: FHSize) -> String {
@@ -313,8 +336,13 @@ enum FamilyCacheNames {
     }
 
     /// UserDefaults key for one account's remembered /me answer.
-    static func accessKey(userId: String) -> String {
-        "kade.family.access.\(safe(userId))"
+    static func accessKey(userId: String, archiveId: String? = nil) -> String {
+        "kade.family.access.\(safe(userId))\(archiveSuffix(archiveId))"
+    }
+
+    static func archiveSuffix(_ archiveId: String?) -> String {
+        guard let archiveId, archiveId != FamilyArchiveRules.defaultId, FamilyArchiveRules.validId(archiveId) else { return "" }
+        return ".archive." + archiveId
     }
 }
 

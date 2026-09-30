@@ -25,6 +25,7 @@ enum FamilyMemory {
     static func key(_ name: String) -> String? {
         guard let userId = FamilySession.shared.userId, !userId.isEmpty else { return nil }
         return "kade.family." + name + "." + FamilyCacheNames.safe(userId)
+            + FamilyCacheNames.archiveSuffix(FamilyHistoryService.shared.archiveId)
     }
 
     static func string(_ name: String) -> String? {

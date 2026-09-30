@@ -68,13 +68,16 @@ enum FamilyDiskStore {
             .appendingPathComponent(FamilyCacheNames.folder, isDirectory: true)
     }
 
-    static func folder(userId: String?) -> URL? {
+    static func folder(userId: String?, archiveId: String? = nil) -> URL? {
         guard let userId, !userId.isEmpty, let root = root() else { return nil }
-        return root.appendingPathComponent(FamilyCacheNames.safe(userId), isDirectory: true)
+        let account = root.appendingPathComponent(FamilyCacheNames.safe(userId), isDirectory: true)
+        guard let archiveId, archiveId != FamilyArchiveRules.defaultId, FamilyArchiveRules.validId(archiveId) else { return account }
+        return account.appendingPathComponent("archives", isDirectory: true)
+            .appendingPathComponent(archiveId, isDirectory: true)
     }
 
-    static func file(_ name: String, userId: String?) -> URL? {
-        folder(userId: userId)?.appendingPathComponent(name, isDirectory: false)
+    static func file(_ name: String, userId: String?, archiveId: String? = nil) -> URL? {
+        folder(userId: userId, archiveId: archiveId)?.appendingPathComponent(name, isDirectory: false)
     }
 
     /// Written whole (atomic), readable only after the phone's first unlock.
@@ -133,6 +136,8 @@ final class FamilyHistoryService {
     private(set) var generation = 0
     /// The family-history version the caches came from.
     private(set) var version: String?
+    /// Nil is the existing default archive. Set only from an authorized catalog.
+    private(set) var archiveId: String?
 
     private var lastHome: FHHome?
     private var trees = FamilyLRU<FHTree>(capacity: 12)
@@ -155,6 +160,16 @@ final class FamilyHistoryService {
         clearMemory()
     }
 
+    func selectArchive(_ id: String?) {
+        let wanted = id == FamilyArchiveRules.defaultId ? nil : id
+        if let wanted, !FamilyArchiveRules.validId(wanted) { return }
+        guard wanted != archiveId else { return }
+        archiveId = wanted
+        reset()
+        FamilyImageLoader.shared.wipe()
+        FamilyStoryPlayer.shared.stop()
+    }
+
     /// A new version of the family history: everything cached is from the old one.
     func noteVersion(_ newVersion: String?) {
         guard let newVersion = FamilyAccessRules.nonEmpty(newVersion) else { return }
@@ -167,18 +182,18 @@ final class FamilyHistoryService {
             FamilyImageLoader.shared.wipe()
         }
         version = newVersion
-        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: FamilySession.shared.userId) {
+        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: FamilySession.shared.userId, archiveId: archiveId) {
             FamilyDiskStore.save(Data(newVersion.utf8), to: file)
         }
     }
 
     private func persistedVersion() -> String? {
         let userId = FamilySession.shared.userId
-        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: userId),
+        if let file = FamilyDiskStore.file(FamilyCacheNames.versionFile, userId: userId, archiveId: archiveId),
            let data = FamilyDiskStore.load(file), let text = String(data: data, encoding: .utf8),
            let version = FamilyAccessRules.nonEmpty(text) { return version }
         // Migrate existing phone caches, which only kept the version in home.json.
-        guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: userId),
+        guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: userId, archiveId: archiveId),
               let data = FamilyDiskStore.load(file),
               let home = try? JSONDecoder().decode(FHHome.self, from: data) else { return nil }
         return FamilyAccessRules.nonEmpty(home.version)
@@ -231,8 +246,8 @@ final class FamilyHistoryService {
     }
 
     private func makeRequest(_ client: KadeAPIClient, _ path: String, method: String, body: [String: Any]?,
-                             query: [URLQueryItem]?, timeout: TimeInterval) throws -> URLRequest {
-        let items: [URLQueryItem] = Self.withVersion(query)
+                             query: [URLQueryItem]?, archiveId: String?, timeout: TimeInterval) throws -> URLRequest {
+        let items: [URLQueryItem] = Self.withVersion(FamilyArchiveRules.query(query, archiveId: path == "archives" ? nil : archiveId))
         var req = client.request(path: Self.base + path, method: method, authorized: true, queryItems: items, timeout: timeout)
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -250,12 +265,17 @@ final class FamilyHistoryService {
         if FamilyDemo.isOn { return demoAnswer(path, query: query) }
 #endif
         guard let client else { throw FamilyFailure.offline }
-        let first = try makeRequest(client, path, method: method, body: body, query: query, timeout: timeout)
+        let asked = generation
+        let requestedArchive = archiveId
+        let first = try makeRequest(client, path, method: method, body: body, query: query, archiveId: requestedArchive, timeout: timeout)
         var (data, http) = try await client.send(first)
+        guard asked == generation else { throw CancellationError() }
         if http.statusCode == 401, await Self.refreshToken(client) {
-            let again = try makeRequest(client, path, method: method, body: body, query: query, timeout: timeout)
+            guard asked == generation else { throw CancellationError() }
+            let again = try makeRequest(client, path, method: method, body: body, query: query, archiveId: requestedArchive, timeout: timeout)
             (data, http) = try await client.send(again)
         }
+        guard asked == generation else { throw CancellationError() }
         return (data, http.statusCode)
     }
 
@@ -302,7 +322,7 @@ final class FamilyHistoryService {
     /// The last /home, from memory or this account's disk, to draw at once.
     func cachedHome() -> FHHome? {
         if let lastHome { return lastHome }
-        guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId),
+        guard let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId, archiveId: archiveId),
               let data = FamilyDiskStore.load(file),
               let value = try? JSONDecoder().decode(FHHome.self, from: data) else { return nil }
         lastHome = value
@@ -316,7 +336,7 @@ final class FamilyHistoryService {
         let (value, data): (FHHome, Data) = try await fetch("home", query: query)
         noteVersion(value.version)
         lastHome = value
-        if let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId) {
+        if let file = FamilyDiskStore.file(FamilyCacheNames.homeFile, userId: FamilySession.shared.userId, archiveId: archiveId) {
             FamilyDiskStore.save(data, to: file)
         }
         return value

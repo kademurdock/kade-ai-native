@@ -67,7 +67,8 @@ final class FamilyImageLoader {
 
     private func memoryKey(_ id: String, _ size: FHSize, _ pixels: Int) -> NSString? {
         guard let userId = FamilySession.shared.userId else { return nil }
-        return FamilyCacheNames.memoryKey(userId: userId, mediaId: id, size: size, pixels: pixels) as NSString
+        return FamilyCacheNames.memoryKey(userId: userId, mediaId: id, size: size, pixels: pixels,
+                                         archiveId: FamilyHistoryService.shared.archiveId) as NSString
     }
 
     // MARK: Asking for a picture
@@ -105,7 +106,7 @@ final class FamilyImageLoader {
         defer { giveSlot() }
         if Task.isCancelled || asked != generation { return nil }
         if let hit = memory.object(forKey: key) { return hit }
-        let file = FamilyDiskStore.folder(userId: userId)?
+        let file = FamilyDiskStore.folder(userId: userId, archiveId: FamilyHistoryService.shared.archiveId)?
             .appendingPathComponent(FamilyCacheNames.imageFile(mediaId: id, size: size), isDirectory: false)
         if let file, let fromDisk = await Self.decodeFile(file, pixels: pixels) {
             guard asked == generation else { return nil }
@@ -127,7 +128,7 @@ final class FamilyImageLoader {
         guard !image.id.isEmpty, let userId = FamilySession.shared.userId else { return nil }
         let size = image.best(.s)
         let asked = generation
-        let kept: URL? = FamilyDiskStore.folder(userId: userId)?
+        let kept: URL? = FamilyDiskStore.folder(userId: userId, archiveId: FamilyHistoryService.shared.archiveId)?
             .appendingPathComponent(FamilyCacheNames.imageFile(mediaId: image.id, size: size), isDirectory: false)
         var bytes: Data? = kept.flatMap { FamilyDiskStore.load($0) }
         if bytes == nil {

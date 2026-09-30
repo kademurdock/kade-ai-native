@@ -20,6 +20,7 @@ import UIKit
 
 struct FamilyHomeView: View {
     let apiClient: KadeAPIClient
+    private let archiveIdentity: String
 
     @State private var home: FHHome?
     @State private var failure: String?
@@ -31,6 +32,7 @@ struct FamilyHomeView: View {
 
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
+        archiveIdentity = FamilyArchiveRules.identity(FamilyHistoryService.shared.archiveId)
         _home = State(initialValue: FamilyHistoryService.shared.cachedHome())
     }
 
@@ -38,6 +40,7 @@ struct FamilyHomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 FamilyHeading(text: "Family history", level: .h1, focusOnArrival: true)
+                FamilyArchivePicker(apiClient: apiClient)
                 content
             }
             .padding()
@@ -99,6 +102,7 @@ struct FamilyHomeView: View {
 
     @MainActor
     private func load(force: Bool) async {
+        guard archiveIdentity == FamilyArchiveRules.identity(FamilyHistoryService.shared.archiveId) else { return }
         if !sinceRead {
             sinceRead = true
             since = FamilyMemory.string(FamilyMemory.seenVersion)
@@ -126,6 +130,7 @@ struct FamilyHomeView: View {
 
     /// The next visit's "new" counts from what this one showed.
     private func rememberSeen() {
+        guard archiveIdentity == FamilyArchiveRules.identity(FamilyHistoryService.shared.archiveId) else { return }
         guard let version = FamilyAccessRules.nonEmpty(home?.version) else { return }
         FamilyMemory.set(version, FamilyMemory.seenVersion)
     }

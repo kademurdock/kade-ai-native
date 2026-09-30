@@ -18,19 +18,45 @@ struct FamilyDestination: View {
     let route: FamilyRoute
     let apiClient: KadeAPIClient
     @ObservedObject private var access = FamilyHistoryAccess.shared
+    @State private var openedArchiveId: String
 
     init(route: FamilyRoute, apiClient: KadeAPIClient) {
         self.route = route
         self.apiClient = apiClient
+        _openedArchiveId = State(initialValue: FamilyHistoryAccess.shared.archiveIdentity)
         FamilyHistoryService.shared.bind(client: apiClient)
     }
 
     var body: some View {
         if route.needsAccess && access.isOpen {
-            screen
+            if !isHome && openedArchiveId != access.archiveIdentity {
+                archiveChanged
+            } else {
+                screen.id(access.archiveIdentity)
+            }
         } else {
             FamilyLockedView(apiClient: apiClient)
         }
+    }
+
+    private var isHome: Bool {
+        if case .home = route { return true }
+        return false
+    }
+
+    /// A back-stack person ID belongs to the archive it came from. Never
+    /// reuse it in the newly selected tree, even when its spelling matches.
+    private var archiveChanged: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("A different family archive is selected.")
+                .fixedSize(horizontal: false, vertical: true)
+            NavigationLink(value: HomeRoute.library(.family(.home))) {
+                Text("Open the selected archive")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .navigationTitle("Family history")
     }
 
     /// One initialiser per route, no inline bodies (type-checking stays cheap).
@@ -84,6 +110,7 @@ struct FamilyLockedView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 FamilyHeading(text: "Family history", level: .h1, focusOnArrival: true)
+                FamilyArchivePicker(apiClient: apiClient)
                 content
             }
             .padding()
@@ -176,6 +203,32 @@ struct FamilyLockedView: View {
         guard !words.isEmpty else { return }
         said = words
         KadeAnnounce.high(words)
+    }
+}
+
+/// Choices are returned by the authorized catalog, never guessed from names
+/// or the broader family feature pack. With one archive there is no picker.
+struct FamilyArchivePicker: View {
+    let apiClient: KadeAPIClient
+    @ObservedObject private var access = FamilyHistoryAccess.shared
+
+    var body: some View {
+        if access.archives.count > 1 {
+            Picker("Family archive", selection: Binding(get: { access.archiveIdentity }, set: { id in
+                Task { await access.selectArchive(id, client: apiClient) }
+            })) {
+                ForEach(access.archives) { archive in
+                    Text(archive.title).tag(archive.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(access.switchingArchive)
+            .accessibilityHint("Changes the research archive. Each archive has its own family tree and sources.")
+        } else if let title = access.archiveTitle {
+            Text(title)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

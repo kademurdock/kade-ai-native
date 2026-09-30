@@ -1,5 +1,39 @@
 import Foundation
 
+/// The server lists only archives this account is explicitly allowed to open.
+struct FHArchive: Decodable, Equatable, Identifiable {
+    var id: String
+    var title: String
+
+    enum CodingKeys: String, CodingKey { case id, title }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let raw = c.fhString(.id), FamilyArchiveRules.validId(raw) else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "Invalid archive identifier")
+        }
+        id = raw
+        title = FamilyAccessRules.nonEmpty(c.fhString(.title)) ?? "Family history"
+    }
+}
+
+struct FHArchiveCatalog: Decodable, Equatable {
+    var archives: [FHArchive] = []
+    var defaultArchive: String? = nil
+
+    enum CodingKeys: String, CodingKey { case archives, defaultArchive }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let listed: [FHArchive] = c.fhList(.archives)
+        archives = listed.reduce(into: []) { result, archive in
+            if !result.contains(where: { $0.id == archive.id }) { result.append(archive) }
+        }
+        let preferred = c.fhString(.defaultArchive)
+        defaultArchive = archives.contains(where: { $0.id == preferred }) ? preferred : nil
+    }
+}
+
 // MARK: - Family history: one answer per route (Sep 29 2026)
 //
 // The shapes of /home, /tree, /person/:id, /gallery, /media, /dna,
@@ -497,14 +531,42 @@ struct FHRecord: Decodable, Equatable {
     var wrongText: String? = nil
     /// Addresses and phone numbers were taken out of it.
     var scrubbed: Bool? = nil
+    /// Limits of the saved evidence, independently of a wrong tree attachment.
+    var evidenceWarning: String? = nil
+    var sourceExcerpt: String? = nil
+    var sourceExcerptCoverage: String? = nil
+    var sourceCitation: String? = nil
+    var sourceUrl: URL? = nil
+    var newspaperSource: FHNewspaperSource? = nil
 
-    enum CodingKeys: String, CodingKey { case key, title, spoken, image, scan, fields, household, url, wrong, wrongText, scrubbed }
+    enum CodingKeys: String, CodingKey {
+        case key, title, spoken, image, scan, fields, household, url, wrong, wrongText, scrubbed
+        case evidenceWarning, sourceExcerpt, sourceExcerptCoverage, sourceCitation, sourceUrl, newspaperSource
+    }
 
     /// The warning to show, in the server's words when it sent them.
     var wrongWords: String? {
         if let said = wrongText, !said.isEmpty { return said }
         guard let why = wrong, !why.isEmpty else { return nil }
         return "Attached to this person by mistake: " + why
+    }
+
+    var warnings: [String] {
+        [wrongWords, FamilyAccessRules.nonEmpty(evidenceWarning)].compactMap { $0 }
+            .reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+
+    var spokenWords: String {
+        var words = FamilyAccessRules.nonEmpty(spoken) ?? FamilyAccessRules.nonEmpty(title) ?? "A record"
+        for warning in warnings where !words.contains(warning) { words += " " + warning }
+        return words
+    }
+
+    var sourceLabel: FHSourceLabel? {
+        let citation = FamilyAccessRules.nonEmpty(sourceCitation) ?? FamilyAccessRules.nonEmpty(newspaperSource?.citation)
+        let url = sourceUrl ?? newspaperSource?.sourceUrl
+        guard citation != nil || url != nil else { return nil }
+        return FHSourceLabel(citation: citation, url: url)
     }
 }
 
@@ -524,6 +586,12 @@ extension FHRecord {
         wrong = c.fhString(.wrong)
         wrongText = c.fhString(.wrongText)
         scrubbed = c.fhBool(.scrubbed)
+        evidenceWarning = c.fhString(.evidenceWarning)
+        sourceExcerpt = c.fhString(.sourceExcerpt)
+        sourceExcerptCoverage = c.fhString(.sourceExcerptCoverage)
+        sourceCitation = c.fhString(.sourceCitation)
+        sourceUrl = c.fhURL(.sourceUrl)
+        newspaperSource = c.fh(.newspaperSource)
     }
 }
 
@@ -813,6 +881,51 @@ extension FHSourceLabel {
     }
 }
 
+struct FHIdentityReview: Decodable, Equatable {
+    var status: String? = nil
+    var note: String? = nil
+
+    enum CodingKeys: String, CodingKey { case status, note }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = c.fhString(.status)
+        note = c.fhString(.note)
+    }
+}
+
+/// What the retained newspaper page or excerpt supports. An indexed name
+/// does not make its linked tree identity or the main article subject proved.
+struct FHNewspaperSource: Decodable, Equatable {
+    var coverage: String? = nil
+    var indexedPersonRole: String? = nil
+    var principalArticleSubject: String? = nil
+    var identityReview: FHIdentityReview? = nil
+    var linkedTreeIdentityVerified: Bool? = nil
+    var requestedSourceUrl: URL? = nil
+    var sourceUrl: URL? = nil
+    var citation: String? = nil
+    var limitations: [String] = []
+
+    enum CodingKeys: String, CodingKey {
+        case coverage, indexedPersonRole, principalArticleSubject, identityReview
+        case linkedTreeIdentityVerified, requestedSourceUrl, sourceUrl, citation, limitations
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coverage = c.fhString(.coverage)
+        indexedPersonRole = c.fhString(.indexedPersonRole)
+        principalArticleSubject = c.fhString(.principalArticleSubject)
+        identityReview = c.fh(.identityReview)
+        linkedTreeIdentityVerified = c.fhBool(.linkedTreeIdentityVerified)
+        requestedSourceUrl = c.fhURL(.requestedSourceUrl)
+        sourceUrl = c.fhURL(.sourceUrl)
+        citation = c.fhString(.citation)
+        limitations = c.fhList(.limitations)
+    }
+}
+
 /// GET /media/:id/info: the picture, its description and any text in it.
 struct FHMediaInfo: Decodable, Equatable {
     var image: FHImage? = nil
@@ -829,12 +942,14 @@ struct FHMediaInfo: Decodable, Equatable {
     var restoredNotes: String? = nil
     var people: [FHPerson] = []
     var source: FHSourceLabel? = nil
+    var evidenceWarning: String? = nil
+    var newspaperSource: FHNewspaperSource? = nil
     /// Whether "Ask for this photo to be restored" makes sense here (an old
     /// photograph with no restored copy yet; never a record).
     var canAskRestore: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
-        case image, caption, description, described, describedNote, text, textAuto, textNote, restoredNotes, people, source, canAskRestore
+        case image, caption, description, described, describedNote, text, textAuto, textNote, restoredNotes, people, source, canAskRestore, evidenceWarning, newspaperSource
     }
 }
 
@@ -852,6 +967,8 @@ extension FHMediaInfo {
         restoredNotes = c.fhString(.restoredNotes)
         people = c.fhList(.people)
         source = c.fh(.source)
+        evidenceWarning = c.fhString(.evidenceWarning)
+        newspaperSource = c.fh(.newspaperSource)
         canAskRestore = c.fhBool(.canAskRestore)
     }
 }
