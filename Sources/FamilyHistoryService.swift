@@ -5,8 +5,9 @@ import Foundation
 // Every family screen reads through FamilyHistoryService.shared: one plain
 // user JWT against /api/kade/family-history/*, the same one quiet refresh on
 // a 401 as the describer (DescribedVideoService.exchange), and the app's one
-// pacing gate (KadeAPIClient.send). Pictures never come through here; they
-// load from their signed links in FamilyImages.swift.
+// pacing gate (KadeAPIClient.send). Every call says `?v=2`, the version the
+// website writes for this app. Pictures never come through here; they load
+// from their signed links in FamilyImages.swift.
 //
 // What stays on the phone, and only for the signed-in account:
 // - in memory: the last /home, the last 30 person pages, a few tree slices,
@@ -196,9 +197,21 @@ final class FamilyHistoryService {
         return ok
     }
 
+    /// Every call asks for the second version (`?v=2`): the answers this app
+    /// draws. Without it /person, /tree, /search, /people, /stories, /story
+    /// and /findings answer in the website page's first-version shapes.
+    static func withVersion(_ query: [URLQueryItem]?) -> [URLQueryItem] {
+        var items: [URLQueryItem] = query ?? []
+        if !items.contains(where: { $0.name == "v" }) {
+            items.append(URLQueryItem(name: "v", value: "2"))
+        }
+        return items
+    }
+
     private func makeRequest(_ client: KadeAPIClient, _ path: String, method: String, body: [String: Any]?,
                              query: [URLQueryItem]?, timeout: TimeInterval) throws -> URLRequest {
-        var req = client.request(path: Self.base + path, method: method, authorized: true, queryItems: query, timeout: timeout)
+        let items: [URLQueryItem] = Self.withVersion(query)
+        var req = client.request(path: Self.base + path, method: method, authorized: true, queryItems: items, timeout: timeout)
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
