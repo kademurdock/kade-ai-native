@@ -311,9 +311,9 @@ struct FamilyListenBar: View {
         return "Part \(player.part + 1) of \(player.partCount)"
     }
 
-    /// "1.25 times".
+    /// "Normal", "1.25 times".
     static func speedWords(_ value: Float) -> String {
-        FHText.number(Double(value)) + (value == 1 ? " time, normal" : " times")
+        value == 1 ? "Normal" : FHText.number(Double(value)) + " times"
     }
 
     /// "1.25x".
