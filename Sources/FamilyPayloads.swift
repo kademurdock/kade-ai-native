@@ -1265,16 +1265,18 @@ extension FHBar {
 
 /// "12 of your ancestors were adults during the Civil War."
 struct FHContextLine: Decodable, Equatable {
+    var key: String? = nil
     var title: String? = nil
     var text: String? = nil
     var spoken: String? = nil
 
-    enum CodingKeys: String, CodingKey { case title, text, spoken }
+    enum CodingKeys: String, CodingKey { case key, title, text, spoken }
 }
 
 extension FHContextLine {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = c.fhString(.key)
         title = c.fhString(.title)
         text = c.fhString(.text)
         spoken = c.fhString(.spoken)
@@ -1332,19 +1334,28 @@ extension FHDecade {
 /// Through the years: newest decade first.
 struct FHTimeline: Decodable, Equatable {
     var scope: String? = nil
+    /// "Your ancestors", "All relatives".
+    var title: String? = nil
+    /// "You, today".
+    var top: String? = nil
+    /// "Scroll down to go back in time."
+    var hint: String? = nil
     var follows: String? = nil
     var lanes: Int? = nil
     var mapReady: Bool? = nil
     var people: [String: FHPerson] = [:]
     var decades: [FHDecade] = []
 
-    enum CodingKeys: String, CodingKey { case scope, follows, lanes, mapReady, people, decades }
+    enum CodingKeys: String, CodingKey { case scope, title, top, hint, follows, lanes, mapReady, people, decades }
 }
 
 extension FHTimeline {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         scope = c.fhString(.scope)
+        title = c.fhString(.title)
+        top = c.fhString(.top)
+        hint = c.fhString(.hint)
         follows = c.fhString(.follows)
         lanes = c.fhInt(.lanes)
         mapReady = c.fhBool(.mapReady)

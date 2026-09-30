@@ -117,6 +117,9 @@ import Foundation
         let timeline = try decode(FHTimeline.self, FamilyDemoData.timeline)
         check(timeline.decades.map { $0.decade ?? 0 } == [1950, 1900, 1870], "decades run newest first")
         check(timeline.people.count == 4 && timeline.decades[0].bars.count == 3, "timeline people and bars read")
+        let timelineV2 = try decode(FHTimeline.self, #"{"scope":"all","title":"All relatives","top":"You, today","hint":"Scroll down to go back in time.","lanes":2,"mapReady":false,"people":{},"decades":[{"decade":1940,"title":"1940s","context":[{"key":"ww2","title":"World War II","text":"1 of your ancestors was an adult during World War II.","spoken":"1 of your ancestors was an adult during World War II."}],"bars":[{"id":"@X1@","lane":1,"from":1900,"to":1970,"side":"father","research":false}],"events":[]}]}"#)
+        check(timelineV2.title == "All relatives" && timelineV2.top == "You, today" && timelineV2.hint != nil && timelineV2.mapReady == false, "the timeline's own words read")
+        check(timelineV2.decades.first?.context.first?.key == "ww2" && timelineV2.decades.first?.bars.first?.personId == "@X1@", "a context line and a lifeline read")
 
         let places = try decode(FHPlaces.self, FamilyDemoData.places)
         check(places.places.count == 2 && places.decades[0].counts["p1"] == 3, "places and their counts read")
