@@ -196,6 +196,30 @@ final class WorldService: ObservableObject {
     }
 }
 
+/// Observe only whether a system call is active. The main-queue callback
+/// retries ambience after call-end without changing the AV interruption latch.
+private final class WorldPhoneCalls: NSObject, CXCallObserverDelegate {
+    private let observer = CXCallObserver()
+    private(set) var active = false
+    var onChange: ((Bool) -> Void)?
+
+    override init() {
+        super.init()
+        active = observer.calls.contains { !$0.hasEnded }
+        observer.setDelegate(self, queue: .main)
+    }
+
+    func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+        // Use the changed call itself when the observer's list is a tick behind.
+        let next = !call.hasEnded || callObserver.calls.contains {
+            $0.uuid != call.uuid && !$0.hasEnded
+        }
+        guard next != active else { return }
+        active = next
+        onChange?(next)
+    }
+}
+
 /// The world's synth voice — one short pre-rendered tone phrase per event
 /// kind, played through a tiny AVAudioEngine. These are deliberate
 /// PLACEHOLDERS with the same shape as the web client's: when Kade designs
@@ -227,7 +251,7 @@ final class WorldTones {
     private var eventSources: [String: String] = [:]
     private var active = false
     private var interrupted = false
-    private let phoneCalls = CXCallObserver()
+    private let phoneCalls = WorldPhoneCalls()
     /// Sep 29 2026: the session is set up and active. Every earcon used to
     /// call setActive twice; now it runs on activate(), after an
     /// interruption or media reset, or after a category change.
@@ -238,6 +262,18 @@ final class WorldTones {
     private var pausedForRoute = false
 
     private init() {
+        phoneCalls.onChange = { [weak self] isActive in
+            guard let self else { return }
+            self.sessionReady = false
+            if isActive {
+                self.engineReset()
+                self.ambiencePlayer?.pause()
+                self.roomTonePlayer?.pause()
+                for file in self.filePlayers.values { file.pause() }
+            } else {
+                self.resumeLoops()
+            }
+        }
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
         engine.attach(player)
         if let format {
@@ -377,9 +413,9 @@ final class WorldTones {
 
     func activate() {
         active = true
-        // Clear a stale suspension interruption on return, while an active
-        // system phone call continues to keep World audio paused.
-        interrupted = phoneCalls.calls.contains { !$0.hasEnded }
+        // Clear only the stale AV suspension flag. Active phone calls have
+        // their own guard and resume callback, so they never latch this flag.
+        interrupted = false
         pausedForRoute = false
         sessionReady = false
         resumeLoops()
@@ -391,7 +427,7 @@ final class WorldTones {
     /// during a phone call, so asking would play the world under the call.
     /// .ended, activate() and a media reset clear `interrupted`.
     private func prepareSession() -> Bool {
-        guard active, !interrupted, !phoneCalls.calls.contains(where: { !$0.hasEnded }) else { return false }
+        guard active, !interrupted, !phoneCalls.active else { return false }
         if sessionReady { return true }
         let session = AVAudioSession.sharedInstance()
         do {
