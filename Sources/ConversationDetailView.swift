@@ -286,7 +286,14 @@ struct ConversationDetailView: View {
     /// under VoiceOver mid-read invalidates the element and cuts the
     /// readout off. Close and reopen for a fresh snapshot; the VISUAL text
     /// keeps pouring for sighted eyes either way.
-    @State private var attachmentUploading = false
+    @StateObject private var attachmentPreparation = ChatAttachmentPreparation()
+    @State private var showingAttachCamera = false
+    @State private var checkingAttachCamera = false
+    @State private var attachCameraTask: Task<Void, Never>?
+    @State private var attachCameraRequestId: UUID?
+    @State private var capturedAttachPhoto: Data?
+    @State private var attachCameraError: String?
+    @State private var retryAttachCamera = false
     @State private var showingAttachMenu = false
     @State private var showingAttachPhotos = false
     @State private var attachPhotoItem: PhotosPickerItem?
@@ -565,6 +572,9 @@ struct ConversationDetailView: View {
         /// there — double-tap-again-to-stop always works.
         case micButton
         case voiceError
+        case attachmentError
+        case attachmentStatus
+        case attachButton
         /// Build 254 (her report, Aug 30 2026: "when you hit send, it reads
         /// your message because that's the focus"): the send moment's anchor.
         /// Build 220 parked VoiceOver on the message row she had just sent,
@@ -745,6 +755,11 @@ struct ConversationDetailView: View {
         .onDisappear {
             KadeChatPresence.shared.disappeared()
             chatOnScreen = false
+            // A camera cover hides this view during intentional capture.
+            // Leaving chat otherwise cancels preparation and ignores late data.
+            if !showingAttachCamera {
+                cancelAttachment(announce: false)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
@@ -858,11 +873,9 @@ struct ConversationDetailView: View {
              * one place a bug can live. Consume-once by design. */
             if let shared = initialSharedFileURL, !sharedFileConsumed {
                 sharedFileConsumed = true
-                await importAttachmentFile(shared)
-                /* The extension copied the file into the App Group so it
-                 * would survive the hand-off; once it is uploaded, the copy
-                 * is somebody else's disk space. */
-                try? FileManager.default.removeItem(at: shared)
+                await importAttachmentFile(shared, deleteAfterPreparing: true)
+                // Cleanup happens only after preparation has retained the
+                // bytes, so background file reads and Retry remain valid.
             }
             // Seed the agent switcher from the conversation's own agent_id
             // the first time this view appears (not a custom init — see
@@ -2763,173 +2776,187 @@ struct ConversationDetailView: View {
         .accessibilityHidden(true)
     }
 
-    /// Session 26: paperclip at the start of the composer row. All of its
-    /// picker plumbing (menu, photo library, file importer) hangs off THIS
-    /// button so the feature stays self-contained -- the proven Describe
-    /// patterns, one surface over.
+    private var attachmentIsBusy: Bool {
+        attachmentPreparation.isBusy || checkingAttachCamera || showingAttachCamera || capturedAttachPhoto != nil
+    }
+
     private var attachButton: some View {
-        Button {
-            showingAttachMenu = true
-        } label: {
-            Image(systemName: "paperclip")
-                .font(.title3)
+        Button { showingAttachMenu = true } label: {
+            Image(systemName: "paperclip").font(.title3)
         }
-        .disabled(isSending || attachmentUploading || pendingAttachment != nil)
+        .disabled(isSending || attachmentIsBusy || pendingAttachment != nil)
         .accessibilityLabel(pendingAttachment == nil ? "Attach a photo or file" : "Attachment added")
-        .accessibilityHint(pendingAttachment == nil
-            ? "Sends a photo or document along with your next message so \(agentDisplayLabel) can look at it."
-            : "One attachment per message. Remove the current one first to attach something else.")
+        .accessibilityHint("Take a photo, choose a photo or file, or paste one. Review the attachment before sending your message.")
+        .accessibilityFocused($a11yFocus, equals: .attachButton)
         .confirmationDialog("Attach to your next message", isPresented: $showingAttachMenu) {
+            Button("Take a photo") { takeAttachmentPhoto() }
             Button("Choose a photo") { showingAttachPhotos = true }
             Button("Choose a file") { showingAttachImporter = true }
-            // Sep 12 2026 (Amber A's report): a copied photo or file goes
-            // straight in, no picker.
-            Button("Paste a photo or file") { Task { await pasteAttachmentFromClipboard() } }
+            Button("Paste a photo or file") { beginAttachment(.clipboard) }
             Button("Cancel", role: .cancel) {}
+        }
+        .fullScreenCover(isPresented: $showingAttachCamera, onDismiss: finishAttachmentCamera) {
+            StillPhotoPicker(
+                onImage: { data in
+                    capturedAttachPhoto = data
+                    showingAttachCamera = false
+                },
+                onCancel: {
+                    capturedAttachPhoto = nil
+                    showingAttachCamera = false
+                },
+                onError: { message in
+                    attachCameraError = message
+                    showingAttachCamera = false
+                }
+            )
+            .ignoresSafeArea()
         }
         .photosPicker(isPresented: $showingAttachPhotos, selection: $attachPhotoItem, matching: .images)
         .onChange(of: attachPhotoItem) { _, newItem in
             guard let newItem else { return }
-            Task {
-                await loadAttachmentPhoto(newItem)
-                attachPhotoItem = nil
+            // Set busy before dispatching any async work, so Send cannot race it.
+            beginAttachment(.photo(newItem))
+            attachPhotoItem = nil
+        }
+        .fileImporter(isPresented: $showingAttachImporter, allowedContentTypes: Self.attachmentImportTypes, allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { beginAttachment(.file(url)) }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    attachmentPreparation.showError("Couldn't open that file. Choose a photo or file again.")
+                }
             }
         }
-        .fileImporter(
-            isPresented: $showingAttachImporter,
-            allowedContentTypes: Self.attachmentImportTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                Task { await importAttachmentFile(url) }
+        .onChange(of: attachmentPreparation.errorMessage) { _, message in
+            guard let message else { return }
+            KadeHaptics.error()
+            a11yFocus = .attachmentError
+            UIAccessibility.post(notification: .announcement, argument: message)
+        }
+    }
+
+    private var attachmentChipRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+            Text(attachmentIsBusy
+                 ? (checkingAttachCamera ? "Checking camera access." : attachmentPreparation.statusMessage)
+                 : "Attached: \(pendingAttachment?.displayName ?? ""). Review before sending.")
+                .font(.footnote)
+                .accessibilityFocused($a11yFocus, equals: .attachmentStatus)
+            Spacer()
+            if attachmentIsBusy {
+                ProgressView().accessibilityHidden(true)
+                Button("Cancel") { cancelAttachment() }
+                    .font(.footnote.bold())
+                    .accessibilityLabel("Cancel attachment")
+            } else {
+                Button {
+                    pendingAttachment = nil
+                    a11yFocus = .attachButton
+                    UIAccessibility.post(notification: .announcement, argument: "Attachment removed.")
+                } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .accessibilityLabel("Remove attachment")
+                .accessibilityHint("Removes the attachment from your next message. The uploaded file isn't deleted.")
             }
         }
     }
 
-    /// The "something is attached" chip above the composer: status text and
-    /// the remove control as true siblings (the Amber rule -- never a
-    /// control inside another element's label).
-    private var attachmentChipRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "paperclip")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            Text(attachmentUploading ? "Attaching…" : "Attached: \(pendingAttachment?.displayName ?? "")")
-                .font(.footnote)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .accessibilityLabel(attachmentUploading
-                    ? "Attaching your file. Hold on."
-                    : "Attached: \(pendingAttachment?.displayName ?? ""). It goes out with your next message.")
-            Spacer()
-            if attachmentUploading {
-                ProgressView()
-                    .accessibilityHidden(true)
-            } else {
-                Button {
-                    pendingAttachment = nil
-                    UIAccessibility.post(notification: .announcement, argument: "Attachment removed.")
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+    private var attachmentErrorRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(attachmentPreparation.errorMessage ?? "")
+                .font(.footnote).foregroundStyle(.red)
+                .accessibilityFocused($a11yFocus, equals: .attachmentError)
+            HStack {
+                Button("Retry attachment") {
+                    if retryAttachCamera { takeAttachmentPhoto() }
+                    else if attachmentPreparation.canRetry { attachmentPreparation.retry() }
+                    else { showingAttachMenu = true }
                 }
-                .accessibilityLabel("Remove attachment")
-                .accessibilityHint("Takes the attachment off your next message. The file itself isn't deleted.")
+                .disabled(isSending || attachmentIsBusy)
+                Button("Cancel attachment") { cancelAttachment() }
             }
+            .font(.footnote.bold())
         }
     }
 
     private static let attachmentImportTypes: [UTType] = [.pdf, .plainText, .image, .data]
 
-    private func loadAttachmentPhoto(_ item: PhotosPickerItem) async {
-        let contentType = item.supportedContentTypes.first
-        var mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
-        var ext = contentType?.preferredFilenameExtension ?? "jpg"
-        guard var data = try? await item.loadTransferable(type: Data.self) else {
-            attachmentFailed("Couldn't load that photo. Try again.")
-            return
-        }
-        /* KADE Aug 28 2026 — iPhone photos are HEIC by default and the vision
-         * lane speaks jpeg/png/webp/gif. Re-encode anything else to JPEG
-         * here so "I sent her a picture" just works, whatever the camera
-         * saved. Fail-soft: if UIImage can't read it, the original goes up
-         * unchanged (a PNG screenshot never hits this branch at all). */
-        let visionSafe = ["image/jpeg", "image/png", "image/webp", "image/gif"]
-        if !visionSafe.contains(mimeType.lowercased()), let img = UIImage(data: data),
-           let jpeg = img.jpegData(compressionQuality: 0.85) {
-            data = jpeg
-            mimeType = "image/jpeg"
-            ext = "jpg"
-        }
-        await uploadAttachment(data: data, mimeType: mimeType, fileName: "photo.\(ext)")
-    }
-
-    /// Sep 12 2026 (Amber A's report: "paste files or photos directly here
-    /// in chat … instead of only uploading via button"). Same reader the
-    /// Describe screen uses (`ClipboardMedia`), same upload lane as the
-    /// pickers. Copied words are left alone on purpose — they belong in the
-    /// message box, which already pastes them.
-    private func pasteAttachmentFromClipboard() async {
-        let kinds: [UTType] = [.image, .pdf, .movie, .data]
-        guard let item = await ClipboardMedia.load(kinds: kinds) else {
-            attachmentFailed("Nothing to paste yet. Copy a photo or a file first, then choose Paste again. Copied words go straight into the message box.")
-            return
-        }
-        if Int64(item.data.count) > ChatAttachment.maxUploadBytes {
-            attachmentFailed("That is larger than 30 megabytes. Try a smaller photo or file.")
-            return
-        }
-        await uploadAttachment(data: item.data, mimeType: item.mimeType, fileName: item.fileName)
-    }
-
-    private func importAttachmentFile(_ url: URL) async {
-        let didStartAccess = url.startAccessingSecurityScopedResource()
-        defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
-        let name = url.lastPathComponent
-        let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
-        if let size = resourceValues?.fileSize, Int64(size) > ChatAttachment.maxUploadBytes {
-            attachmentFailed("\(name) is larger than 30 megabytes. Try a smaller file.")
-            return
-        }
-        guard let data = try? Data(contentsOf: url) else {
-            attachmentFailed("Couldn't read \(name). Try again.")
-            return
-        }
-        await uploadAttachment(
-            data: data,
-            mimeType: resourceValues?.contentType?.preferredMIMEType ?? "application/octet-stream",
-            fileName: name
-        )
-    }
-
-    private func uploadAttachment(data: Data, mimeType: String, fileName: String) async {
-        attachmentUploading = true
-        UIAccessibility.post(notification: .announcement, argument: "Attaching \(fileName).")
-        defer { attachmentUploading = false }
-        do {
-            let uploaded = try await ChatAttachment.upload(
-                client: apiClient,
-                data: data,
-                mimeType: mimeType,
-                fileName: fileName,
-                conversationId: conversationId,
-                agentId: selectedAgentId
-            )
-            pendingAttachment = uploaded
+    private func beginAttachment(_ source: ChatAttachmentPreparation.Source) {
+        guard !isSending, pendingAttachment == nil else { return }
+        retryAttachCamera = false
+        attachmentPreparation.start(source, client: apiClient, conversationId: conversationId, agentId: selectedAgentId) { attachment in
+            pendingAttachment = attachment
             KadeHaptics.success()
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: "Attached \(fileName). It goes out with your next message."
-            )
-        } catch {
-            attachmentFailed("Couldn't attach \(fileName). Check your connection and try again.")
+            a11yFocus = .attachmentStatus
+            UIAccessibility.post(notification: .announcement, argument: "Attached \(attachment.displayName). Review it, then choose Send message when you're ready.")
+        }
+        a11yFocus = .attachmentStatus
+        UIAccessibility.post(notification: .announcement, argument: "Preparing your attachment. You can cancel.")
+    }
+
+    // Shared-extension imports use the same synchronous start and size guard.
+    private func importAttachmentFile(_ url: URL, deleteAfterPreparing: Bool = false) async {
+        beginAttachment(.file(url, deleteAfterPreparing: deleteAfterPreparing))
+    }
+
+    private func takeAttachmentPhoto() {
+        guard !isSending, !attachmentIsBusy, pendingAttachment == nil else { return }
+        guard !showingCall, !showingSpotterCall, activeSheet == nil, readingMessage == nil else {
+            attachmentPreparation.showError("Finish your call or close the other screen before taking a photo.")
+            return
+        }
+        attachmentPreparation.cancel()
+        retryAttachCamera = true
+        checkingAttachCamera = true
+        let id = UUID()
+        attachCameraRequestId = id
+        attachCameraTask = Task { @MainActor in
+            let access = await StillPhotoPicker.requestCameraAccess()
+            guard attachCameraRequestId == id, !Task.isCancelled else { return }
+            attachCameraRequestId = nil
+            attachCameraTask = nil
+            checkingAttachCamera = false
+            guard !showingCall, !showingSpotterCall, activeSheet == nil, readingMessage == nil else {
+                attachmentPreparation.showError("Finish your call or close the other screen before taking a photo.")
+                return
+            }
+            if let message = access.errorMessage { attachmentPreparation.showError(message) }
+            else { showingAttachCamera = true }
         }
     }
 
-    private func attachmentFailed(_ message: String) {
-        KadeHaptics.error()
-        UIAccessibility.post(notification: .announcement, argument: message)
+    private func finishAttachmentCamera() {
+        if let message = attachCameraError {
+            attachCameraError = nil
+            capturedAttachPhoto = nil
+            attachmentPreparation.showError(message)
+            return
+        }
+        if let data = capturedAttachPhoto {
+            capturedAttachPhoto = nil
+            beginAttachment(.bytes(data, mimeType: "image/jpeg", fileName: "photo.jpg"))
+        } else {
+            retryAttachCamera = false
+            a11yFocus = .attachButton
+            UIAccessibility.post(notification: .announcement, argument: "Photo cancelled. Nothing was attached.")
+        }
+    }
+
+    private func cancelAttachment(announce: Bool = true) {
+        attachCameraRequestId = nil
+        attachCameraTask?.cancel()
+        attachCameraTask = nil
+        checkingAttachCamera = false
+        capturedAttachPhoto = nil
+        attachCameraError = nil
+        retryAttachCamera = false
+        attachmentPreparation.cancel()
+        if announce {
+            a11yFocus = .attachButton
+            UIAccessibility.post(notification: .announcement, argument: "Attachment cancelled. Nothing was sent.")
+        }
     }
 
     private var composer: some View {
@@ -2950,7 +2977,11 @@ struct ConversationDetailView: View {
                     Spacer()
                     Button("Retry") { sendTask = Task { await retry() } }
                         .font(.footnote.bold())
+                        .disabled(attachmentIsBusy)
                 }
+            }
+            if attachmentPreparation.errorMessage != nil {
+                attachmentErrorRow
             }
             if let voiceInputError {
                 // Same pattern as the send-failure row above -- the Text
@@ -2961,7 +2992,7 @@ struct ConversationDetailView: View {
                     .foregroundStyle(.red)
                     .accessibilityFocused($a11yFocus, equals: .voiceError)
             }
-            if attachmentUploading || pendingAttachment != nil {
+            if attachmentIsBusy || pendingAttachment != nil {
                 attachmentChipRow
             }
             HStack(alignment: .bottom, spacing: 8) {
@@ -3059,7 +3090,7 @@ struct ConversationDetailView: View {
                 }
                 .disabled(
                     !isSending
-                        && (voiceService.isRecording || voiceService.isTranscribing
+                        && (attachmentIsBusy || voiceService.isRecording || voiceService.isTranscribing
                             /* KADE Aug 28 2026 (her report: "send just an attachment
                              * with no words, the send button is dimmed"): a ready
                              * attachment IS a message. The web composer has always
@@ -3182,7 +3213,7 @@ struct ConversationDetailView: View {
         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         /* Empty text with a ready attachment is a real send (Aug 28 2026) —
          * the photo IS what they're saying. Kiana sees it natively now. */
-        guard !trimmed.isEmpty || pendingAttachment != nil, !isSending else { return }
+        guard !trimmed.isEmpty || pendingAttachment != nil, !isSending, !attachmentIsBusy else { return }
         // A brand-new conversation has no agent_id for the server to fall
         // back on (an EXISTING conversation's turns can omit it and the
         // server still knows who's answering, per its own stored history --
@@ -3423,7 +3454,7 @@ struct ConversationDetailView: View {
     /// conversation -- see this section's doc comment for why an older
     /// exchange doesn't get a Regenerate action.
     private func canRegenerate(_ message: KadeMessage) -> Bool {
-        guard !isSending, !message.isCreatedByUser, let last = messages.last else { return false }
+        guard !isSending, !attachmentIsBusy, !message.isCreatedByUser, let last = messages.last else { return false }
         return !last.isCreatedByUser && message.id == last.id
     }
 
@@ -3524,6 +3555,8 @@ struct ConversationDetailView: View {
         requestId: String? = nil,
         reusePendingRowId: String? = nil
     ) async {
+        // Retry and Regenerate bypass send(); block them before any send state changes.
+        guard !attachmentIsBusy else { return }
         failedAttempt = nil
         // Bug #6 (Sep 29 2026): this turn's request id, agent and attachment
         // are fixed here, once, so a failure can hand the exact same three
@@ -4099,7 +4132,7 @@ struct ConversationDetailView: View {
     /// still has no conversation id, so the same id also gets her the chat
     /// the first attempt made instead of a second one.
     private func retry() async {
-        guard let attempt = failedAttempt else { return }
+        guard !attachmentIsBusy, let attempt = failedAttempt else { return }
         failedAttempt = nil
         var reuseRequestId: String? = nil
         let attachmentNow: ChatAttachment? = attempt.includeAttachment ? pendingAttachment : nil

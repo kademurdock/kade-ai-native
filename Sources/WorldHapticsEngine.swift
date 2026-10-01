@@ -88,9 +88,7 @@ final class WorldHapticsEngine: @unchecked Sendable {
             return WorldHapticsEngine.pattern(from: shape)
         }.value
         guard let pattern else { return }
-        lock.lock()
-        patterns[kind] = pattern
-        lock.unlock()
+        lock.withLock { patterns[kind] = pattern }
     }
 
     // MARK: - Play

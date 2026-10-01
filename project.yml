@@ -85,7 +85,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
-        MARKETING_VERSION: "2.2.1"
+        MARKETING_VERSION: "2.2.2"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -135,9 +135,9 @@ targets:
         # Session 13 ("calling and spotters"): Spotter/Live mode shares your
         # camera during a call so your Spotter can see and describe what's
         # around you -- same crash-without-this-key rule as the mic string
-        # above. Only requested the moment you actually tap "Bring in your
-        # Spotter" (CameraCaptureController.start()), never on a plain voice call.
-        NSCameraUsageDescription: "Kade-AI uses your camera so your Spotter can see what's around you and describe it during a call."
+        # above. Requested when you choose Take a photo (StillPhotoPicker)
+        # or Bring in your Spotter (CameraCaptureController.start()).
+        NSCameraUsageDescription: "Kade-AI uses your camera only when you choose to take a photo for a chat or description, or turn on your Spotter during a call."
         NSLocationWhenInUseUsageDescription: "Kade-AI uses your location, only while the app is open and only when you turn on Share my location, so your characters can tell you where you are, what's nearby, and how to walk there."
         # Sep 29 2026 (Family history, her yes to saving and sharing photos):
         # the share sheet's Save Image, and Save to Photos, add a picture to
@@ -227,7 +227,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.keyboard
-        MARKETING_VERSION: "2.2.1"
+        MARKETING_VERSION: "2.2.2"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -278,7 +278,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
-        MARKETING_VERSION: "2.2.1"
+        MARKETING_VERSION: "2.2.2"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -327,7 +327,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.widgets
-        MARKETING_VERSION: "2.2.1"
+        MARKETING_VERSION: "2.2.2"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -363,6 +363,19 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGN_STYLE: Manual
 
+  # Local synthetic attachment regressions, separate from release archives.
+  KadeAIAttachmentTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [AttachmentTests]
+    dependencies:
+      - target: KadeAI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.attachmenttests
+        SWIFT_VERSION: "5.9"
+        CODE_SIGNING_ALLOWED: "NO"
+
 schemes:
   KadeAI:
     build:
@@ -370,6 +383,15 @@ schemes:
         KadeAI: all
     archive:
       config: Release
+  KadeAIAttachmentTests:
+    build:
+      targets:
+        KadeAI: [testing]
+        KadeAIAttachmentTests: [testing]
+    test:
+      config: Debug
+      targets:
+        - KadeAIAttachmentTests
   # Built only by the ios-a11y-audit workflow. The TestFlight lane never names
   # this scheme, so nothing here can lengthen or endanger a release build.
   KadeAIA11yAudit:

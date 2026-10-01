@@ -42,6 +42,10 @@ struct DescribeView: View {
 
     @State private var showingSourceMenu = false
     @State private var showingCamera = false
+    @State private var requestingCameraAccess = false
+    @State private var cameraAccessTask: Task<Void, Never>?
+    @State private var cameraImageOnDismiss: Data?
+    @State private var cameraErrorOnDismiss: String?
     @State private var showingPhotosPicker = false
     @State private var showingFileImporter = false
     @State private var photoPickerItem: PhotosPickerItem?
@@ -51,7 +55,7 @@ struct DescribeView: View {
     @State private var activeSheet: DescribeSheet?
     @State private var errorMessage: String?
 
-    private enum Focus: Hashable { case status, result }
+    private enum Focus: Hashable { case status, result, error }
     @AccessibilityFocusState private var a11yFocus: Focus?
 
     init(apiClient: KadeAPIClient) {
@@ -88,6 +92,13 @@ struct DescribeView: View {
                     .font(.body)
 
                 statusLine
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Error. \(errorMessage)")
+                        .accessibilityFocused($a11yFocus, equals: .error)
+                }
                 addButton
 
                 if let outcome {
@@ -114,7 +125,7 @@ struct DescribeView: View {
             hasResult ? FeedbackPrefs.gate(.success) : nil
         }
         .confirmationDialog("Add a photo, video, or document", isPresented: $showingSourceMenu) {
-            Button("Take a photo") { showingCamera = true }
+            Button("Take a photo") { beginCameraCapture() }
             Button("Choose a photo or video") { showingPhotosPicker = true }
             Button("Choose a file") { showingFileImporter = true }
             // Sep 12 2026 (Amber A's report): what is on the clipboard,
@@ -122,10 +133,27 @@ struct DescribeView: View {
             Button("Paste from the clipboard") { Task { await pasteFromClipboard() } }
             Button("Cancel", role: .cancel) {}
         }
-        .fullScreenCover(isPresented: $showingCamera) {
-            CameraCapturePicker(
-                onImage: { data in Task { await upload(data: data, mimeType: "image/jpeg", fileName: "photo.jpg") } },
-                onCancel: {}
+        .fullScreenCover(isPresented: $showingCamera, onDismiss: {
+            if let data = cameraImageOnDismiss {
+                cameraImageOnDismiss = nil
+                Task { await upload(data: data, mimeType: "image/jpeg", fileName: "photo.jpg") }
+            } else if let message = cameraErrorOnDismiss {
+                cameraErrorOnDismiss = nil
+                cameraFailed(message)
+            } else {
+                a11yFocus = .status
+            }
+        }) {
+            StillPhotoPicker(
+                onImage: { data in
+                    cameraImageOnDismiss = data
+                    showingCamera = false
+                },
+                onCancel: { showingCamera = false },
+                onError: { message in
+                    cameraErrorOnDismiss = message
+                    showingCamera = false
+                }
             )
             .ignoresSafeArea()
         }
@@ -166,6 +194,11 @@ struct DescribeView: View {
         } message: { message in
             Text(message)
         }
+        .onDisappear {
+            cameraAccessTask?.cancel()
+            cameraAccessTask = nil
+            requestingCameraAccess = false
+        }
     }
 
     // MARK: - Pieces
@@ -189,8 +222,36 @@ struct DescribeView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isBusy)
+        .disabled(isBusy || requestingCameraAccess)
         .accessibilityHint("Take a photo, choose a photo or video from your library, pick a file from Files, or paste what is on your clipboard.")
+    }
+
+    @MainActor
+    private func beginCameraCapture() {
+        guard !isBusy, !requestingCameraAccess else { return }
+        errorMessage = nil
+        requestingCameraAccess = true
+        cameraAccessTask = Task {
+            let access = await StillPhotoPicker.requestCameraAccess()
+            guard !Task.isCancelled else { return }
+            requestingCameraAccess = false
+            cameraAccessTask = nil
+            if access == .ready {
+                cameraImageOnDismiss = nil
+                cameraErrorOnDismiss = nil
+                showingCamera = true
+            } else if let message = access.errorMessage {
+                cameraFailed(message)
+            }
+        }
+    }
+
+    @MainActor
+    private func cameraFailed(_ message: String) {
+        errorMessage = message
+        a11yFocus = .error
+        KadeHaptics.error()
+        UIAccessibility.post(notification: .announcement, argument: message)
     }
 
     private func resultSection(_ outcome: DescribeService.Outcome) -> some View {
@@ -402,6 +463,7 @@ struct DescribeView: View {
     }
 
     private func upload(data: Data, mimeType: String, fileName: String) async {
+        errorMessage = nil
         outcome = nil
         savedReminderKeys.removeAll()
         UIAccessibility.post(notification: .announcement, argument: "Uploading.")
@@ -465,52 +527,6 @@ private struct PickedMovie: Transferable {
                 .appendingPathExtension(ext)
             try FileManager.default.copyItem(at: received.file, to: copy)
             return Self(url: copy)
-        }
-    }
-}
-
-/// Camera capture for a single still photo. SwiftUI has no native "take a
-/// photo" view (`PhotosPicker` is library-only), so this wraps
-/// `UIImagePickerController` with `sourceType = .camera` — old, simple,
-/// already-accessible system UI, the standard bridge for exactly this case
-/// and lower-risk than driving `CameraCaptureController`'s live
-/// `AVCaptureSession` (built for streaming frames during a call, not for
-/// "take one photo and hand it back").
-private struct CameraCapturePicker: UIViewControllerRepresentable {
-    var onImage: (Data) -> Void
-    var onCancel: () -> Void
-
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = .camera
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let parent: CameraCapturePicker
-        init(_ parent: CameraCapturePicker) { self.parent = parent }
-
-        func imagePickerController(
-            _ picker: UIImagePickerController,
-            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
-        ) {
-            picker.dismiss(animated: true)
-            guard let image = info[.originalImage] as? UIImage,
-                  let data = image.jpegData(compressionQuality: 0.9) else {
-                parent.onCancel()
-                return
-            }
-            parent.onImage(data)
-        }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            picker.dismiss(animated: true)
-            parent.onCancel()
         }
     }
 }

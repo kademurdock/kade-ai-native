@@ -91,6 +91,23 @@ final class KadeAPIClient: ObservableObject {
         return (data, http)
     }
 
+    /// Only attachment uploads get a total-transfer deadline. Keep the same
+    /// account pacing, cookies and browser UA without shortening chat streams
+    /// or the other tools' legitimate long-running requests.
+    func sendUpload(_ request: URLRequest, resourceTimeout: TimeInterval) async throws -> (Data, HTTPURLResponse) {
+        try Task.checkCancellation()
+        await waitForPacingGate()
+        try Task.checkCancellation()
+        let config = Self.baseConfiguration()
+        config.timeoutIntervalForResource = resourceTimeout
+        let uploadSession = URLSession(configuration: config)
+        defer { uploadSession.invalidateAndCancel() }
+        let (data, response) = try await uploadSession.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (data, http)
+    }
+
     /// Same pacing gate and session as `send(_:)`, but for a long-lived
     /// Server-Sent-Events connection where buffering the full body first
     /// isn't an option — hands back the raw byte stream instead. Added for
