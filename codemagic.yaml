@@ -248,7 +248,7 @@ workflows:
   # day (KADE_COMPILE_DAILY_CAP, default 6) so a loop cannot eat the month.
   ios-compile-check:
     name: Kade-AI Native - compile and attachment tests (no signing, no publish)
-    max_build_duration: 20
+    max_build_duration: 12
     instance_type: mac_mini_m2
     environment:
       xcode: "26.4"

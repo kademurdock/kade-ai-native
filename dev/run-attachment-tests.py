@@ -73,7 +73,7 @@ def run():
                    "-destination-timeout", "60",
                    "-derivedDataPath", str(folder / "build/compile-simulator"),
                    "-resultBundlePath", str(result_path),
-                   "-parallel-testing-enabled", "NO", "-test-iterations", "1",
+                   "-parallel-testing-enabled", "NO",
                    "-test-timeouts-enabled", "YES",
                    "-default-test-execution-time-allowance", "30",
                    "-maximum-test-execution-time-allowance", "60",
