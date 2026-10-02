@@ -2155,6 +2155,10 @@ struct SoundBoothView: View {
             let sourceEngine = engine
             let r = try await service.render(body: body)
             newVoice = false; currentProjectId = r.projectId ?? currentProjectId
+            /* Oct 2 2026: the voice this AuK HQ render sent is saved with its
+             * project now, so it is hers, as when a project is opened: later
+             * drafts are written for it instead of replacing it. */
+            if sourceEngine == "scenema" && engine == sourceEngine && st["voice_description"] != nil { placedVoice = nil }
             // Sep 25 2026: a song pasted whole was sorted by the server first;
             // the editor takes the sorted boxes so it shows what was sent.
             let sortedSentence = applyPasteSorted(r.pasteSorted, engine: sourceEngine)

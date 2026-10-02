@@ -273,7 +273,8 @@ enum SoundBoothText {
     /// what an engine's list of problems becomes when it is printed as text
     /// (every failed Seed render on Oct 1 2026 said only that), so it is said
     /// in plain words instead, once, however many problems the list held
-    /// ("[object Object],[object Object]").
+    /// ("[object Object],[object Object]"). The words start with a capital
+    /// after a sentence ends ("Seed failed. The engine did not say why.").
     static func readable(_ message: String?) -> String? {
         let said = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !said.isEmpty else { return nil }
@@ -283,7 +284,13 @@ enum SoundBoothText {
             with: "[object Object]",
             options: .regularExpression
         )
-        let plain = once.replacingOccurrences(of: "[object Object]", with: "the engine did not say why")
+        let plain = once
+            .replacingOccurrences(
+                of: #"([.!?]\s+)\[object Object\]"#,
+                with: "$1The engine did not say why",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "[object Object]", with: "the engine did not say why")
         guard let first = plain.first else { return nil }
         let sentence = "\(first.uppercased())\(plain.dropFirst())"
         return sentence.hasSuffix(".") ? sentence : sentence + "."

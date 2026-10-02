@@ -219,8 +219,10 @@ struct LibraryRequestsSection: View {
                 }
                 if canChange(rq) {
                     Button("Add details") { addition = ""; adding = rq }.font(.footnote)
+                    // Oct 2 2026: Voice Control answers to the word on the button as well as its label.
                     Button("Cancel") { cancelling = rq }.font(.footnote).foregroundStyle(.red)
                         .accessibilityLabel("Cancel this request")
+                        .accessibilityInputLabels(["Cancel", "Cancel this request"])
                 }
             }
             .buttonStyle(.borderless)
