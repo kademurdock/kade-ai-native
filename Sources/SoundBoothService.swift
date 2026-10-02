@@ -119,6 +119,20 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     /// The server's own line for what made the row and why ("Sung in my voice
     /// — a song with music"). Read for Sing it in my voice rows only.
     let why: String?
+    /// Oct 2 2026, AuK HQ speech rows: the script without its VOICE:, SEX:,
+    /// SCENE: or SHOT: lines (only directions and words to perform), and the
+    /// voice the saved script carries, for Describe a new voice. Both are
+    /// empty for an edit, whose instruction lives in Edit instructions.
+    /// Absent on older servers and on other engines.
+    let performance: String?
+    let voiceDescription: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, options, title, engine, mode, sourceText, screenplay, voiceSeed, script, readback
+        case sungLyrics, jobs, state, lastError, costUSD, updatedAt, takes, hasRecoverableAudio, why
+        case performance
+        case voiceDescription = "voice_description"
+    }
 
     var engineLabel: String {
         switch engine {
@@ -188,15 +202,20 @@ struct SoundBoothScriptResult: Decodable {
     /// drafted: `lyrics` belongs in the lyrics box, `script` is nil (the draft
     /// above is the direction).
     let pasteSorted: SoundBoothPasteSorted?
-    /// Oct 2 2026: the voice an AuK HQ draft was written for, as its own field,
-    /// for the Describe a new voice box. Her report: "it writes things in the
-    /// wrong places like voice descriptions" — the voice used to arrive only as
-    /// a VOICE: line at the top of the script. Absent on older servers; the
-    /// booth then takes the voice from that line (`SoundBoothText.splitHeaders`).
+    /// Oct 2 2026, AuK HQ only: what goes in the script editor, directions in
+    /// square brackets and the words to perform, never a VOICE:, SEX:, SCENE:
+    /// or SHOT: line. Her report: "it writes things in the wrong places like
+    /// voice descriptions." Absent on older servers; the booth then lifts the
+    /// header lines out of `screenplay` itself (`SoundBoothText.splitHeaders`).
+    let performance: String?
+    /// Oct 2 2026, AuK HQ only: the voice the draft was written for, as its own
+    /// field, for the Describe a new voice box. Absent on older servers; the
+    /// booth then takes the voice from the screenplay's VOICE: line.
     let voiceDescription: String?
 
     private enum CodingKeys: String, CodingKey {
         case engine, mode, script, screenplay, readback, estimate, mismatch, problem, note, pasted, pasteSorted
+        case performance
         case voiceDescription = "voice_description"
     }
 }
@@ -253,12 +272,18 @@ enum SoundBoothText {
     /// A server message, or nil when it says nothing. "[object Object]" is
     /// what an engine's list of problems becomes when it is printed as text
     /// (every failed Seed render on Oct 1 2026 said only that), so it is said
-    /// in plain words instead.
+    /// in plain words instead, once, however many problems the list held
+    /// ("[object Object],[object Object]").
     static func readable(_ message: String?) -> String? {
         let said = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !said.isEmpty else { return nil }
         guard said.contains("[object Object]") else { return said }
-        let plain = said.replacingOccurrences(of: "[object Object]", with: "the engine did not say why")
+        let once = said.replacingOccurrences(
+            of: #"\[object Object\](\s*,\s*\[object Object\])+"#,
+            with: "[object Object]",
+            options: .regularExpression
+        )
+        let plain = once.replacingOccurrences(of: "[object Object]", with: "the engine did not say why")
         guard let first = plain.first else { return nil }
         let sentence = "\(first.uppercased())\(plain.dropFirst())"
         return sentence.hasSuffix(".") ? sentence : sentence + "."
@@ -644,13 +669,15 @@ final class SoundBoothService: ObservableObject {
     }
 
     /// mode "format" keeps her words verbatim and only adds structure;
-    /// "write" drafts a whole piece from a description.
+    /// "write" drafts a whole piece from a description. Oct 2 2026: `gender`
+    /// is nil when nothing chose one (AuK HQ has no sex setting, and its voice
+    /// description says it), so no default sex is sent to the writer.
     func makeScript(
         engine: String,
         mode: String,
         text: String,
         voiceDescription: String?,
-        gender: String,
+        gender: String?,
         mood: String?,
         scene: String?,
         shot: String?,
@@ -658,8 +685,8 @@ final class SoundBoothService: ObservableObject {
         lyrics: String? = nil,
         band: String? = nil
     ) async throws -> SoundBoothScriptResult {
-        var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "gender": gender]
-        if engine == "lyria" || engine == "yue2" { body.removeValue(forKey: "gender") }
+        var body: [String: Any] = ["engine": engine, "mode": mode, "text": text]
+        if let gender, !gender.isEmpty, engine != "lyria", engine != "yue2" { body["gender"] = gender }
         if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
         // Part 293: the YuE2 Style, so the desk writes a Kids song clean.
         if engine == "yue2", let band, !band.isEmpty { body["band"] = band }
