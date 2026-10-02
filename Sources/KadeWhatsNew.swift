@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: a Library like the Files app"
-    static let body = "The Library is one screen at a time, with Back at the top left, real counts, and items that say what they are, like Described audio episode. The Sound Booth keeps less-used settings under More settings, a described video lists what its run really cost, and the Clubhouse asks before Back throws away a tape you're recording."
+    static let title = "What's new: Change password works again"
+    static let body = "In Settings, Password & Account asks for your current password, then changes it right away. In the Sound Booth, AuK HQ keeps the voice in Describe a new voice instead of the script, and a Seed Audio clip over 30 seconds is shortened to fit."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false
