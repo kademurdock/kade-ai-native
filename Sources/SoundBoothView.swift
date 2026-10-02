@@ -1539,6 +1539,13 @@ struct SoundBoothView: View {
 
     // MARK: - Actions
 
+    /// Oct 2 2026: a failed render or a warning before one, said at high
+    /// priority so other speech never swallows it. The same status line.
+    private func announceUrgent(_ msg: String) {
+        statusLine = msg
+        KadeAnnounce.high(msg)
+    }
+
     private func announce(_ msg: String) {
         statusLine = msg
         UIAccessibility.post(notification: .announcement, argument: msg)
@@ -2022,7 +2029,7 @@ struct SoundBoothView: View {
             let key = sent.map { $0.url }.joined(separator: "|")
             if !warnings.isEmpty && longClipWarning != key {
                 longClipWarning = key
-                announce(warnings.joined(separator: " ") + " Import a clip of 30 seconds or less, or choose \(generateLabel) again to try anyway.")
+                announceUrgent(warnings.joined(separator: " ") + " Import a clip of 30 seconds or less, or choose \(generateLabel) again to try anyway.")
                 return
             }
         }
@@ -2110,7 +2117,7 @@ struct SoundBoothView: View {
         } catch {
             service.finishRenderCard(id: card, status: SoundBoothService.cardReason((error as? LocalizedError)?.errorDescription ?? error.localizedDescription), failed: true)
             Earcons.shared.play(.error)
-            announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.")
+            announceUrgent((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.")
             /* Oct 2 2026: the server saved the failed attempt under a project.
              * Trying again adds to that row instead of starting another failed
              * one beside it (three identical Seed rows on Oct 1), and the
