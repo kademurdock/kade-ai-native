@@ -110,6 +110,10 @@ struct LibraryRequestsSection: View {
     @State private var adding: RRRequest?
     @State private var addition = ""
     @State private var cancelling: RRRequest?
+    /// Oct 2 2026: a request's buttons on screen step aside only for
+    /// VoiceOver, which has them in the Actions rotor; Voice Control and
+    /// Switch Control still reach each one by name.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     var body: some View {
         if model.visible {
@@ -183,10 +187,32 @@ struct LibraryRequestsSection: View {
         return bits.joined(separator: " · ")
     }
 
+    /// Oct 2 2026: the words are the one VoiceOver element, with the row's
+    /// actions in its rotor. The buttons beside them used to be folded into
+    /// that element for everyone, which took them from Voice Control too; now
+    /// they are hidden from VoiceOver alone (the Family screens' rule).
     private func row(_ rq: RRRequest) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text((rq.unread == true ? "New: " : "") + rq.title).font(.headline)
-            Text(detailLine(rq)).font(.subheadline).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text((rq.unread == true ? "New: " : "") + rq.title).font(.headline)
+                Text(detailLine(rq)).font(.subheadline).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(spoken(rq))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(rq.item != nil ? "Opens it." : "Reads the details.")
+            .accessibilityAction {
+                if let item = rq.item { openItem(item, of: rq) } else { Task { await details(rq) } }
+            }
+            .accessibilityActions {
+                if let item = rq.item { Button("Open \(item.title)") { openItem(item, of: rq) } }
+                Button("Hear the details") { Task { await details(rq) } }
+                if canChange(rq) {
+                    Button("Add details") { addition = ""; adding = rq }
+                    Button("Cancel this request") { cancelling = rq }
+                }
+            }
             HStack {
                 if let item = rq.item {
                     Button("Open \(item.title)") { openItem(item, of: rq) }.font(.footnote)
@@ -194,24 +220,11 @@ struct LibraryRequestsSection: View {
                 if canChange(rq) {
                     Button("Add details") { addition = ""; adding = rq }.font(.footnote)
                     Button("Cancel") { cancelling = rq }.font(.footnote).foregroundStyle(.red)
+                        .accessibilityLabel("Cancel this request")
                 }
             }
             .buttonStyle(.borderless)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(rq))
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(rq.item != nil ? "Opens it." : "Reads the details.")
-        .accessibilityAction {
-            if let item = rq.item { openItem(item, of: rq) } else { Task { await details(rq) } }
-        }
-        .accessibilityActions {
-            if let item = rq.item { Button("Open \(item.title)") { openItem(item, of: rq) } }
-            Button("Hear the details") { Task { await details(rq) } }
-            if canChange(rq) {
-                Button("Add details") { addition = ""; adding = rq }
-                Button("Cancel this request") { cancelling = rq }
-            }
+            .accessibilityHidden(voiceOverOn)
         }
     }
 
