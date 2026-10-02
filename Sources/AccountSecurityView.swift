@@ -4,14 +4,14 @@ import UIKit
 /// Session 26, leftovers item 7 (account management), scoped to what the
 /// server actually supports. Two real operations:
 ///
-/// CHANGE PASSWORD -- LibreChat has no authenticated change-password
-/// route; it has the reset flow. On THIS deployment there is deliberately
-/// no email service, and `requestPasswordReset` (AuthService.js) returns
-/// the reset `link` DIRECTLY in the response body when email is
-/// unconfigured -- so the app can run the whole flow in-app: request a
-/// reset for the signed-in user's own email, parse `token` + `userId` off
-/// the returned link, then POST /api/auth/resetPassword. The token lives
-/// 900 seconds; this flow uses it within one breath of minting it.
+/// CHANGE PASSWORD -- Oct 2 2026: POST /api/auth/changePassword (signed in,
+/// rate limited like the reset route) with the current password and the new
+/// one. The server checks the current password, sets the new one, keeps this
+/// phone signed in and emails nothing. It answers `{ message }` in plain
+/// words, which are said as they are. This replaced a reset-link flow that
+/// asked /requestPasswordReset for a link and spent it at once: since Sep 8
+/// that route emails the link instead of handing it back, so the old screen
+/// failed for everyone.
 ///
 /// DELETE ACCOUNT -- DELETE /api/user/delete (requireJwtAuth +
 /// canDeleteAccount; ALLOW_ACCOUNT_DELETION defaults on). Irreversible
@@ -24,6 +24,7 @@ struct AccountSecurityView: View {
     let apiClient: KadeAPIClient
     @EnvironmentObject private var auth: AuthService
 
+    @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
     @State private var isChanging = false
@@ -43,12 +44,18 @@ struct AccountSecurityView: View {
     var body: some View {
         Form {
             Section {
+                SecureField("Current password", text: $currentPassword)
+                    .textContentType(.password)
+                    .accessibilityLabel("Current password")
+                    .accessibilityHint("The password you sign in with now.")
                 SecureField("New password", text: $newPassword)
                     .textContentType(.newPassword)
+                    .accessibilityLabel("New password")
                     .accessibilityHint("At least 8 characters.")
                 SecureField("Confirm new password", text: $confirmPassword)
                     .textContentType(.newPassword)
-                    .accessibilityHint("Type the same password again.")
+                    .accessibilityLabel("Confirm new password")
+                    .accessibilityHint("Type the new password again.")
                 Button {
                     Task { await changePassword() }
                 } label: {
@@ -60,7 +67,7 @@ struct AccountSecurityView: View {
                     }
                 }
                 .disabled(isChanging)
-                .accessibilityHint("Sets the new password right away. You stay signed in on this phone.")
+                .accessibilityHint("Changes it right away. You stay signed in on this phone.")
                 if let statusMessage {
                     Text(statusMessage)
                         .font(.footnote)
@@ -114,68 +121,82 @@ struct AccountSecurityView: View {
 
     // MARK: - Password change
 
-    private struct ResetRequestResponse: Decodable {
-        let link: String?
+    /// The server's answer: `{ ok, message }` on success, `{ message }` when
+    /// nothing changed. Every message is a plain sentence meant to be heard.
+    private struct ChangePasswordAnswer: Decodable {
         let message: String?
     }
 
     private func changePassword() async {
+        let current = currentPassword
         let password = newPassword
+        guard !current.isEmpty else {
+            speakStatus("Type your current password first. Nothing changed.")
+            return
+        }
         guard password.count >= 8 else {
-            speakStatus("Passwords need at least 8 characters. Nothing changed.")
+            speakStatus("The new password needs at least 8 characters. Nothing changed.")
             return
         }
         guard password == confirmPassword else {
-            speakStatus("The two passwords don't match. Nothing changed.")
+            speakStatus("The two new passwords don't match. Nothing changed.")
             return
         }
-        guard let email = signedInEmail else {
-            speakStatus("You need to be signed in to change the password.")
+        guard password != current else {
+            speakStatus("The new password is the same as the current one. Nothing changed.")
+            return
+        }
+        guard signedInEmail != nil else {
+            speakStatus("Sign in first, then change your password.")
             return
         }
         isChanging = true
         defer { isChanging = false }
 
-        // Step 1: mint a reset token for OUR OWN email. With no email
-        // service configured the link comes straight back in the response
-        // (verified against AuthService.js's `return { link }` branch).
-        var req = apiClient.request(path: "api/auth/requestPasswordReset", method: "POST")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email])
-        guard let (data, http) = try? await apiClient.send(req) else {
-            speakStatus("Couldn't reach the server. Check your connection and try again.")
+        let body = ["currentPassword": current, "newPassword": password]
+        var reply = await sendPasswordChange(body)
+        // An access token that ran out is renewed once from the sign-in cookie.
+        if reply?.status == 401, await auth.refreshAccessToken() {
+            reply = await sendPasswordChange(body)
+        }
+        guard let answer = reply else {
+            KadeHaptics.error()
+            speakStatus("Couldn't reach the server. Check your connection and try again. Nothing changed.")
             return
         }
-        if http.statusCode == 429 {
-            speakStatus("Too many tries in a row. Wait a few minutes, then try again.")
+        if answer.status == 200 {
+            currentPassword = ""
+            newPassword = ""
+            confirmPassword = ""
+            KadeHaptics.success()
+            speakStatus("Password changed. Use the new one next time you sign in.")
             return
         }
-        guard http.statusCode == 200,
-              let parsed = try? JSONDecoder().decode(ResetRequestResponse.self, from: data),
-              let link = parsed.link,
-              let comps = URLComponents(string: link),
-              let token = comps.queryItems?.first(where: { $0.name == "token" })?.value,
-              let userId = comps.queryItems?.first(where: { $0.name == "userId" })?.value else {
-            speakStatus("The server didn't hand back a reset link — it may have email delivery turned on now. Nothing changed.")
-            return
+        let said = ((try? JSONDecoder().decode(ChangePasswordAnswer.self, from: answer.data))?.message ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let message: String
+        switch answer.status {
+        case 401:
+            message = "Your sign-in has run out. Sign out, sign back in, then try again. Nothing changed."
+        case 404:
+            message = "The website can't change passwords from the app yet. Nothing changed."
+        case 429:
+            message = "Too many tries in a row. Wait a few minutes, then try again. Nothing changed."
+        default:
+            message = said.isEmpty ? "The password could not be changed. Nothing changed." : said
         }
+        KadeHaptics.error()
+        speakStatus(message)
+    }
 
-        // Step 2: spend the token on the new password immediately.
-        var resetReq = apiClient.request(path: "api/auth/resetPassword", method: "POST")
-        resetReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        resetReq.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "userId": userId,
-            "token": token,
-            "password": password,
-        ])
-        guard let (_, resetHttp) = try? await apiClient.send(resetReq), resetHttp.statusCode == 200 else {
-            speakStatus("Couldn't set the new password. Nothing changed — try again.")
-            return
-        }
-        newPassword = ""
-        confirmPassword = ""
-        KadeHaptics.success()
-        speakStatus("Password changed. Use the new one next time you sign in.")
+    /// One try at POST api/auth/changePassword. Nil when the site could not
+    /// be reached.
+    private func sendPasswordChange(_ body: [String: String]) async -> (data: Data, status: Int)? {
+        var req = apiClient.request(path: "api/auth/changePassword", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, http) = try? await apiClient.send(req) else { return nil }
+        return (data: data, status: http.statusCode)
     }
 
     private func speakStatus(_ message: String) {

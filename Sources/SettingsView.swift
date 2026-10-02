@@ -1085,9 +1085,9 @@ struct SettingsView: View {
     }
 
     private func accountSecurityRow(searchStyle: Bool) -> some View {
-        // Session 26, leftovers item 7: change password (the whole
-        // reset flow runs in-app -- see AccountSecurityView's doc
-        // comment) and delete account, double-confirmed.
+        // Session 26, leftovers item 7: change password (Oct 2 2026: with
+        // the current password, see AccountSecurityView's doc comment)
+        // and delete account, double-confirmed.
         Button {
             showingAccountSecurity = true
         } label: {

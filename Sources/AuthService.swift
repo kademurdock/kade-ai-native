@@ -142,6 +142,17 @@ final class AuthService: ObservableObject {
         // any other status: leave the optimistic signed-in state alone
     }
 
+    /// Oct 2 2026: a fresh access token from the refresh cookie, for one call
+    /// that came back 401 (Change password). True when it worked. Unlike the
+    /// launch refresh it never signs out; the caller says what happened.
+    func refreshAccessToken() async -> Bool {
+        let req = client.request(path: "api/auth/refresh", method: "POST")
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+              let decoded = try? decoder.decode(LoginResponse.self, from: data) else { return false }
+        persist(token: decoded.token, user: decoded.user)
+        return true
+    }
+
     private func persist(token: String, user: KadeUser) {
         Keychain.set(token, for: .accessToken)
         // Re-encode the decoded user so the stored blob is exactly what we read back.
