@@ -108,12 +108,15 @@ enum LibraryWords {
     static func items(_ n: Int) -> String { count(n, "item", "items") }
     static func shelves(_ n: Int) -> String { count(n, "shelf", "shelves") }
 
-    /// Oct 2 2026: an upload's 0...1 as a whole percent. A track's progress
-    /// is divided by the file's size, so an empty file gives a value that is
-    /// not a number, and turning that into an Int stops the app; it reads 0.
+    /// Oct 2 2026: an upload's 0...1 as a whole percent, for the words beside
+    /// the bar. Hardening only: the upload already refuses an empty file and
+    /// skips a progress report with no total, so a value that is not a number
+    /// should never arrive, but if one did, turning it into an Int would stop
+    /// the app; it reads 0 instead. Rounded down, so it never says 100 percent
+    /// before the upload has finished.
     static func percent(_ fraction: Double) -> Int {
         guard fraction.isFinite else { return 0 }
-        return Int((Swift.min(Swift.max(fraction, 0), 1) * 100).rounded())
+        return Int((Swift.min(Swift.max(fraction, 0), 1) * 100).rounded(.down))
     }
 
     /// "45 seconds", "12 minutes", "1 hour 5 minutes". A length from the
