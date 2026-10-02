@@ -103,8 +103,9 @@ struct SoundBoothView: View {
     /// draft or a starting point (`placeSpeechDraft`), trimmed. While the box
     /// still holds exactly this, the voice is the app's, not hers: it is never
     /// sent to the writing desk as her choice, and the next draft's voice
-    /// replaces it. Typing in the box or picking off the voice wheel makes it
-    /// hers. Kept per engine with the rest of the workspace.
+    /// replaces it. Typing in the box, picking off the voice wheel, or making a
+    /// take or voice sample with it makes it hers. Kept per engine with the
+    /// rest of the workspace.
     @State private var placedVoice: String?
 
     private struct WorkspaceDraft {
@@ -1885,7 +1886,8 @@ struct SoundBoothView: View {
     }
 
     /// Oct 2 2026: true when Describe a new voice holds words she put there
-    /// (typed, picked off the voice wheel, or kept from a project she opened),
+    /// (typed, picked off the voice wheel, used for a take or voice sample, or
+    /// kept from a project she opened),
     /// not a voice a draft or starting point placed.
     private var voiceIsHers: Bool {
         let box = (values["voice_description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2158,7 +2160,10 @@ struct SoundBoothView: View {
             /* Oct 2 2026: the voice this AuK HQ render sent is saved with its
              * project now, so it is hers, as when a project is opened: later
              * drafts are written for it instead of replacing it. */
-            if sourceEngine == "scenema" && engine == sourceEngine && st["voice_description"] != nil { placedVoice = nil }
+            /* Undo writing change after this take restores the words only: the
+             * voice now belongs to the project, so Undo must not hand it back
+             * to the app (or swap in the voice from before the draft). */
+            if sourceEngine == "scenema" && engine == sourceEngine && st["voice_description"] != nil { placedVoice = nil; writingUndo?.voice = nil }
             // Sep 25 2026: a song pasted whole was sorted by the server first;
             // the editor takes the sorted boxes so it shows what was sent.
             let sortedSentence = applyPasteSorted(r.pasteSorted, engine: sourceEngine)
