@@ -108,6 +108,14 @@ enum LibraryWords {
     static func items(_ n: Int) -> String { count(n, "item", "items") }
     static func shelves(_ n: Int) -> String { count(n, "shelf", "shelves") }
 
+    /// Oct 2 2026: an upload's 0...1 as a whole percent. A track's progress
+    /// is divided by the file's size, so an empty file gives a value that is
+    /// not a number, and turning that into an Int stops the app; it reads 0.
+    static func percent(_ fraction: Double) -> Int {
+        guard fraction.isFinite else { return 0 }
+        return Int((Swift.min(Swift.max(fraction, 0), 1) * 100).rounded())
+    }
+
     /// "45 seconds", "12 minutes", "1 hour 5 minutes". A length from the
     /// server is never trusted to fit an Int (DescribedVideoView's rule): a
     /// broken value would stop every shelf that lists the item from opening.

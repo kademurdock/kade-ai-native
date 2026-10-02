@@ -306,7 +306,7 @@ struct LibraryHomeView: View {
         var spoken: [String] = []
         var shown = "books, recordings, links and requests"
         if let p = uploads.progress, let t = uploads.title {
-            shown = "uploading \(t), \(Int(p * 100)) percent"
+            shown = "uploading \(t), \(LibraryWords.percent(p)) percent"
             spoken.append(shown)
         } else if requests.unread > 0 {
             shown = requests.unread == 1 ? "1 request has news" : "\(requests.unread) requests have news"

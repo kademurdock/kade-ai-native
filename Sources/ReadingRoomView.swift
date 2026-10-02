@@ -970,7 +970,8 @@ struct LibraryUploadStatusRow: View {
                     if artShown && !typeSize.isAccessibilitySize {
                         KadeArtSpot(imageName: "ArtBookCart", fallbackSymbol: "books.vertical", width: 44, height: 44)
                     }
-                    ProgressView(value: p).accessibilityLabel("Uploading, \(Int(p * 100)) percent")
+                    ProgressView(value: p.isFinite ? Swift.min(Swift.max(p, 0), 1) : 0)
+                        .accessibilityLabel("Uploading, \(LibraryWords.percent(p)) percent")
                 }
             } else {
                 Text("Uploads").font(.subheadline.weight(.semibold))
