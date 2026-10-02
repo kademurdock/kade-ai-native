@@ -81,6 +81,17 @@ struct SoundBoothView: View {
     /// Imported clips, in order. Seed uses up to three (@Audio1–3); AuK HQ
     /// uses the first.
     @State private var clips: [(url: String, name: String)] = []
+    /// Oct 2 2026: how long each imported clip is, by its link, when the
+    /// server measured it. Seed Audio takes at most 30 seconds of a clip.
+    @State private var clipSeconds: [String: Double] = [:]
+    /// The Seed clips a length warning was last said for. Generating again
+    /// with the same clips goes ahead.
+    @State private var longClipWarning = ""
+    /// Oct 2 2026: what an AuK HQ draft's header lines said besides the voice
+    /// (sex, scene, shot, language), by setting. They are lifted out of the
+    /// script so the editor holds only words to perform (`placeSpeechDraft`),
+    /// and ride with the render so it sounds as the draft was written.
+    @State private var scriptHeaders: [String: String] = [:]
 
     private struct WorkspaceDraft {
         var mode = "easy"
@@ -161,6 +172,8 @@ struct SoundBoothView: View {
     @State private var showUploadMore = false
 
     @AccessibilityFocusState private var focusStatus: Bool
+    /// Oct 2 2026: the status line's level meter moves only when this allows.
+    @KadeMotionPolicy private var motionAllowed: Bool
     /// B8: where VoiceOver lands after the goal changes.
     @AccessibilityFocusState private var boothFocus: BoothFocus?
 
@@ -553,7 +566,9 @@ struct SoundBoothView: View {
                 Button("Start a new project from this") {
                     guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
                     currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false
-                    trackTitle = starter.title; script = starter.script; text = ""; readback = ""; mood = ""
+                    // Oct 2 2026: an AuK HQ starter's VOICE: and SEX: lines go to the settings, not the editor.
+                    scriptHeaders = [:]
+                    trackTitle = starter.title; script = placeSpeechDraft(starter.script, voice: nil).script; text = ""; readback = ""; mood = ""
                     if engine == "lyria" { values["instrumental"] = starter.script.contains("Instrumental only, no vocals.") ? "1" : "" }
                     invalidateQuote()
                     announce("Starting \(starter.title). The starting point is ready to edit. Nothing has been generated.")
@@ -562,7 +577,7 @@ struct SoundBoothView: View {
             }
             Button("New blank project") {
                 currentProjectId = nil; trackTitle = ""; script = ""; text = ""; readback = ""; mood = ""
-                voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false
+                voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false; scriptHeaders = [:]
                 invalidateQuote(); announce("New blank project. Other engine drafts are kept.")
             }.disabled(workspaceBusy)
             if engine == "scenema" {
@@ -582,7 +597,16 @@ struct SoundBoothView: View {
                 .font(.subheadline)
                 .foregroundStyle(.primary)
             if isWriting || isRendering || currentJobId != nil {
-                ProgressView().accessibilityHidden(true)
+                /* Oct 2 2026, for sight: while the booth writes or records, a
+                 * little level meter in the colour of what is being made.
+                 * Hidden from VoiceOver like the spinner it replaces, and the
+                 * spinner comes back whenever motion is off, VoiceOver is
+                 * running or Low Power Mode is on (KadeMotionPolicy). */
+                if motionAllowed {
+                    KadeWaveformBars(active: true, tint: goal?.tint ?? .indigo)
+                } else {
+                    ProgressView().accessibilityHidden(true)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1298,6 +1322,7 @@ struct SoundBoothView: View {
                 if let previous = writingUndo, previous.engine == engine {
                     Button("Undo writing change") {
                         script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
+                        if engine == "scenema" { scriptHeaders = [:] }
                         invalidateQuote(); announce("Previous writing restored.")
                     }.disabled(workspaceBusy)
                 }
@@ -1420,7 +1445,7 @@ struct SoundBoothView: View {
                 .accessibilityHint("Shows the words this song sang. They are not part of What you will hear.")
             }
 
-            if p.state == "failed", let error = p.lastError, !error.isEmpty {
+            if p.state == "failed", let error = SoundBoothText.readable(p.lastError) {
                 Text("Generation stopped. \(error)")
                     .font(.callout)
                     .accessibilityLabel("Render failed. \(error)")
@@ -1542,7 +1567,7 @@ struct SoundBoothView: View {
         }
         await loadProjects()
         if currentJobId == nil, let latest = projects.first, latest.state == "failed" {
-            announce("Your latest render stopped. \(latest.lastError ?? "No finished audio was returned.") The saved attempt is in the library below.")
+            announce("Your latest render stopped. \(SoundBoothText.readable(latest.lastError) ?? "No finished audio was returned.") The saved attempt is in the library below.")
         }
     }
 
@@ -1612,10 +1637,17 @@ struct SoundBoothView: View {
                     mimeType: mimeType(for: url),
                     engine: engine
                 )
-                clips.append((url: imported.url, name: isUpload ? Self.withLength(imported.name, seconds: imported.seconds) : imported.name))
+                // Oct 2 2026: a Seed clip shows its length too, since Seed takes 30 seconds at most.
+                let showLength = isUpload || engine == "seed"
+                clips.append((url: imported.url, name: showLength ? Self.withLength(imported.name, seconds: imported.seconds) : imported.name))
+                if let length = imported.seconds { clipSeconds[imported.url] = length }
                 Earcons.shared.play(.actionDone)
                 KadeHaptics.success()
-                announce(imported.spoken + (engine == "seed" ? " It is @Audio\(clips.count). Name it in the script." : ""))
+                var said = imported.spoken + (engine == "seed" ? " It is @Audio\(clips.count). Name it in the script." : "")
+                if engine == "seed", let length = imported.seconds, length > SoundBoothText.seedClipLimit {
+                    said += " " + Self.seedLengthWords(number: clips.count, seconds: length)
+                }
+                announce(said)
             } catch {
                 Earcons.shared.play(.error)
                 importError = (error as? LocalizedError)?.errorDescription ?? "Couldn't read that file. \(error.localizedDescription)"
@@ -1760,11 +1792,57 @@ struct SoundBoothView: View {
         let place = ["a midnight train", "a seaside town", "a kitchen in a thunderstorm", "an old theatre"].randomElement() ?? "home"
         let turn = ["an unexpected reunion", "a promise kept", "a small act of courage", "something thought lost"].randomElement() ?? "a reunion"
         script = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes." : "Write a short vivid story about \(place) and \(turn), with a satisfying ending."
-        invalidateQuote(); announce("A new idea is in the editor. Help write this can develop it. Undo restores your previous writing.")
+        /* Oct 2 2026: the button it names is the one under the editor. For a
+         * voice, the idea is a description, so it says not to perform it yet. */
+        let develop = engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this"
+        let next = isMusic
+            ? "\(develop) can develop it."
+            : "It describes a piece, so it is not ready to perform. Choose \(develop) to turn it into a script."
+        invalidateQuote(); announce("A new idea is in the editor. \(next) Undo restores your previous writing.")
+    }
+
+    /// Oct 2 2026: said when a writing button is pressed while AuK HQ's Task
+    /// is set to edit. The desk writes words to perform, and an edit never
+    /// reads them, so its draft would land where nothing uses it.
+    private static let editTaskDeskWords = "Task is set to edit, so a script would not be used. Write what to change in Edit instructions, under Voice, references, and writing desk. Or set Task to speech to write a script."
+
+    /// True when AuK HQ is set to edit an imported recording.
+    private var isEditTask: Bool { engine == "scenema" && values["auk_task"] == "edit" }
+
+    /// Oct 2 2026, her report: "it writes things in the wrong places like
+    /// voice descriptions." An AuK HQ draft arrives as a screenplay whose first
+    /// lines are VOICE:, SEX: and sometimes SCENE: and SHOT:. Those are
+    /// settings, not words to perform, so they never go in the script editor.
+    /// The voice goes in the Describe a new voice box when that box is empty;
+    /// words she typed there are kept (they win at render anyway). The other
+    /// lines ride with the render (`scriptHeaders`). A server that sends the
+    /// voice as its own field (`voice_description`) is read first. Every other
+    /// engine's text is placed as it came. Returns the script for the editor
+    /// and a sentence to say, or "".
+    private func placeSpeechDraft(_ draft: String, voice: String?) -> (script: String, lead: String) {
+        guard engine == "scenema" else { return (draft, "") }
+        let split = SoundBoothText.splitHeaders(draft)
+        var others = split.headers
+        let headerVoice = others.removeValue(forKey: "voice") ?? ""
+        scriptHeaders = others
+        let answered = (voice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let described = answered.isEmpty ? headerVoice : answered
+        let mine = (values["voice_description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !described.isEmpty, mine.isEmpty else { return (split.body, "") }
+        values["voice_description"] = described
+        let box = currentEngine?.settings.first(where: { $0.key == "voice_description" })?.label ?? "Describe a new voice"
+        return (split.body, "The voice description is in \(box), under Voice, references, and writing desk. ")
+    }
+
+    /// Oct 2 2026: what is said about a Seed clip over Seed's limit. True both
+    /// before and after the server learned to trim long clips.
+    private static func seedLengthWords(number: Int, seconds: Double) -> String {
+        "@Audio\(number) is \(SoundBoothText.seconds(seconds)) long. Seed Audio takes at most \(Int(SoundBoothText.seedClipLimit)) seconds of a clip, so a shorter clip is safer."
     }
 
     private func quickDraft() async {
         guard !workspaceBusy else { return }
+        if isEditTask { announce(Self.editTaskDeskWords); return }
         let original = script
         let originalLyrics = values["lyrics"] ?? ""
         let requestEngine = engine
@@ -1785,9 +1863,14 @@ struct SoundBoothView: View {
         do {
             // Part 296: every setting here goes through sendableValue, so a locked one stays home.
             let lyricsToSend: String? = isMusic && sendableValue("lyrics") != nil ? originalLyrics : nil
+            /* Oct 2 2026: a voice draft hears about the imported clips and the
+             * mood, as the writing desk's own button already sends them, so a
+             * Seed draft names @Audio1 for the clip that is attached. A song
+             * never sends a clip: its recording is a cover, not a voice. */
+            let voiceClips: [String] = isMusic || clipsLocked ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
                 voiceDescription: sendableValue("voice_description"), gender: sendableValue("gender") ?? "female",
-                mood: nil, scene: nil, shot: nil, lyrics: lyricsToSend,
+                mood: isMusic || mood.isEmpty ? nil : mood, scene: nil, shot: nil, clipURLs: voiceClips, lyrics: lyricsToSend,
                 band: engine == "yue2" ? sendableValue("band") : nil)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
@@ -1825,7 +1908,11 @@ struct SoundBoothView: View {
     private func placeSongDraft(_ result: SoundBoothScriptResult, engine: String, lyricsBefore: String) -> (direction: String?, lead: String) {
         var draft = result.screenplay ?? result.script
         let pasted = result.pasted == true
-        guard engine == "yue2" || engine == "lyria" else { return (draft, Self.noteLead(result.note)) }
+        guard engine == "yue2" || engine == "lyria" else {
+            // Oct 2 2026: an AuK HQ draft's header lines go to the settings, not the editor.
+            let speech = placeSpeechDraft(draft, voice: result.voiceDescription)
+            return (speech.script, Self.noteLead(result.note) + speech.lead)
+        }
         let mine = lyricsBefore.trimmingCharacters(in: .whitespacesAndNewlines)
         let box = currentEngine?.settings.first(where: { $0.key == "lyrics" })?.label
             ?? (engine == "lyria" ? "Your own lyrics" : "Lyrics")
@@ -1871,6 +1958,7 @@ struct SoundBoothView: View {
 
     private func makeScript(kind: String) async {
         guard engine != "lyria", !workspaceBusy else { return }
+        if isEditTask { announce(Self.editTaskDeskWords); return }
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard body.count >= 3 else {
             announce(kind == "write" ? "Say what you want made first." : "Type the words you want performed first.")
@@ -1892,7 +1980,9 @@ struct SoundBoothView: View {
                 shot: st["shot"] as? String,
                 clipURLs: engine == "lyria" || clipsLocked ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
             )
-            script = r.screenplay ?? r.script
+            // Oct 2 2026: header lines go to the settings; only words to perform reach the editor.
+            let placed = placeSpeechDraft(r.screenplay ?? r.script, voice: r.voiceDescription)
+            script = placed.script
             readback = r.readback ?? ""
             estimate = r.estimate
             confirmArmed = false
@@ -1902,6 +1992,7 @@ struct SoundBoothView: View {
             if let mm = r.mismatch, !mm.isEmpty { parts.append(mm) }
             if let rb = r.readback, !rb.isEmpty { parts.append(rb) }
             if let sp = r.estimate?.spoken { parts.append(sp) }
+            if !placed.lead.isEmpty { parts.append(placed.lead.trimmingCharacters(in: .whitespaces)) }
             if let p = r.problem { parts.append("One thing to fix first: \(p)") }
             Earcons.shared.play(.actionDone)
             announce(parts.isEmpty ? "Script ready." : parts.joined(separator: " "))
@@ -1917,6 +2008,24 @@ struct SoundBoothView: View {
         guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
         if trackTitle.count > 80 { announce("Use a title up to 80 characters."); return }
+        /* Oct 2 2026: a Seed clip over 30 seconds made every Seed render fail.
+         * Said once before anything is spent; pressing Generate again with the
+         * same clips goes ahead, since the server may now trim it itself. */
+        if engine == "seed" && !clipsLocked {
+            let sent = Array(clips.prefix(3))
+            var warnings: [String] = []
+            for (index, clip) in sent.enumerated() {
+                if let length = clipSeconds[clip.url], length > SoundBoothText.seedClipLimit {
+                    warnings.append(Self.seedLengthWords(number: index + 1, seconds: length))
+                }
+            }
+            let key = sent.map { $0.url }.joined(separator: "|")
+            if !warnings.isEmpty && longClipWarning != key {
+                longClipWarning = key
+                announce(warnings.joined(separator: " ") + " Import a clip of 30 seconds or less, or choose \(generateLabel) again to try anyway.")
+                return
+            }
+        }
         if engine == "yue2", let settings = currentEngine?.settings {
             // A locked setting is never sent, so it is never checked either.
             for setting in settings where ["number", "range"].contains(setting.kind) && setting.lockReason == nil {
@@ -1934,6 +2043,16 @@ struct SoundBoothView: View {
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
+        /* Oct 2 2026: what the draft's header lines said besides the voice
+         * (placeSpeechDraft), so the take sounds as the draft was written. A
+         * setting the guide has for the same thing wins; AuK HQ has none of
+         * these today, and its default gender gives way to the draft's. */
+        if engine == "scenema" && (st["auk_task"] as? String) != "edit" {
+            let guideKeys = Set((currentEngine?.settings ?? []).map { $0.key })
+            for (key, value) in scriptHeaders where !guideKeys.contains(key) {
+                body[key] = value
+            }
+        }
         if engine != "lyria" && !clips.isEmpty && !clipsLocked { body["referenceExpected"] = true }
         body["title"] = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         body["engine"] = engine; body["mode"] = mode
@@ -1990,7 +2109,16 @@ struct SoundBoothView: View {
             }
         } catch {
             service.finishRenderCard(id: card, status: SoundBoothService.cardReason((error as? LocalizedError)?.errorDescription ?? error.localizedDescription), failed: true)
+            Earcons.shared.play(.error)
             announce((error as? LocalizedError)?.errorDescription ?? "The render could not be confirmed. Check the library before retrying.")
+            /* Oct 2 2026: the server saved the failed attempt under a project.
+             * Trying again adds to that row instead of starting another failed
+             * one beside it (three identical Seed rows on Oct 1), and the
+             * library shows it now rather than on the next visit. */
+            if let failed = error as? SoundBoothService.BoothError, let saved = failed.projectId {
+                currentProjectId = saved
+                await loadProjects()
+            }
         }
     }
 
@@ -2125,7 +2253,7 @@ struct SoundBoothView: View {
                         Earcons.shared.play(.error)
                         if st.state == "failed" {
                             showFailedProjects = true
-                            renderConfirmationMessage = st.error ?? st.spoken ?? "No finished recording was returned. Your saved attempt remains in the library."
+                            renderConfirmationMessage = SoundBoothText.readable(st.error) ?? st.spoken ?? "No finished recording was returned. Your saved attempt remains in the library."
                             showRenderConfirmation = true
                         }
                     }
@@ -2220,6 +2348,11 @@ struct SoundBoothView: View {
         if p.engine == "seed", case .array(let references) = p.options?["audio_urls"] {
             clips = references.compactMap { if case .string(let url) = $0 { return (url: url, name: "Saved reference") }; return nil }
         } else if case .string(let url) = p.options?["reference_voice_url"] { clips = [(url: url, name: "Saved reference")] }
+        /* Oct 2 2026: a saved AuK HQ piece comes back as a screenplay with its
+         * VOICE: and SEX: lines on top. Those go back to the settings, after
+         * the saved settings are in, so a voice she typed is never replaced. */
+        scriptHeaders = [:]
+        if p.engine == "scenema" && values["auk_task"] != "edit" { script = placeSpeechDraft(script, voice: nil).script }
         // Part 296: a saved score sits in More settings, so the group opens to show it.
         if moreSettingsHoldWords(engine: p.engine) { showMoreSettings = true }
         announce("Opened \(p.title). Its draft and settings are restored. Change what you like and generate another take.")

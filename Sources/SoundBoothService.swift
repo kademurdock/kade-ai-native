@@ -188,6 +188,89 @@ struct SoundBoothScriptResult: Decodable {
     /// drafted: `lyrics` belongs in the lyrics box, `script` is nil (the draft
     /// above is the direction).
     let pasteSorted: SoundBoothPasteSorted?
+    /// Oct 2 2026: the voice an AuK HQ draft was written for, as its own field,
+    /// for the Describe a new voice box. Her report: "it writes things in the
+    /// wrong places like voice descriptions" — the voice used to arrive only as
+    /// a VOICE: line at the top of the script. Absent on older servers; the
+    /// booth then takes the voice from that line (`SoundBoothText.splitHeaders`).
+    let voiceDescription: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case engine, mode, script, screenplay, readback, estimate, mismatch, problem, note, pasted, pasteSorted
+        case voiceDescription = "voice_description"
+    }
+}
+
+/// Oct 2 2026: small text rules the booth shares, kept free of the main actor
+/// so any model or view can use them.
+enum SoundBoothText {
+    /// Seed Audio takes at most this many seconds of each reference clip. A
+    /// 32.6 second clip made every Seed render fail (Oct 1 2026).
+    static let seedClipLimit: Double = 30
+
+    /// The header words an AuK HQ screenplay may start with, and the setting
+    /// each fills. The same list the server reads (kadeSoundBoothScreenplay.js
+    /// HEADER_KEYS), so a line lifted out here would never have been spoken.
+    private static let headerKeys: [String: String] = [
+        "voice": "voice", "who": "voice", "speaker": "voice",
+        "sex": "gender", "gender": "gender",
+        "scene": "scene", "where": "scene", "place": "scene",
+        "shot": "shot",
+        "language": "language", "lang": "language",
+    ]
+
+    /// An AuK HQ screenplay without its header lines (VOICE:, SEX:, SCENE:,
+    /// SHOT:, LANGUAGE:), and what those lines said, by setting ("voice",
+    /// "gender", "scene", "shot", "language"). Read the way the server's
+    /// parseScreenplay reads them: KEY: value lines at the very top, blank
+    /// lines allowed between them, stopping at the first line that is not one.
+    /// Text with no header lines comes back exactly as it was.
+    static func splitHeaders(_ text: String) -> (body: String, headers: [String: String]) {
+        let lines = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+        var headers: [String: String] = [:]
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { index += 1; continue }
+            guard let colon = line.firstIndex(of: ":") else { break }
+            let word = line[..<colon].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            guard (3...10).contains(word.count),
+                  word.allSatisfy({ $0.isASCII && $0.isLetter }),
+                  let key = headerKeys[word.lowercased()],
+                  !value.isEmpty else { break }
+            headers[key] = value
+            index += 1
+        }
+        guard !headers.isEmpty else { return (text, [:]) }
+        let body = lines[index...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (body, headers)
+    }
+
+    /// A server message, or nil when it says nothing. "[object Object]" is
+    /// what an engine's list of problems becomes when it is printed as text
+    /// (every failed Seed render on Oct 1 2026 said only that), so it is said
+    /// in plain words instead.
+    static func readable(_ message: String?) -> String? {
+        let said = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !said.isEmpty else { return nil }
+        guard said.contains("[object Object]") else { return said }
+        let plain = said.replacingOccurrences(of: "[object Object]", with: "the engine did not say why")
+        guard let first = plain.first else { return nil }
+        let sentence = "\(first.uppercased())\(plain.dropFirst())"
+        return sentence.hasSuffix(".") ? sentence : sentence + "."
+    }
+
+    /// A length as it is said: "33 seconds", or "32.6 seconds" when it is not whole.
+    static func seconds(_ value: Double) -> String {
+        guard value.isFinite, value >= 0, value < 100_000 else { return "a long time" }
+        let whole = value.rounded()
+        if abs(value - whole) < 0.05 { return "\(Int(whole)) seconds" }
+        return String(format: "%.1f seconds", value)
+    }
 }
 
 /// Sep 25 2026: where the server put a song pasted whole from ChatGPT. The
@@ -502,6 +585,10 @@ struct KadeFamilyFeatures: Decodable, Equatable {
 final class SoundBoothService: ObservableObject {
     struct BoothError: LocalizedError {
         let message: String
+        /// Oct 2 2026: the project a failed render was saved under, when the
+        /// server named it, so trying again adds to that row instead of
+        /// starting another failed one beside it.
+        var projectId: String? = nil
         var errorDescription: String? { message }
     }
 
@@ -509,9 +596,11 @@ final class SoundBoothService: ObservableObject {
     init(apiClient: KadeAPIClient) { client = apiClient }
 
     private func decodeError(_ data: Data, fallback: String) -> BoothError {
-        struct E: Decodable { let error: String? }
-        let msg = (try? JSONDecoder().decode(E.self, from: data))?.error
-        return BoothError(message: msg?.isEmpty == false ? msg! : fallback)
+        struct E: Decodable { let error: String?; let projectId: String? }
+        let decoded = try? JSONDecoder().decode(E.self, from: data)
+        let msg = SoundBoothText.readable(decoded?.error)
+        let project = (decoded?.projectId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return BoothError(message: msg ?? fallback, projectId: project.isEmpty ? nil : project)
     }
 
     private func post<T: Decodable>(_ path: String, body: [String: Any], timeout: TimeInterval, fallback: String) async throws -> T {
@@ -636,7 +725,7 @@ final class SoundBoothService: ObservableObject {
             guard answer.1.statusCode == 200 else { throw decodeError(answer.0, fallback: fallback) }
             let job = try JSONDecoder().decode(ScriptJobState.self, from: answer.0)
             if job.state == "done", let result = job.result { return result }
-            if job.state == "failed" { throw BoothError(message: job.error ?? fallback) }
+            if job.state == "failed" { throw BoothError(message: SoundBoothText.readable(job.error) ?? fallback) }
         }
         throw BoothError(message: "The writer is taking far too long. Your idea is kept. Try again.")
     }
@@ -743,7 +832,7 @@ final class SoundBoothService: ObservableObject {
     /// A short plain reason for a card that ends without audio: the server's
     /// own first sentence when it is short, otherwise just "Didn't finish".
     static func cardReason(_ message: String?) -> String {
-        let first = (message ?? "").split(separator: ".").first
+        let first = (SoundBoothText.readable(message) ?? "").split(separator: ".").first
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         guard !first.isEmpty, first.count <= 60 else { return "Didn't finish" }
         return "Didn't finish. \(first.prefix(1).uppercased())\(first.dropFirst())."
