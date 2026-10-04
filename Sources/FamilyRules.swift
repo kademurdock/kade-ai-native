@@ -171,6 +171,13 @@ enum FamilyDemoSwitch {
 }
 
 extension FamilyRoute {
+    var destination: FamilyRoute {
+        switch self {
+        case .discoveries, .mysteries: return .home
+        default: return self
+        }
+    }
+
     /// Every family screen but the locked one needs an open family history.
     var needsAccess: Bool { self != .locked }
 

@@ -115,6 +115,9 @@ struct FHReelCard: Decodable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey { case key, images, people, text, spoken, open }
 
     var id: String { key }
+    var isVisibleInNavigation: Bool {
+        key != "mystery" && !FHOpen.isRetiredSection(key) && open?.opensRetiredSection != true
+    }
 }
 
 extension FHReelCard {
@@ -136,6 +139,13 @@ struct FHReel: Decodable, Equatable {
     var cards: [FHReelCard] = []
 
     enum CodingKeys: String, CodingKey { case title, detail, cover, cards }
+
+    var visibleCards: [FHReelCard] { cards.filter { $0.isVisibleInNavigation } }
+    var visibleDetail: String? {
+        let count = visibleCards.count
+        guard count != cards.count else { return detail }
+        return count == 1 ? "1 card" : "\(count) cards"
+    }
 }
 
 extension FHReel {
@@ -158,6 +168,10 @@ struct FHFeatured: Decodable, Equatable {
     var open: FHOpen? = nil
 
     enum CodingKeys: String, CodingKey { case kind, title, text, spoken, image, open }
+
+    var isVisibleInNavigation: Bool {
+        !FHOpen.isRetiredSection(kind) && open?.opensRetiredSection != true
+    }
 }
 
 extension FHFeatured {
@@ -226,6 +240,11 @@ struct FHHome: Decodable, Equatable {
     enum CodingKeys: String, CodingKey {
         case version, mode, isOwner, hero, faces, reel, featured, news, tiles, more, comingSoon, footnote, owner
     }
+
+    var visibleTiles: [FHTile] { tiles.filter { $0.isVisibleInNavigation } }
+    var visibleMore: [FHTile] { more.filter { $0.isVisibleInNavigation } }
+    var visibleFeatured: [FHFeatured] { featured.filter { $0.isVisibleInNavigation } }
+    var visibleNews: FHNews? { news?.open?.opensRetiredSection == true ? nil : news }
 }
 
 extension FHHome {

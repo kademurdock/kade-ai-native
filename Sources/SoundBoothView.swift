@@ -1834,7 +1834,10 @@ struct SoundBoothView: View {
         writingUndo = WritingUndo(engine: engine, script: script, lyrics: values["lyrics"] ?? "")
         let place = ["a midnight train", "a seaside town", "a kitchen in a thunderstorm", "an old theatre"].randomElement() ?? "home"
         let turn = ["an unexpected reunion", "a promise kept", "a small act of courage", "something thought lost"].randomElement() ?? "a reunion"
-        script = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes." : "Write a short vivid story about \(place) and \(turn), with a satisfying ending."
+        let existingIdea = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        script = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes."
+            : engine == "seed" ? Self.seedSurpriseIdea(place: place, turn: turn, existing: existingIdea.isEmpty ? text : existingIdea)
+            : "Write a short vivid story about \(place) and \(turn), with a satisfying ending."
         /* Oct 2 2026: the button it names is the one under the editor. For a
          * voice, the idea is a description, so it says not to perform it yet. */
         let develop = engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this"
@@ -1842,6 +1845,21 @@ struct SoundBoothView: View {
             ? "\(develop) can develop it."
             : "It describes a piece, so it is not ready to perform. Choose \(develop) to turn it into a script."
         invalidateQuote(); announce("A new idea is in the editor. \(next) Undo restores your previous writing.")
+    }
+
+    /// Seed makes a scene, so its idea asks for people actually exchanging words.
+    /// Explicit sound-only or no-dialogue requests keep their constraints; music
+    /// behind a conversation, "no vocals" and "no narration" are not no-speech.
+    private static func seedSurpriseIdea(place: String, turn: String, existing: String) -> String {
+        // A character saying "No talking!" is dialogue, not an output constraint.
+        let instructions = existing.replacingOccurrences(of: #""[^"\n]*"|“[^”\n]*”"#, with: "", options: .regularExpression)
+        let noSpeechOrDialogue = #"\b(?:no|without)[\s-]+(?:any[\s-]+)?(?:spoken[\s-]+words|dialogue|talking|(?:human[\s-]+)?(?:speech|voices))\b"#
+        let soundOnlyRequest = #"^\s*(?:please[\s,]+)?(?:(?:make|create|generate|write|give me|I want|I need)\s+)?(?:an?\s+)?(?:only[\s-]+(?:instrumental(?:\s+music)?|music|ambience|ambient(?:[\s-]+sounds?)?|sounds?|sound[\s-]+effects|sfx)|(?:instrumental(?:\s+music)?|music|ambience|ambient(?:[\s-]+sounds?)?|sounds?|sound[\s-]+effects|sfx)[\s-]+only)\b(?!\s+(?:(?:in|for|as)\s+(?:(?:a|the)\s+)?background\b|background\b|under(?:neath)?\b|behind\b|beneath\b|over\b|during\s+(?:the\s+)?(?:dialogue|conversation|speech|talking)\b))"#
+        if instructions.range(of: noSpeechOrDialogue, options: [.regularExpression, .caseInsensitive]) != nil
+            || instructions.range(of: soundOnlyRequest, options: [.regularExpression, .caseInsensitive]) != nil {
+            return "Create a developed audio idea at \(place), inspired by \(turn), with a clear progression and a complete ending. Preserve the existing request's explicit sound-only or no-dialogue constraints and its requested kind of sound. Existing request: \(existing)"
+        }
+        return "Create a developed audio scene at \(place), sparked by \(turn). Invent distinct people with different wants, voices and ways of speaking. Let sustained, natural dialogue and what the people do carry the scene through a meaningful change. Use concrete details and concise setting and sound cues, leave room for the actual exchange, and give the scene a complete ending."
     }
 
     /// Oct 2 2026: said when a writing button is pressed while AuK HQ's Task

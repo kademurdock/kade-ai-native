@@ -230,3 +230,45 @@ struct FamilyFamilySection: View {
         }
     }
 }
+
+// MARK: - Saved notes and tree changes
+
+struct FamilySavedNotesSection: View {
+    let notes: [String]
+    let history: [String]
+
+    @State private var historyExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    FamilyHeading(text: "Notes", level: .h2)
+                    entries(notes)
+                }
+            }
+            if !history.isEmpty {
+                DisclosureGroup(isExpanded: $historyExpanded) {
+                    entries(history)
+                        .padding(.top, 8)
+                } label: {
+                    Text("Changes made to the tree (\(history.count))")
+                        .font(.title3.bold())
+                        .foregroundStyle(.primary)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+        }
+    }
+
+    private func entries(_ words: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(words.enumerated()), id: \.offset) { pair in
+                Text(pair.element)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}

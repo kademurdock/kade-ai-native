@@ -133,6 +133,9 @@ struct FamilyPersonScreen: View {
             if !page.sources.isEmpty || page.withheld != nil {
                 FamilySourcesSection(sources: page.sources, withheld: page.withheld)
             }
+            if let person = page.person, !person.notes.isEmpty || !person.history.isEmpty {
+                FamilySavedNotesSection(notes: person.notes, history: person.history)
+            }
         }
     }
 

@@ -212,7 +212,7 @@ struct FamilyReelCard: View {
     private var title: String { FamilyAccessRules.nonEmpty(reel.title) ?? "Your family in 60 seconds" }
 
     private var spoken: String {
-        guard let detail = FamilyAccessRules.nonEmpty(reel.detail) else { return title }
+        guard let detail = FamilyAccessRules.nonEmpty(reel.visibleDetail) else { return title }
         return title + ", " + detail
     }
 
@@ -229,7 +229,7 @@ struct FamilyReelCard: View {
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title).font(.title3.bold()).foregroundStyle(.primary)
-                        if let detail = reel.detail {
+                        if let detail = reel.visibleDetail {
                             Text(detail).font(.subheadline).foregroundStyle(.secondary)
                         }
                     }

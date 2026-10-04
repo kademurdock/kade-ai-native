@@ -4,8 +4,8 @@ import UIKit
 // MARK: - Family history: "Your family in 60 seconds" (Sep 29 2026)
 //
 // DESIGN 1.2 item 2: 6 to 8 cards the server builds (you; your
-// grandparents; the oldest known ancestor; the ocean crossing; a mystery
-// solved; where most of them lived; "Explore your tree"), each one big
+// grandparents; the oldest known ancestor; the ocean crossing;
+// where most of them lived; "Explore your tree"), each one big
 // picture and one sentence. It never plays by itself.
 // - Sight: swipeable pages, with Previous and Next buttons and "2 of 7".
 // - VoiceOver: a plain list of the same cards, each ONE element (its
@@ -30,7 +30,7 @@ struct FamilyReelView: View {
         FamilyAccessRules.nonEmpty(reel?.title) ?? "Your family in 60 seconds"
     }
 
-    private var cards: [FHReelCard] { reel?.cards ?? [] }
+    private var cards: [FHReelCard] { reel?.visibleCards ?? [] }
 
     var body: some View {
         content
@@ -187,7 +187,6 @@ struct FamilyReelPicture: View {
         switch key {
         case "places": return "map"
         case "ocean": return "sailboat"
-        case "mystery": return "magnifyingglass"
         case "end": return "tree"
         default: return "person.3"
         }

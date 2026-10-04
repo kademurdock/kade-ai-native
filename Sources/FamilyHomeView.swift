@@ -72,23 +72,26 @@ struct FamilyHomeView: View {
 
     @ViewBuilder
     private func sections(_ home: FHHome) -> some View {
+        let featured = home.visibleFeatured
+        let tiles = home.visibleTiles
+        let more = home.visibleMore
         if let hero = home.hero {
             FamilyHeroCard(hero: hero, faces: home.faces, reelTitle: home.reel?.title)
         }
-        if let reel = home.reel, !reel.cards.isEmpty {
+        if let reel = home.reel, !reel.visibleCards.isEmpty {
             FamilyReelCard(reel: reel)
         }
-        if !home.featured.isEmpty {
-            FamilyFeaturedCard(items: home.featured)
+        if !featured.isEmpty {
+            FamilyFeaturedCard(items: featured)
         }
-        if let news = home.news {
+        if let news = home.visibleNews {
             FamilyNewsStrip(news: news)
         }
-        if !home.tiles.isEmpty {
-            FamilyTileGrid(tiles: home.tiles) { personId in openNote(personId) }
+        if !tiles.isEmpty {
+            FamilyTileGrid(tiles: tiles) { personId in openNote(personId) }
         }
-        if !home.more.isEmpty {
-            FamilyMoreRows(rows: home.more) { personId in openNote(personId) }
+        if !more.isEmpty {
+            FamilyMoreRows(rows: more) { personId in openNote(personId) }
         }
         FamilyHomeFooter(home: home)
     }

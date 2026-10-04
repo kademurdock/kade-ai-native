@@ -304,6 +304,9 @@ struct FHPerson: Decodable, Equatable, Identifiable {
     var spoken: String? = nil
     // The person page adds these.
     var otherNames: [String] = []
+    /// Saved profile notes and tree edits, in the server's order and wording.
+    var notes: [String] = []
+    var history: [String] = []
     var bornA: String? = nil
     var duplicate: FHDuplicate? = nil
     /// "stepfather", "adoptive mother", "probable father" beside a family member.
@@ -314,7 +317,7 @@ struct FHPerson: Decodable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, first, years, yearsSpoken, living, gen, term, chain, side, sideText, research, face, initials, spoken
-        case otherNames, bornA, duplicate, kindText, label, lifespan
+        case otherNames, notes, history, bornA, duplicate, kindText, label, lifespan
     }
 
     var sideKind: FHSide { FHSide(raw: side) }
@@ -343,6 +346,8 @@ extension FHPerson {
         initials = c.fhString(.initials)
         spoken = c.fhString(.spoken)
         otherNames = c.fhList(.otherNames)
+        notes = c.fhList(.notes)
+        history = c.fhList(.history)
         bornA = c.fhString(.bornA)
         duplicate = c.fh(.duplicate)
         kindText = c.fhString(.kindText)
@@ -561,6 +566,12 @@ struct FHOpen: Decodable, Equatable {
         "whereWhen", "map", "discoveries", "mysteries", "people", "play", "note",
     ]
 
+    static func isRetiredSection(_ key: String?) -> Bool {
+        key == "discoveries" || key == "mysteries"
+    }
+
+    var opensRetiredSection: Bool { Self.isRetiredSection(to) }
+
     var target: FHOpenTarget? {
         let key = to ?? ""
         let someId: String? = (id?.isEmpty == false) ? id : nil
@@ -580,8 +591,7 @@ struct FHOpen: Decodable, Equatable {
         case "dna": return .route(.dna(forId: someId))
         case "whereWhen": return .route(.whereWhen(map: false))
         case "map": return .route(.whereWhen(map: true))
-        case "discoveries": return .route(.discoveries)
-        case "mysteries": return .route(.mysteries)
+        case "discoveries", "mysteries": return .route(.home)
         case "people": return .route(.people)
         case "play": return .route(.play)
         case "note": return .note(personId: someId)
@@ -631,6 +641,9 @@ struct FHTile: Decodable, Equatable, Identifiable {
 
     var id: String { key }
     var isEnabled: Bool { enabled ?? true }
+    var isVisibleInNavigation: Bool {
+        !FHOpen.isRetiredSection(key) && open?.opensRetiredSection != true
+    }
 }
 
 extension FHTile {
@@ -677,6 +690,7 @@ enum FamilyRoute: Hashable {
     case dna(forId: String?)
     case stories
     case story(slug: String, title: String)
+    /// Retained for older navigation entries; both open the family home.
     case discoveries
     case mysteries
     case people

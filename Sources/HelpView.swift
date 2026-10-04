@@ -233,7 +233,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.3: Change password, and the voice in its own box",
+                title: "Newest build, 2.2.4: Family notes and audio scenes",
+                body: "Family History has a simpler home: the separate Discoveries and Family Mysteries sections are removed. Retained research findings, their evidence and how sure they are stay on people's pages. Saved notes now appear there too, and Changes made to the tree opens the saved history. In the Sound Booth, Seed Audio's Write a script from this develops fuller scenes with actual dialogue when the idea calls for it. Requests for short scenes, a single narrator or ambience without speech still guide the draft. Surprise me offers an audio-scene idea for Seed Audio."
+            ),
+            HelpEntry(
+                title: "In 2.2.3: Change password, and the voice in its own box",
                 body: "Change password works again. In Settings, open Password & Account, type your current password, then your new one twice. It changes right away, and you stay signed in. In the Sound Booth, AuK HQ speech keeps the voice in its own box: a draft puts only the words to perform in the script, and the voice it was written for goes in Describe a new voice, unless you wrote your own there. Until you make a take or hear a sample, your next idea can bring a new voice, and Undo writing change takes the draft's voice back out. Once you make a take, that voice stays with the project. A Seed Audio clip over 30 seconds is shortened to fit instead of stopping the scene, and a render that fails says why in plain words. In the Library, Voice Control can now reach each request's Open, Add details and Cancel buttons."
             ),
             HelpEntry(

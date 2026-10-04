@@ -40,8 +40,7 @@ struct FamilyDestination: View {
     }
 
     private var isHome: Bool {
-        if case .home = route { return true }
-        return false
+        route.destination == .home
     }
 
     /// A back-stack person ID belongs to the archive it came from. Never
@@ -62,8 +61,8 @@ struct FamilyDestination: View {
     /// One initialiser per route, no inline bodies (type-checking stays cheap).
     @ViewBuilder
     private var screen: some View {
-        switch route {
-        case .home:
+        switch route.destination {
+        case .home, .discoveries, .mysteries:
             FamilyHomeView(apiClient: apiClient)
         case .reel:
             FamilyReelView(apiClient: apiClient)
@@ -81,10 +80,6 @@ struct FamilyDestination: View {
             FamilyListScreen(apiClient: apiClient, mode: .stories)
         case .story(let slug, let title):
             FamilyStoryScreen(apiClient: apiClient, slug: slug, title: title)
-        case .discoveries:
-            FamilyListScreen(apiClient: apiClient, mode: .discoveries)
-        case .mysteries:
-            FamilyListScreen(apiClient: apiClient, mode: .mysteries)
         case .people:
             FamilyListScreen(apiClient: apiClient, mode: .people)
         case .play:

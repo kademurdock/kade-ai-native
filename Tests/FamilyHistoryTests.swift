@@ -35,6 +35,16 @@ import Foundation
         let home = try decode(FHHome.self, FamilyDemoData.home)
         check(home.tiles.count == 4, "home has exactly four tiles")
         check(home.more.count == 6, "home has six More rows")
+        check(home.visibleMore.map { $0.key } == ["stories", "people", "play", "note"], "older home payloads hide both retired sections and keep the other rows")
+        check(home.visibleTiles == home.tiles && home.visibleFeatured == home.featured && home.visibleNews == home.news, "unrelated home content stays visible")
+        let aliasedTile = try decode(FHTile.self, #"{"key":"extra","open":{"to":"mysteries"}}"#)
+        let retiredTile = try decode(FHTile.self, #"{"key":"discoveries","open":{"to":"home"}}"#)
+        check(!aliasedTile.isVisibleInNavigation && !retiredTile.isVisibleInNavigation, "retired tiles are hidden by destination or key")
+        let olderReel = try decode(FHReel.self, #"{"detail":"3 cards, about a minute","cards":[{"key":"mystery","open":{"to":"person","id":"x"}},{"key":"extra","open":{"to":"discoveries"}},{"key":"end","open":{"to":"tree"}}]}"#)
+        check(olderReel.cards.count == 3 && olderReel.visibleCards.map { $0.key } == ["end"], "old reel data stays readable while retired cards and links are hidden")
+        check(olderReel.visibleDetail == "1 card" && home.reel?.visibleDetail == home.reel?.detail, "reel counts follow visible cards and unchanged reels retain their detail")
+        let olderHome = try decode(FHHome.self, #"{"tiles":[{"key":"extra","open":{"to":"discoveries"}}],"featured":[{"kind":"mysteries"},{"kind":"extra","open":{"to":"mysteries"}},{"kind":"story","title":"A mystery in the records","open":{"to":"story","id":"the-farm"}}],"news":{"text":"Retired section","open":{"to":"discoveries"}}}"#)
+        check(olderHome.visibleTiles.isEmpty && olderHome.visibleFeatured.map { $0.kind } == ["story"] && olderHome.visibleNews == nil, "retired destinations are hidden across home surfaces without filtering story titles")
         check(home.faces?.people.count == 5, "home has five faces")
         check(home.reel?.cards.count == 5 && home.reel?.cover?.id == "m-tree1", "home has the reel and its cover")
         check(home.featured.count == 2 && home.news?.images.count == 1, "home has featured cards and news")
@@ -77,7 +87,7 @@ import Foundation
 
         let dna = try decode(FHDNA.self, FamilyDemoData.dna)
         check(dna.test?.applies == "fullSibling" && dna.test?.cards.count == 1, "the DNA test section reads")
-        check(dna.test?.mysteries?.cards.count == 1 && dna.test?.mysteries?.headsUp != nil, "the mysteries sit behind a heads-up")
+        check(dna.test?.mysteries?.cards.count == 1 && dna.test?.mysteries?.headsUp != nil, "legacy DNA finding fields remain readable")
         check(dna.paper?.generations.map { $0.wedges.count } == [4, 8], "the paper fan's generations read")
         check(dna.compare?.averages.first?.relationClass == "first cousin", "\"class\" reads as relationClass")
         check(dna.birthplaces?.rows.first?.count == 3 && dna.abroad?.rows.count == 1, "birthplaces and abroad read")
@@ -235,6 +245,17 @@ import Foundation
         let person = try decode(FHPerson.self, #"{"id":"@X1@","name":"Ada Example","gen":"four","living":"yes","face":7,"otherNames":["A",3,null,"B"],"years":1850}"#)
         check(person.name == "Ada Example" && person.gen == nil && person.living == true, "a wrong gen is nil, living reads as text")
         check(person.face == nil && person.otherNames == ["A", "B"] && person.years == "1850", "a wrong face is nil; bad names are dropped")
+        check(person.notes.isEmpty && person.history.isEmpty, "older person payloads without saved notes or history still decode")
+        let emptySavedNotes = try decode(FHPerson.self, #"{"notes":[],"history":[]}"#)
+        check(emptySavedNotes.notes.isEmpty && emptySavedNotes.history.isEmpty, "empty saved lists stay empty")
+        let malformedSavedNotes = try decode(FHPerson.self, #"{"name":"Ada Example","notes":null,"history":{"text":"Wrong shape"},"futureField":[1,2]}"#)
+        check(malformedSavedNotes.name == "Ada Example" && malformedSavedNotes.notes.isEmpty && malformedSavedNotes.history.isEmpty, "null or wrongly shaped saved lists and unknown fields leave the person readable")
+        let mixedSavedNotes = try decode(FHPerson.self, #"{"notes":["The identity is unresolved.",null,42,{"text":"Not a string"},false,["Nested"],"Line one.\nLine two."],"history":["Clerical correction: a duplicate entry was merged.",true,null,"A possible parent remains unconfirmed."]}"#)
+        check(mixedSavedNotes.notes == ["The identity is unresolved.", "Line one.\nLine two."], "saved notes drop only invalid elements and preserve wording, line breaks and order")
+        check(mixedSavedNotes.history == ["Clerical correction: a duplicate entry was merged.", "A possible parent remains unconfirmed."], "saved tree history drops invalid elements without turning clerical changes or uncertainty into new claims")
+        let annotatedProfile = try decode(FHPersonPage.self, #"{"person":{"id":"@X1@","name":"Ada Example","notes":["A saved profile note.","A second saved note."],"history":["A spelling was corrected.","A duplicate entry was merged."]},"findings":[{"title":"A possible ancestor","proof":"guess","proofText":"Best guess, not proven by records","evidence":"An invented saved source note"}]}"#)
+        check(annotatedProfile.person?.notes == ["A saved profile note.", "A second saved note."] && annotatedProfile.person?.history == ["A spelling was corrected.", "A duplicate entry was merged."], "person-page saved notes and tree history keep the API's order")
+        check(annotatedProfile.findings.first?.proof == "guess" && annotatedProfile.findings.first?.proofText == "Best guess, not proven by records" && annotatedProfile.findings.first?.evidence == "An invented saved source note", "adding saved profile text preserves findings proof and evidence")
         let messy = try decode(FHHome.self, #"{"hero":7,"tiles":[{"key":"a"},5,null,{"key":"b","enabled":"no"}],"footnote":"Made up.","owner":{"notes":"2"}}"#)
         check(messy.hero == nil && messy.footnote == "Made up.", "a broken hero leaves the rest")
         check(messy.tiles.map { $0.key } == ["a", "b"] && messy.tiles[1].isEnabled == false, "bad tiles are dropped, the rest keep their order")
@@ -323,6 +344,9 @@ import Foundation
             check(FHOpen(to: key, id: "x").target != nil, "open \(key) goes somewhere")
         }
         check(FHOpen(to: "sky").target == nil, "an unknown open is ignored")
+        check(FHOpen(to: "discoveries").target == .route(.home) && FHOpen(to: "mysteries").target == .route(.home), "older section links open the family home")
+        check(FamilyRoute.discoveries.destination == .home && FamilyRoute.mysteries.destination == .home, "saved section routes open the family home")
+        check(FamilyRoute.person(FamilyPersonRoute(id: "@X1@")).destination == .person(FamilyPersonRoute(id: "@X1@")) && FamilyRoute.locked.destination == .locked, "person and access routes are unchanged")
         check(FHOpen(to: "person").target == nil, "a person without an id is ignored")
         check(FHOpen(to: "note", id: "@X1@").target == .note(personId: "@X1@"), "a note opens the note sheet")
         check(FHOpen(to: "gallery", id: "@X1@", since: "v2", filter: "records").target
@@ -338,6 +362,8 @@ import Foundation
         check(!FamilyRoute.locked.needsAccess && routes.filter { $0 != .locked }.allSatisfy { $0.needsAccess }, "every family screen but the locked one needs access")
         check(FamilyRoute.person(FamilyPersonRoute(id: "@X1@", name: "Ada Example")).fallbackTitle == "Ada Example"
               && FamilyRoute.play.fallbackTitle == "Family history", "a pushed screen is titled at once")
+        let retainedProfile = try decode(FHPersonPage.self, #"{"findings":[{"key":"f1","title":"A possible ancestor","text":"The identity is unresolved.","proof":"guess","proofText":"Best guess, not proven by records","evidence":"An invented saved source note","people":[]}]}"#)
+        check(retainedProfile.findings.count == 1 && retainedProfile.findings[0].text == "The identity is unresolved." && retainedProfile.findings[0].proof == "guess" && retainedProfile.findings[0].proofText == "Best guess, not proven by records" && retainedProfile.findings[0].evidence == "An invented saved source note", "profile findings retain their prose, uncertainty and evidence")
 
         // MARK: Pictures name their sizes and their other copy.
 

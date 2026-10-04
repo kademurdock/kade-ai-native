@@ -199,8 +199,7 @@ struct FamilyTileGrid: View {
     }
 }
 
-/// More: Stories, Discoveries, Family mysteries, Everyone in the tree, the
-/// game, Add a memory.
+/// More: Stories, Everyone in the tree, the game, Add a memory.
 struct FamilyMoreRows: View {
     let rows: [FHTile]
     let onNote: (String?) -> Void
@@ -224,8 +223,6 @@ enum FamilyHomeIcons {
         case "whereWhen", "map": return "clock.arrow.circlepath"
         case "dna": return "point.3.connected.trianglepath.dotted"
         case "stories": return "book"
-        case "discoveries": return "magnifyingglass"
-        case "mysteries": return "questionmark.circle"
         case "people": return "person.3"
         case "play": return "gamecontroller"
         case "note": return "square.and.pencil"

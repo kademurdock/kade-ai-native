@@ -10,15 +10,14 @@ import UIKit
 //     family of your grandparents ..."). Half-siblings and descendants of a
 //     tested line see only the cards about their own ancestors; guests and
 //     relatives by marriage get no test section at all (the server decides).
-//  2. Family mysteries behind their heads-up and a Show button.
-//  3. "Details for DNA fans", collapsed: the method, the bands, the caveats,
+//  2. "Details for DNA fans", collapsed: the method, the bands, the caveats,
 //     each cluster and (when the research sends them) its matches.
-//  4. Where your DNA comes from, on paper: the fan from the grandparents,
+//  3. Where your DNA comes from, on paper: the fan from the grandparents,
 //     generation 1 to 7 (FamilyDNAFan.swift), and the ancestors named in it.
-//  5. Where they were born, in counts (never percentages, never a chart).
-//  6. Born across the ocean.
-//  7. How much DNA you share with a relative, on average.
-//  8. The footnote.
+//  4. Where they were born, in counts (never percentages, never a chart).
+//  5. Born across the ocean.
+//  6. How much DNA you share with a relative, on average.
+//  7. The footnote.
 // VoiceOver: each card is ONE element with Open {person} in the Actions
 // rotor; the fan is ONE adjustable element (swipe up or down for another
 // generation).
@@ -126,7 +125,7 @@ struct FamilyDNAScreen: View {
 // MARK: - The owner's test
 
 /// What the owner's DNA test found, said for this viewer: the sentence, the
-/// cards, the family mysteries behind their heads-up, and the details.
+/// cards and the details.
 struct FamilyDNATestSection: View {
     let test: FHDNATest
     let screenTitle: String
@@ -142,11 +141,6 @@ struct FamilyDNATestSection: View {
             }
             ForEach(Array(test.cards.enumerated()), id: \.offset) { pair in
                 FamilyFindingCard(finding: pair.element.asFinding)
-            }
-            if let mysteries = test.mysteries, !mysteries.cards.isEmpty {
-                FamilyHeadsUpGate(title: "Family mysteries",
-                                  headsUp: FamilyAccessRules.nonEmpty(mysteries.headsUp) ?? "This part may be news to some of the family.",
-                                  findings: mysteries.cards.map { $0.asFinding })
             }
             if let details = test.details, details.hasAnything {
                 FamilyDNADetails(details: details)
