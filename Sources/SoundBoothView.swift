@@ -65,6 +65,7 @@ struct SoundBoothView: View {
         /// she has changed the box since).
         var voice: (before: String?, placedBefore: String?, placed: String)? = nil
         var idea: (text: String, inputMode: String)? = nil
+        var title: (before: String, placed: String)? = nil
     }
     @State private var writingUndo: WritingUndo?
     @AppStorage("kade.soundBooth.thinkMode") private var writingThink: SoundBoothThinkMode = .auto
@@ -80,6 +81,10 @@ struct SoundBoothView: View {
     @State private var mode = "easy"
     @State private var text = ""
     @State private var trackTitle = ""
+    @State private var titleRevision = 0
+    private var trackTitleBinding: Binding<String> {
+        Binding(get: { trackTitle }, set: { trackTitle = $0; titleRevision += 1 })
+    }
     @State private var renameProject: SoundBoothProject?
     @State private var renameTitle = ""
     @State private var showRename = false
@@ -1008,7 +1013,7 @@ struct SoundBoothView: View {
         }
         .disabled(workspaceBusy)
         .accessibilityLabel("Writing thought: \(writingThink.label)")
-        .accessibilityHint("Cycles Auto, Low and Medium. Low is quicker; Medium develops the writing longer. Song length follows your idea.")
+        .accessibilityHint("Cycles Auto, Low, Medium and High. Auto chooses up to Medium. High gives the lyric writer more room to reason and can take longer. Song length follows your idea.")
     }
 
     /// Part 296, the shared contract: the settings most people use first, in
@@ -1429,10 +1434,10 @@ struct SoundBoothView: View {
                 }
             }
 
-            TextField("Track title (optional)", text: $trackTitle)
+            TextField("Track title (optional)", text: trackTitleBinding)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Track title")
-                .accessibilityHint("Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
+                .accessibilityHint(isMusic ? "Up to 80 characters. A song draft fills an empty title with the writer's title. Your own title is kept. You can rename it in the library." : "Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
                 // B8: the first field of every goal's form, where a goal pick lands.
                 .accessibilityFocused($boothFocus, equals: .firstField)
             TextEditor(text: editorText)
@@ -1469,6 +1474,7 @@ struct SoundBoothView: View {
                 if let previous = writingUndo, previous.engine == engine {
                     Button("Undo writing change") {
                         script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
+                        if let title = previous.title, trackTitle == title.placed { trackTitle = title.before }
                         if let idea = previous.idea { text = idea.text; inputMode = idea.inputMode }
                         /* Oct 2 2026: a voice the undone draft put in Describe a
                          * new voice goes back out with it, unless she changed
@@ -2078,6 +2084,8 @@ struct SoundBoothView: View {
         if isEditTask { announce(Self.editTaskDeskWords); return }
         let original = script
         let originalLyrics = values["lyrics"] ?? ""
+        let originalTitle = trackTitle
+        let originalTitleRevision = titleRevision
         let requestEngine = engine
         let version = quoteVersion
         let idea = (!isMusic && inputMode == "brief" && !text.isEmpty ? text : script.isEmpty ? text : script).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2108,6 +2116,7 @@ struct SoundBoothView: View {
                 band: engine == "yue2" ? sendableValue("band") : nil,
                 instrumental: isMusic ? musicIsInstrumental : nil,
                 singing: engine == "yue2" ? sendableValue("singing") : nil,
+                title: originalTitle,
                 thinkMode: writingThink)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
@@ -2120,9 +2129,18 @@ struct SoundBoothView: View {
             if let now = values["voice_description"], now != voiceBefore {
                 undo.voice = (before: voiceBefore, placedBefore: placedBefore, placed: now)
             }
+            var titleLead = ""
+            if isMusic, titleRevision == originalTitleRevision, originalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               trackTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let title = result.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+                let placedTitle = String(title.prefix(80))
+                undo.title = (before: trackTitle, placed: placedTitle)
+                trackTitle = placedTitle
+                titleLead = "Track title: \(placedTitle). "
+            }
             writingUndo = undo
             script = draft; readback = result.readback ?? ""; invalidateQuote()
-            announce(placed.lead + "Draft ready in the editor. You can edit or undo it. No audio has been generated.")
+            announce(placed.lead + titleLead + "Draft ready in the editor. You can edit or undo it. No audio has been generated.")
         } catch { announce((error as? LocalizedError)?.errorDescription ?? "The writing desk could not finish. Your text is kept.") }
     }
 
@@ -2767,7 +2785,7 @@ struct SoundBoothView: View {
                 }
                 .accessibilityHint("Opens the steps for a good result.")
             }
-            TextField("Track title (optional)", text: $trackTitle)
+            TextField("Track title (optional)", text: trackTitleBinding)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Track title")
                 .accessibilityHint("Up to 80 characters. Left blank, it is called Sung in my voice. You can rename it in the library.")

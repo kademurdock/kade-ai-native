@@ -1,13 +1,14 @@
 import Foundation
 
 enum SoundBoothThinkMode: String {
-    case auto, low, medium
+    case auto, low, medium, high
 
     var label: String {
         switch self {
         case .auto: return "Auto"
         case .low: return "Low"
         case .medium: return "Medium"
+        case .high: return "High"
         }
     }
 
@@ -15,7 +16,8 @@ enum SoundBoothThinkMode: String {
         switch self {
         case .auto: return .low
         case .low: return .medium
-        case .medium: return .auto
+        case .medium: return .high
+        case .high: return .auto
         }
     }
 }
@@ -215,6 +217,7 @@ struct SoundBoothScriptResult: Decodable {
     let mode: String
     let script: String
     let screenplay: String?
+    let title: String?
     let readback: String?
     let estimate: SoundBoothEstimate?
     /// Non-nil when the text reads like a DESCRIPTION but was sent to be
@@ -248,7 +251,7 @@ struct SoundBoothScriptResult: Decodable {
     let voiceDescription: String?
 
     private enum CodingKeys: String, CodingKey {
-        case engine, mode, script, screenplay, readback, estimate, mismatch, problem, note, pasted, pasteSorted
+        case engine, mode, script, screenplay, title, readback, estimate, mismatch, problem, note, pasted, pasteSorted
         case performance
         case voiceDescription = "voice_description"
     }
@@ -733,9 +736,11 @@ final class SoundBoothService: ObservableObject {
         band: String? = nil,
         instrumental: Bool? = nil,
         singing: String? = nil,
+        title: String? = nil,
         thinkMode: SoundBoothThinkMode = .auto
     ) async throws -> SoundBoothScriptResult {
         var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "thinkMode": thinkMode.rawValue]
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { body["title"] = title }
         if let gender, !gender.isEmpty, engine != "lyria", engine != "yue2" { body["gender"] = gender }
         if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
         if let instrumental { body["instrumental"] = instrumental }
