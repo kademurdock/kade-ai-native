@@ -67,6 +67,7 @@ struct SoundBoothView: View {
         var idea: (text: String, inputMode: String)? = nil
     }
     @State private var writingUndo: WritingUndo?
+    @AppStorage("kade.soundBooth.thinkMode") private var writingThink: SoundBoothThinkMode = .auto
     private var isEffects: Bool { engine == "stable" }
     /// Sep 27 2026: Sing it in my voice (an upload engine) counts too, so its
     /// form never gets the writing desk.
@@ -997,6 +998,19 @@ struct SoundBoothView: View {
         }
     }
 
+    private var writingThinkButton: some View {
+        Button {
+            KadeHaptics.press()
+            writingThink = writingThink.next
+            announce("Writing thought: \(writingThink.label).")
+        } label: {
+            Label("Think: \(writingThink.label)", systemImage: "brain.head.profile")
+        }
+        .disabled(workspaceBusy)
+        .accessibilityLabel("Writing thought: \(writingThink.label)")
+        .accessibilityHint("Cycles Auto, Low and Medium. Low is quicker; Medium develops the writing longer. Song length follows your idea.")
+    }
+
     /// Part 296, the shared contract: the settings most people use first, in
     /// the guide's order, then the ones the guide marks `advanced` inside ONE
     /// collapsed "More settings" group. A locked setting is drawn greyed out
@@ -1445,6 +1459,7 @@ struct SoundBoothView: View {
             }
 
             if !isEffects && !isEditTask {
+                writingThinkButton
                 HStack {
                     Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
                         Task { await quickDraft() }
@@ -1469,7 +1484,7 @@ struct SoundBoothView: View {
                     }.disabled(workspaceBusy)
                 }
                 Text(isMusic
-                    ? "Writing help does not generate audio. Surprise me asks the writer to invent an original song idea, about ten seconds and a fraction of a cent; drafting uses the writing model."
+                    ? "Writing help does not generate audio. Surprise me asks the writer for a new song idea; drafting uses the writing model."
                     : "Writing help does not generate audio. Surprise me is free; drafting uses the writing model.").font(.footnote)
             }
             if !readback.isEmpty {
@@ -1935,10 +1950,10 @@ struct SoundBoothView: View {
             let original = script, requestEngine = engine
             isWriting = true
             defer { isWriting = false }
-            announce("Thinking up a song nobody has written. The writer is brainstorming and throwing ideas away, so give it about ten seconds.")
+            announce("Thinking up a new song idea.")
             // Part 293: the chosen YuE2 Style rides along, so a Kids song idea comes back clean.
             // Part 296: never a locked Style (sendableValue).
-            if let idea = try? await service.songIdea(band: engine == "yue2" ? sendableValue("band") : nil), !idea.isEmpty {
+            if let idea = try? await service.songIdea(band: engine == "yue2" ? sendableValue("band") : nil, thinkMode: writingThink), !idea.isEmpty {
                 guard engine == requestEngine, script == original else { announce("Your editor changed while the idea was being made. Your current text is kept."); return }
                 writingUndo = WritingUndo(engine: engine, script: script, lyrics: values["lyrics"] ?? "")
                 script = idea
@@ -2076,7 +2091,7 @@ struct SoundBoothView: View {
         announce(lyricsPasteOnly
             ? "Sorting the song you pasted into the lyrics box."
             : isMusic
-            ? "Writing your song. The writer takes its time, about five minutes, then goes back over it like a producer. You will get a notice when the draft is ready."
+            ? "Writing your song. You will get a notice when the draft is ready."
             : "Writing a draft from your idea.")
         do {
             // Part 296: every setting here goes through sendableValue, so a locked one stays home.
@@ -2092,7 +2107,8 @@ struct SoundBoothView: View {
                 mood: isMusic || mood.isEmpty ? nil : mood, scene: nil, shot: nil, clipURLs: voiceClips, lyrics: lyricsToSend,
                 band: engine == "yue2" ? sendableValue("band") : nil,
                 instrumental: isMusic ? musicIsInstrumental : nil,
-                singing: engine == "yue2" ? sendableValue("singing") : nil)
+                singing: engine == "yue2" ? sendableValue("singing") : nil,
+                thinkMode: writingThink)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }
@@ -2206,7 +2222,8 @@ struct SoundBoothView: View {
                 mood: mood.isEmpty ? nil : mood,
                 scene: st["scene"] as? String,
                 shot: st["shot"] as? String,
-                clipURLs: engine == "lyria" || clipsLocked ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url }
+                clipURLs: engine == "lyria" || clipsLocked ? [] : clips.prefix(engine == "seed" ? 3 : 1).map { $0.url },
+                thinkMode: writingThink
             )
             // Oct 2 2026: the editor gets only the performance; the voice goes to Describe a new voice.
             let placed = placeSpeechDraft(r.screenplay ?? r.script, performance: r.performance, voice: r.voiceDescription)

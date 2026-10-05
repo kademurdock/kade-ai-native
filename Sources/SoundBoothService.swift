@@ -1,5 +1,25 @@
 import Foundation
 
+enum SoundBoothThinkMode: String {
+    case auto, low, medium
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .low: return "Low"
+        case .medium: return "Medium"
+        }
+    }
+
+    var next: SoundBoothThinkMode {
+        switch self {
+        case .auto: return .low
+        case .low: return .medium
+        case .medium: return .auto
+        }
+    }
+}
+
 // MARK: - Sound Booth (Part 120, Sep 3 2026)
 //
 // Her ask, Part 119.10: "I'm hoping the next session can be building a native
@@ -683,15 +703,15 @@ final class SoundBoothService: ObservableObject {
 
     /// Surprise me, for songs. The server picks a way of looking, the lyric
     /// writer brainstorms and throws ideas away, and one pitch comes back:
-    /// about ten seconds and a fraction of a cent. Any failure throws and
+    /// using the writing model. Any failure throws and
     /// the view falls back to its own free list.
     /// Part 293: `band` is the YuE2 Style she chose (Kids, Soul…). A Kids style
     /// makes the server pitch only clean ideas, whoever is asking.
-    func songIdea(band: String? = nil) async throws -> String {
+    func songIdea(band: String? = nil, thinkMode: SoundBoothThinkMode = .auto) async throws -> String {
         struct Idea: Decodable { let idea: String }
-        var body: [String: Any] = [:]
+        var body: [String: Any] = ["thinkMode": thinkMode.rawValue]
         if let band, !band.isEmpty { body["band"] = band }
-        let made: Idea = try await post("api/kade/sound-booth/idea", body: body, timeout: 90, fallback: "The writer could not be reached.")
+        let made: Idea = try await post("api/kade/sound-booth/idea", body: body, timeout: 240, fallback: "The writer could not be reached.")
         return made.idea
     }
 
@@ -712,9 +732,10 @@ final class SoundBoothService: ObservableObject {
         lyrics: String? = nil,
         band: String? = nil,
         instrumental: Bool? = nil,
-        singing: String? = nil
+        singing: String? = nil,
+        thinkMode: SoundBoothThinkMode = .auto
     ) async throws -> SoundBoothScriptResult {
-        var body: [String: Any] = ["engine": engine, "mode": mode, "text": text]
+        var body: [String: Any] = ["engine": engine, "mode": mode, "text": text, "thinkMode": thinkMode.rawValue]
         if let gender, !gender.isEmpty, engine != "lyria", engine != "yue2" { body["gender"] = gender }
         if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
         if let instrumental { body["instrumental"] = instrumental }
