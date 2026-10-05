@@ -522,8 +522,11 @@ struct SoundBoothView: View {
         guard !workspaceBusy, transferTargets.contains(target), importError.isEmpty else { return }
         let source = engine, version = quoteVersion, title = trackTitle
         let sourceClips = clips
+        var options = collectedSettings()
+        // A silent render omits lyrics, but a draft copy keeps them for later singing.
+        if isMusic, let lyrics = sendableValue("lyrics") { options["lyrics"] = lyrics }
         let body: [String: Any] = ["engine": source, "title": title, "sourceText": text,
-                                  "script": script, "mode": mode, "options": collectedSettings()]
+                                  "script": script, "mode": mode, "options": options]
         isCopyingDraft = true
         defer { isCopyingDraft = false }
         do {
