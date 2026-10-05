@@ -233,8 +233,8 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.4: Family notes and audio scenes",
-                body: "Family History has a simpler home: the separate Discoveries and Family Mysteries sections are removed. Retained research findings, their evidence and how sure they are stay on people's pages. Saved notes now appear there too, and Changes made to the tree opens the saved history. In the Sound Booth, Seed Audio's Write a script from this develops fuller scenes with actual dialogue when the idea calls for it. Requests for short scenes, a single narrator or ambience without speech still guide the draft. Surprise me offers an audio-scene idea for Seed Audio."
+                title: "Newest build, 2.2.4: A clearer Sound Booth and Family notes",
+                body: "In the Sound Booth, Try this in another engine copies compatible writing and references, including Lyria to YuE2. The original stays, and Restore previous draft brings back what was in the destination. Copying does not make audio or start a paid render. Recent work folds away saved attempts and takes; removing an entry there leaves finished recordings in My Creations. AuK's Edit task puts Edit instructions in the main box. Import a recording and optionally set start and end seconds in the reference settings to work on a passage. For a reference voice, AuK uses the first eight seconds. Surprise me puts a speech or scene idea in the writing desk without replacing a finished script. Seed Audio develops fuller dialogue scenes when the idea calls for it. Family History has a simpler home: saved notes, retained research and Changes made to the tree live on each person's page."
             ),
             HelpEntry(
                 title: "In 2.2.3: Change password, and the voice in its own box",

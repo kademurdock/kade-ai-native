@@ -64,6 +64,7 @@ struct SoundBoothView: View {
         /// voice it put there, so Undo takes that voice back out too (unless
         /// she has changed the box since).
         var voice: (before: String?, placedBefore: String?, placed: String)? = nil
+        var idea: (text: String, inputMode: String)? = nil
     }
     @State private var writingUndo: WritingUndo?
     private var isEffects: Bool { engine == "stable" }
@@ -71,6 +72,9 @@ struct SoundBoothView: View {
     /// form never gets the writing desk.
     private var usesDirectPrompt: Bool { isMusic || isEffects || isUpload }
     private var isMusic: Bool { engine == "lyria" || engine == "yue2" }
+    private var musicIsInstrumental: Bool {
+        engine == "lyria" ? values["instrumental"] == "1" : engine == "yue2" && (sendableValue("singing") ?? "").lowercased().hasPrefix("instrumental")
+    }
     @State private var engine = "scenema"
     @State private var mode = "easy"
     @State private var text = ""
@@ -125,6 +129,10 @@ struct SoundBoothView: View {
         var placedVoice: String? = nil
     }
     @State private var drafts: [String: WorkspaceDraft] = [:]
+    @State private var copiedDraftUndo: (engine: String, draft: WorkspaceDraft)?
+    @State private var isCopyingDraft = false
+    @State private var showRecentWork = false
+    @State private var showWritingDesk = false
     @State private var showEngineDetails = false
     /// Part 296: the engine's one "More settings" group (the settings the
     /// guide marks `advanced`). Closed again whenever the engine changes.
@@ -326,9 +334,12 @@ struct SoundBoothView: View {
                 statusBlock
                 if let goal {
                     goalHeader(goal)
+                    if engine == "scenema", let task = currentEngine?.settings.first(where: { $0.key == "auk_task" }) {
+                        settingRow(task)
+                    }
                     if isUpload { uploadSection } else { scriptSection }
                     if !usesDirectPrompt {
-                        DisclosureGroup("Voice, references, and writing desk") {
+                        DisclosureGroup("Voice, references, and writing desk", isExpanded: $showWritingDesk) {
                             /* Part 296: when the guide groups this engine's
                              * settings (More settings), Easy and Advanced
                              * would only repeat that choice, so the picker
@@ -337,7 +348,8 @@ struct SoundBoothView: View {
                             writingSection
                         }
                     }
-                    DisclosureGroup("Starting points and new projects") { starterSection }
+                    draftTransferSection
+                    DisclosureGroup("Starting points") { starterSection }
                 } else {
                     // A render picked back up on the front door can still be stopped.
                     stopRenderButton
@@ -433,13 +445,18 @@ struct SoundBoothView: View {
         quoteVersion += 1
     }
 
-    private var workspaceBusy: Bool { isWriting || isRendering || isImporting || isImportingLink || currentJobId != nil }
-    private var editorTitle: String { isEffects ? "Sound description" : isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
+    private var workspaceBusy: Bool { isWriting || isRendering || isImporting || isImportingLink || isCopyingDraft || currentJobId != nil }
+    private var editorTitle: String { isEditTask ? "Edit instructions" : isEffects ? "Sound description" : isMusic ? "Music direction" : engine == "seed" ? "Scene script" : "Performance script" }
+    private var editorText: Binding<String> {
+        Binding(get: { isEditTask ? values["instruction"] ?? "" : script },
+                set: { if isEditTask { values["instruction"] = $0 } else { script = $0 } })
+    }
     private var generateLabel: String {
         if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
         return isEffects ? "Generate sounds" : isMusic ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
     }
     private var editorHint: String {
+        if isEditTask { return "Say exactly what to change in the imported recording, such as replacing a word, changing emotion, or removing noise. Add optional start and end seconds in the reference settings to edit one part." }
         if isEffects { return "Describe the foreground sound, quieter background layers, their distance and the space around them. Ask for no speech or music when you want only environmental sound." }
         if engine == "yue2" { return "Describe the style and singing voice. Add lyrics in song settings, or use Write my song idea. For a cover, import a source recording there. Its melody guides a new arrangement; it does not clone the singer." }
         if engine == "lyria" { return "Describe the genre, instruments, mood, singing voice if wanted, structure and length. Send this direction straight to Lyria. Put exact words to sing in Your own lyrics below." }
@@ -450,7 +467,7 @@ struct SoundBoothView: View {
     private func selectEngine(_ next: String) {
         guard next != engine else { settleGoal(on: next); return }
         guard !workspaceBusy else { announce("Finish the current operation or stop the render before switching workspaces."); return }
-        drafts[engine] = WorkspaceDraft(mode: mode, text: text, title: trackTitle, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice, placedVoice: placedVoice)
+        drafts[engine] = currentDraft
         let draft = drafts[next] ?? WorkspaceDraft()
         trackTitle = draft.title; engine = next; mode = draft.mode; text = draft.text; script = draft.script
         readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
@@ -459,6 +476,84 @@ struct SoundBoothView: View {
         starterId = ""; showHowTo = false; showEngineDetails = false; showMoreSettings = false; showUploadMore = false
         invalidateQuote()
         settleGoal(on: next)
+    }
+
+    private var currentDraft: WorkspaceDraft {
+        WorkspaceDraft(mode: mode, text: text, title: trackTitle, script: script, readback: readback, voiceLabel: voiceLabel, mood: mood, inputMode: inputMode, values: values, clips: clips, importError: importError, projectId: currentProjectId, newVoice: newVoice, placedVoice: placedVoice)
+    }
+
+    private var transferTargets: [String] {
+        let compatible = isMusic ? ["lyria", "yue2"] : ["scenema", "seed", "stable"]
+        return compatible.filter { $0 != engine && guide?.engines[$0] != nil }
+    }
+
+    @ViewBuilder
+    private var draftTransferSection: some View {
+        if !isUpload {
+            Menu {
+                ForEach(transferTargets, id: \.self) { target in
+                    Button("Copy to \(Self.engineName(target))") { Task { await copyDraft(to: target) } }
+                }
+            } label: { Label(isCopyingDraft ? "Copying draft…" : "Try this in another engine", systemImage: "arrow.right.square") }
+            .disabled(workspaceBusy || (script.isEmpty && text.isEmpty && clips.isEmpty && (values["lyrics"] ?? "").isEmpty))
+            .accessibilityHint("Copies compatible writing and references without generating audio. The original and the previous destination draft are kept.")
+            if let undo = copiedDraftUndo, undo.engine == engine {
+                Button("Restore previous \(Self.engineName(engine)) draft") {
+                    // Save the copied draft before restoring, so this button can toggle back.
+                    let copied = currentDraft
+                    drafts[engine] = undo.draft
+                    applyDraft(undo.draft)
+                    copiedDraftUndo = (engine, copied)
+                    invalidateQuote(); announce("Previous draft restored. The same button can bring the copied draft back.")
+                }.disabled(workspaceBusy)
+            }
+        }
+    }
+
+    private func applyDraft(_ draft: WorkspaceDraft) {
+        mode = draft.mode; text = draft.text; trackTitle = draft.title; script = draft.script
+        readback = draft.readback; voiceLabel = draft.voiceLabel; mood = draft.mood
+        inputMode = draft.inputMode; values = draft.values; clips = draft.clips; importError = draft.importError
+        currentProjectId = draft.projectId; newVoice = draft.newVoice; placedVoice = draft.placedVoice
+        writingUndo = nil
+    }
+
+    private func copyDraft(to target: String) async {
+        guard !workspaceBusy, transferTargets.contains(target), importError.isEmpty else { return }
+        let source = engine, version = quoteVersion, title = trackTitle
+        let sourceClips = clips
+        let body: [String: Any] = ["engine": source, "title": title, "sourceText": text,
+                                  "script": script, "mode": mode, "options": collectedSettings()]
+        isCopyingDraft = true
+        defer { isCopyingDraft = false }
+        do {
+            let result = try await service.carry(to: target, draft: body)
+            guard engine == source, quoteVersion == version, trackTitle == title else {
+                announce("Your draft changed while copying. Your current work is kept."); return
+            }
+            guard result.draft.engine == target else { announce("The copied draft did not match the chosen engine. Your work is kept."); return }
+            let previous = drafts[target] ?? WorkspaceDraft()
+            var copied = WorkspaceDraft()
+            copied.mode = result.draft.mode; copied.title = result.draft.title
+            copied.inputMode = inputMode
+            copied.text = result.draft.sourceText ?? ""; copied.script = result.draft.script
+            for (key, value) in result.draft.options {
+                if let field = value.asFieldText { copied.values[key] = field }
+            }
+            var references: [String] = []
+            if case .array(let urls) = result.draft.options["audio_urls"] {
+                references = urls.compactMap { if case .string(let url) = $0 { return url }; return nil }
+            } else if case .string(let url) = result.draft.options["reference_voice_url"] { references = [url] }
+            copied.clips = references.map { url in (url: url, name: sourceClips.first(where: { $0.url == url })?.name ?? "Copied reference") }
+            drafts[target] = copied
+            isCopyingDraft = false
+            quietEngineChange = true
+            selectEngine(target)
+            copiedDraftUndo = (target, previous)
+            writingUndo = nil
+            let rewrite = result.rewriteAdvised ? " Use the writing desk to adapt it before generating." : ""
+            announce("Copied to \(Self.engineName(target)). The original is kept. " + result.notes.joined(separator: " ") + rewrite + " No audio generated.")
+        } catch { announce((error as? LocalizedError)?.errorDescription ?? "Couldn't copy that draft. Your work is kept.") }
     }
 
     // MARK: - What do you want to make? (redesign B8, Sep 23 2026)
@@ -579,7 +674,7 @@ struct SoundBoothView: View {
                     Text("Choose a starting point").tag("")
                     ForEach((guide?.starters ?? []).filter { $0.engine == engine }) { item in Text(item.title).tag(item.id) }
                 }
-                Button("Start a new project from this") {
+                Button("Start a draft from this") {
                     guard let starter = guide?.starters?.first(where: { $0.id == starterId }) else { return }
                     currentProjectId = nil; values = [:]; clips = []; importError = ""; newVoice = false; placedVoice = nil
                     // Oct 2 2026: an AuK HQ starter's voice goes in Describe a new voice, not the editor, and is said.
@@ -591,10 +686,10 @@ struct SoundBoothView: View {
                 }.disabled(starterId.isEmpty || workspaceBusy)
                 Text("Free to load. These replace the current editor; finish or save your work first. Generation starts with one press; cost information is shown by the button.").font(.caption)
             }
-            Button("New blank project") {
+            Button("New blank draft") {
                 currentProjectId = nil; trackTitle = ""; script = ""; text = ""; readback = ""; mood = ""
                 voiceLabel = ""; values = [:]; clips = []; importError = ""; newVoice = false; placedVoice = nil
-                invalidateQuote(); announce("New blank project. Other engine drafts are kept.")
+                invalidateQuote(); announce("New blank draft. Other engine drafts are kept.")
             }.disabled(workspaceBusy)
             if engine == "scenema" {
             Button("Try a different designed voice next time") {
@@ -762,7 +857,7 @@ struct SoundBoothView: View {
     /// Part 296: only for a server that does not mark `advanced` settings;
     /// a guide that does gets More settings instead (`settingsList`).
     private static let easyKeys: [String: [String]] = [
-        "scenema": ["auk_task", "instruction", "voice_description", "reference_voice_url", "gen_seconds"],
+        "scenema": ["auk_task", "instruction", "edit_start", "edit_end", "voice_description", "reference_voice_url", "gen_seconds"],
         "seed": ["voice", "audio_urls"],
         /* Lyria has three knobs and they all belong on the easy side: there is
          * nothing advanced about it, because the brief IS the control. */
@@ -783,7 +878,7 @@ struct SoundBoothView: View {
 
     private var writingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(engine == "seed" ? "Build your scene" : "Prepare the performance").font(.headline).accessibilityAddTraits(.isHeader)
+            Text(isEditTask ? "Recording and edit settings" : engine == "seed" ? "Build your scene" : "Prepare the performance").font(.headline).accessibilityAddTraits(.isHeader)
 
             /* ⭐ THE FIX FOR THE REAL CONFUSION (Part 121.1, her question).
              * The two buttons were never the problem: ONE BOX MEANT TWO
@@ -792,28 +887,30 @@ struct SoundBoothView: View {
              * it succeeds, it spends, and by ear nothing announces the
              * mistake. So the choice sits ABOVE the box, the box's own label
              * changes with it, and only ONE button exists at a time. */
-            if let input = guide?.input {
-                Text(input.question).font(.subheadline.bold())
-                Picker(input.question, selection: $inputMode) {
-                    ForEach(input.modes) { m in Text(m.label).tag(m.key) }
+            if !isEditTask {
+                if let input = guide?.input {
+                    Text(input.question).font(.subheadline.bold())
+                    Picker(input.question, selection: $inputMode) {
+                        ForEach(input.modes) { m in Text(m.label).tag(m.key) }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel(input.question)
+                    .accessibilityHint(currentInput?.boxHint ?? "")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityLabel(input.question)
-                .accessibilityHint(currentInput?.boxHint ?? "")
-            }
 
-            if let m = currentInput {
-                Text(m.boxLabel).font(.subheadline)
-                Text(m.boxHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
-            }
+                if let m = currentInput {
+                    Text(m.boxLabel).font(.subheadline)
+                    Text(m.boxHint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                }
 
-            TextEditor(text: $text)
-                .frame(minHeight: 140)
-                .padding(6)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
-                .accessibilityLabel(currentInput?.boxLabel ?? "What should it say")
-                .accessibilityHint(currentInput?.boxHint ?? "Type the words you want performed.")
-            DictationButton(apiClient: apiClient, text: $text, fieldName: "sound idea")
+                TextEditor(text: $text)
+                    .frame(minHeight: 140)
+                    .padding(6)
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
+                    .accessibilityLabel(currentInput?.boxLabel ?? "What should it say")
+                    .accessibilityHint(currentInput?.boxHint ?? "Type the words you want performed.")
+                DictationButton(apiClient: apiClient, text: $text, fieldName: "sound idea")
+            }
 
             if let g = currentEngine {
                 DisclosureGroup(isExpanded: $showHowTo) {
@@ -829,7 +926,7 @@ struct SoundBoothView: View {
                 .accessibilityHint("Opens the tips for getting a good result from this engine.")
             }
 
-            if engine == "scenema" {
+            if engine == "scenema" && !isEditTask {
                 Button {
                     KadeHaptics.press()
                     activeSheet = .voicePicker
@@ -851,7 +948,7 @@ struct SoundBoothView: View {
                     settingsList(g.settings)
                 } else {
                     let keys = Self.easyKeys[engine] ?? []
-                    let shown = g.settings.filter { mode == "advanced" || keys.contains($0.key) }
+                    let shown = g.settings.filter { (mode == "advanced" || keys.contains($0.key)) && settingApplies($0) }
                     ForEach(shown) { setting in
                         settingRow(setting)
                     }
@@ -873,7 +970,7 @@ struct SoundBoothView: View {
                 }
             }
 
-            if let moods = health?.moods, !moods.isEmpty {
+            if !isEditTask, let moods = health?.moods, !moods.isEmpty {
                 Picker("Mood", selection: $mood) {
                     Text("No particular mood").tag("")
                     ForEach(moods) { m in Text(m.label).tag(m.key) }
@@ -883,15 +980,17 @@ struct SoundBoothView: View {
                 .accessibilityHint("A note to the actor about what the speaker is feeling. It is never spoken.")
             }
 
-            Button {
-                KadeHaptics.press()
-                Task { await makeScript(kind: inputMode == "brief" ? "write" : "format") }
-            } label: {
-                Text(currentInput?.button ?? "Turn my words into a script").frame(maxWidth: .infinity)
+            if !isEditTask {
+                Button {
+                    KadeHaptics.press()
+                    Task { await makeScript(kind: inputMode == "brief" ? "write" : "format") }
+                } label: {
+                    Text(currentInput?.button ?? "Turn my words into a script").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                .disabled(isWriting || isRendering)
+                .accessibilityHint(currentInput?.buttonHint ?? "")
             }
-            .buttonStyle(KadeCardButtonStyle())
-            .disabled(isWriting || isRendering)
-            .accessibilityHint(currentInput?.buttonHint ?? "")
         }
     }
 
@@ -902,8 +1001,9 @@ struct SoundBoothView: View {
     /// server) this is just the settings, as before.
     @ViewBuilder
     private func settingsList(_ list: [SoundBoothGuide.Setting]) -> some View {
-        let main = list.filter { $0.advanced != true }
-        let more = list.filter { $0.advanced == true }
+        let applicable = list.filter { settingApplies($0) }
+        let main = applicable.filter { $0.advanced != true }
+        let more = applicable.filter { $0.advanced == true }
         ForEach(main) { setting in
             settingRow(setting)
         }
@@ -923,6 +1023,12 @@ struct SoundBoothView: View {
                     .accessibilityHint(moreSettingsHint(count: more.count))
             }
         }
+    }
+
+    private func settingApplies(_ setting: SoundBoothGuide.Setting) -> Bool {
+        guard engine == "scenema" else { return true }
+        if ["auk_task", "instruction"].contains(setting.key) { return false }
+        return isEditTask || !["edit_start", "edit_end"].contains(setting.key)
     }
 
     /// Says what a double tap does now: open the group, or close it again.
@@ -1179,7 +1285,7 @@ struct SoundBoothView: View {
         if max > 1 { return "@Audio\(index + 1): " }
         // Sep 27 2026: "Singing: " for Sing it in my voice, in its guide's words.
         if isUpload { return currentEngine?.ui?.clip ?? "Singing: " }
-        return engine == "yue2" ? "Covering: " : "Cloning: "
+        return engine == "yue2" ? "Covering: " : isEditTask ? "Editing: " : "Cloning: "
     }
 
     /// Part 293, the Family feature pack: which media-link row the cover field
@@ -1312,14 +1418,20 @@ struct SoundBoothView: View {
                 .accessibilityHint("Up to 80 characters. Leave blank to use the first seven words of your direction. You can rename it in the library.")
                 // B8: the first field of every goal's form, where a goal pick lands.
                 .accessibilityFocused($boothFocus, equals: .firstField)
-            TextEditor(text: $script)
+            TextEditor(text: editorText)
                 .font(.system(.body, design: usesDirectPrompt ? .default : .monospaced))
                 .frame(minHeight: 160)
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel(editorTitle)
                 .accessibilityHint(editorHint)
-            DictationButton(apiClient: apiClient, text: $script, fieldName: "script")
+            DictationButton(apiClient: apiClient, text: editorText, fieldName: isEditTask ? "edit instructions" : "script")
+            if engine == "scenema" {
+                Text(isEditTask
+                    ? "Import the recording under Voice, references, and writing desk. Short experiments are quicker; use a time range to change one passage."
+                    : "For a reference voice, AuK uses the first eight seconds. Choose a clean clip with one speaker.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
 
             if usesDirectPrompt, let g = currentEngine {
                 DisclosureGroup(isEffects ? "Sound settings" : "Lyrics, covers, and song settings") {
@@ -1329,7 +1441,7 @@ struct SoundBoothView: View {
                 }
             }
 
-            if !isEffects {
+            if !isEffects && !isEditTask {
                 HStack {
                     Button(engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this") {
                         Task { await quickDraft() }
@@ -1339,6 +1451,7 @@ struct SoundBoothView: View {
                 if let previous = writingUndo, previous.engine == engine {
                     Button("Undo writing change") {
                         script = previous.script; values["lyrics"] = previous.lyrics; writingUndo = nil
+                        if let idea = previous.idea { text = idea.text; inputMode = idea.inputMode }
                         /* Oct 2 2026: a voice the undone draft put in Describe a
                          * new voice goes back out with it, unless she changed
                          * the box since; then her words stay. */
@@ -1363,7 +1476,7 @@ struct SoundBoothView: View {
                     .accessibilityLabel("What you will hear. \(readback)")
             }
 
-            if engine == "scenema" {
+            if engine == "scenema" && !isEditTask {
                 Button {
                     KadeHaptics.press()
                     Task { await renderTapped(preview: true) }
@@ -1408,13 +1521,13 @@ struct SoundBoothView: View {
     // MARK: - Library
 
     private var librarySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Library").font(.headline).accessibilityAddTraits(.isHeader)
-
+        DisclosureGroup("Recent work (\(visibleProjects.count))", isExpanded: $showRecentWork) {
+            Text("Your saved attempts and takes. Remove clears an entry here; its finished recordings stay in My Creations until you remove them there.")
+                .font(.footnote).foregroundStyle(.secondary)
             Toggle("Show failed and stopped attempts", isOn: $showFailedProjects)
                 .accessibilityHint("Finished takes and recoverable parts stay visible. This does not delete anything.")
             if visibleProjects.isEmpty {
-                Text("No projects match this view. Turn on Show failed and stopped attempts to include those without audio.")
+                Text("No saved work matches this view. Turn on Show failed and stopped attempts to include those without audio.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -1658,9 +1771,10 @@ struct SoundBoothView: View {
             do {
                 let data = try Data(contentsOf: url)
                 guard data.count <= 20 * 1024 * 1024 else {
-                    importError = isUpload
+                    importError = isUpload || isEditTask || engine == "yue2"
                         ? "That recording is bigger than twenty megabytes. A whole song fits as an MP3, so export an MP3 and import that."
-                        : "That clip is bigger than twenty megabytes. Ten to twenty seconds is all it needs."
+                        : engine == "scenema" ? "That clip is bigger than twenty megabytes. AuK needs only the first eight seconds for a reference voice; import a shorter clip."
+                        : "That clip is bigger than twenty megabytes. Import a clip of thirty seconds or less."
                     announce(importError)
                     return
                 }
@@ -1671,7 +1785,7 @@ struct SoundBoothView: View {
                     engine: engine
                 )
                 // Oct 2 2026: a Seed clip shows its length too, since Seed takes 30 seconds at most.
-                let showLength = isUpload || engine == "seed"
+                let showLength = isUpload || engine == "seed" || isEditTask
                 clips.append((url: imported.url, name: showLength ? Self.withLength(imported.name, seconds: imported.seconds) : imported.name))
                 Earcons.shared.play(.actionDone)
                 KadeHaptics.success()
@@ -1730,7 +1844,7 @@ struct SoundBoothView: View {
                 if st.key == "audio_quality" { out[st.key] = enabled ? "high" : "low" }
                 else { out[st.key] = enabled }
             case "number", "range":
-                guard let n = Double(raw) else { continue }
+                guard let n = Double(raw), n.isFinite else { continue }
                 if let lo = st.min, n < lo { continue }
                 if let hi = st.max, n > hi { continue }
                 out[st.key] = (["seed", "pitch", "count", "steps", "weirdness"].contains(st.key)) ? Int(n.rounded()) : n
@@ -1835,16 +1949,21 @@ struct SoundBoothView: View {
         let place = ["a midnight train", "a seaside town", "a kitchen in a thunderstorm", "an old theatre"].randomElement() ?? "home"
         let turn = ["an unexpected reunion", "a promise kept", "a small act of courage", "something thought lost"].randomElement() ?? "a reunion"
         let existingIdea = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        script = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes."
+        let idea = isMusic ? "Warm acoustic folk about \(place) and \(turn). An expressive lead vocal, a memorable chorus and a gentle build, about two minutes."
             : engine == "seed" ? Self.seedSurpriseIdea(place: place, turn: turn, existing: existingIdea.isEmpty ? text : existingIdea)
             : "Write a short vivid story about \(place) and \(turn), with a satisfying ending."
+        if isMusic { script = idea }
+        else {
+            writingUndo?.idea = (text: text, inputMode: inputMode)
+            text = idea; inputMode = "brief"; showWritingDesk = true
+        }
         /* Oct 2 2026: the button it names is the one under the editor. For a
          * voice, the idea is a description, so it says not to perform it yet. */
         let develop = engine == "yue2" ? "Write my song idea" : isMusic ? "Shape my music idea" : "Write a script from this"
         let next = isMusic
             ? "\(develop) can develop it."
             : "It describes a piece, so it is not ready to perform. Choose \(develop) to turn it into a script."
-        invalidateQuote(); announce("A new idea is in the editor. \(next) Undo restores your previous writing.")
+        invalidateQuote(); announce("A new idea is in \(isMusic ? "the editor" : "the writing desk"). \(next) Undo restores your previous writing.")
     }
 
     /// Seed makes a scene, so its idea asks for people actually exchanging words.
@@ -1943,7 +2062,7 @@ struct SoundBoothView: View {
         let originalLyrics = values["lyrics"] ?? ""
         let requestEngine = engine
         let version = quoteVersion
-        let idea = (script.isEmpty ? text : script).trimmingCharacters(in: .whitespacesAndNewlines)
+        let idea = (!isMusic && inputMode == "brief" && !text.isEmpty ? text : script.isEmpty ? text : script).trimmingCharacters(in: .whitespacesAndNewlines)
         /* A song pasted whole into the lyrics box, with no direction typed, is
          * sorted by the server with no writer and no charge, so it needs no
          * idea of its own. Anything else still needs one. */
@@ -1958,7 +2077,7 @@ struct SoundBoothView: View {
             : "Writing a draft from your idea.")
         do {
             // Part 296: every setting here goes through sendableValue, so a locked one stays home.
-            let lyricsToSend: String? = isMusic && sendableValue("lyrics") != nil ? originalLyrics : nil
+            let lyricsToSend: String? = isMusic && !musicIsInstrumental && sendableValue("lyrics") != nil ? originalLyrics : nil
             /* Oct 2 2026: a voice draft hears about the imported clips and the
              * mood, as the writing desk's own button already sends them, so a
              * Seed draft names @Audio1 for the clip that is attached. A song
@@ -1968,7 +2087,9 @@ struct SoundBoothView: View {
             let result = try await service.makeScript(engine: engine, mode: "write", text: idea,
                 voiceDescription: deskVoice(sendableValue("voice_description")), gender: deskGender,
                 mood: isMusic || mood.isEmpty ? nil : mood, scene: nil, shot: nil, clipURLs: voiceClips, lyrics: lyricsToSend,
-                band: engine == "yue2" ? sendableValue("band") : nil)
+                band: engine == "yue2" ? sendableValue("band") : nil,
+                instrumental: isMusic ? musicIsInstrumental : nil,
+                singing: engine == "yue2" ? sendableValue("singing") : nil)
             guard engine == requestEngine, script == original, quoteVersion == version else {
                 announce("Your writing or settings changed. Your current text is kept."); return
             }
@@ -2043,7 +2164,7 @@ struct SoundBoothView: View {
         let sortedWords = (result.pasteSorted?.lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !sortedWords.isEmpty && (!deskBlock || engine == "lyria") {
             values["lyrics"] = sortedWords
-        } else if !deskBlock && engine == "yue2" && !pasted {
+        } else if !deskBlock && engine == "yue2" && !pasted && !musicIsInstrumental {
             return (nil, "The writer did not return separate lyrics. Your idea is kept.")
         }
         lead += Self.noteLead(result.note)
@@ -2107,7 +2228,7 @@ struct SoundBoothView: View {
     }
 
     private func renderTapped(preview: Bool) async {
-        guard !isWriting else { announce("Wait for the writing draft to finish."); return }
+        guard !isWriting, !isCopyingDraft else { announce("Wait for the writing draft to finish."); return }
         guard !isImporting, !isImportingLink else { announce("Wait for the reference clip to finish importing."); return }
         guard importError.isEmpty else { announce("The reference import failed. Retry it or choose Discard failed import before generating."); return }
         guard !isRendering, currentJobId == nil else { announce("A render is already in progress. Wait for it or stop it first."); return }
@@ -2132,7 +2253,7 @@ struct SoundBoothView: View {
                 return
             }
         }
-        if engine == "yue2", let settings = currentEngine?.settings {
+        if engine == "yue2" || isEditTask, let settings = currentEngine?.settings {
             // A locked setting is never sent, so it is never checked either.
             for setting in settings where ["number", "range"].contains(setting.kind) && setting.lockReason == nil {
                 let raw = (values[setting.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2146,6 +2267,13 @@ struct SoundBoothView: View {
             }
         }
         let st = collectedSettings()
+        if isEditTask {
+            guard !clips.isEmpty, !clipsLocked else { announceUrgent("Import the recording to edit first."); return }
+            guard !(values["instruction"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { announceUrgent("Describe what to change in Edit instructions first."); return }
+            if let end = st["edit_end"] as? Double, end <= (st["edit_start"] as? Double ?? 0) {
+                announceUrgent("The edit end must be after the edit start."); return
+            }
+        }
         let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
@@ -2201,13 +2329,14 @@ struct SoundBoothView: View {
                 announce((preview ? "Voice sample queued. " : "Queued. ") + noteWords + estimateWords + leaveWords + sortedSentence)
                 startPolling(job)
             } else {
+                showRecentWork = true
                 service.finishRenderCard(id: card, status: "Ready to play")
                 Earcons.shared.play(.actionDone); KadeHaptics.success()
                 // The server's own sentence first (a paste note, Lyria's "it
                 // wrote words for it"), then the booth's.
                 let serverWords = (r.spoken ?? r.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let lead = serverWords.isEmpty ? "" : serverWords + " "
-                announce(lead + "Ready. The recording is in your library below and in My Creations." + sortedSentence)
+                announce(lead + "Ready. The recording is in Recent work below and in My Creations." + sortedSentence)
                 await loadProjects()
             }
         } catch {
@@ -2347,6 +2476,7 @@ struct SoundBoothView: View {
                     announce(st.spoken ?? st.state)
                 }
                 if st.isFinished {
+                    showRecentWork = true
                     if st.state == "done" {
                         service.finishRenderCard(under: cardKey, status: "Ready to play")
                         Earcons.shared.play(.actionDone)

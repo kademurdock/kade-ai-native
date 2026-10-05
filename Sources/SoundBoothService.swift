@@ -176,6 +176,20 @@ struct SoundBoothProject: Decodable, Identifiable, Equatable {
     }
 }
 
+struct SoundBoothCarryResult: Decodable {
+    struct Draft: Decodable {
+        let engine: String
+        let title: String
+        let sourceText: String?
+        let script: String
+        let options: [String: SoundBoothJSON]
+        let mode: String
+    }
+    let draft: Draft
+    let notes: [String]
+    let rewriteAdvised: Bool
+}
+
 struct SoundBoothScriptResult: Decodable {
     let engine: String
     let mode: String
@@ -661,6 +675,12 @@ final class SoundBoothService: ObservableObject {
         try await post("api/kade/sound-booth/suggest", body: ["text": text], timeout: 30, fallback: "Couldn't suggest right now.")
     }
 
+    /// Converts only the draft's supported fields. No saved project or audio is made.
+    func carry(to engine: String, draft: [String: Any]) async throws -> SoundBoothCarryResult {
+        try await post("api/kade/sound-booth/carry", body: ["engine": engine, "draft": draft], timeout: 30,
+                       fallback: "Couldn't copy that draft. Your current work is kept.")
+    }
+
     /// Surprise me, for songs. The server picks a way of looking, the lyric
     /// writer brainstorms and throws ideas away, and one pitch comes back:
     /// about ten seconds and a fraction of a cent. Any failure throws and
@@ -690,11 +710,15 @@ final class SoundBoothService: ObservableObject {
         shot: String?,
         clipURLs: [String] = [],
         lyrics: String? = nil,
-        band: String? = nil
+        band: String? = nil,
+        instrumental: Bool? = nil,
+        singing: String? = nil
     ) async throws -> SoundBoothScriptResult {
         var body: [String: Any] = ["engine": engine, "mode": mode, "text": text]
         if let gender, !gender.isEmpty, engine != "lyria", engine != "yue2" { body["gender"] = gender }
         if let lyrics, !lyrics.isEmpty { body["lyrics"] = lyrics }
+        if let instrumental { body["instrumental"] = instrumental }
+        if let singing, !singing.isEmpty { body["singing"] = singing }
         // Part 293: the YuE2 Style, so the desk writes a Kids song clean.
         if engine == "yue2", let band, !band.isEmpty { body["band"] = band }
         if let v = voiceDescription, !v.isEmpty { body["voice_description"] = v }
