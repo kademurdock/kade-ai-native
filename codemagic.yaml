@@ -43,6 +43,7 @@ workflows:
           ./run-speech-tests.sh
           bash ./run-push-tests.sh
           bash ./run-character-tests.sh
+          bash ./run-starter-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
           # Sep 29 2026: Family history models, demo family and drawing maths.
@@ -271,6 +272,7 @@ workflows:
           ./run-speech-tests.sh
           bash ./run-push-tests.sh
           bash ./run-character-tests.sh 2>&1 | tee "$CM_BUILD_DIR/speech-tests.log"
+          bash ./run-starter-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
           bash ./run-family-tests.sh

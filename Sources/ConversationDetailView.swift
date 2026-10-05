@@ -129,6 +129,7 @@ struct ConversationDetailView: View {
     /// just reads whatever `agent_id` each send request carries (see
     /// `AgentPickerView`'s doc comment).
     @State private var selectedAgentId: String?
+    @State private var starterSessionSeed = UUID().uuidString
 
     /// Non-nil only in the brief window between tapping "Edit and Resend"
     /// on the last user message (`MessageRow`'s actions menu) and the next
@@ -2157,13 +2158,13 @@ struct ConversationDetailView: View {
 
     // MARK: - Sep 23 2026 redesign: the first chat's welcome (B4)
 
-    /// Three plain openers that suit ANY character: no persona assumed,
-    /// nothing that only makes sense for one of them.
-    private static let starterLines = [
-        "What can you help me with?",
-        "Tell me something good about today.",
-        "Help me think something through."
-    ]
+    private var starterLines: [String] {
+        guard let selectedAgentId else { return [] }
+        let agent = agentsService.agents.first(where: { $0.id == selectedAgentId })
+        guard agent != nil || !agentsService.isLoading else { return [] }
+        let pool = agent?.conversationStarters
+        return ConversationStarters.select(pool: pool, characterId: selectedAgentId, seed: starterSessionSeed)
+    }
 
     /// B4 (Sep 23 2026 redesign, "the first chat welcomes you"). Replaces the
     /// old "Pick an agent below, then send your first message" line, which
@@ -2190,7 +2191,7 @@ struct ConversationDetailView: View {
                 .accessibilityAddTraits(.isHeader)
             if !keyboardUp {
                 VStack(spacing: 10) {
-                    ForEach(Self.starterLines, id: \.self) { line in
+                    ForEach(starterLines, id: \.self) { line in
                         Button {
                             useStarter(line)
                         } label: {

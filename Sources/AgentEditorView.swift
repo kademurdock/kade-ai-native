@@ -69,6 +69,8 @@ struct AgentEditorView: View {
     @State private var voiceCatalog: VoiceCatalog.Snapshot = .empty
     @State private var showingVoicePicker = false
     @State private var starters: [String] = []
+    @State private var suggestingStarters = false
+    @State private var starterNote: String?
     @State private var availableTools: [AvailableTool] = []
     @State private var selectedTools: Set<String> = []
     /// Tool strings on the agent that aren't in the available-tools list
@@ -113,7 +115,7 @@ struct AgentEditorView: View {
     }
 
     private var canSave: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving && !isLoadingDetail
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving && !isLoadingDetail && !suggestingStarters
     }
 
     var body: some View {
@@ -266,25 +268,7 @@ struct AgentEditorView: View {
                         .accessibilityValue(voice.isEmpty ? "Default" : voiceCatalog.displayLabel(voice))
                         .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
                     }
-                    Section {
-                        ForEach(starters.indices, id: \.self) { i in
-                            TextField("Starter \(i + 1)", text: starterBinding(at: i), axis: .vertical)
-                                .accessibilityLabel("Conversation starter \(i + 1)")
-                        }
-                        .onDelete { starters.remove(atOffsets: $0) }
-                        if starters.count < Self.maxStarters {
-                            Button {
-                                starters.append("")
-                            } label: {
-                                Label("Add a starter", systemImage: "plus")
-                            }
-                            .accessibilityHint("Adds another suggested opening line. Swipe up or down on a starter for its delete action.")
-                        }
-                    } header: {
-                        Text("Conversation starters")
-                    } footer: {
-                        Text("Up to \(Self.maxStarters) tappable opening lines people see when they start a chat with this agent.")
-                    }
+                    conversationStartersSection
                     if !availableTools.isEmpty {
                         Section {
                             DisclosureGroup {
@@ -485,11 +469,12 @@ struct AgentEditorView: View {
                     service: service,
                     characterName: name,
                     existing: instructions,
-                    onUse: { written in
+                    onUse: { written, suggested in
                         instructions = written
+                        if let suggested { starters = ConversationStarters.clean(suggested) }
                         UIAccessibility.post(
                             notification: .announcement,
-                            argument: "Personality replaced, \(written.count) characters. Nothing is saved until you tap Save."
+                            argument: "Personality replaced, \(written.count) characters.\(suggested == nil ? "" : " Suggested starters are ready to review.") Nothing is saved until you tap Save."
                         )
                     }
                 )
@@ -736,7 +721,63 @@ struct AgentEditorView: View {
         }
     }
 
-    private static let maxStarters = 4
+    private static let maxStarters = ConversationStarters.maximumPoolSize
+
+    private var conversationStartersSection: some View {
+        Section {
+            ForEach(starters.indices, id: \.self) { i in
+                TextField("Starter \(i + 1)", text: starterBinding(at: i), axis: .vertical)
+                    .accessibilityLabel("Conversation starter \(i + 1)")
+            }
+            .onDelete { starters.remove(atOffsets: $0) }
+            if starters.count < Self.maxStarters {
+                Button {
+                    starters.append("")
+                } label: {
+                    Label("Add a starter", systemImage: "plus")
+                }
+                .accessibilityHint("Adds another suggested opening line. Swipe up or down on a starter for its delete action.")
+            }
+            Button(suggestingStarters ? "Suggesting starters…" : "Suggest starters from this personality (free)") {
+                Task { await suggestStarters() }
+            }
+            .disabled(suggestingStarters || isSaving || instructions.trimmingCharacters(in: .whitespacesAndNewlines).count < 8)
+            .accessibilityHint("Replaces these opening lines with suggestions to review. Nothing is saved until you tap Save.")
+            if let starterNote { Text(starterNote).font(.footnote) }
+        } header: {
+            Text("Conversation starters")
+        } footer: {
+            Text("Keep up to \(Self.maxStarters) opening lines. Each new conversation shows a fresh selection of four. These are things someone can say to this character.")
+        }
+    }
+
+    private func suggestStarters() async {
+        guard !suggestingStarters, !isSaving else { return }
+        let inputName = name
+        let inputDescription = description
+        let inputInstructions = instructions
+        let inputCategory = category
+        let previousStarters = starters
+        suggestingStarters = true
+        starterNote = nil
+        defer { suggestingStarters = false }
+        do {
+            let lines = try await service.suggestStarters(
+                name: inputName, description: inputDescription, instructions: inputInstructions, category: inputCategory
+            )
+            guard name == inputName, description == inputDescription, instructions == inputInstructions,
+                  category == inputCategory, starters == previousStarters else {
+                starterNote = "You changed the character or starters while suggestions were loading. Your edits are kept; tap again for new suggestions."
+                return
+            }
+            starters = lines
+            starterNote = "\(lines.count) starters are ready to edit. Nothing is saved until you tap Save."
+            UIAccessibility.post(notification: .announcement, argument: starterNote)
+        } catch {
+            starterNote = (error as? LocalizedError)?.errorDescription ?? "Couldn't suggest starters. Your edits are kept."
+            UIAccessibility.post(notification: .announcement, argument: starterNote)
+        }
+    }
 
     private func toolBinding(_ key: String) -> Binding<Bool> {
         Binding(

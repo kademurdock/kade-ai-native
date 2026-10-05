@@ -27,7 +27,7 @@ struct PersonaWriterSheet: View {
     let service: AgentBuilderService
     let characterName: String
     let existing: String
-    let onUse: (String) -> Void
+    let onUse: (String, [String]?) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -39,6 +39,8 @@ struct PersonaWriterSheet: View {
     @State private var round = 0
     @State private var busy = false
     @State private var errorNote: String?
+    @State private var suggestedStarters: [String] = []
+    @State private var useSuggestedStarters = true
 
     private var trimmedBrief: String { brief.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -49,6 +51,7 @@ struct PersonaWriterSheet: View {
                     briefSection
                 } else {
                     draftSection
+                    if !suggestedStarters.isEmpty { startersSection }
                     if !questions.isEmpty { questionsSection }
                     useSection
                 }
@@ -153,21 +156,35 @@ struct PersonaWriterSheet: View {
         }
     }
 
+    private var startersSection: some View {
+        Section {
+            Toggle("Use these suggested starters", isOn: $useSuggestedStarters)
+            DisclosureGroup("Review \(suggestedStarters.count) conversation starters") {
+                ForEach(suggestedStarters, id: \.self) { line in
+                    Text(line).font(.callout)
+                }
+            }
+        } footer: {
+            Text("A new conversation shows four from this pool. You can edit every line back in the character editor.")
+        }
+    }
+
     private var useSection: some View {
         Section {
             Button("Use this personality") {
-                onUse(draft)
+                onUse(draft, useSuggestedStarters && !suggestedStarters.isEmpty ? suggestedStarters : nil)
                 dismiss()
             }
             .fontWeight(.bold)
             .disabled(busy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityHint("Puts this text into the personality box in the editor. It still has to be saved there.")
+            .accessibilityHint("Puts the personality and any selected starters in the editor for review. Tap Save there to keep them.")
             Button("Start over") {
                 round = 0
                 questions = []
                 answers = ["", "", ""]
                 notes = nil
                 errorNote = nil
+                suggestedStarters = []
             }
         }
     }
@@ -190,6 +207,7 @@ struct PersonaWriterSheet: View {
                 round: nextRound
             )
             draft = out.instructions
+            suggestedStarters = ConversationStarters.clean(out.conversation_starters ?? [])
             questions = out.questions
             answers = ["", "", ""]
             notes = out.notes

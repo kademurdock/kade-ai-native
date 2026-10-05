@@ -616,6 +616,7 @@ final class AgentBuilderService: ObservableObject {
 
     struct PersonaDraft: Decodable {
         let instructions: String
+        let conversation_starters: [String]?
         let questions: [String]
         let notes: String?
         let round: Int
@@ -624,6 +625,31 @@ final class AgentBuilderService: ObservableObject {
     }
 
     struct PersonaAnswer { let q: String; let a: String }
+
+    private struct StarterDraft: Decodable {
+        let ok: Bool
+        let conversation_starters: [String]
+    }
+
+    /// Free preview from authored persona text. This reads no conversations or
+    /// private memory and does not save the character.
+    func suggestStarters(name: String, description: String, instructions: String, category: String) async throws -> [String] {
+        var req = client.request(path: "api/kade/builder/starters", method: "POST", authorized: true)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "name": name, "description": description, "instructions": instructions, "category": category
+        ])
+        let (data, http) = try await client.send(req)
+        guard http.statusCode == 200 else {
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't suggest starters. Your words are still here."))
+        }
+        let out = try decoder.decode(StarterDraft.self, from: data)
+        let lines = ConversationStarters.clean(out.conversation_starters)
+        guard out.ok, !lines.isEmpty else {
+            throw AgentBuilderError(message: "No starters came back. Your words are still here.")
+        }
+        return lines
+    }
 
     /// Ask the writing desk for a system prompt. `existing` opens the second
     /// door — improve the prompt I already have — which is the one that makes

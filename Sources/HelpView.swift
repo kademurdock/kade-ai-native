@@ -233,7 +233,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.4: A clearer Sound Booth and Family notes",
+                title: "Newest build, 2.2.4: More ways to start talking",
+                body: "New conversations offer four opening lines from that character's own pool, with a fresh selection for each new chat. Tapping one puts it in your message box for editing. Agent Builder holds up to twenty-four starters, and Suggest starters from this personality is free. The personality writer also brings suggestions to review, with a choice to use them or keep your existing lines. In the Sound Booth, Think cycles Auto, Low, Medium and High. Auto chooses up to Medium; High lets the lyric writer think longer and can cost more. Newly generated lyrics can suggest a song title. A title you already wrote, or changed while the writing was loading, is kept."
+            ),
+            HelpEntry(
+                title: "Earlier in 2.2.4: A clearer Sound Booth and Family notes",
                 body: "In the Sound Booth, Try this in another engine copies compatible writing and references, including Lyria to YuE2. The original stays, and Restore previous draft brings back what was in the destination. Copying does not make audio or start a paid render. Recent work folds away saved attempts and takes; removing an entry there leaves finished recordings in My Creations. AuK's Edit task puts Edit instructions in the main box. Import a recording and optionally set start and end seconds in the reference settings to work on a passage. For a reference voice, AuK uses the first eight seconds. Surprise me puts a speech or scene idea in the writing desk without replacing a finished script. Seed Audio develops fuller dialogue scenes when the idea calls for it. Family History has a simpler home: saved notes, retained research and Changes made to the tree live on each person's page."
             ),
             HelpEntry(
@@ -301,7 +305,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Starting a new chat",
-                body: "Talk to your main character, near the top of the Talk tab, starts a fresh conversation with them; the pencil button in the conversation list does the same. A new chat says hello with a few starter lines: tap one to put it in the message box, change it if you like, then send. If you'd rather carry on from before, Pick up where you left off opens your last conversation with that character."
+                body: "Talk to your main character, near the top of the Talk tab, starts a fresh conversation with them; the pencil button in the conversation list does the same. Each new chat offers a fresh selection of four opening lines from that character's starters. Tap one to put it in the message box, change it if you like, then send. If you'd rather carry on from before, Pick up where you left off opens your last conversation with that character."
             ),
         ]),
         HelpSection(title: "Chatting", entries: [
@@ -596,7 +600,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Agent Builder", entries: [
             HelpEntry(
                 title: "Creating a character",
-                body: "Agent Builder is on the Create tab. Its plus button builds a new character from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to four conversation starters, the tappable opening lines people see when they start a chat."
+                body: "Agent Builder is on the Create tab. Its plus button builds a new character from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to twenty-four conversation starters. Each new chat shows a fresh selection of four. Suggest starters from this personality is free and puts new lines in the editor for you to review. The personality writer also brings suggested starters you can choose to use. Tap Save to keep any of these edits."
             ),
             HelpEntry(
                 title: "Editing, duplicating, or deleting one",

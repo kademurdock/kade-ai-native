@@ -20,11 +20,13 @@ struct KadeAgent: Codable, Identifiable, Hashable {
     let author: String?
     let isPromoted: Bool?
     let avatar: KadeAgentAvatar?
+    let conversationStarters: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, category, author, avatar
         case mongoId = "_id"
         case isPromoted = "is_promoted"
+        case conversationStarters = "conversation_starters"
     }
 
     /// Lenient by hand: `id` and `name` stay strict (a row without them is
@@ -42,6 +44,7 @@ struct KadeAgent: Codable, Identifiable, Hashable {
         author = try? c.decode(String.self, forKey: .author)
         isPromoted = try? c.decode(Bool.self, forKey: .isPromoted)
         avatar = try? c.decode(KadeAgentAvatar.self, forKey: .avatar)
+        conversationStarters = try? c.decode([String].self, forKey: .conversationStarters)
     }
 }
 

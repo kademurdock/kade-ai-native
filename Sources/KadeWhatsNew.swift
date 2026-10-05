@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: A clearer Sound Booth"
-    static let body = "Try an idea, script or reference in another compatible engine without making audio first. Recent work folds away, and AuK editing puts the change you want in its own main box. Family History's simpler home and saved notes are included too."
+    static let title = "What's new: More ways to start talking"
+    static let body = "Start a new chat for a fresh selection of that character's conversation starters. Build your own pool in Agent Builder, with free suggestions from the personality. The Sound Booth's Think button now offers Auto, Low, Medium and High, and new lyrics can bring their own song title. Your own title wins."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false
