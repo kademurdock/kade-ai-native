@@ -23,3 +23,9 @@ before FINAL. The runner is in
 both native build gates. Windows cannot execute Swift here; the authorized
 Mac build must compile and run it. Physical iPhone/VoiceOver timing remains
 unverified until the user tries the build.
+
+The first signed candidate, 2.2.4 build 326 at `d58a6d3`, passed its build
+gates but Apple rejected Publishing because approved version 2.2.4 has a
+closed upload train. That candidate was not delivered. All four target
+marketing versions are now 2.2.5 for a corrected candidate; its signed build
+and TestFlight acceptance must be verified separately.
