@@ -754,6 +754,7 @@ struct ConversationDetailView: View {
             chatOnScreen = true
         }
         .onDisappear {
+            messageSendingService.cancelMemoryReceiptRecovery()
             KadeChatPresence.shared.disappeared()
             chatOnScreen = false
             // A camera cover hides this view during intentional capture.
@@ -838,6 +839,9 @@ struct ConversationDetailView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: MessageSendingService.memoryArtifactNotification)) { note in
+            guard chatOnScreen,
+                  let receiptConversation = note.userInfo?["conversationId"] as? String,
+                  receiptConversation == conversationId || receiptConversation == messageSendingService.activeStreamId else { return }
             // Aug 7 2026 — the memory-saved cue: spoken + felt the moment
             // the platform's memory keeper files or forgets a card
             // mid-conversation. Deletions read as "forgotten."

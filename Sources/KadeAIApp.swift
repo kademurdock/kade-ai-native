@@ -87,15 +87,18 @@ struct KadeAIApp: App {
                     appDelegate.pushService = pushService
                     // Synthesize the earcons once up front so the first real
                     // one (a message send) is never a synthesis hitch.
+                    // Warm audio data only; preparing AVAudioPlayers here
+                    // would activate the shared audio session while idle.
                     // Build 216: and the haptic engine, for the same reason --
                     // its lazy first start() was landing on her send turn.
                     //
                     // ⚠️ BOTH ARE SKIPPED UNDER THE ACCESSIBILITY AUDIT (Part 90,
                     // DEBUG-only, CI-only). A prewarmed CHHapticEngine and a set
-                    // of prepared AVAudioPlayers keep the run loop and the audio
-                    // session alive, and XCUITest waits for the app to go IDLE
-                    // before every query -- so on the Codemagic simulator the app
-                    // never idled, every accessibility snapshot timed out after
+                    // of prepared AVAudioPlayers kept the run loop and audio
+                    // session alive. Audio warmup now only caches data; XCUITest
+                    // still waits for IDLE before every query. With hardware
+                    // warmup on, the Codemagic simulator never idled, every
+                    // accessibility snapshot timed out after
                     // sixty seconds, and Apple's audit could not read a single
                     // screen. Twice, at six and a half minutes of Mac time each.
                     // A simulator has no haptics and nobody is listening to the

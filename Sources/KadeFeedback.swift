@@ -454,40 +454,26 @@ final class Earcons {
 
     private let sampleRate: Double = 44_100
     private var cache: [Earcon: Data] = [:]
-    /// Build 216: one ready, already-`prepareToPlay()`d player per bundled
-    /// earcon, built at launch. `prepareToPlay()` is the expensive half of
-    /// starting a sound -- it allocates buffers and readies the audio
-    /// hardware, and it was running on the send turn, right beside the
-    /// haptic handshake the 215 crash cornered. Firing a warm player is a
-    /// seek plus a play.
-    private var readyPlayers: [Earcon: AVAudioPlayer] = [:]
+    private var fileCache: [Earcon: Data] = [:]
     /// Keep players alive until they finish -- an AVAudioPlayer deallocated
     /// mid-play just stops. Small pool, pruned as clips end.
     private var players: [AVAudioPlayer] = []
 
-    /// Synthesize every earcon once, off the main actor's hot path, so the
-    /// first real play() is never a synthesis hitch. Called at launch.
+    /// Cache bytes at launch. Preparing a player activates the shared audio
+    /// session even while idle, so hardware setup waits for an actual sound.
     func prewarm() {
         for e in Earcon.allCases where cache[e] == nil {
             cache[e] = Self.renderWAV(segments: e.segments, amplitude: e.amplitude, sampleRate: sampleRate)
         }
-        // Build 216: and the real recordings get their players built and
-        // prepared here too, so no send ever pays for that again.
         for e in Earcon.allCases {
-            guard readyPlayers[e] == nil, let file = e.bundleFile,
-                  let url = Bundle.main.url(forResource: file.name, withExtension: file.ext),
-                  let player = try? AVAudioPlayer(contentsOf: url) else { continue }
-            player.volume = e.bundleVolume
-            player.prepareToPlay()
-            readyPlayers[e] = player
+            guard fileCache[e] == nil, let file = e.bundleFile,
+                  let url = Bundle.main.url(forResource: file.name, withExtension: file.ext) else { continue }
+            fileCache[e] = try? Data(contentsOf: url)
         }
     }
 
     /// Play an earcon, honouring the Sound effects switch. Safe to call from
     /// anywhere on the main actor; a no-op if sound is off or synthesis fails.
-    /// Cache of the real recordings' bytes, loaded lazily per earcon.
-    private var fileCache: [Earcon: Data] = [:]
-
     /* ⭐ BUILD 216. Same reasoning as KadeHaptics.play: the sound now starts
      * on the next main-queue turn instead of inside the SwiftUI update that
      * asked for it, so the scene-update watchdog is never holding an
@@ -498,12 +484,7 @@ final class Earcons {
     }
 
     private func fire(_ earcon: Earcon) {
-        // Build 216: warm player from prewarm() -- the whole point.
-        if let ready = readyPlayers[earcon] {
-            ready.currentTime = 0
-            ready.play()
-            return
-        }
+        guard prepareFeedbackSession() else { return }
         // Real recording first (July 22 2026); the synth path below is the
         // fail-soft fallback and still owns every earcon with no file.
         if let file = earcon.bundleFile {
@@ -536,6 +517,20 @@ final class Earcons {
         player.play()
     }
 
+    /// Only choose a mixing UI-sound profile when no other app audio lane has
+    /// configured the session. Recording, calls, books and speech own theirs.
+    private func prepareFeedbackSession() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        guard session.category == .soloAmbient else { return true }
+        do {
+            try session.setCategory(.ambient, mode: .default)
+            return true
+        } catch {
+            KadeBreadcrumbs.drop("feedback audio: mixing setup failed (\(error.localizedDescription))")
+            return false
+        }
+    }
+
     /// Session 23 (Kade: "the space between the send sound, and the
     /// thinking sound, is huge"): text chat had NO waiting sound at all —
     /// send bloop, then dead air for the whole generation (and on voice
@@ -560,6 +555,7 @@ final class Earcons {
     func startWaitingLoop(fadeIn: TimeInterval = 0) {
         guard FeedbackPrefs.shared.soundEffects else { return }
         if let player = waitingPlayer, player.isPlaying { return }
+        guard prepareFeedbackSession() else { return }
         waitingPlayer = nil
         // July 22 2026: Kade's bubbling Thinking loop (shipped pre-trimmed —
         // the raw master carries ~1.16s of MP3 encoder silence that made
@@ -632,6 +628,7 @@ final class Earcons {
     private var chimeCache: [String: Data] = [:]
     func playRoomChime(join: Bool) {
         guard FeedbackPrefs.shared.soundEffects else { return }
+        guard prepareFeedbackSession() else { return }
         let name = join ? "CallConnected" : "CallDisconnected"
         if chimeCache[name] == nil,
            let url = Bundle.main.url(forResource: name, withExtension: "mp3") {

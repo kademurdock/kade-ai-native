@@ -43,11 +43,9 @@ import Foundation
 ///    it's the server saying the turn already completed. This service
 ///    treats a 404 here exactly like a normal `final` frame.
 ///
-/// Given both of those, this service deliberately never decodes
-/// `responseMessage` out of the SSE payload — it only watches the stream
-/// for a completion signal (`final: true`) or an explicit `error` event,
-/// then returns. Less clever, more correct: the actual message content
-/// always comes from the same already-proven GET /api/messages path.
+/// Message content comes from GET /api/messages after completion. The stream
+/// supplies only the completed reply identity for bounded recovery of verified
+/// keeper receipts that arrive after FINAL. A missing identity is never guessed.
 ///
 /// v1 scope also skips the web client's resumable/reconnect/sync machinery
 /// on purpose (built for a much more continuous, token-by-token UI than
@@ -81,6 +79,9 @@ final class MessageSendingService: ObservableObject {
 
     private let client: KadeAPIClient
     private let decoder = JSONDecoder()
+    private var memoryReceiptTask: Task<Void, Never>?
+    private var memoryReceiptLease = MemoryReceiptLease()
+    private var liveMemoryCalls: Set<String> = []
 
     /// The in-flight turn's `streamId` (== `conversationId`, confirmed in
     /// `docs/ENDPOINTS.md`), published so `ConversationDetailView` can offer
@@ -118,6 +119,9 @@ final class MessageSendingService: ObservableObject {
         onThink: ((String) -> Void)? = nil,
         onTool: ((String) -> Void)? = nil
     ) async throws -> String {
+        cancelMemoryReceiptRecovery()
+        let memoryReceiptGeneration = memoryReceiptLease.generation
+        liveMemoryCalls = []
         let start = try await startGeneration(
             text: text,
             conversationId: conversationId,
@@ -135,7 +139,11 @@ final class MessageSendingService: ObservableObject {
         KadeBreadcrumbs.drop("request dispatched")
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
-        try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText, onTool: onTool)
+        let replyId = try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText, onTool: onTool)
+        if let replyId, memoryReceiptLease.accepts(memoryReceiptGeneration) {
+            recoverMemoryReceipts(scope: .init(conversationId: start.conversationId, messageId: replyId),
+                                  generation: memoryReceiptGeneration)
+        }
         return start.conversationId
     }
 
@@ -151,6 +159,7 @@ final class MessageSendingService: ObservableObject {
     /// smaller problem than a Stop button that hangs on a flaky network
     /// call.
     func abortActive() async {
+        cancelMemoryReceiptRecovery()
         guard let streamId = activeStreamId else { return }
         var req = client.request(path: "api/agents/chat/abort", method: "POST", authorized: true)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -280,7 +289,11 @@ final class MessageSendingService: ObservableObject {
 
     // MARK: - Phase B: subscribe until `final`
 
-    private struct FinalFlag: Codable { let final: Bool? }
+    private struct FinalFlag: Decodable {
+        struct Reply: Decodable { let messageId: String?; let conversationId: String? }
+        let final: Bool?
+        let responseMessage: Reply?
+    }
     private struct ErrorFrame: Codable { let error: String?; let message: String? }
 
     /// Session 35 encore (her ask: "see the deepthink bubble as it's
@@ -297,17 +310,6 @@ final class MessageSendingService: ObservableObject {
     /// platform's memory writer after its post-turn pass); native read past
     /// them. Now each one lands as a NotificationCenter post the chat view
     /// turns into a spoken + felt cue. Fail-soft: unparseable = skipped.
-    private struct AttachmentFrame: Decodable {
-        struct DataBox: Decodable {
-            struct MemoryArt: Decodable {
-                let key: String?
-                let type: String?
-            }
-            let memory: MemoryArt?
-        }
-        let event: String?
-        let data: DataBox?
-    }
     static let memoryArtifactNotification = Notification.Name("kadeMemoryArtifact")
 
     private struct DeltaFrame: Decodable {
@@ -411,7 +413,7 @@ final class MessageSendingService: ObservableObject {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
-    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) async throws {
+    private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) async throws -> String? {
         var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // Generous on purpose: the generation job lives server-side,
@@ -423,7 +425,7 @@ final class MessageSendingService: ObservableObject {
 
         let (bytes, http) = try await client.streamBytes(req)
         if http.statusCode == 404 {
-            return  // job already finished server-side — see type doc, point 2
+            return nil  // no guessed historical reply id
         }
         guard http.statusCode == 200 else { throw SendError.server(http.statusCode) }
 
@@ -442,7 +444,8 @@ final class MessageSendingService: ObservableObject {
                 }
 
                 if let flag = try? decoder.decode(FinalFlag.self, from: jsonData), flag.final == true {
-                    return
+                    guard flag.responseMessage?.conversationId == streamId else { return nil }
+                    return flag.responseMessage?.messageId
                 }
 
                 if let onThink,
@@ -486,22 +489,80 @@ final class MessageSendingService: ObservableObject {
                     }
                 }
 
-                if let frame = try? decoder.decode(AttachmentFrame.self, from: jsonData),
-                   frame.event == "attachment",
-                   let memory = frame.data?.memory,
-                   let type = memory.type {
-                    await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: Self.memoryArtifactNotification,
-                            object: nil,
-                            userInfo: ["type": type, "key": memory.key ?? ""]
-                        )
-                    }
+                if let frame = try? decoder.decode(ReceiptAttachmentFrame.self, from: jsonData),
+                   frame.event == "attachment", let receipt = frame.data,
+                   receipt.conversationId == streamId,
+                   let messageId = receipt.messageId {
+                    var tracker = MemoryReceiptTracker(
+                        scope: .init(conversationId: streamId, messageId: messageId), seen: liveMemoryCalls
+                    )
+                    for verified in tracker.consume([receipt]) { announceMemoryReceipt(verified) }
+                    liveMemoryCalls = tracker.seen
                 }
 
                 currentEvent = "message"
             }
         }
         throw SendError.streamEndedWithoutFinal
+    }
+
+    private struct ReceiptAttachmentFrame: Decodable {
+        let event: String?
+        let data: MemoryReceipt?
+    }
+    private struct ReceiptMessages: Decodable {
+        struct Reply: Decodable {
+            let messageId: String
+            let conversationId: String
+            let isCreatedByUser: Bool
+            let attachments: [MemoryReceipt]?
+        }
+        let messages: [Reply]
+    }
+
+    func cancelMemoryReceiptRecovery() {
+        memoryReceiptLease.invalidate()
+        memoryReceiptTask?.cancel()
+        memoryReceiptTask = nil
+    }
+
+    private func announceMemoryReceipt(_ receipt: MemoryReceipt) {
+        guard let kind = receipt.memory?.type else { return }
+        NotificationCenter.default.post(name: Self.memoryArtifactNotification, object: nil,
+            userInfo: ["type": kind, "key": receipt.memory?.key ?? "",
+                       "conversationId": receipt.conversationId ?? "", "messageId": receipt.messageId ?? ""])
+    }
+
+    /// The reply finishes immediately. Only its existing saved metadata is read
+    /// briefly afterward; no generation, audio, push, or historical replay.
+    private func recoverMemoryReceipts(scope: MemoryReceiptScope, generation: UUID) {
+        guard memoryReceiptLease.accepts(generation) else { return }
+        let window = MemoryReceiptWindow(start: Date())
+        var tracker = MemoryReceiptTracker(scope: scope, seen: liveMemoryCalls)
+        memoryReceiptTask = Task { [weak self] in
+            guard let self else { return }
+            for attempt in 0..<MemoryReceiptWindow.maxAttempts {
+                do {
+                    try await Task.sleep(nanoseconds: MemoryReceiptWindow.intervalSeconds * 1_000_000_000)
+                    guard window.permits(attempt: attempt, now: Date(), cancelled: Task.isCancelled,
+                                         scopeMatches: self.memoryReceiptLease.accepts(generation)) else { return }
+                    var request = self.client.request(path: "api/messages", authorized: true,
+                        queryItems: [URLQueryItem(name: "conversationId", value: scope.conversationId),
+                                     URLQueryItem(name: "messageId", value: scope.messageId)])
+                    request.timeoutInterval = min(6, max(1, window.deadline.timeIntervalSinceNow))
+                    let (data, http) = try await self.client.send(request)
+                    guard window.permits(attempt: attempt, now: Date(), cancelled: Task.isCancelled,
+                                         scopeMatches: self.memoryReceiptLease.accepts(generation)),
+                          http.statusCode == 200 else { return }
+                    let snapshot = try self.decoder.decode(ReceiptMessages.self, from: data)
+                    guard snapshot.messages.count == 1, let reply = snapshot.messages.first,
+                          !reply.isCreatedByUser, reply.messageId == scope.messageId,
+                          reply.conversationId == scope.conversationId else { return }
+                    let fresh = tracker.consume(reply.attachments ?? [])
+                    for receipt in fresh { self.announceMemoryReceipt(receipt) }
+                    if !fresh.isEmpty { return }
+                } catch { return } // bounded, fail-soft; never retry a rejected read
+            }
+        }
     }
 }
