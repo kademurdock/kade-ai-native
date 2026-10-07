@@ -22,6 +22,16 @@ Autoplay still avoids moving VoiceOver to the completed reply. Read-aloud-off,
 speech failure, deliberate Stop, errors, manual message reading and recording
 review retain their existing focus and announcement paths.
 
+Streaming also exposed a second focus bug: FINAL rearmed the first-clip wait
+even if character playback had already started. If the last clip was playing
+at FINAL, draining it could focus the reply as though speech had failed.
+`ReplySpeechFocus` retains actual playback history through FINAL and only
+permits a fallback when no clip ever played. Completion's immediate VoiceOver
+decision remains separate from its pending first-clip wait. Eighteen Foundation
+checks cover playback before/after FINAL, sentence gaps, a failed first clip,
+Hear replies off, no assistant reply, new sends and canceled waits. Both build
+workflows run that gate before compiling the app.
+
 No VoiceOver speech or audio-session setting is changed. Ordinary user-driven
 VoiceOver, playback mixing and system ducking remain under their existing
 controls. Source inspection supports the focus-lifecycle fault; physical

@@ -440,14 +440,15 @@ struct ConversationDetailView: View {
     /// won't). While true, the waiting ticks stay alive through the TTS
     /// fetch instead of dying at the received bloop. Set BEFORE sendState
     /// flips to .idle so the sendState watcher reads it race-free.
-    @State private var awaitingSpokenReply = false
+    @State private var replySpeechFocus = ReplySpeechFocus()
+    private var awaitingSpokenReply: Bool { replySpeechFocus.awaitingFirstClip }
     /// Fail-safe for the flag above: if the clip never starts AND the queue
     /// never visibly drains (a hang, not a clean failure), stop ticking
     /// after 12s rather than forever.
     @State private var speechWaitWatchdog: Task<Void, Never>? = nil
     @State private var speechWaitGeneration = 0
     @State private var spokenTurnLive = false
-    @State private var spokenTurnStarted = false
+    private var spokenTurnStarted: Bool { replySpeechFocus.playbackStarted }
     @State private var speechWorkPhase: SpeechWaitPolicy.Phase = .waiting
     @State private var speechGapResume: Task<Void, Never>? = nil
     private let speechGapResumeDelay: UInt64 = 800_000_000
@@ -1073,7 +1074,7 @@ struct ConversationDetailView: View {
                 // Waiting belongs to this send, including when an older clip
                 // temporarily owns the speaker or read-aloud is disabled.
                 spokenTurnLive = true
-                spokenTurnStarted = false
+                replySpeechFocus.reset()
                 speechWorkPhase = .waiting
             }
             else if case .sending = old, case .idle = new {
@@ -1197,7 +1198,7 @@ struct ConversationDetailView: View {
              * soundstage. stopWaitingLoop is safe to call redundantly. */
             if playing, case .sending = sendState { Earcons.shared.stopWaitingLoop() }
             if playing {
-                spokenTurnStarted = true
+                replySpeechFocus.playbackDidStart()
                 speechGapResume?.cancel()
                 speechGapResume = nil
                 if spokenTurnLive { Earcons.shared.stopWaitingLoop() }
@@ -1218,7 +1219,7 @@ struct ConversationDetailView: View {
                  * VoiceOver focus move on the promise that the voice would
                  * deliver it, and that promise just broke. Make the move now,
                  * or the reply sits unread by either voice. */
-                if UIAccessibility.isVoiceOverRunning {
+                if replySpeechFocus.speechQueueDidFinish(), UIAccessibility.isVoiceOverRunning {
                     a11yFocus = messages.last.map { .message($0.id) }
                 }
                 endSpeechWait()
@@ -3498,7 +3499,7 @@ struct ConversationDetailView: View {
 
     private func endSpeechWait() {
         speechWaitGeneration += 1
-        awaitingSpokenReply = false
+        replySpeechFocus.clearWait()
         speechWaitWatchdog?.cancel()
         speechWaitWatchdog = nil
         // Part 109: a pending resume must die with the wait it belonged to,
@@ -3938,7 +3939,10 @@ struct ConversationDetailView: View {
             // flips -- the sendState watcher reads this flag to know whether
             // the waiting ticks survive past the received bloop. Same
             // reply-exists condition as the enqueueSpeak below.
-            awaitingSpokenReply = readAloudEnabled && messages.contains(where: { !$0.isCreatedByUser })
+            let focusCompletedReply = replySpeechFocus.completed(
+                readAloudEnabled: readAloudEnabled,
+                hasAssistantReply: messages.contains(where: { !$0.isCreatedByUser })
+            )
             sendState = .idle
             if files != nil {
                 // Spent successfully -- the server owns it now.
@@ -3959,12 +3963,12 @@ struct ConversationDetailView: View {
              * still marks the moment. With read-aloud off nothing else would
              * announce the reply, so the move stays exactly as it was.
              *
-             * `awaitingSpokenReply` (set immediately above) is the precise
-             * flag for "speech is coming for this turn" -- read-aloud on AND
-             * an assistant message to speak. If TTS then fails to play
+             * Completion keeps speech-delivery intent separate from waiting
+             * for a first clip: streaming may already have spoken before
+             * FINAL. If TTS then fails to play
              * anything, the isSpeaking watcher makes this move after the
              * fact; see its comment. */
-            if !awaitingSpokenReply {
+            if focusCompletedReply {
                 a11yFocus = messages.last.map { .message($0.id) }
             }
             if wasNewConversation {
