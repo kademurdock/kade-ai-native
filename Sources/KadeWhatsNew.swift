@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: More ways to start talking"
-    static let body = "Start a new chat for a fresh selection of that character's conversation starters. Build your own pool in Agent Builder, with free suggestions from the personality. The Sound Booth's Think button now offers Auto, Low, Medium and High, and new lyrics can bring their own song title. Your own title wins."
+    static let title = "What's new: Quieter chat focus"
+    static let body = "Sending keeps the Send and Stop control in place for VoiceOver, and ends editing in the message box. Hear replies leaves your place alone while the character reads. You can still move through the screen, review your recording, stop a reply or read messages whenever you choose."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

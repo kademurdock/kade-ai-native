@@ -233,7 +233,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.4: More ways to start talking",
+                title: "Newest build, 2.2.6: Quieter chat focus",
+                body: "The Send and Stop control stays available to VoiceOver through sending and reply arrival, even when the message box is empty. It dims when a message cannot be sent; choosing it explains what is needed. Sending ends keyboard editing so the message box does not resume editing as the reply arrives. With Hear replies on, the character's voice reads the reply without moving VoiceOver to it. With Hear replies off, the new reply is still read through VoiceOver. Recording, reviewing a transcription, errors and your own navigation retain their usual feedback."
+            ),
+            HelpEntry(
+                title: "In 2.2.4: More ways to start talking",
                 body: "New conversations offer four opening lines from that character's own pool, with a fresh selection for each new chat. Tapping one puts it in your message box for editing. Agent Builder holds up to twenty-four starters, and Suggest starters from this personality is free. The personality writer also brings suggestions to review, with a choice to use them or keep your existing lines. In the Sound Booth, Think cycles Auto, Low, Medium and High. Auto chooses up to Medium; High lets the lyric writer think longer and can cost more. Newly generated lyrics can suggest a song title. A title you already wrote, or changed while the writing was loading, is kept."
             ),
             HelpEntry(

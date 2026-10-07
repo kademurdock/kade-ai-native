@@ -558,8 +558,8 @@ struct ConversationDetailView: View {
         case failed(String)
     }
 
-    /// VoiceOver focus targets. On a successful send, focus jumps to the
-    /// new reply so the user hears it without hunting for it; on a failed
+    /// VoiceOver focus targets. With Hear replies off, a successful send
+    /// focuses the new reply; autoplay keeps the user's place. On a failed
     /// send, focus jumps to the error instead; after switching agents,
     /// focus returns to the agent button so the new selection is announced.
     private enum A11yFocus: Hashable {
@@ -587,6 +587,9 @@ struct ConversationDetailView: View {
         case sendButton
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
+    /// Keyboard editing is separate from VoiceOver's cursor. A send ends
+    /// editing explicitly so re-enabling the composer cannot restore it.
+    @FocusState private var composerEditing: Bool
     /// Build 217: the replying row's decorative layer is skipped entirely
     /// under VoiceOver -- see `replyingRow`.
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
@@ -3056,6 +3059,7 @@ struct ConversationDetailView: View {
                                 .strokeBorder(Color(uiColor: .separator))
                         )
                         .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                        .focused($composerEditing)
                         .accessibilityLabel("Message")
                         .accessibilityFocused($a11yFocus, equals: .composerField)
                 } else {
@@ -3069,6 +3073,7 @@ struct ConversationDetailView: View {
                                 .strokeBorder(Color(uiColor: .separator))
                         )
                         .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                        .focused($composerEditing)
                         .accessibilityLabel("Message")
                         .accessibilityFocused($a11yFocus, equals: .composerField)
                 }
@@ -3087,25 +3092,22 @@ struct ConversationDetailView: View {
                     if isSending {
                         stopGenerating()
                     } else {
+                        if let reason = sendUnavailableReason {
+                            UIAccessibility.post(notification: .announcement, argument: reason)
+                            return
+                        }
                         sendTask = Task { await send() }
                     }
                 } label: {
                     Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.title)
+                        .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
                 }
-                .disabled(
-                    !isSending
-                        && (attachmentIsBusy || voiceService.isRecording || voiceService.isTranscribing
-                            /* KADE Aug 28 2026 (her report: "send just an attachment
-                             * with no words, the send button is dimmed"): a ready
-                             * attachment IS a message. The web composer has always
-                             * allowed it and the server accepts empty text with
-                             * files — only this guard was stricter than the
-                             * platform. Uploading still disables (nothing real to
-                             * send yet). */
-                            || (draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                && pendingAttachment == nil))
-                )
+                // Keep the same accessible button through draft clearing,
+                // generation and arrival, as the recording button already
+                // does. Disabling it while the draft is empty used to retire
+                // VoiceOver's anchor twice on every send. Guard the action
+                // above and dim it visually instead.
                 .accessibilityLabel(isSending ? "Stop" : "Send message")
                 .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
                 // Build 254: the send moment's focus anchor -- see `case
@@ -3214,11 +3216,21 @@ struct ConversationDetailView: View {
         return "Record a voice message"
     }
 
+    private var sendUnavailableReason: String? {
+        if attachmentIsBusy { return "Wait for the attachment to finish before sending." }
+        if voiceService.isRecording { return "Stop recording and review your message before sending." }
+        if voiceService.isTranscribing { return "Wait for your recording to finish transcribing." }
+        if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, pendingAttachment == nil {
+            return "Write or attach a message first."
+        }
+        return nil
+    }
+
     private func send() async {
         let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         /* Empty text with a ready attachment is a real send (Aug 28 2026) —
          * the photo IS what they're saying. Kiana sees it natively now. */
-        guard !trimmed.isEmpty || pendingAttachment != nil, !isSending, !attachmentIsBusy else { return }
+        guard !isSending, sendUnavailableReason == nil else { return }
         // A brand-new conversation has no agent_id for the server to fall
         // back on (an EXISTING conversation's turns can omit it and the
         // server still knows who's answering, per its own stored history --
@@ -3299,9 +3311,10 @@ struct ConversationDetailView: View {
          * reading the last answer aloud, then got cut off mid-sentence when
          * the new row stole focus. Now it lands on the button she just tapped,
          * which says "Stop" and nothing else. */
-        if UIAccessibility.isVoiceOverRunning {
+        if UIAccessibility.isVoiceOverRunning, a11yFocus != .sendButton {
             a11yFocus = .sendButton
         }
+        composerEditing = false
         let inputSource = draftInputSource
         draftInputSource = nil
         draftText = ""
@@ -3635,9 +3648,10 @@ struct ConversationDetailView: View {
          * transaction and the crumb stay exactly as 220 built them -- keeping
          * build 211's one-mutation-per-commit discipline, since fusing this
          * into the `sendState` flip would rebuild the pileup 211 split. */
-        if UIAccessibility.isVoiceOverRunning {
+        if UIAccessibility.isVoiceOverRunning, a11yFocus != .sendButton {
             a11yFocus = .sendButton
         }
+        composerEditing = false
         await Self.nextRunLoopTurn()
         KadeBreadcrumbs.drop("focus anchored")
         sendState = .sending
