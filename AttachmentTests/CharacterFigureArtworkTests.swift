@@ -8,7 +8,7 @@ final class CharacterFigureArtworkTests: XCTestCase {
     private var samplePack: CharacterFigureArtwork {
         CharacterFigureArtwork(agentID: kiana, avatarFilename: CharacterMotion.kianaFile,
             farArm: "far", torso: "torso", head: "head", nearArm: "near",
-            faceRect: CGRect(x: 0.34, y: 0.17, width: 0.5, height: 0.56),
+            faceRect: CGRect(x: 0.1, y: 0.08, width: 0.8, height: 0.8),
             farShoulder: CharacterFigureJoint(x: 0.28, y: 0.48),
             waist: CharacterFigureJoint(x: 0.5, y: 0.78),
             neck: CharacterFigureJoint(x: 0.5, y: 0.35),
@@ -31,5 +31,18 @@ final class CharacterFigureArtworkTests: XCTestCase {
     func testJointCoordinatesStayInTheCanvas() {
         XCTAssertFalse(CharacterFigureJoint(x: -0.01, y: 0.5).isValid)
         XCTAssertFalse(CharacterFigureJoint(x: 0.5, y: .infinity).isValid)
+    }
+
+    func testFaceRectCoversASquareFullPanelInsideTheCanvas() {
+        let wide = CharacterFigureArtwork(agentID: kiana,
+            avatarFilename: CharacterMotion.kianaFile,
+            farArm: "far", torso: "torso", head: "head", nearArm: "near",
+            faceRect: CGRect(x: 0.1, y: 0.1, width: 0.7, height: 0.6),
+            farShoulder: CharacterFigureJoint(x: 0.28, y: 0.48),
+            waist: CharacterFigureJoint(x: 0.5, y: 0.78),
+            neck: CharacterFigureJoint(x: 0.5, y: 0.35),
+            nearShoulder: CharacterFigureJoint(x: 0.72, y: 0.48))
+        XCTAssertTrue(samplePack.isValid)
+        XCTAssertFalse(wide.isValid)
     }
 }

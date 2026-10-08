@@ -14,8 +14,9 @@ struct CharacterFigureJoint {
 /// One reviewed art pack. Core layers are transparent squares with identical
 /// dimensions and alignment: far arm, torso, head, then near arm. Optional
 /// locks sit behind and in front of those core layers, following the head's
-/// neck joint. The head must be cut from the neutral face sheet so its eyes
-/// and mouth line up with the existing expression, mouth, and blink atlases.
+/// neck joint. The head's neutral face must align with the complete 414 px
+/// portrait panel placed in faceRect; expression, mouth, and blink patches use
+/// their existing coordinates within that panel.
 struct CharacterFigureArtwork {
     let agentID: String
     let avatarFilename: String
@@ -25,8 +26,9 @@ struct CharacterFigureArtwork {
     let nearArm: String
     var backHair: String?
     var frontHair: String?
-    /// Destination of the existing face atlas's feathered face region in the
-    /// figure canvas. Mouth and blink patches follow the same affine mapping.
+    /// Square destination of the complete neutral portrait panel in the
+    /// figure canvas, normalized to 0...1. This has the same meaning as the
+    /// Android figure pack's faceRect, so one art manifest can serve both.
     let faceRect: CGRect
     let farShoulder: CharacterFigureJoint
     let waist: CharacterFigureJoint
@@ -59,6 +61,7 @@ struct CharacterFigureArtwork {
             (backHair.map { !$0.isEmpty } ?? true) && (frontHair.map { !$0.isEmpty } ?? true) &&
             [faceRect.minX, faceRect.minY, faceRect.width, faceRect.height].allSatisfy({ $0.isFinite }) &&
             faceRect.minX >= 0 && faceRect.minY >= 0 && faceRect.width > 0 && faceRect.height > 0 &&
+            abs(faceRect.width - faceRect.height) <= 0.0001 &&
             faceRect.maxX <= 1 && faceRect.maxY <= 1 &&
             [farShoulder, waist, neck, nearShoulder].allSatisfy({ $0.isValid })
     }

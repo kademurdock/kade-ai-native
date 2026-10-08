@@ -50,8 +50,7 @@ struct CharacterPortraitView: View {
                             .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
-                    if let artwork = figureArtwork, let sheet,
-                       figureMatchesSheet(artwork, sheet: sheet) {
+                    if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: performance.face,
                             body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
                                 time: time, level: outputLevel, active: active, presentation: performance))
@@ -178,23 +177,15 @@ struct CharacterPortraitView: View {
             .frame(width: side, height: side)
     }
 
-    private func figureMatchesSheet(_ artwork: CharacterFigureArtwork, sheet: Sheet) -> Bool {
-        let x = artwork.faceRect.width / sheet.face.width
-        let y = artwork.faceRect.height / sheet.face.height
-        // Moving and scaling the atlas is fine; stretching a face is not.
-        return x.isFinite && y.isFinite && x > 0 && y > 0 &&
-            abs(x - y) <= max(x, y) * 0.05
-    }
-
     private func figureFaceDetails(_ pose: CharacterPose, face: CharacterFace,
                                    sheet: Sheet, artwork: CharacterFigureArtwork) -> some View {
-        let scaleX = artwork.faceRect.width / sheet.face.width
-        let scaleY = artwork.faceRect.height / sheet.face.height
-        let shiftX = artwork.faceRect.minX - sheet.face.minX * scaleX
-        let shiftY = artwork.faceRect.minY - sheet.face.minY * scaleY
+        // Each atlas panel is a full square. Scaling that square preserves the
+        // face, mouth, and blink regions' authored positions inside it.
+        let scale = artwork.faceRect.width
         return faceDetails(pose, face: face, sheet: sheet)
-            .scaleEffect(x: scaleX, y: scaleY, anchor: .topLeading)
-            .offset(x: shiftX * CGFloat(side), y: shiftY * CGFloat(side))
+            .scaleEffect(x: scale, y: scale, anchor: .topLeading)
+            .offset(x: artwork.faceRect.minX * CGFloat(side),
+                    y: artwork.faceRect.minY * CGFloat(side))
     }
 
     private func layeredFigure(_ artwork: CharacterFigureArtwork, sheet: Sheet,
