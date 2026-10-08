@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: Quieter chat focus"
-    static let body = "Sending keeps the Send and Stop control in place for VoiceOver, and ends editing in the message box. Hear replies leaves your place alone while the character reads. You can still move through the screen, review your recording, stop a reply or read messages whenever you choose."
+    static let title = "What's new: One Library shelf"
+    static let body = "Browse books, newspapers, radio, audio and video in one Library list. Choose a Type, Decade or Format, search, and load more without opening more shelves. Continue and Family history stay easy to reach; folders, uploads and collections are in Other library views. Completed chats leave VoiceOver where you put it with Hear replies on or off."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

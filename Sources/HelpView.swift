@@ -233,7 +233,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.6: Quieter chat focus",
+                title: "Newest build, 2.2.7: One Library shelf",
+                body: "The Library opens one list of everything your account can access. Search by title, topic, channel or year, or choose Type, Decade and Format. Newspapers, newsletters and yearbooks have their own types. Format chooses Read, Audio or Video; Order chooses Recently added or Title. Clear filters returns to the full list. Load more adds the next items and moves VoiceOver to the first new one. Continue and Family history remain above the list. Other library views keeps folders, My uploads, Recently opened and Collections, including uploads still in progress. Existing players, saved places and item actions still work. A completed chat now keeps VoiceOver where you left it whether Hear replies is on or off. The arrival sound and haptic still mark a new reply, and you can choose when to read it."
+            ),
+            HelpEntry(
+                title: "In 2.2.6: Quieter chat focus",
                 body: "The Send and Stop control stays available to VoiceOver through sending and reply arrival, even when the message box is empty. It dims when a message cannot be sent; choosing it explains what is needed. Sending ends keyboard editing so the message box does not resume editing as the reply arrives. With Hear replies on, the character's voice reads the reply without moving VoiceOver to it. With Hear replies off, the new reply is still read through VoiceOver. Recording, reviewing a transcription, errors and your own navigation retain their usual feedback."
             ),
             HelpEntry(

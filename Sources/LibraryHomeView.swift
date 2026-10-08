@@ -1,18 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// THE LIBRARY'S FIRST SCREEN (Part 296, Sep 27 2026). BARD's Bookshelf
-/// shape: a short, fixed list that never reorders, each row opening its own
-/// screen with Back at the top left. In this order, always: Continue,
-/// Springfield and the Ozarks, Video, Audio, Books, Search the Library,
-/// Recently added, Recently opened, My uploads, Collections, Talk to the
-/// Librarian, Add and requests. The reading-room picture is the last row.
-///
-/// Rows keep their places; only their words change. A count says "loading"
-/// until it is real (the tree, kept on disk from last time, usually has it at
-/// once). The Listen, Browse and Add switch and the lists stacked under it
-/// are gone, and so is the status line: news is spoken, never inserted
-/// above what she is touching.
+/// One BARD-style catalog list, with Type, Decade and Format filters.
+/// Continue and Family history remain easy to reach. The older folders,
+/// saved uploads and collections stay in one closed optional-views group.
 struct LibraryHomeView: View {
     @ObservedObject private var service: ReadingRoomService
     @ObservedObject private var nowPlaying: LibraryNowPlaying
@@ -22,9 +13,11 @@ struct LibraryHomeView: View {
     /// Sep 29 2026: the Family history row's state (FamilyHistoryAccess).
     @ObservedObject private var family = FamilyHistoryAccess.shared
     @StateObject private var actions: LibraryRowActions
+    @StateObject private var catalog: LibraryBrowseController
     @AppStorage(LibraryWords.hasLocalKey) private var rememberedLocal = false
     @State private var collectionCount: Int?
     @State private var lastLoad: Date?
+    @State private var browseRefresh = UUID()
     private let apiClient: KadeAPIClient
 
     init(apiClient: KadeAPIClient) {
@@ -34,38 +27,34 @@ struct LibraryHomeView: View {
         _service = ObservedObject(wrappedValue: pair.service)
         _nowPlaying = ObservedObject(wrappedValue: shared)
         _actions = StateObject(wrappedValue: LibraryRowActions(service: pair.service))
+        _catalog = StateObject(wrappedValue: LibraryBrowseController(service: pair.service))
     }
 
     var body: some View {
         List {
             Section {
-                Group {
-                    continueRow
+                continueRow
+                familyRow
+                familyAskRow
+                DisclosureGroup("Other library views") {
                     localRow
-                    mediaRow("Video", root: "Videos", icon: "film")
-                    mediaRow("Audio", root: "Audio", icon: "waveform")
-                    mediaRow("Books", root: "Books", icon: "book.closed")
-                }
-                Group {
-                    pageRow("Search the Library", icon: "magnifyingglass", page: .search,
-                            hint: "Find a title, a channel, a brand or a year anywhere in the Library.")
+                    mediaRow("Video folders", root: "Videos", icon: "film")
+                    mediaRow("Audio folders", root: "Audio", icon: "waveform")
+                    mediaRow("Book folders", root: "Books", icon: "book.closed")
                     pageRow("Recently added", icon: "sparkles", page: .recentlyAdded,
                             hint: "The newest things in the Library, newest first.")
                     countRow("Recently opened", icon: "clock.arrow.circlepath", detail: openedDetail, route: .page(.recentlyOpened),
                              hint: "What you opened lately, newest first.")
                     countRow("My uploads", icon: "square.and.arrow.up", detail: mineDetail,
                              route: .shelf(LibraryShelfRef(id: LibraryShelfScreen.mineID, title: "My uploads", path: "", scope: "mine")),
-                             hint: "Everything you added, on its shelves.")
+                             hint: "Everything you added, including uploads still in progress.")
                     countRow("Collections", icon: "text.badge.plus", detail: collectionsDetail, route: .page(.collections),
                              hint: "Your playlists, and the ones shared with you.")
-                    familyRow
-                    familyAskRow
                 }
-                Group {
-                    librarianRow
-                    addRow
-                }
+                librarianRow
+                addRow
             }
+            LibraryBrowseSections(catalog: catalog, actions: actions)
             // The reading alcove: silent, and at the bottom, where touch never looks for a control.
             Section {
                 Image("LibraryAlcove").resizable().scaledToFill().frame(height: 130).clipped()
@@ -76,8 +65,14 @@ struct LibraryHomeView: View {
         .navigationTitle("Library")
         .navigationBarTitleDisplayMode(.inline)
         .libraryRowActions(actions)
-        .refreshable { await reload(force: true) }
+        .refreshable { await reload(force: true); browseRefresh = UUID() }
         .task { await reload(force: false) }
+        .task(id: catalogLoadID) { await catalog.reload(id: catalogLoadID) }
+        .onDisappear { catalog.suspend() }
+    }
+
+    private var catalogLoadID: LibraryBrowseLoadID {
+        catalog.loadID(refresh: browseRefresh, changes: actions.changes)
     }
 
     // MARK: rows
@@ -142,8 +137,7 @@ struct LibraryHomeView: View {
         return (item.isAudio ? "Part " : "Chapter ") + w
     }
 
-    /// Springfield and the Ozarks is always the second row, so nothing is
-    /// slipped in above Video once things load. It opens in the family
+    /// Springfield and the Ozarks remains in Other library views. It opens in the family
     /// library. Anywhere else (an outside seat, the App Review seat) it stays
     /// where it is, greyed out with the Family feature pack's reason: her
     /// Sep 25 rule for pack features is greyed, never hidden. Until that is
@@ -203,7 +197,7 @@ struct LibraryHomeView: View {
         let count = rootCount(root)
         let ref = LibraryShelfRef(id: shelves.publicTree?.root(root)?.id ?? root, title: title, path: root, scope: "public", count: count)
         return linkRow(title, icon: icon, detail: countDetail(count), route: .shelf(ref),
-                       hint: "Opens the \(title) shelves.")
+                       hint: "Browse \(title.lowercased()).")
     }
 
     private func rootCount(_ root: String) -> Int? {
@@ -237,7 +231,7 @@ struct LibraryHomeView: View {
         return n == 0 ? "none yet" : n.formatted()
     }
 
-    /// Sep 29 2026: Family history, after Collections, always in this place.
+    /// Family history stays above the catalog, with its existing account gate.
     /// The family's account opens it ("Ada's brother", the server's words);
     /// every other account, the App Review seat included, sees it greyed with
     /// the server's reason (her rule: greyed, never hidden). "Checking" until

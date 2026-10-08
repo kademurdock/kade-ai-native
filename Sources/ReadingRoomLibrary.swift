@@ -87,6 +87,16 @@ extension ReadingRoomService {
     func searchPage(_ q: String, page: Int, scope: String = "public") async throws -> RRSearch {
         try await get("api/kade/reading-room/search", [URLQueryItem(name: "q", value: q), URLQueryItem(name: "scope", value: scope), URLQueryItem(name: "page", value: String(page))], as: RRSearch.self)
     }
+    func browse(_ query: LibraryBrowseQuery, after: String? = nil) async throws -> LibraryBrowsePage<RRItem> {
+        var request = client.request(path: "api/kade/reading-room/browse", authorized: true,
+                                     queryItems: query.queryItems(after: after), timeout: 60)
+        if let url = request.url { request.url = LibraryBrowseQuery.preservingPluses(in: url) }
+        let (data, http) = try await client.send(request)
+        guard http.statusCode == 200 else {
+            throw RRError(message: (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "The library could not be loaded.")
+        }
+        return try JSONDecoder().decode(LibraryBrowsePage<RRItem>.self, from: data)
+    }
     struct Colls: Decodable { let mine: [RRCollectionRow]; let shared: [RRCollectionRow] }
     func collections() async throws -> Colls { try await get("api/kade/reading-room/collections", as: Colls.self) }
     struct CollWrap: Decodable { let collection: RRCollectionRow }

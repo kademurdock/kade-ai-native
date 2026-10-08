@@ -559,8 +559,8 @@ struct ConversationDetailView: View {
         case failed(String)
     }
 
-    /// VoiceOver focus targets. With Hear replies off, a successful send
-    /// focuses the new reply; autoplay keeps the user's place. On a failed
+    /// VoiceOver focus targets. A successful send keeps the user's place in
+    /// both Hear replies modes. Manual reading still selects a row. On a failed
     /// send, focus jumps to the error instead; after switching agents,
     /// focus returns to the agent button so the new selection is announced.
     private enum A11yFocus: Hashable {
@@ -1211,17 +1211,11 @@ struct ConversationDetailView: View {
             if !speaking { scheduleThinkingResume() }
             // B13: a waiting notification card shows once the voice is done.
             if !speaking { showPushCardWhenQuiet() }
-            if was, !speaking, awaitingSpokenReply {
-                /* Build 254: reaching here means the speak queue drained
-                 * without a clip ever starting -- the isClipPlaying watcher
-                 * above clears `awaitingSpokenReply` the moment one does -- so
-                 * TTS never spoke this reply. The completion path skipped its
-                 * VoiceOver focus move on the promise that the voice would
-                 * deliver it, and that promise just broke. Make the move now,
-                 * or the reply sits unread by either voice. */
-                if replySpeechFocus.speechQueueDidFinish(), UIAccessibility.isVoiceOverRunning {
-                    a11yFocus = messages.last.map { .message($0.id) }
-                }
+            if was, !speaking, awaitingSpokenReply,
+               replySpeechFocus.queueDidDrain(hasPendingSpeech: voiceService.hasPendingSpeech) {
+                // Completion is quiet, including a voice that never starts.
+                // A global old-pump drain is not this reply's failure receipt.
+                // VoiceService's actual playback-error handling retains its cue.
                 endSpeechWait()
             }
         }
@@ -3585,6 +3579,7 @@ struct ConversationDetailView: View {
         let turnRequestId = requestId ?? UUID().uuidString
         let turnAgentId = selectedAgentId
         let sentAttachment = includeAttachment ? pendingAttachment : nil
+        var completedReplyId: String?
         var reusedRowId: String? = nil
         if let rowId = reusePendingRowId, messages.contains(where: { $0.messageId == rowId }) {
             reusedRowId = rowId
@@ -3911,7 +3906,8 @@ struct ConversationDetailView: View {
                             attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
                         )
                     )
-                }
+                },
+                onCompletedReply: { completedReplyId = $0 }
             )
             // Build 205: her Aug-15 kill left a NINETY-SECOND hole between
             // "send started" and a "reply landed" that never came, so nothing
@@ -3939,38 +3935,24 @@ struct ConversationDetailView: View {
             // flips -- the sendState watcher reads this flag to know whether
             // the waiting ticks survive past the received bloop. Same
             // reply-exists condition as the enqueueSpeak below.
-            let focusCompletedReply = replySpeechFocus.completed(
+            let currentReply = completedReplyId.flatMap { id in
+                messages.first(where: {
+                    ReplySpeechFocus.acceptsReply(finalReplyId: id, conversationId: resolvedConversationId,
+                        message: ReplySpeechIdentity(messageId: $0.messageId, conversationId: $0.conversationId,
+                                                     isCreatedByUser: $0.isCreatedByUser))
+                })
+            }
+            replySpeechFocus.completed(
                 readAloudEnabled: readAloudEnabled,
-                hasAssistantReply: messages.contains(where: { !$0.isCreatedByUser })
+                hasAssistantReply: currentReply != nil
             )
             sendState = .idle
             if files != nil {
                 // Spent successfully -- the server owns it now.
                 pendingAttachment = nil
             }
-            /* ⭐ BUILD 254 — HER REPORT, Aug 30 2026: "voiceover on the native
-             * app reads the message at the same time as tts does when voice
-             * messages are turned on."
-             *
-             * This focus move and the `enqueueSpeak` below fire in the same
-             * breath, and the row's label is the ENTIRE reply -- so with voice
-             * messages on, VoiceOver read the reply off the focus move while
-             * the character's own voice read the same words out of the
-             * speaker. Two voices, same text, nothing synchronising them.
-             *
-             * Her call: when read-aloud is on, the spoken reply IS the
-             * delivery, so leave focus where she left it -- the arrival ding
-             * still marks the moment. With read-aloud off nothing else would
-             * announce the reply, so the move stays exactly as it was.
-             *
-             * Completion keeps speech-delivery intent separate from waiting
-             * for a first clip: streaming may already have spoken before
-             * FINAL. If TTS then fails to play
-             * anything, the isSpeaking watcher makes this move after the
-             * fact; see its comment. */
-            if focusCompletedReply {
-                a11yFocus = messages.last.map { .message($0.id) }
-            }
+            // Successful FINAL never moves VoiceOver to a row or composer,
+            // in either Hear mode. Arrival feedback and manual reading stay.
             if wasNewConversation {
                 // Session 24 (Kade: new chats "all say new chat"): now that
                 // the first send carries the NO_PARENT sentinel (see
@@ -4028,11 +4010,11 @@ struct ConversationDetailView: View {
                  * already playing"). The reload above is the first moment
                  * the real id exists, so this is the earliest it can be
                  * done. Nil-safe: no reply, no adoption, no crash. */
-                if let spoken = messages.last(where: { !$0.isCreatedByUser }) {
+                if let spoken = currentReply {
                     voiceService.adoptStreamedTurn(as: spoken.id)
                 }
             }
-            if !streamedThisTurn, readAloudEnabled, let reply = messages.last(where: { !$0.isCreatedByUser }) {
+            if !streamedThisTurn, readAloudEnabled, let reply = currentReply {
                 // FIX (session 21, Kade: "Whit replies still come back as
                 // Kiana"). Attribute the spoken reply to whoever ACTUALLY
                 // authored it (`reply.agentId` / `reply.speakerLabel`), not to

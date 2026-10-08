@@ -241,6 +241,7 @@ enum LibraryWords {
         var bits: [String] = [item.title]
         if let a = item.author, !a.isEmpty { bits.append("by \(a)") }
         bits.append(item.typeWord)
+        if let decade = item.decade, !decade.isEmpty { bits.append(decade) }
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }
@@ -257,6 +258,7 @@ enum LibraryWords {
         var bits: [String] = []
         if let a = item.author, !a.isEmpty { bits.append("by \(a)") }
         bits.append(item.typeWord)
+        if let decade = item.decade, !decade.isEmpty { bits.append(decade) }
         let len = length(of: item)
         if !len.isEmpty { bits.append(len) }
         if let sub = item.sub, !sub.isEmpty { bits.append(sub) }

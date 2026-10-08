@@ -139,6 +139,9 @@ final class VoiceService: NSObject, ObservableObject {
      * condition it needed. `pumpScheduled` is set SYNCHRONOUSLY, before the
      * Task exists, so the second caller can see it. */
     private var pumpScheduled = false
+    /// isSpeaking can be false before a scheduled pump gets its turn. Chat
+    /// wait cleanup must check real queued/pumping work instead of that edge.
+    var hasPendingSpeech: Bool { pumpScheduled || isPumping || !speakQueue.isEmpty || isClipPlaying }
     /* Part 91.10 — the pump raises this while it holds a prefetched clip, so
      * stopSpeaking can tell the pump to drop what it is carrying. The pump
      * owns the prefetch task; stop cannot reach into the loop, so it leaves a

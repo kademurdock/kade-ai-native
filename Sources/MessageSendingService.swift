@@ -117,11 +117,13 @@ final class MessageSendingService: ObservableObject {
         requestId: String? = nil,
         onText: ((String) -> Void)? = nil,
         onThink: ((String) -> Void)? = nil,
-        onTool: ((String) -> Void)? = nil
+        onTool: ((String) -> Void)? = nil,
+        onCompletedReply: ((String?) -> Void)? = nil
     ) async throws -> String {
         cancelMemoryReceiptRecovery()
         let memoryReceiptGeneration = memoryReceiptLease.generation
         liveMemoryCalls = []
+        let turnRequestId = requestId ?? UUID().uuidString
         let start = try await startGeneration(
             text: text,
             conversationId: conversationId,
@@ -129,7 +131,7 @@ final class MessageSendingService: ObservableObject {
             agentId: agentId,
             files: files,
             inputSource: inputSource,
-            requestId: requestId
+            requestId: turnRequestId
         )
         /* Build 212: the second half of the send-prologue bisect (see the
          * long note in ConversationDetailView.performSend). startGeneration
@@ -139,7 +141,15 @@ final class MessageSendingService: ObservableObject {
         KadeBreadcrumbs.drop("request dispatched")
         activeStreamId = start.streamId
         defer { activeStreamId = nil }
-        let replyId = try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText, onTool: onTool)
+        var replyId = try await waitForFinal(streamId: start.streamId, onThink: onThink, onText: onText, onTool: onTool)
+        if replyId == nil, !Task.isCancelled {
+            // A short stream can already be gone (404). One bounded read of
+            // this exact owner-scoped request preserves autoplay without
+            // guessing the newest historical assistant message.
+            replyId = await completedReplyId(requestId: turnRequestId, conversationId: start.conversationId)
+        }
+        if Task.isCancelled { throw URLError(.cancelled) }
+        onCompletedReply?(replyId)
         if let replyId, memoryReceiptLease.accepts(memoryReceiptGeneration) {
             recoverMemoryReceipts(scope: .init(conversationId: start.conversationId, messageId: replyId),
                                   generation: memoryReceiptGeneration)
@@ -272,6 +282,14 @@ final class MessageSendingService: ObservableObject {
     }
 
     private struct ReceiptBody: Decodable { let status: String }
+
+    private func completedReplyId(requestId: String, conversationId: String) async -> String? {
+        let request = client.request(path: "api/agents/chat/tasks/\(requestId)", authorized: true, timeout: 8)
+        guard let (data, http) = try? await client.send(request), !Task.isCancelled,
+              http.statusCode == 200,
+              let receipt = try? decoder.decode(ReplyTaskReceipt.self, from: data) else { return nil }
+        return receipt.completedReplyId(requestId: requestId, conversationId: conversationId)
+    }
 
     /// Never throws and never resends anything -- it only reads.
     func checkReceipt(requestId: String) async -> ReceiptCheck {

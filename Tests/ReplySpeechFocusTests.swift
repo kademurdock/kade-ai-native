@@ -6,45 +6,72 @@ func check(_ passed: Bool, _ message: String) {
     if !passed { fatalError(message) }
 }
 
-// The reported path: the final streamed clip is already playing at FINAL.
+// FINAL observes delivery state but never instructs an automatic focus move.
 var streamed = ReplySpeechFocus()
 streamed.playbackDidStart()
-check(!streamed.completed(readAloudEnabled: true, hasAssistantReply: true), "autoplay completion keeps the user's cursor")
-check(!streamed.awaitingFirstClip, "a clip before FINAL satisfies first-clip delivery")
-check(!streamed.speechQueueDidFinish(), "draining the final streamed clip cannot reread the reply through VoiceOver")
-
-// A gap between streamed sentences, including a gap at final completion.
+streamed.completed(readAloudEnabled: true, hasAssistantReply: true)
+check(!streamed.awaitingFirstClip, "a clip before FINAL satisfies delivery")
+check(!streamed.queueDidDrain(hasPendingSpeech: false), "draining spoken audio does not create another delivery")
 var gap = ReplySpeechFocus()
 gap.playbackDidStart()
-check(!gap.speechQueueDidFinish(), "a sentence gap does not request a fallback")
-check(!gap.completed(readAloudEnabled: true, hasAssistantReply: true), "FINAL in a sentence gap retains speech intent")
-check(!gap.speechQueueDidFinish(), "a later tail failure does not reread an already spoken reply")
+check(!gap.queueDidDrain(hasPendingSpeech: true), "a sentence gap with pending speech does not finish waiting")
+gap.completed(readAloudEnabled: true, hasAssistantReply: true)
+check(!gap.awaitingFirstClip && !gap.queueDidDrain(hasPendingSpeech: false), "FINAL between sentences does not rearm first-clip waiting")
 
-// The non-streamed handoff still delivers its first clip after FINAL.
 var buffered = ReplySpeechFocus()
-check(!buffered.completed(readAloudEnabled: true, hasAssistantReply: true), "buffered autoplay also preserves focus")
-check(buffered.awaitingFirstClip, "buffered speech waits for its actual first clip")
+buffered.completed(readAloudEnabled: true, hasAssistantReply: true)
+check(buffered.awaitingFirstClip, "buffered speech still waits for its real first clip")
+check(!buffered.queueDidDrain(hasPendingSpeech: true) && buffered.awaitingFirstClip,
+      "an older pump's false edge cannot end a newly scheduled or queued reply")
 buffered.playbackDidStart()
-check(!buffered.awaitingFirstClip && !buffered.speechQueueDidFinish(), "a clip after FINAL also prevents duplicate VoiceOver")
+check(!buffered.awaitingFirstClip && !buffered.queueDidDrain(hasPendingSpeech: false), "a clip after FINAL also prevents duplicate delivery")
 
-// A real speech failure must retain the existing accessible delivery path.
 var failed = ReplySpeechFocus()
-check(!failed.completed(readAloudEnabled: true, hasAssistantReply: true), "speech failure first waits for voice delivery")
-check(failed.speechQueueDidFinish(), "a queue that never played falls back to VoiceOver")
-check(!failed.speechQueueDidFinish(), "speech failure fallback happens only once")
+failed.completed(readAloudEnabled: true, hasAssistantReply: true)
+check(failed.awaitingFirstClip, "zero-audio FINAL first waits for actual queued playback")
+check(failed.queueDidDrain(hasPendingSpeech: false), "an actually idle queue ends waiting without a focus instruction")
+check(!failed.queueDidDrain(hasPendingSpeech: false), "an idle drain cannot repeat the completed wait")
 
 var silent = ReplySpeechFocus()
-check(silent.completed(readAloudEnabled: false, hasAssistantReply: true), "Hear replies off reads the new reply through VoiceOver")
-check(!silent.awaitingFirstClip && !silent.speechQueueDidFinish(), "a silent reply has no later voice fallback")
-check(silent.completed(readAloudEnabled: true, hasAssistantReply: false), "no assistant reply never promises speech")
+silent.completed(readAloudEnabled: false, hasAssistantReply: true)
+check(!silent.awaitingFirstClip, "Hear replies off stays quiet and never waits for autoplay")
+check(!silent.queueDidDrain(hasPendingSpeech: false), "Hear replies off has no automatic fallback delivery")
+silent.completed(readAloudEnabled: true, hasAssistantReply: false)
+check(!silent.awaitingFirstClip, "a FINAL without a current assistant reply never promises speech")
 
-// A new send and a canceled wait must not inherit a previous turn's result.
 streamed.reset()
-check(!streamed.playbackStarted && !streamed.awaitingFirstClip, "new send clears prior playback history")
-check(!streamed.completed(readAloudEnabled: true, hasAssistantReply: true) && streamed.speechQueueDidFinish(), "previous spoken turn cannot hide a new turn's speech failure")
+check(!streamed.playbackStarted && !streamed.awaitingFirstClip, "a new Send clears previous playback history")
+streamed.completed(readAloudEnabled: true, hasAssistantReply: true)
+check(!streamed.queueDidDrain(hasPendingSpeech: true) && streamed.awaitingFirstClip, "an old drain cannot finish a new pending Send")
 var canceled = ReplySpeechFocus()
-_ = canceled.completed(readAloudEnabled: true, hasAssistantReply: true)
+canceled.completed(readAloudEnabled: true, hasAssistantReply: true)
 canceled.clearWait()
-check(!canceled.speechQueueDidFinish(), "canceling a wait cannot cause a late focus move")
+check(!canceled.queueDidDrain(hasPendingSpeech: false), "canceling the wait leaves no late fallback action")
 
+let old = ReplySpeechIdentity(messageId: "old-reply", conversationId: "current-chat", isCreatedByUser: false)
+let current = ReplySpeechIdentity(messageId: "current-reply", conversationId: "current-chat", isCreatedByUser: false)
+check(!ReplySpeechFocus.acceptsReply(finalReplyId: nil, conversationId: "current-chat", message: old), "missing FINAL identity cannot replay history")
+check(!ReplySpeechFocus.acceptsReply(finalReplyId: "", conversationId: "current-chat", message: old), "empty FINAL identity cannot replay history")
+check(!ReplySpeechFocus.acceptsReply(finalReplyId: "current-reply", conversationId: "current-chat", message: old), "an old assistant row cannot stand in for the current reply")
+check(ReplySpeechFocus.acceptsReply(finalReplyId: "current-reply", conversationId: "current-chat", message: current), "the exact current FINAL reply is eligible for autoplay")
+check(!ReplySpeechFocus.acceptsReply(finalReplyId: "current-reply", conversationId: "other-chat", message: current), "same reply ID in another chat is rejected")
+let human = ReplySpeechIdentity(messageId: "current-reply", conversationId: "current-chat", isCreatedByUser: true)
+check(!ReplySpeechFocus.acceptsReply(finalReplyId: "current-reply", conversationId: "current-chat", message: human), "a human message is never an assistant autoplay reply")
+let receiptData = Data(#"{"taskId":"current-request","conversationId":"current-chat","status":"completed","responseMessageId":"current-reply","canOpenConversation":true}"#.utf8)
+let receipt = try JSONDecoder().decode(ReplyTaskReceipt.self, from: receiptData)
+check(receipt.completedReplyId(requestId: "current-request", conversationId: "current-chat") == "current-reply", "an already-ended stream recovers the exact completed request's reply")
+check(receipt.completedReplyId(requestId: "other-request", conversationId: "current-chat") == nil, "a different request cannot supply the reply")
+check(receipt.completedReplyId(requestId: "current-request", conversationId: "other-chat") == nil, "a different chat cannot supply the reply")
+for status in ["starting", "running", "failed", "stopped", "interrupted"] {
+    let incomplete = ReplyTaskReceipt(taskId: "current-request", conversationId: "current-chat", status: status,
+                                      responseMessageId: "current-reply", canOpenConversation: true)
+    check(incomplete.completedReplyId(requestId: "current-request", conversationId: "current-chat") == nil,
+          "a \(status) request cannot claim a completed reply")
+}
+let deleted = ReplyTaskReceipt(taskId: "current-request", conversationId: "current-chat", status: "completed",
+                               responseMessageId: "current-reply", canOpenConversation: false)
+check(deleted.completedReplyId(requestId: "current-request", conversationId: "current-chat") == nil, "a deleted or inaccessible chat cannot be recovered")
+let missing = ReplyTaskReceipt(taskId: "current-request", conversationId: "current-chat", status: "completed",
+                               responseMessageId: nil, canOpenConversation: true)
+check(missing.completedReplyId(requestId: "current-request", conversationId: "current-chat") == nil, "a receipt without a reply ID never guesses history")
 print("Reply speech focus: \(checks) checks passed")

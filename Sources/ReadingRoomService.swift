@@ -87,6 +87,8 @@ struct RRItem: Codable, Identifiable, Hashable {
     /// with the movie category, so the category alone said "Movie" for every
     /// episode. `category` stays as stored: pictures and Edit key on it.
     var typeLabel: String?
+    /// The unified catalog's source-derived decade, when returned by browse.
+    var decade: String?
 
     /// Sep 12 2026, her word: "videos are showing up as books, doesn't seem
     /// like there's a way to play them or get AI descriptions". The archive
