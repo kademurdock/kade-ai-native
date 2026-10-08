@@ -22,6 +22,7 @@ struct CallView: View {
     @StateObject private var camera = CameraCaptureController()
     @EnvironmentObject private var conversationsService: ConversationsService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var startError: String?
     @State private var didAnnounceConnected = false
@@ -83,7 +84,8 @@ struct CallView: View {
                     CharacterPortraitView(agentID: agentId, name: agentName,
                         playing: true,
                         level: { callService.characterLevel }, listening: true,
-                        presentation: { callService.characterPresentation })
+                        presentation: { callService.characterPresentation },
+                        stage: true, side: callPortraitSide)
                 } else {
                     KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
                 }
@@ -256,6 +258,14 @@ struct CallView: View {
     }
 
     // MARK: - Pieces
+
+    private var callPortraitSide: Double {
+        if dynamicTypeSize.isAccessibilitySize { return 104 }
+        let height = UIScreen.main.bounds.height
+        if height < 700 { return 132 }
+        if height < 860 { return 160 }
+        return 208
+    }
 
     private var statusHeader: some View {
         VStack(spacing: 6) {
