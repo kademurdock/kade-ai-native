@@ -117,3 +117,29 @@ check(shapes.count >= 3, "the mouth keeps changing shape")
 check(CharacterMotion.viseme(time: 3.01, strength: 0.4, seed: 7) == CharacterMotion.viseme(time: 3.05, strength: 0.4, seed: 7), "one shape per syllable slot, no flicker")
 check(CharacterMotion.pose(id: "a", time: 2, level: 1, active: false).viseme == 0, "off is a closed mouth")
 print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")
+
+let figureBefore = count
+let figureSpeech = CharacterPresentation(activity: .speaking, expression: .excited, elapsed: 0.4)
+let figureOn = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0.15,
+    active: true, presentation: figureSpeech)
+let figureQuiet = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0,
+    active: true, presentation: figureSpeech)
+check(figureOn.nearArmAngle != figureQuiet.nearArmAngle, "figure follows rendered speech energy")
+let figureOff = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0.15,
+    active: false, presentation: figureSpeech)
+check(figureOff.headAngle == 0 && figureOff.nearArmAngle == 0 && figureOff.torsoLift == 0,
+    "motion gate parks the entire figure")
+check(CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: .nan, level: 0.15,
+    active: true, presentation: figureSpeech).headAngle == 0, "invalid figure clock is still")
+for sample in [CharacterPresentation.idle, CharacterPresentation(activity: .listening),
+    CharacterPresentation(activity: .thinking), figureSpeech] {
+    for level in [0.0, 0.02, 0.5, 100.0, Double.nan] {
+        let p = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 14.5,
+            level: level, active: true, presentation: sample)
+        check(abs(p.headAngle) <= 7 && abs(p.headNod) <= 0.018 &&
+            abs(p.torsoAngle) <= 3 && abs(p.torsoLift) <= 0.008 &&
+            abs(p.farArmAngle) <= 14 && abs(p.nearArmAngle) <= 16,
+            "figure joints stay bounded")
+    }
+}
+print("Layered figure motion: \(count - figureBefore) checks passed")
