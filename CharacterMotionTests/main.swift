@@ -12,6 +12,19 @@ check(!CharacterMotion.prepared(id: CharacterMotion.dellaID, path: "/images/" + 
 check(CharacterMotion.prepared(id: CharacterMotion.lillyID, path: "/images/" + CharacterMotion.lillyFile), "the public Lilly's own artwork")
 check(CharacterMotion.prepared(id: CharacterMotion.skyleeLillyID, path: "/images/" + CharacterMotion.skyleeLillyFile), "Skylee's Lilly's own artwork")
 check(!CharacterMotion.prepared(id: CharacterMotion.lillyID, path: "/images/" + CharacterMotion.skyleeLillyFile), "each Lilly matches only her own file")
+for (id, file) in [
+    (CharacterMotion.kianaID, CharacterMotion.kianaFile),
+    (CharacterMotion.dellaID, CharacterMotion.dellaFile),
+    (CharacterMotion.harleyID, CharacterMotion.harleyFile),
+    (CharacterMotion.lillyID, CharacterMotion.lillyFile),
+    (CharacterMotion.skyleeLillyID, CharacterMotion.skyleeLillyFile),
+    (CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile),
+] {
+    check(CharacterAppearance.description(agentID: id, avatarPath: "/images/" + file) != nil,
+        "current portrait has an optional description")
+    check(CharacterAppearance.description(agentID: id, avatarPath: "/images/replaced.png") == nil,
+        "replaced portrait has no stale description")
+}
 check(CharacterMotion.rigID(CharacterMotion.skyleeLillyID) == CharacterMotion.lillyID, "Skylee's Lilly wears the public Lilly's rig")
 check(CharacterMotion.rigID(CharacterMotion.kianaID) == CharacterMotion.kianaID, "everyone else is their own rig")
 check(CharacterMotion.animatedIDs.contains(CharacterMotion.lillyID) && CharacterMotion.animatedIDs.contains(CharacterMotion.skyleeLillyID), "both Lillys are on the moving-faces shelf")
