@@ -32,7 +32,9 @@ enum CharacterKianaBustGeometry {
     /// intentionally preserving the crown's original crop at the top edge.
     static var headPath: Path {
         var path = Path()
-        path.move(to: CGPoint(x: 145, y: 0))
+        // Follow the actual upper-left loc edge. The old straight corner
+        // retained a wedge of the tan source background beside the crown.
+        path.move(to: CGPoint(x: 167, y: 0))
         path.addLine(to: CGPoint(x: 279, y: 0))
         path.addCurve(to: CGPoint(x: 309, y: 24), control1: CGPoint(x: 291, y: 5), control2: CGPoint(x: 302, y: 13))
         path.addLine(to: CGPoint(x: 319, y: 34))
@@ -59,9 +61,9 @@ enum CharacterKianaBustGeometry {
         path.addLine(to: CGPoint(x: 72, y: 130))
         path.addLine(to: CGPoint(x: 79, y: 107))
         path.addLine(to: CGPoint(x: 82, y: 90))
-        path.addCurve(to: CGPoint(x: 113, y: 34), control1: CGPoint(x: 90, y: 68), control2: CGPoint(x: 101, y: 48))
-        path.addLine(to: CGPoint(x: 135, y: 14))
-        path.addLine(to: CGPoint(x: 145, y: 0))
+        path.addCurve(to: CGPoint(x: 108, y: 47), control1: CGPoint(x: 88, y: 72), control2: CGPoint(x: 98, y: 58))
+        path.addCurve(to: CGPoint(x: 134, y: 18), control1: CGPoint(x: 115, y: 36), control2: CGPoint(x: 124, y: 27))
+        path.addCurve(to: CGPoint(x: 167, y: 0), control1: CGPoint(x: 143, y: 11), control2: CGPoint(x: 151, y: 3))
         path.closeSubpath()
         return path
     }

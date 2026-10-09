@@ -18,6 +18,13 @@ struct CharacterPortraitView: View {
     var side = 160.0
     /// A local preview may pause decoration; this never overrides system policy.
     var motionPaused = false
+    #if DEBUG && targetEnvironment(simulator)
+    /// Controlled audit samples only; never a production speech-turn trigger.
+    var handPrototypeElapsed: Double? = nil
+    var handPrototypeVariant: CharacterHarleyHandPrototypeVariant = .smallRight
+    /// Stable open/closed samples for native mask review, never ordinary UI.
+    var blinkAuditAmount: Double? = nil
+    #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -44,10 +51,11 @@ struct CharacterPortraitView: View {
         if enabled {
             TimelineView(.animation(minimumInterval: 1.0 / (playing ? 24.0 : 12.0), paused: !active)) { timeline in
                 let performance = active ? presentation() : .idle
+                let face = CharacterFacialPolicy.face(for: performance, agentID: agentID)
                 let time = timeline.date.timeIntervalSinceReferenceDate
                 let outputLevel = active && playing ? level() : 0
-                let pose = CharacterMotion.pose(id: agentID ?? "unknown",
-                    time: time, level: outputLevel, active: active, presentation: performance)
+                let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
+                    time: time, level: outputLevel, active: active, presentation: performance))
                 // Facial expression and individual gestures carry the performance;
                 // the larger stage adds a little reach without amplifying it sixfold.
                 let reach = stage ? 1.6 : 1.0
@@ -60,22 +68,30 @@ struct CharacterPortraitView: View {
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
                     if let artwork = bustArtwork {
-                        layeredBust(artwork, pose: pose, face: performance.face,
+                        layeredBust(artwork, pose: pose, face: face,
                             motion: CharacterBustMotion.pose(CharacterFigureMotion.pose(
                                 id: agentID ?? "unknown", time: time, level: outputLevel,
                                 active: active, presentation: performance), limits: artwork.motionLimits))
                     } else if let artwork = figureArtwork, let sheet {
-                        layeredFigure(artwork, sheet: sheet, pose: pose, face: performance.face,
+                        layeredFigure(artwork, sheet: sheet, pose: pose, face: face,
                             body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
                                 time: time, level: outputLevel, active: active, presentation: performance))
                     } else {
-                        portrait(pose, face: performance.face)
+                        portrait(pose, face: face)
                             .frame(width: side, height: side)
                             .clipShape(RoundedRectangle(cornerRadius: 22))
                             .scaleEffect(active ? pose.scale : 1)
                             .rotationEffect(.degrees(pose.tilt * reach))
                             .offset(y: pose.lift * reach)
                     }
+                    #if DEBUG && targetEnvironment(simulator)
+                    if stage, side >= 160, prepared,
+                       agentID == CharacterMotion.harleyID,
+                       bustArtwork != nil, let sample = handPrototypeElapsed {
+                        CharacterHarleyHandPrototype(side: side,
+                            sampleElapsed: sample, active: active, variant: handPrototypeVariant)
+                    }
+                    #endif
                 }
                 .frame(width: side + 12, height: side + 12)
                 // Image/opacity animation state belongs to one exact portrait.
@@ -106,6 +122,15 @@ struct CharacterPortraitView: View {
     private struct RenderIdentity: Hashable {
         let agentID: String?
         let avatarPath: String?
+    }
+    private func reviewedPose(_ pose: CharacterPose) -> CharacterPose {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, let amount = blinkAuditAmount {
+            return CharacterPose(mouth: pose.mouth, blink: amount, tilt: pose.tilt,
+                lift: pose.lift, brow: pose.brow, viseme: pose.viseme, scale: pose.scale)
+        }
+        #endif
+        return pose
     }
     /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
     private var rig: String? { CharacterMotion.rigID(agentID) }
@@ -145,23 +170,9 @@ struct CharacterPortraitView: View {
     }
     @ViewBuilder private func portrait(_ pose: CharacterPose, face: CharacterFace) -> some View {
         if let sheet {
-            let basicOnly = agentID == CharacterMotion.witherspoonID
-            let shownFace = basicOnly ? face.basicSheetFace : face
             ZStack(alignment: .topLeading) {
                 panel(sheet.faces, CharacterFace.neutral.rawValue)
-                // Every drawn face sits ready at zero opacity so a change is a dissolve.
-                ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed && (!basicOnly || $0.rawValue < 9) }, id: \.rawValue) { drawnFace in
-                    let index = drawnFace.rawValue
-                    feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
-                        .opacity(shownFace.rawValue == index ? 1 : 0)
-                }
-                .animation(active ? .easeInOut(duration: 0.45) : nil, value: face)
-                // A laugh keeps its own open mouth; every other face talks with shapes.
-                if pose.viseme > 0 && pose.viseme < 9 && shownFace != .laugh {
-                    feathered(panel(sheet.mouths, pose.viseme), region: sheet.mouth, inner: 0.5)
-                }
-                feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes, inner: 0.6)
-                    .opacity(CharacterMotion.blend(pose.blink))
+                faceDetails(pose, face: face, sheet: sheet)
             }
         } else if let url {
             AsyncImage(url: url) { phase in
@@ -272,21 +283,26 @@ struct CharacterPortraitView: View {
         let basicOnly = agentID == CharacterMotion.witherspoonID
         let shownFace = basicOnly ? face.basicSheetFace : face
         return ZStack(alignment: .topLeading) {
-            // Every drawn face sits ready at zero opacity so a change dissolves.
-            ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed && (!basicOnly || $0.rawValue < 9) }, id: \.rawValue) { drawnFace in
-                let index = drawnFace.rawValue
+            // One authored expression owns the face. Spatial feathering keeps
+            // its edge soft without dissolving two sets of brows or lips.
+            if shownFace != .neutral && shownFace != .closed {
+                let index = shownFace.rawValue
                 feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
-                    .opacity(shownFace.rawValue == index ? 1 : 0)
             }
-            .animation(active ? .easeInOut(duration: 0.45) : nil, value: face)
             // A laugh keeps its own open mouth; every other face uses shapes.
             if pose.viseme > 0 && pose.viseme < 9 && shownFace != .laugh {
                 feathered(panel(sheet.mouths, pose.viseme), region: sheet.mouth, inner: 0.5)
             }
-            feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes, inner: 0.6)
-                .opacity(CharacterMotion.blend(pose.blink))
+            // Only open and closed eyes are authored. A short closed-eye hold
+            // follows the existing blink wave without inventing ghost eyelids.
+            if CharacterFacialPolicy.shouldBlink(amount: pose.blink,
+                    face: shownFace, agentID: agentID) {
+                feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes,
+                    inner: CharacterFacialPolicy.blinkInnerRadius(agentID: agentID))
+            }
         }
         .frame(width: side, height: side)
+        .transaction { $0.animation = nil; $0.disablesAnimations = true }
     }
 
     private func figureLayer(_ image: String) -> some View {

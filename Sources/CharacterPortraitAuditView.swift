@@ -85,6 +85,10 @@ struct CharacterPortraitAuditView: View {
     @State private var reviewSide = 208.0
     @State private var reviewStill = false
     @State private var reviewDark = false
+    @State private var handSample: Double? = nil
+    @State private var handVariant = CharacterHarleyHandPrototypeVariant.smallRight
+    @State private var facialStudy = false
+    @State private var blinkSample: Double? = nil
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -103,11 +107,19 @@ struct CharacterPortraitAuditView: View {
                 CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
-                    motionPaused: reviewStill)
-                Text(reviewName + " · production puppet")
-                Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
-                    ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
-                    : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                    motionPaused: reviewStill, handPrototypeElapsed: handSample,
+                    handPrototypeVariant: handVariant, blinkAuditAmount: blinkSample)
+                Text(reviewName + (facialStudy ? " · controlled face preview"
+                    : (handSample == nil ? " · production puppet" : " · hand study")))
+                if facialStudy {
+                    Text("Authored face study. No audio; simulator preview, not a recording of a production call.")
+                } else if handSample != nil {
+                    Text("Unregistered hand prototype. Controlled motion sample; not enabled in the app.")
+                } else {
+                    Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
+                        ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
+                        : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                }
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
@@ -218,6 +230,81 @@ struct CharacterPortraitAuditView: View {
             reviewPerformance = .idle
             reviewDark = false
             try await capturePose("lilly-private-production-puppet")
+            // A controlled study uses the existing production portrait and
+            // crop, with the candidate hand added only in DEBUG simulators.
+            reviewAgentID = CharacterMotion.harleyID
+            reviewName = "Harley"
+            reviewPerformance = CharacterPresentation(activity: .listening)
+            try check(UIImage(named: "CharacterHarleyGreetingHandPrototype") != nil,
+                "Harley hand study resource is bundled for simulator review")
+            try check(!CharacterHarleyHandPrototypeMotion.pose(elapsed: 1, active: false).visible,
+                "disabled motion hides the hand study entirely")
+            for variant in [CharacterHarleyHandPrototypeVariant.smallRight, .largeLeft] {
+                handVariant = variant
+                let prefix = variant == .smallRight ? "harley-hand-study" : "harley-hand-study-large-left"
+                for dark in [false, true] {
+                    reviewDark = dark
+                    for (sample, label) in [(0.0, "rest"), (0.25, "entry"), (0.5, "raised"),
+                                           (0.625, "right"), (0.875, "left"), (1.75, "exit"), (2.0, "finished")] {
+                        handSample = sample
+                        try await capturePose("\(prefix)-\(label)-\(dark ? "dark" : "light")")
+                    }
+                    handSample = 0.5
+                    reviewStill = true
+                    try await capturePose("\(prefix)-motion-off-\(dark ? "dark" : "light")")
+                    reviewStill = false
+                    UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+                    try await capturePose("\(prefix)-reduce-motion-\(dark ? "dark" : "light")")
+                    UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
+                    handSample = 0
+                    try await capturePose("\(prefix)-full-cycle-\(dark ? "dark" : "light")")
+                    for tick in 1...48 {
+                        handSample = Double(tick) / 24
+                        await wait(1.0 / 24)
+                    }
+                }
+            }
+            handVariant = .smallRight
+            handSample = nil
+            facialStudy = true
+            reviewDark = false
+            reviewStill = false
+            reviewSide = 208
+            // Keep the exact production compositor visible through complete
+            // blink windows. These controlled faces do not simulate speech
+            // audio or assert audible synchronization.
+            for person in roster {
+                reviewAgentID = person.agentID
+                reviewName = person.auditName
+                reviewPerformance = CharacterPresentation(activity: .speaking,
+                    expression: .amused, elapsed: 0.4, laughing: true)
+                try await capturePose(person.rawValue + "-authored-laugh-light")
+                await wait(person == .della || person == .witherspoon ? 6 : 2)
+                reviewPerformance = CharacterPresentation(activity: .speaking,
+                    expression: .excited, elapsed: 0.4, laughing: false)
+                try await capturePose(person.rawValue + "-authored-excited-light")
+                await wait(2)
+            }
+            // Review the full authored eyelid over three different faces.
+            // Deterministic samples make the remaining spatial edge observable
+            // even when an ordinary blink falls between screenshot captures.
+            for person in [CharacterAuditPerson.lilly, .privateLilly] {
+                reviewAgentID = person.agentID
+                reviewName = person.auditName
+                for (expression, label) in [(CharacterExpression.neutral, "neutral"),
+                                           (.concerned, "concerned"), (.warm, "smile")] {
+                    reviewPerformance = CharacterPresentation(activity: .listening, expression: expression)
+                    for (amount, state) in [(0.0, "open"), (1.0, "closed")] {
+                        blinkSample = amount
+                        try await capturePose("\(person.rawValue)-blink-mask-\(label)-\(state)-light")
+                    }
+                }
+            }
+            blinkSample = nil
+            facialStudy = false
+            reviewPerformance = .idle
+            reviewDark = false
+            gallery = false
             puppetPoses = false
             let wav = Self.wav(seconds: 3)
             callMode = true

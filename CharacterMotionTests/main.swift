@@ -131,6 +131,130 @@ check(CharacterMotion.viseme(time: 3.01, strength: 0.4, seed: 7) == CharacterMot
 check(CharacterMotion.pose(id: "a", time: 2, level: 1, active: false).viseme == 0, "off is a closed mouth")
 print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")
 
+let facialBefore = count
+for id in [CharacterMotion.lillyID, CharacterMotion.skyleeLillyID] {
+    check(CharacterFacialPolicy.blinkInnerRadius(agentID: id) == 0.9,
+        "both exact Lilly identities use her complete authored eye core")
+}
+for id in [nil, "unknown", CharacterMotion.harleyID, CharacterMotion.kianaID,
+           CharacterMotion.dellaID, CharacterMotion.witherspoonID] as [String?] {
+    check(CharacterFacialPolicy.blinkInnerRadius(agentID: id) == 0.6,
+        "Lilly's eye-core adjustment cannot affect another identity")
+}
+let neutralListener = CharacterPresentation(activity: .listening)
+check(CharacterFacialPolicy.face(for: neutralListener, agentID: CharacterMotion.harleyID) == .neutral,
+    "Harley listens with his resting face instead of startled curious eyes")
+for id in CharacterMotion.animatedIDs.filter({ $0 != CharacterMotion.harleyID }) {
+    check(CharacterFacialPolicy.face(for: neutralListener, agentID: id) == .curious,
+        "the listening face of another prepared identity is unchanged")
+}
+for id in [nil, "", "unknown"] as [String?] {
+    check(CharacterFacialPolicy.face(for: neutralListener, agentID: id) == neutralListener.face,
+        "missing or unknown identities never borrow Harley's listening override")
+}
+for activity in [CharacterActivity.idle, .thinking, .speaking] {
+    let presentation = CharacterPresentation(activity: activity)
+    check(CharacterFacialPolicy.face(for: presentation, agentID: CharacterMotion.harleyID) == presentation.face,
+        "Harley's other neutral activities preserve their established face")
+}
+for expression in CharacterExpression.allCases.filter({ $0 != .neutral }) {
+    let presentation = CharacterPresentation(activity: .listening, expression: expression)
+    check(CharacterFacialPolicy.face(for: presentation, agentID: CharacterMotion.harleyID) == expression.face,
+        "an explicit direction takes precedence over Harley's resting-listener face")
+}
+for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
+    let presentation = CharacterPresentation(activity: activity, laughing: true)
+    check(CharacterFacialPolicy.face(for: presentation, agentID: CharacterMotion.harleyID) == .laugh,
+        "a one-shot laugh takes precedence over the listening override")
+}
+for invalid in [Double.nan, Double.infinity, -Double.infinity, -1, 1.01] {
+    check(!CharacterFacialPolicy.shouldBlink(amount: invalid, face: .neutral, agentID: CharacterMotion.harleyID),
+        "invalid blink data cannot park an eyelid over the face")
+}
+check(!CharacterFacialPolicy.shouldBlink(amount: 0, face: .neutral, agentID: CharacterMotion.harleyID)
+    && !CharacterFacialPolicy.shouldBlink(amount: 0.349999, face: .neutral, agentID: CharacterMotion.harleyID)
+    && CharacterFacialPolicy.shouldBlink(amount: 0.35, face: .neutral, agentID: CharacterMotion.harleyID)
+    && CharacterFacialPolicy.shouldBlink(amount: 1, face: .neutral, agentID: CharacterMotion.harleyID),
+    "authored closed eyes switch at a bounded threshold without fractional opacity")
+for id in [CharacterMotion.harleyID, CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.skyleeLillyID] {
+    check(!CharacterFacialPolicy.shouldBlink(amount: 1, face: .laugh, agentID: id),
+        "an authored closed-eye laugh retains its own eyes, including private Lilly")
+}
+for id in [CharacterMotion.dellaID, CharacterMotion.witherspoonID] {
+    check(CharacterFacialPolicy.shouldBlink(amount: 1, face: .laugh, agentID: id),
+        "an authored open-eye laugh retains its blink")
+}
+check(!CharacterFacialPolicy.shouldBlink(amount: 1, face: .delighted, agentID: CharacterMotion.harleyID),
+    "Harley's authored closed-eye delight retains its own eyelids")
+for id in [CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.skyleeLillyID,
+           CharacterMotion.dellaID, CharacterMotion.witherspoonID] {
+    check(CharacterFacialPolicy.shouldBlink(amount: 1, face: .delighted, agentID: id),
+        "the other authored open-eye delighted panels retain their blink")
+}
+// Both existing sinusoid windows must survive the actual 12/24 fps cadence,
+// regardless of where the window falls between two display ticks. No new
+// animation clock or duration is introduced by the discrete pixel selection.
+for duration in [0.16, 0.2] {
+    let ownedDuration = duration * (1 - 2 * asin(CharacterFacialPolicy.blinkThreshold) / .pi)
+    check(ownedDuration > 0.12 && ownedDuration < 0.16,
+        "the authored closed-eye hold stays brief inside the existing blink wave")
+    for fps in [12, 24] {
+        for offset in 0..<48 {
+            var closedTicks = 0
+            for tick in -1...(Int(ceil(duration * Double(fps))) + 1) {
+                let elapsed = (Double(tick) + Double(offset) / 48) / Double(fps)
+                let amount = (0...duration).contains(elapsed) ? sin(elapsed / duration * .pi) : 0
+                if CharacterFacialPolicy.shouldBlink(amount: amount, face: .neutral, agentID: CharacterMotion.harleyID) {
+                    closedTicks += 1
+                }
+            }
+            check(closedTicks >= Int(floor(ownedDuration * Double(fps)))
+                && closedTicks <= Int(ceil(ownedDuration * Double(fps))),
+                "blink is visible for the expected bounded ticks at 12/24 fps")
+        }
+    }
+}
+for id in CharacterMotion.animatedIDs {
+    for fps in [12, 24] {
+        var blinkRun = 0
+        var totalClosed = 0
+        for tick in 0..<(20 * fps) {
+            let pose = CharacterMotion.pose(id: id, time: Double(tick) / Double(fps), level: 0,
+                active: true, presentation: neutralListener)
+            if CharacterFacialPolicy.shouldBlink(amount: pose.blink, face: .neutral, agentID: id) {
+                blinkRun += 1; totalClosed += 1
+                check(blinkRun <= Int(ceil(0.16 * Double(fps))),
+                    "actual per-character blink waves never hold the eye patch too long")
+            } else {
+                blinkRun = 0
+            }
+        }
+        check(totalClosed > 0, "actual per-character clocks retain blinks at each display cadence")
+    }
+}
+check(!CharacterFacialPolicy.shouldBlink(amount: CharacterPose.still.blink, face: .neutral,
+        agentID: CharacterMotion.harleyID), "the still pose has no decorative blink")
+print("Authored facial selection: \(count - facialBefore) checks passed")
+
+let handBefore = count
+for invalid in [Double.nan, Double.infinity, -Double.infinity, -1, 0, 2, 3] {
+    check(!CharacterHarleyHandPrototypeMotion.pose(elapsed: invalid, active: true).visible,
+        "invalid or completed hand samples show no additional limb")
+}
+for tick in 1..<200 {
+    let elapsed = Double(tick) / 100
+    let pose = CharacterHarleyHandPrototypeMotion.pose(elapsed: elapsed, active: true)
+    check(pose.visible && pose.angle.isFinite && (-2...72).contains(pose.angle),
+        "the entire hand study remains within its authored rotation range")
+    check(!CharacterHarleyHandPrototypeMotion.pose(elapsed: elapsed, active: false).visible,
+        "motion policy hides the hand at every point in the study")
+}
+for sample in [0.5, 1.0, 1.5] {
+    check(abs(CharacterHarleyHandPrototypeMotion.pose(elapsed: sample, active: true).angle) < 0.000001,
+        "entry, raised swings and exit join at the same position")
+}
+print("Isolated hand study: \(count - handBefore) checks passed")
+
 let figureBefore = count
 let figureSpeech = CharacterPresentation(activity: .speaking, expression: .excited, elapsed: 0.4)
 let figureOn = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0.15,

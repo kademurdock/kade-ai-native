@@ -1,0 +1,56 @@
+Harley greeting hand v1: isolated native simulator study
+
+Created with the built-in ImageGen tool on 2026-10-09. No paid API/CLI fallback.
+Source output: C:/Users/KADE/.codex/generated_images/01a12108-89e0-7591-94cf-034672a00923/exec-57e9342d-de51-45ba-ba78-f55f88880efb.png
+Source canvas: 1024x1536 RGBA.
+SHA-256: df5ea251a2ca6fbb0ec550636475fee9b3a46d837776c4866428ac33e615efaf
+
+The source is copied byte-for-byte to this directory and to
+CharacterHarleyGreetingHandPrototype.imageset. Raster RGB/alpha are unchanged.
+Generated alpha retains a diffuse background halo. A hand-authored SwiftUI
+silhouette excludes the halo at runtime; this is a code mask, not raster editing.
+The old original Harley face, neck, torso and all atlas art remain unchanged.
+
+The anatomy and sleeve are generated supporting art, not the original portrait's
+limb pixels. Likeness/style, shoulder continuity and native placement still need
+review. No independent figure pack or normal-app gesture is registered.
+
+World placement in the existing crop: x628, y359, width194.56, height291.84.
+Crop remains x242, y0, side540. Rotation pivot is world728,638, below the viewport.
+The raised pose swings +/-2degrees; rest uses +72degrees to place the hand below
+the viewport. The 2second gesture is a controlled review sample, not a rule to
+repeat for every sentence/clip. Caller must pass the complete motion-policy gate.
+
+Exact built-in generation and background-extraction prompts are preserved in
+dev/harley-hand-generation-prompts.txt. That transcript is the prompt provenance;
+this note records the selected output and deterministic native registration.
+
+Integration API: CharacterHarleyHandPrototype(side: side,
+sampleElapsed: controlledSeconds, active: completeMotionPolicyGate).
+Place it after the existing bust head as a foreground layer. It has no background,
+blocks no touch target, is hidden from VoiceOver and clips to the same stage shape.
+
+Static geometry verification: 2321 sampled source silhouette points. Across
+raised angles -2,-1,0,1,2degrees, source fingers/palm above y600 stay in world
+x670.169..776.767, y368.755..473.703, inside the existing viewport. At resting
+72degrees no sampled trace point lies inside the viewport. The visible raised
+trace does not enter the original head contour; sampled minimum separation is
+53.554world pixels before head motion. This is geometric evidence, not native
+visual acceptance of the extraction or attachment.
+
+Second DEBUG simulator variant: largeLeft. Uses the same source PNG/RGB and
+same authored silhouette, mirrored in SwiftUI only after the source cut.
+World placement: x180,y325,width291.84,height437.76,pivot321.36,743.
+The source is1.5times the smallRight image scale; the face/crop stay unchanged.
+Negated gesture rotation puts rest at-72degrees outside the left side.
+
+Analytical second-variant check:17hand angles from-2to+2degrees in0.25degree
+steps,17Harley head angles over the same range and head offsets-3,0,+3pixels:
+867combined pose samples. No sampled hand/head contour intersection. Minimum
+sampled contour separation9.592world pixels. Raised fingers/palm above source
+y600 stay at world x248.706..408.569,y339.649..497.072, inside the rectangular
+crop x242..782,y0..540. Rest has zero sampled points in that viewport.
+These are sampled geometric bounds. The rounded native stage clip, visual
+forearm attachment, extraction edges and perceived scale are not yet verified
+for largeLeft; no production acceptance is claimed. Default remains smallRight,
+preserving the first native study's placement and angle behavior.

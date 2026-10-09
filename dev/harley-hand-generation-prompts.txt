@@ -1,0 +1,17 @@
+Harley hand prototype — built-in ImageGen, 2026-10-09
+
+Generation reference: dev/puppet-review-assets/body.png (style reference only)
+Generated output: exec-8581de3d-e5df-4e8d-814f-0b1181301634.png
+transparent_background: true
+
+Exact generation prompt:
+Use case: photorealistic-natural. Asset type: isolated transparent forearm/hand animation layer for an iPhone character puppet. The input image is a STYLE REFERENCE ONLY: match the adult man's warm skin tone, worn blue denim overshirt, rolled cuff, camera perspective, soft frontal light and realistic photographic texture. Generate only ONE anatomically natural adult male forearm with ONE open hand, raised in a gentle conversational greeting, palm toward camera, relaxed five fingers. No head, face, torso, shoulder, second arm or other objects. Portrait composition: fingers point upward; palm is in upper third, wrist around middle; denim rolled cuff immediately below wrist; a short vertical denim-covered forearm extends to the lower edge and ends with a clean rounded elbow cap. Straight axis so the layer can rotate around its bottom elbow pivot. The entire hand and all fingers must fit with transparent margin, no clipping. Keep the palm modest in size relative to the arm, natural proportions and no jewelry. Genuinely transparent background with clean anti-aliased photographic edges, no checkerboard painted into pixels, no shadow or glow outside the arm, no text. This is an additional layer; do not redraw or include any part of the reference torso.
+
+Background extraction edit target: the generated output above
+Edited output: exec-57e9342d-de51-45ba-ba78-f55f88880efb.png
+transparent_background: true
+
+Exact extraction prompt:
+Use case: background-extraction. Edit target: the isolated adult male denim forearm and hand. Remove ALL of the brown, blue and black studio background and ALL diffuse halo/glow outside the actual hand, fingers, skin, cuff and denim. Change only background/alpha. Preserve the exact arm anatomy, five fingers, skin RGB texture, denim RGB, pose, composition and size. Output a clean production cutout on genuinely transparent pixels: outside the silhouette alpha is zero, with only a narrow anti-aliased edge. No shadow, color mist, glow or feathered cloud outside the subject. Keep the entire hand and rounded denim elbow end. This is an animation layer, so a broad partially transparent background is unacceptable.
+
+Inspection result: both outputs retain a broad diffuse alpha halo. The edited output is a prototype source, not an approved production cutout. A runtime vector silhouette may mask it without modifying raster RGB; native visual review is required before registration.
