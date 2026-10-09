@@ -24,6 +24,11 @@ struct CharacterPortraitView: View {
     var handPrototypeVariant: CharacterHarleyHandPrototypeVariant = .smallRight
     /// Stable open/closed samples for native mask review, never ordinary UI.
     var blinkAuditAmount: Double? = nil
+    /// Angel's geometric expressions/visemes, controlled visual samples only.
+    var angelFaceAudit: CharacterFace? = nil
+    var angelMouthAudit: Int? = nil
+    var angelMotionAudit: CharacterBustPose? = nil
+    var angelOrnamentsAudit: AngelVectorOrnamentPose? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
@@ -33,6 +38,9 @@ struct CharacterPortraitView: View {
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
+    private var angelArtwork: CharacterAngelVectorArt? {
+        CharacterAngelArtwork.approved(agentID: agentID, avatarPath: path)
+    }
     private var figureArtwork: CharacterFigureArtwork? {
         stage ? CharacterFigureArtwork.approved(agentID: agentID, avatarPath: path) : nil
     }
@@ -51,7 +59,7 @@ struct CharacterPortraitView: View {
         if enabled {
             TimelineView(.animation(minimumInterval: 1.0 / (playing ? 24.0 : 12.0), paused: !active)) { timeline in
                 let performance = active ? presentation() : .idle
-                let face = CharacterFacialPolicy.face(for: performance, agentID: agentID)
+                let face = reviewedFace(CharacterFacialPolicy.face(for: performance, agentID: agentID))
                 let time = timeline.date.timeIntervalSinceReferenceDate
                 let outputLevel = active && playing ? level() : 0
                 let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
@@ -67,7 +75,19 @@ struct CharacterPortraitView: View {
                             .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
-                    if let artwork = bustArtwork {
+                    if let art = angelArtwork {
+                        CharacterAngelVectorView(art: art,
+                            facial: AngelVectorMotion.facial(face, blink: pose.blink, active: active),
+                            mouth: AngelVectorMotion.mouth(role: pose.viseme, strength: voice,
+                                face: face, active: active),
+                            ornaments: reviewedAngelOrnaments(AngelVectorMotion.ornaments(time: time, active: active,
+                                expression: performance.expression)),
+                            motion: reviewedAngelMotion(CharacterBustMotion.pose(CharacterFigureMotion.pose(
+                                id: agentID ?? "unknown", time: time, level: outputLevel,
+                                active: active, presentation: performance), limits: CharacterAngelArtwork.limits)))
+                            .frame(width: side, height: side)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                    } else if let artwork = bustArtwork {
                         layeredBust(artwork, pose: pose, face: face,
                             motion: CharacterBustMotion.pose(CharacterFigureMotion.pose(
                                 id: agentID ?? "unknown", time: time, level: outputLevel,
@@ -125,10 +145,29 @@ struct CharacterPortraitView: View {
     }
     private func reviewedPose(_ pose: CharacterPose) -> CharacterPose {
         #if DEBUG && targetEnvironment(simulator)
-        if active, let amount = blinkAuditAmount {
-            return CharacterPose(mouth: pose.mouth, blink: amount, tilt: pose.tilt,
-                lift: pose.lift, brow: pose.brow, viseme: pose.viseme, scale: pose.scale)
+        if active, blinkAuditAmount != nil || angelMouthAudit != nil {
+            return CharacterPose(mouth: angelMouthAudit == nil ? pose.mouth : 1,
+                blink: blinkAuditAmount ?? pose.blink, tilt: pose.tilt,
+                lift: pose.lift, brow: pose.brow, viseme: angelMouthAudit ?? pose.viseme, scale: pose.scale)
         }
+        #endif
+        return pose
+    }
+    private func reviewedFace(_ face: CharacterFace) -> CharacterFace {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, agentID == CharacterMotion.angelID, let sample = angelFaceAudit { return sample }
+        #endif
+        return face
+    }
+    private func reviewedAngelMotion(_ pose: CharacterBustPose) -> CharacterBustPose {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, let sample = angelMotionAudit { return sample }
+        #endif
+        return pose
+    }
+    private func reviewedAngelOrnaments(_ pose: AngelVectorOrnamentPose) -> AngelVectorOrnamentPose {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, let sample = angelOrnamentsAudit { return sample }
         #endif
         return pose
     }

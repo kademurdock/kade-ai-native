@@ -29,9 +29,12 @@ enum CharacterMotion {
     static let harleyFile = "agent-agent_d26Mtu8mgOzkVGQECqO1a-avatar-1789921519491.png"
     static let witherspoonID = "agent_o7TKU3lK0Euo0MKgpNpvZ"
     static let witherspoonFile = "agent-agent_o7TKU3lK0Euo0MKgpNpvZ-avatar-1790252530815.png"
+    static let angelID = "agent_NkG_Fb8_xLz8HFJyx4gNv"
+    /// Filled only from the server's uploaded original Angel avatar receipt.
+    static let angelFile = "agent-agent_NkG_Fb8_xLz8HFJyx4gNv-avatar-1791586815115.png"
     /// The characters with a full moving face, in the order the picker shows
     /// them. A new rigged character joins the picker's top shelf by joining this.
-    static let animatedIDs = [harleyID, lillyID, skyleeLillyID, kianaID, dellaID, witherspoonID]
+    static let animatedIDs = [harleyID, lillyID, skyleeLillyID, kianaID, dellaID, witherspoonID, angelID]
     /// Which drawn rig a character wears: Skylee's Lilly uses the public
     /// Lilly's sheets and timing; everyone else is their own.
     static func rigID(_ id: String?) -> String? {
@@ -44,7 +47,7 @@ enum CharacterMotion {
     }
     static func prepared(id: String?, path: String?) -> Bool {
         guard let path, let url = URL(string: path) else { return false }
-        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == skyleeLillyID && url.lastPathComponent == skyleeLillyFile) || (id == harleyID && url.lastPathComponent == harleyFile) || (id == witherspoonID && url.lastPathComponent == witherspoonFile)
+        return (id == kianaID && url.lastPathComponent == kianaFile) || (id == dellaID && url.lastPathComponent == dellaFile) || (id == lillyID && url.lastPathComponent == lillyFile) || (id == skyleeLillyID && url.lastPathComponent == skyleeLillyFile) || (id == harleyID && url.lastPathComponent == harleyFile) || (id == witherspoonID && url.lastPathComponent == witherspoonFile) || (id == angelID && !angelFile.isEmpty && url.lastPathComponent == angelFile)
     }
     /// Mouth shapes without phonemes: a spoken clip has no word timings, so the
     /// shape follows how loud the sound is (how open) with a new pick about every

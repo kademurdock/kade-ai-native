@@ -13,8 +13,8 @@ import sys
 import time
 
 
-CHARACTERS = ("harley", "kiana", "lilly", "della", "witherspoon", "lilly-private")
-PRIORITY = CHARACTERS[:3]
+CHARACTERS = ("harley", "kiana", "lilly", "della", "witherspoon", "lilly-private", "angel")
+PRIORITY = CHARACTERS[:3] + ("angel",)
 
 
 def scenarios():

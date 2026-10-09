@@ -8,6 +8,8 @@ enum CharacterAppearance {
     static func description(agentID: String?, avatarPath: String?) -> String? {
         guard CharacterMotion.prepared(id: agentID, path: avatarPath) else { return nil }
         switch CharacterMotion.rigID(agentID) {
+        case CharacterMotion.angelID:
+            return "Angel is a little girl cherub with chestnut curls, large hazel-brown eyes and rosy cheeks. She wears a fully sleeved ivory robe with a high pearl collar and tiny shimmering jewels. Soft white feather wings rise behind her shoulders, and a pearl-gold halo floats above her curls."
         case CharacterMotion.kianaID:
             return "Kiana is a young Black woman with long dark locs threaded with pink and dark heart beads. She wears small heart earrings, layered heart necklaces, and a cream off-shoulder knit sweater."
         case CharacterMotion.dellaID:

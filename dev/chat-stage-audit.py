@@ -6,8 +6,8 @@ import subprocess
 import sys
 import time
 
-PEOPLE = ['harley', 'kiana', 'lilly', 'della', 'witherspoon', 'lilly-private']
-PRIORITY = PEOPLE[:3]
+PEOPLE = ['harley', 'kiana', 'lilly', 'della', 'witherspoon', 'lilly-private', 'angel']
+PRIORITY = PEOPLE[:3] + ['angel']
 
 def run(*args):
     return subprocess.check_output(['xcrun', 'simctl', *args], text=True).strip()
