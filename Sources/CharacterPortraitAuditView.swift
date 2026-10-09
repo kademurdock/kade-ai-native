@@ -86,6 +86,7 @@ struct CharacterPortraitAuditView: View {
     @State private var reviewStill = false
     @State private var reviewDark = false
     @State private var handSample: Double? = nil
+    @State private var facialStudy = false
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -105,8 +106,11 @@ struct CharacterPortraitAuditView: View {
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
                     motionPaused: reviewStill, handPrototypeElapsed: handSample)
-                Text(reviewName + (handSample == nil ? " · production puppet" : " · hand study"))
-                if handSample != nil {
+                Text(reviewName + (facialStudy ? " · controlled face preview"
+                    : (handSample == nil ? " · production puppet" : " · hand study")))
+                if facialStudy {
+                    Text("Authored face study. No audio; simulator preview, not a recording of a production call.")
+                } else if handSample != nil {
                     Text("Unregistered hand prototype. Controlled motion sample; not enabled in the app.")
                 } else {
                     Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
@@ -254,7 +258,29 @@ struct CharacterPortraitAuditView: View {
                 }
             }
             handSample = nil
+            facialStudy = true
             reviewDark = false
+            reviewStill = false
+            reviewSide = 208
+            // Keep the exact production compositor visible through complete
+            // blink windows. These controlled faces do not simulate speech
+            // audio or assert audible synchronization.
+            for person in roster {
+                reviewAgentID = person.agentID
+                reviewName = person.auditName
+                reviewPerformance = CharacterPresentation(activity: .speaking,
+                    expression: .amused, elapsed: 0.4, laughing: true)
+                try await capturePose(person.rawValue + "-authored-laugh-light")
+                await wait(person == .della || person == .witherspoon ? 6 : 2)
+                reviewPerformance = CharacterPresentation(activity: .speaking,
+                    expression: .excited, elapsed: 0.4, laughing: false)
+                try await capturePose(person.rawValue + "-authored-excited-light")
+                await wait(2)
+            }
+            facialStudy = false
+            reviewPerformance = .idle
+            reviewDark = false
+            gallery = false
             puppetPoses = false
             let wav = Self.wav(seconds: 3)
             callMode = true

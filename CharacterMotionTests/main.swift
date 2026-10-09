@@ -175,6 +175,13 @@ for id in [CharacterMotion.dellaID, CharacterMotion.witherspoonID] {
     check(CharacterFacialPolicy.shouldBlink(amount: 1, face: .laugh, agentID: id),
         "an authored open-eye laugh retains its blink")
 }
+check(!CharacterFacialPolicy.shouldBlink(amount: 1, face: .delighted, agentID: CharacterMotion.harleyID),
+    "Harley's authored closed-eye delight retains its own eyelids")
+for id in [CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.skyleeLillyID,
+           CharacterMotion.dellaID, CharacterMotion.witherspoonID] {
+    check(CharacterFacialPolicy.shouldBlink(amount: 1, face: .delighted, agentID: id),
+        "the other authored open-eye delighted panels retain their blink")
+}
 // Both existing sinusoid windows must survive the actual 12/24 fps cadence,
 // regardless of where the window falls between two display ticks. No new
 // animation clock or duration is introduced by the discrete pixel selection.

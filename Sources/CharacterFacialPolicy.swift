@@ -18,6 +18,9 @@ enum CharacterFacialPolicy {
 
     static func shouldBlink(amount: Double, face: CharacterFace, agentID: String?) -> Bool {
         guard amount.isFinite, (0...1).contains(amount), amount >= blinkThreshold else { return false }
+        // Harley's delighted nuance also has authored closed/squinted eyes.
+        // The other delighted panels have visible open eyes.
+        if face == .delighted, agentID == CharacterMotion.harleyID { return false }
         // These exact laugh panels already close the eyes. Della and
         // Witherspoon's laugh panels have open eyes and retain their blink.
         if face == .laugh {
