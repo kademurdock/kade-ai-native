@@ -491,6 +491,14 @@ struct ContentView: View {
         case .freshAgentChat(let request):
             ConversationDetailView(conversation: nil, initialAgentId: request.agentID)
                 .id(request.id)
+                .task(id: request.id) {
+                    // A newly introduced public character may not be in this
+                    // app session's cached roster yet. Keep the exact target
+                    // while refreshing her name and bundled-art eligibility.
+                    if !agentsService.agents.contains(where: { $0.id == request.agentID }) {
+                        await agentsService.refresh()
+                    }
+                }
         case .transcribe:
             TranscribeView(apiClient: apiClient)
         case .help:
