@@ -3,26 +3,26 @@ import Foundation
 import SwiftUI
 #endif
 
-/// Conservative exact-atlas study. The original head, locs and shoulders move
-/// together; the existing concept supplies only the lower torso below y600.
+/// Conservative exact-atlas bust. The original head, locs and shoulders move
+/// together. The close crop excludes the mismatched generated torso entirely.
 /// Source RGB and all native facial patch coordinates remain unchanged.
 enum CharacterKianaBustGeometry {
-    static let bodyClipMinY = 600.0
+    static let bodyClipMinY = 620.0
 
     static let artwork: CharacterBustArtwork = {
         var value = CharacterBustArtwork(
             bodyAsset: "CharacterKianaBustBody", maskAsset: nil,
             bodyX: 0, bodyY: 0, bodyWidth: 1024, bodyHeight: 1228.8,
-            cropX: 155, cropY: 0, cropSide: 740,
+            cropX: 215, cropY: 0, cropSide: 620,
             panelX: 205, panelY: -5, panelSide: 640,
             neckX: 576, neckY: 445, waistX: 512, waistY: 1050,
             faceCore: nil, headOutline: .kianaHead, accessoryOutlines: [],
-            // The35px overlap exceeds the worst bottom-edge displacement
-            // (less than5px) at these restrained production motion bounds.
+            // The original panel ends at y635, beyond the crop's y620 edge.
+            // Its15px margin exceeds the worst displacement (under5px).
             motionLimits: CharacterBustMotionLimits(headDegrees: 0.60, bodyDegrees: 0,
                 headOffsetPixels: 0.60, bodyOffsetPixels: 0))
-        // Mandatory: this resource still contains the old generated concept
-        // head. It must never be drawn above the torso-only world boundary.
+        // Mandatory: this resource contains a generated face and mismatched
+        // chest. Its entire visible range is excluded from this close crop.
         value.bodyClipMinY = bodyClipMinY
         return value
     }()

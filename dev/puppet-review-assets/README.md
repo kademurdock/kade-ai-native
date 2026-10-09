@@ -4,11 +4,14 @@ These masters back the committed asset-catalog entries used in simulator and
 device builds. `prepare-puppet-review.py --check` verifies both copies and the
 RGBA canvases. Native geometry is registered only for exact prepared avatars.
 
-Kiana reuses the earlier clothed concept below a mandatory worldy600 clip; its
-generated head is never drawn. Her original head, locs and shoulders are sourced
-from the existing atlas. The initial0.2degree candidate was increased to0.6degrees
-with0.6source-pixel nodding: the35pixel overlap exceeds the worst bottom-edge
-displacement of5pixels. Native seam review remains required before distribution.
+Kiana's reused clothed concept is bundled for provenance, but a mandatory world
+y620 clip and a crop ending at y620 exclude it entirely from the visible stage.
+Native review exposed a hard panel edge and duplicate pendant in the wider study.
+Her original head, locs and knit shoulders now fill the close crop and move
+together at at most0.6degrees and0.6source pixels; there is no separate torso
+motion. The original panel ends at y635, leaving15pixels of margin beyond the
+crop; maximum bottom-edge motion is under5pixels. Original face RGB and jewelry
+are unchanged. New native captures must verify the corrected composition.
 Della and Witherspoon provenance and overlap checks are recorded in their
 adjacent registration notes. The librarian is a woman and uses she/her.
 

@@ -367,6 +367,37 @@ unsafeKiana.bodyClipMinY = nil
 check(!unsafeKiana.isValid, "Kiana cannot expose the reused concept's generated face without the torso clip")
 unsafeKiana.bodyClipMinY = 0
 check(!unsafeKiana.isValid, "a zero-height Kiana clip cannot bypass exact-face registration")
+unsafeKiana.bodyClipMinY = 600
+check(!unsafeKiana.isValid, "the old y600 torso cutoff cannot expose Kiana's mismatched chest")
+let closeKiana = CharacterKianaBustGeometry.artwork
+let oldWideKiana = CharacterBustArtwork(
+    bodyAsset: closeKiana.bodyAsset, maskAsset: closeKiana.maskAsset,
+    bodyX: closeKiana.bodyX, bodyY: closeKiana.bodyY,
+    bodyWidth: closeKiana.bodyWidth, bodyHeight: closeKiana.bodyHeight,
+    cropX: 155, cropY: 0, cropSide: 740,
+    panelX: closeKiana.panelX, panelY: closeKiana.panelY, panelSide: closeKiana.panelSide,
+    neckX: closeKiana.neckX, neckY: closeKiana.neckY,
+    waistX: closeKiana.waistX, waistY: closeKiana.waistY,
+    faceCore: closeKiana.faceCore, headOutline: closeKiana.headOutline,
+    accessoryOutlines: closeKiana.accessoryOutlines, motionLimits: closeKiana.motionLimits,
+    maskPlacement: closeKiana.maskPlacement, bodyClipMinY: closeKiana.bodyClipMinY)
+check(!oldWideKiana.isValid, "the old wide Kiana crop cannot reveal the rectangular torso join")
+let kianaCropBottom = closeKiana.cropY + closeKiana.cropSide
+let kianaPanelBottom = closeKiana.panelY + closeKiana.panelSide
+check(kianaCropBottom <= (closeKiana.bodyClipMinY ?? -Double.infinity),
+    "Kiana's supporting concept starts entirely outside the visible crop")
+check(kianaPanelBottom > kianaCropBottom,
+    "the original Kiana panel has lower-edge overdraw before motion")
+let kianaAngle = closeKiana.motionLimits.headDegrees * Double.pi / 180
+for angle in [-kianaAngle, kianaAngle] {
+    for x in [closeKiana.panelX, closeKiana.panelX + closeKiana.panelSide] {
+        let movedBottom = closeKiana.neckY + (x - closeKiana.neckX) * sin(angle)
+            + (kianaPanelBottom - closeKiana.neckY) * cos(angle)
+            - closeKiana.motionLimits.headOffsetPixels
+        check(movedBottom > kianaCropBottom,
+            "Kiana's original lower edge remains outside the crop at the extreme allowed poses")
+    }
+}
 var invalidMask = CharacterDellaBustGeometry.artwork
 invalidMask.maskPlacement = CharacterBustMaskPlacement(x: 35, y: 0, side: .nan)
 check(!invalidMask.isValid, "invalid matte registration cannot enter the production renderer")

@@ -7,8 +7,10 @@ This does not change agent discovery, account access, voices or conversation dat
 
 Heads use the existing expression, mouth and blink atlases. Bodies are supporting
 plates. Lilly's original cats remain static. Arms and hands are not separately
-articulated. Kiana's original locs and shoulders remain together with restrained
-head motion; a mandatory torso clip excludes the reused concept's generated face.
+articulated. Kiana's original locs and knit shoulders remain together with
+restrained head motion. Her close crop excludes the reused concept entirely;
+its mismatched chest, duplicate pendant and hard panel join are never visible.
+Kiana has no separate torso motion in this version.
 Della's independent extraction supplies alpha only. Witherspoon retains her
 original glasses, pinned hair, face and feminine identity.
 

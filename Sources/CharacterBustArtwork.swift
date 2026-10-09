@@ -57,7 +57,7 @@ struct CharacterBustArtwork {
     let accessoryOutlines: [CharacterBustOutline]
     let motionLimits: CharacterBustMotionLimits
     var maskPlacement: CharacterBustMaskPlacement? = nil
-    /// Mandatory for Kiana's reused concept: the generated head is excluded.
+    /// Mandatory for Kiana's reused concept: its entire plate is excluded.
     /// Applied in world coordinates to the supporting image before body motion.
     var bodyClipMinY: Double? = nil
 
@@ -84,7 +84,8 @@ struct CharacterBustArtwork {
         }
         if headOutline == .kianaHead {
             guard let minimum = bodyClipMinY,
-                  minimum >= CharacterKianaBustGeometry.bodyClipMinY else { return false }
+                  minimum >= CharacterKianaBustGeometry.bodyClipMinY,
+                  cropY + cropSide <= minimum else { return false }
         }
         return [motionLimits.headDegrees, motionLimits.bodyDegrees,
             motionLimits.headOffsetPixels, motionLimits.bodyOffsetPixels].allSatisfy { $0 >= 0 }

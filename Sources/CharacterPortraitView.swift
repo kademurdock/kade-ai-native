@@ -207,19 +207,36 @@ struct CharacterPortraitView: View {
                         .clipShape(CharacterBustCut(artwork: artwork, outline: outline))
                 }
             }
-            portrait(pose, face: face)
-                .frame(width: side, height: side)
-                .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
-                .offset(x: (artwork.panelX - artwork.cropX) * unit,
-                        y: (artwork.panelY - artwork.cropY) * unit)
-                .frame(width: side, height: side, alignment: .topLeading)
-                .mask(alignment: .topLeading) { bustMask(artwork, unit: unit) }
+            maskedBustHead(artwork, pose: pose, face: face, unit: unit)
                 .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
                 .rotationEffect(.degrees(motion.headAngle), anchor: neck)
                 .offset(y: motion.headOffsetY * unit)
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+
+    private func scaledBustHead(_ artwork: CharacterBustArtwork, pose: CharacterPose,
+                                face: CharacterFace, unit: Double) -> some View {
+        portrait(pose, face: face)
+            .frame(width: side, height: side)
+            .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
+            .offset(x: (artwork.panelX - artwork.cropX) * unit,
+                    y: (artwork.panelY - artwork.cropY) * unit)
+            .frame(width: side, height: side, alignment: .topLeading)
+    }
+
+    @ViewBuilder private func maskedBustHead(_ artwork: CharacterBustArtwork, pose: CharacterPose,
+                                            face: CharacterFace, unit: Double) -> some View {
+        if artwork.maskAsset != nil {
+            scaledBustHead(artwork, pose: pose, face: face, unit: unit)
+                .mask(alignment: .topLeading) { bustMask(artwork, unit: unit) }
+        } else {
+            // The authored outline supplies the cut. Do not trim the original
+            // panel to the viewport before rotation: its extra edge pixels keep
+            // Kiana's close crop covered while the head and shoulders move.
+            scaledBustHead(artwork, pose: pose, face: face, unit: unit)
+        }
     }
 
     private func bodyVisibleStart(_ artwork: CharacterBustArtwork, unit: Double) -> Double {
@@ -246,8 +263,6 @@ struct CharacterPortraitView: View {
                 }
             }
             .frame(width: side, height: side, alignment: .topLeading)
-        } else {
-            Rectangle().fill(.white).frame(width: side, height: side)
         }
     }
 
