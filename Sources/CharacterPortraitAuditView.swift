@@ -61,7 +61,14 @@ struct CharacterPortraitAuditView: View {
                 Text(name).font(.title)
                 Text("Offline audio engine. Local synthetic test tones.")
             }
-        }.padding(8).preferredColorScheme(reviewDark ? .dark : .light).task { await run() }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The app owns its window appearance. Set the fixture's own environment
+        // and backdrop so an ancestor preference cannot silently turn dark QA light.
+        .background(reviewDark ? Color.black : Color.white)
+        .environment(\.colorScheme, reviewDark ? .dark : .light)
+        .task { await run() }
     }
     private func galleryPortrait(_ id: String, _ name: String, _ expression: CharacterExpression) -> some View {
         VStack(spacing: 0) {
@@ -151,18 +158,18 @@ struct CharacterPortraitAuditView: View {
             try await advance(0.5)
             try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, label + " rendered call output outlives early server listening")
             try check(call.characterPresentation.expression == .surprised, label + " reaction belongs to the rendered clip")
-            step(label.lowercased() + "-call-speaking"); try await advance(0.8)
+            try await capturePose(label.lowercased() + "-call-speaking"); try await advance(0.8)
             call.auditControl("{\"type\":\"clear\"}"); try await advance(0.2)
             try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " barge-in clears mouth and expression")
-            step(label.lowercased() + "-call-interrupted"); try await advance(0.4)
+            try await capturePose(label.lowercased() + "-call-interrupted"); try await advance(0.4)
             let shortWav = Self.wav(seconds: 1.4)
             call.auditReceive(metadata: packet(agentID, expression: "concerned"), wav: shortWav)
             call.auditReceive(metadata: packet(agentID, expression: "amused"), wav: shortWav)
             try await advance(0.4)
             try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .concerned, label + " first queued reaction resumes correctly after interruption")
-            step(label.lowercased() + "-call-queued-first"); try await advance(1.2)
+            try await capturePose(label.lowercased() + "-call-queued-first"); try await advance(1.2)
             try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .amused, label + " second queued reaction waits for its own audio")
-            step(label.lowercased() + "-call-queued-second"); try await advance(1.4)
+            try await capturePose(label.lowercased() + "-call-queued-second"); try await advance(1.4)
             try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " completed call queue returns to listening")
             call.auditReceive(metadata: packet(other, expression: "amused"), wav: wav)
             try await advance(0.3)
