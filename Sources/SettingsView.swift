@@ -370,10 +370,7 @@ struct SettingsView: View {
             hapticsRow(searchStyle: false)
             sensorySyncRow(searchStyle: false)
             reduceMotionRow(searchStyle: false)
-            Toggle(isOn: $voicePortraits) {
-                tileLabel("Animated character face", systemImage: "face.smiling", tint: SectionTint.feedback)
-            }
-            .accessibilityHint("Shows the character's moving face at the top of every conversation. It blinks while quiet and talks along with voice messages. Turning this off does not change the audio or transcript. Reduce motion is always honored.")
+            animatedCharactersRow(searchStyle: false)
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
@@ -576,7 +573,7 @@ struct SettingsView: View {
         case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
         case highContrast, font, spacing, pictures, pictureWords
-        case soundEffects, haptics, sensorySync, reduceMotion
+        case soundEffects, haptics, sensorySync, reduceMotion, animatedCharacters
         case keyboardPhrases, keyboardClean
         case location
         case usage, accountSecurity, export
@@ -613,6 +610,7 @@ struct SettingsView: View {
             case .simpleTranscript: return "Simple transcript"
             case .simpleComposer: return "Simple composer"
             case .reduceMotion: return "Reduce motion"
+            case .animatedCharacters: return "Animated characters"
             case .keyboardPhrases: return "My Keyboard Phrases"
             case .keyboardClean: return "Clean up keyboard dictation"
             case .location: return "Share my location"
@@ -632,7 +630,7 @@ struct SettingsView: View {
             case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
             case .highContrast, .font, .spacing, .pictures, .pictureWords: return "Accessibility"
-            case .soundEffects, .haptics, .sensorySync, .reduceMotion: return "Feedback & Sounds"
+            case .soundEffects, .haptics, .sensorySync, .reduceMotion, .animatedCharacters: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
             case .location: return "Location"
             case .usage, .accountSecurity, .export: return "Account"
@@ -672,6 +670,7 @@ struct SettingsView: View {
             case .simpleTranscript: return "simple transcript troubleshooting freeze plain rows debug"
             case .simpleComposer: return "simple composer troubleshooting freeze message box debug"
             case .reduceMotion: return "motion animation reduce animations still"
+            case .animatedCharacters: return "animated characters puppets moving face portrait avatar kiana harley lilly della librarian calls conversation voice messages"
             case .keyboardPhrases: return "keyboard phrases quick kade keys buttons typing"
             case .keyboardClean: return "keyboard dictation clean cleanup transcribe filler grammar typing"
             case .location: return "location gps where directions maps share place"
@@ -750,6 +749,7 @@ struct SettingsView: View {
         case .simpleTranscript: simpleTranscriptRow(searchStyle: true)
         case .simpleComposer: simpleComposerRow(searchStyle: true)
         case .reduceMotion: reduceMotionRow(searchStyle: true)
+        case .animatedCharacters: animatedCharactersRow(searchStyle: true)
         case .keyboardPhrases: keyboardPhrasesRow(searchStyle: true)
         case .keyboardClean: keyboardCleanRow(searchStyle: true)
         case .location: locationRow(searchStyle: true)
@@ -1041,6 +1041,13 @@ struct SettingsView: View {
     }
 
     @AppStorage("kadeVoicePortraits") private var voicePortraits = true
+    private func animatedCharactersRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $voicePortraits) {
+            tileLabel(searchStyle ? searchLabel(.animatedCharacters, "Animated characters") : "Animated characters",
+                systemImage: "face.smiling", tint: SectionTint.feedback)
+        }
+        .accessibilityHint("Shows character puppets in conversations and calls. They blink while quiet and move their mouths with speech. Small views use the familiar portrait. Turning this off does not change audio or the transcript. Reduce motion is always honored.")
+    }
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {
             tileLabel(searchStyle ? searchLabel(.reduceMotion, "Reduce motion") : "Reduce motion", systemImage: "pause.circle", tint: SectionTint.feedback)

@@ -2755,25 +2755,14 @@ struct ConversationDetailView: View {
          * changes at clip boundaries, and every clip start and end publishes
          * on VoiceService (isClipPlaying, nowPlayingKey), which re-runs this
          * body. The stage's own TimelineView stays the only per-frame clock. */
-        let mood = StageMood(talking
-            ? voiceService.characterPresentation()
-            : (thinking ? CharacterPresentation(activity: .thinking) : .idle))
-        return HStack {
-            Spacer(minLength: 0)
-            CharacterPortraitView(agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
-                name: agentDisplayLabel, playing: talking && !voiceService.isPaused,
+        return CharacterConversationStage(
+                agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
+                name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
                     if voiceService.isClipPlaying { return voiceService.characterPresentation() }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
-                },
-                stage: true, side: side)
-            Spacer(minLength: 0)
-        }
-        .frame(height: side + 40)
-        // A background, so the glow can never change the stage's size.
-        .background(StageMoodLight(mood: mood))
-        .background(Color(.systemBackground))
+                })
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
          * character picker, for sighted people; it is the same sheet as the
          * "Talking to" row and is off while a send is out, like that row.
@@ -5091,93 +5080,6 @@ private struct ChatControlRowBackground: View {
             Color(.secondarySystemBackground)
         } else {
             Rectangle().fill(.bar)
-        }
-    }
-}
-
-/// C5 (Sep 23 2026 redesign) — the mood light's colour families, read from
-/// the same `CharacterPresentation` the face stage performs: warm for a
-/// smile, a laugh, delight, play and tenderness; cool while a reply is being
-/// thought; soft violet for worry, sadness and seriousness; the accent,
-/// faint, the rest of the time.
-private enum StageMood: CaseIterable {
-    case idle, warm, thinking, low
-
-    init(_ presentation: CharacterPresentation) {
-        if case .thinking = presentation.activity {
-            self = .thinking
-            return
-        }
-        switch presentation.face {
-        case .smile, .laugh, .delighted, .playful, .tender: self = .warm
-        case .worried, .sad, .serious: self = .low
-        default: self = .idle
-        }
-    }
-
-    /// System colours, so light and dark appearance each get their own shade.
-    var center: Color {
-        switch self {
-        case .idle: return .accentColor
-        case .warm: return .orange
-        case .thinking: return .teal
-        case .low: return .purple
-        }
-    }
-
-    var edge: Color {
-        switch self {
-        case .idle: return .accentColor
-        case .warm: return .pink
-        case .thinking: return .blue
-        case .low: return .gray
-        }
-    }
-
-    /// How strong the middle of the glow is; idle is the faint one.
-    var strength: Double {
-        switch self {
-        case .idle: return 0.12
-        case .warm: return 0.34
-        case .thinking: return 0.3
-        case .low: return 0.26
-        }
-    }
-}
-
-/// C5: the glow itself, drawn as the face stage's BACKGROUND so it can never
-/// change the stage's size or layout. Decorative: hidden, never hit-tested.
-/// One layer per mood sits ready at zero opacity (the same dissolve the
-/// portrait uses for its faces), so a mood change is a cross-fade: animated,
-/// easeInOut 0.6 s, only when the motion policy allows, and instant
-/// otherwise. The ellipse fades out exactly at the stage's edges, so it
-/// never ends in a hard line above the transcript. High contrast gets no
-/// glow at all.
-private struct StageMoodLight: View {
-    let mood: StageMood
-    @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
-    @KadeContrastPolicy private var highContrast: Bool
-
-    var body: some View {
-        if !highContrast {
-            ZStack {
-                ForEach(StageMood.allCases, id: \.self) { layer in
-                    EllipticalGradient(
-                        gradient: Gradient(stops: [
-                            .init(color: layer.center.opacity(layer.strength), location: 0),
-                            .init(color: layer.edge.opacity(layer.strength * 0.55), location: 0.55),
-                            .init(color: layer.edge.opacity(0), location: 1)
-                        ]),
-                        center: .center,
-                        startRadiusFraction: 0,
-                        endRadiusFraction: 0.5
-                    )
-                    .opacity(layer == mood ? 1 : 0)
-                }
-            }
-            .animation(motionAllowed ? .easeInOut(duration: 0.6) : nil, value: mood)
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
         }
     }
 }

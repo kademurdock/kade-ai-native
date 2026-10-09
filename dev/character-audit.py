@@ -21,12 +21,20 @@ try:
     run('ui',sim,'appearance','light')
     app=pathlib.Path('build/character-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app').resolve()
     run('install',sim,str(app))
+    documents=pathlib.Path(run('get_app_container',sim,'com.kademurdock.kadeai','data'))/'Documents'
+    documents.mkdir(exist_ok=True)
+    for name in ('character-audit.json','character-phase.txt','character-captured.txt','character-checkpoint.txt'):
+        (documents/name).unlink(missing_ok=True)
     env=dict(os.environ,SIMCTL_CHILD_KADE_A11Y_AUDIT='1',SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1')
+    if os.environ.get('KADE_PUPPET_AUDIT') == '1':
+        env['SIMCTL_CHILD_KADE_PUPPET_AUDIT'] = '1'
     video=subprocess.Popen(['xcrun','simctl','io',sim,'recordVideo','--codec=h264',str(out/'playback.mp4')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)
-    documents=pathlib.Path(run('get_app_container',sim,'com.kademurdock.kadeai','data'))/'Documents'
-    deadline=time.monotonic()+90; seen=set(); result=None; died=None
+    # Four characters plus two puppet pose/crop galleries need additional
+    # capture acknowledgements. Keep the expanded offline audit bounded.
+    audit_seconds=300
+    deadline=time.monotonic()+audit_seconds; seen=set(); result=None; died=None
     while time.monotonic()<deadline:
         phase=documents/'character-phase.txt'
         if phase.exists():
@@ -55,7 +63,7 @@ try:
             except Exception:
                 pass
         checkpoint=documents/'character-checkpoint.txt'
-        result={'passed':False,'error':died or 'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
+        result={'passed':False,'error':died or f'No completed native runtime receipt within {audit_seconds} seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
     # Sep 10 2026: this is DIAGNOSTICS, gathered after the verdict is already
     # decided, and it must never be the thing that fails a passing run. On a
     # loaded worker `log show` can outrun its timeout, and an uncaught
@@ -68,8 +76,17 @@ try:
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
     assert result.get('passed'),result.get('error')
+    # Only the waveform run is recorded. Layout fixtures have their own PNGs,
+    # and must not inflate this video with app relaunches and keyboard waits.
+    if video is not None:
+        video.send_signal(signal.SIGINT)
+        try: video.wait(timeout=10)
+        except subprocess.TimeoutExpired: video.terminate(); video.wait(timeout=10)
+        video=None
+    if os.environ.get('KADE_CHAT_LAYOUT_AUDIT') == '1':
+        subprocess.run([sys.executable, 'dev/chat-stage-audit.py', sim], check=True, timeout=180)
     if os.environ.get('KADE_CALL_LAYOUT_AUDIT') == '1':
-        subprocess.run([sys.executable, 'dev/call-layout-audit.py', sim], check=True, timeout=100)
+        subprocess.run([sys.executable, 'dev/call-layout-audit.py', sim], check=True, timeout=180)
 finally:
     if video is not None:
         video.send_signal(signal.SIGINT)

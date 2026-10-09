@@ -1,6 +1,22 @@
 import SwiftUI
 import AVFoundation
 
+#if DEBUG && targetEnvironment(simulator)
+/// Whitelisted, local-only inputs for the real CallView layout fixture.
+/// These values never select an agent for a normal authenticated call.
+enum CharacterCallLayoutFixture {
+    enum Variant: String { case large, accessibility, still, off }
+    static var person: CharacterAuditPerson {
+        CharacterAuditPerson(rawValue: ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_CHARACTER"] ?? "") ?? .kiana
+    }
+    static var variant: Variant {
+        Variant(rawValue: ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_VARIANT"] ?? "") ?? .large
+    }
+    static var agentID: String { person.agentID }
+    static var name: String { person.name }
+}
+#endif
+
 /// Real-time call screen — voice always, Spotter's camera/video layer once
 /// toggled on mid-call. New in session 13 ("work on calling and spotters
 /// and shit too... I'd like to be fully featured soon"). Presented full-
@@ -626,8 +642,10 @@ struct CallView: View {
     /// Photograph the production screen with invented text. No call is started.
     private func prepareLayoutAudit() {
         agentsService.seedCharacterAudit()
-        UserDefaults.standard.set(true, forKey: "kadeVoicePortraits")
-        UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+        let person = CharacterCallLayoutFixture.person
+        let variant = CharacterCallLayoutFixture.variant
+        UserDefaults.standard.set(variant != .off, forKey: "kadeVoicePortraits")
+        UserDefaults.standard.set(variant == .still, forKey: "kade.feedback.reduceMotion")
         callService.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
         let captions = [
             ("user", "Tell me about a quiet afternoon by the lake."),
@@ -638,7 +656,18 @@ struct CallView: View {
                let json = String(data: data, encoding: .utf8) { callService.auditControl(json) }
         }
         let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        try? "ready".write(to: folder.appendingPathComponent("call-layout-ready.txt"), atomically: true, encoding: .utf8)
+        let registered = CharacterBustArtwork.approved(stage: true, side: 208,
+            agentID: agentId, avatarPath: "/images/" + person.avatarFile) != nil
+        let receipt: [String: Any] = [
+            "character": person.rawValue, "agentID": agentId ?? "",
+            "expectedAgentID": person.agentID, "avatarFile": person.avatarFile,
+            "variant": variant.rawValue, "portraitEnabled": variant != .off,
+            "appReduceMotion": variant == .still, "productionPuppetRegistered": registered,
+            "syntheticCaptions": true, "audioStarted": false, "microphoneStarted": false
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: receipt) {
+            try? data.write(to: folder.appendingPathComponent("call-layout-ready.txt"), options: .atomic)
+        }
     }
     #endif
 

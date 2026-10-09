@@ -155,8 +155,258 @@ for sample in [CharacterPresentation.idle, CharacterPresentation(activity: .list
             "figure joints stay bounded")
     }
 }
+func figureValues(_ pose: CharacterFigurePose) -> [Double] {
+    [pose.headAngle, pose.headNod, pose.torsoAngle, pose.torsoLift,
+        pose.farArmAngle, pose.nearArmAngle]
+}
+let stillFigure = figureValues(.still)
+for clock in [Double.nan, Double.infinity, -Double.infinity, -0.001] {
+    check(figureValues(CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: clock, level: 1, active: true, presentation: figureSpeech)) == stillFigure,
+        "invalid or negative clock parks every Harley joint")
+}
+for activity in [CharacterActivity.idle, .listening, .thinking] {
+    let state = CharacterPresentation(activity: activity, elapsed: 0.4)
+    let quiet = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 0, active: true, presentation: state)
+    let unrelatedAudio = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 1, active: true, presentation: state)
+    check(figureValues(quiet) == figureValues(unrelatedAudio),
+        "listening thinking and idle cannot gesture to another speaker's audio")
+}
+let figureLimits = [7.0, 0.018, 3, 0.008, 14, 16]
+for expression in CharacterExpression.allCases {
+    for clock in [0.0, 0.4, 0.8, 1, 14.5, 80, 3600, 86400] {
+        let state = CharacterPresentation(activity: .speaking,
+            expression: expression, elapsed: clock)
+        let disabled = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+            time: clock, level: 1, active: false, presentation: state)
+        check(figureValues(disabled) == stillFigure,
+            "disabled preview parks all body joints across authored directions")
+        for level in [-1.0, 0, 0.5, 100, Double.nan, Double.infinity] {
+            let pose = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+                time: clock, level: level, active: true, presentation: state)
+            check(zip(figureValues(pose), figureLimits).allSatisfy {
+                $0.0.isFinite && abs($0.0) <= $0.1
+            }, "Harley joint output stays finite and inside the compositor's limits")
+        }
+    }
+}
+for elapsed in [Double.nan, Double.infinity, -Double.infinity, -1] {
+    let state = CharacterPresentation(activity: .speaking,
+        expression: .excited, elapsed: elapsed)
+    let pose = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 0.5, active: true, presentation: state)
+    check(figureValues(pose).allSatisfy { $0.isFinite },
+        "invalid cue elapsed time cannot corrupt the body's transform")
+}
 print("Layered figure motion: \(count - figureBefore) checks passed")
 
+let bustBefore = count
+let harleyAvatarPath = "/images/" + CharacterMotion.harleyFile
+func reviewBust(enabled: Bool = true, stage: Bool = true, side: Double = 208,
+                agentID: String? = CharacterMotion.harleyID,
+                avatarPath: String? = "/images/" + CharacterMotion.harleyFile) -> CharacterBustArtwork? {
+    CharacterBustArtwork.review(enabled: enabled, stage: stage, side: side,
+        agentID: agentID, avatarPath: avatarPath)
+}
+check(reviewBust() != nil, "explicit Harley stage review resolves its matching art pack")
+check(reviewBust(enabled: false) == nil, "review opt-in is required")
+check(reviewBust(stage: false) == nil, "inline portraits cannot become review busts")
+check(reviewBust(side: 160) != nil, "minimum review stage is accepted")
+for side in [0.0, -1, 84, 104, 132, 159.99, Double.nan, Double.infinity, -Double.infinity] {
+    check(reviewBust(side: side) == nil, "compact or invalid stages keep the established face")
+}
+for agentID in [nil, "", "harley", CharacterMotion.kianaID, CharacterMotion.skyleeLillyID] as [String?] {
+    check(reviewBust(agentID: agentID) == nil, "foreign or absent identity never borrows Harley's body")
+}
+for avatarPath in [nil, "", "/images/replaced.png", "/images/" + CharacterMotion.kianaFile,
+                   harleyAvatarPath + ".backup", "/images/prefix-" + CharacterMotion.harleyFile] as [String?] {
+    check(reviewBust(avatarPath: avatarPath) == nil, "changed or foreign avatar cannot inherit review artwork")
+}
+check(reviewBust(avatarPath: "https://example.test" + harleyAvatarPath + "?version=1") != nil,
+    "a URL query does not change the verified avatar filename")
+
+func bustValues(_ pose: CharacterBustPose) -> [Double] {
+    [pose.headAngle, pose.bodyAngle, pose.headOffsetY, pose.bodyOffsetY]
+}
+check(bustValues(CharacterBustMotion.pose(.still)) == [0, 0, 0, 0],
+    "the motion gate parks the bust without a residual transform")
+let bustLimits = [2.0, 0.5, 3, 2]
+for value in [-1000.0, -1, 0, 1, 1000, Double.nan, Double.infinity, -Double.infinity] {
+    let figure = CharacterFigurePose(headAngle: value, headNod: value,
+        torsoAngle: value, torsoLift: value, farArmAngle: value, nearArmAngle: value)
+    let bust = CharacterBustMotion.pose(figure)
+    check(zip(bustValues(bust), bustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "review bust clamps every transform even with corrupt upstream motion")
+    if !value.isFinite {
+        check(bustValues(bust) == [0, 0, 0, 0], "invalid motion components park safely")
+    }
+}
+for expression in CharacterExpression.allCases {
+    let state = CharacterPresentation(activity: .speaking, expression: expression, elapsed: 0.4)
+    let figure = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 100, level: 1, active: true, presentation: state)
+    check(zip(bustValues(CharacterBustMotion.pose(figure)), bustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "authored speech stays within the bust's conservative movement limits")
+}
+
+let lillyAvatarPath = "/images/" + CharacterMotion.lillyFile
+let lillyBust = reviewBust(agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath)!
+check(lillyBust.requiredAssets == ["CharacterLillyBustBody"] && lillyBust.maskAsset == nil,
+    "Lilly needs her body support and uses original atlas outlines rather than a generated head")
+check(lillyBust.headOutline == .lillyHead &&
+    lillyBust.accessoryOutlines == [.lillyLeftCat, .lillyRightCat],
+    "Lilly keeps two static original companions separate from her moving head")
+check(lillyBust.panelSide / lillyBust.cropSide >= 0.88 &&
+    lillyBust.panelSide / lillyBust.cropSide <= 1,
+    "close Lilly crop preserves a readable face at native stage size")
+check(lillyBust.panelX >= lillyBust.cropX && lillyBust.panelY >= lillyBust.cropY &&
+    lillyBust.panelX + lillyBust.panelSide <= lillyBust.cropX + lillyBust.cropSide &&
+    lillyBust.panelY + lillyBust.panelSide <= lillyBust.cropY + lillyBust.cropSide,
+    "complete Lilly atlas destination and both cats fit the close crop")
+check(reviewBust(enabled: false, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil &&
+    reviewBust(stage: false, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil,
+    "Lilly requires the same explicit stage review gates as Harley")
+check(reviewBust(side: 160, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) != nil,
+    "Lilly is eligible at the minimum readable stage size")
+for side in [0.0, -1, 84, 104, 132, 159.99, Double.nan, Double.infinity, -Double.infinity] {
+    check(reviewBust(side: side, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil,
+        "Lilly stays an ordinary portrait in compact or invalid stages")
+}
+for avatarPath in [nil, "", "/images/replaced.png", harleyAvatarPath,
+                   lillyAvatarPath + ".backup", "/images/prefix-" + CharacterMotion.lillyFile,
+                   "/images/" + CharacterMotion.skyleeLillyFile] as [String?] {
+    check(reviewBust(agentID: CharacterMotion.lillyID, avatarPath: avatarPath) == nil,
+        "public Lilly body requires her exact current public avatar")
+}
+check(reviewBust(agentID: CharacterMotion.skyleeLillyID, avatarPath: lillyAvatarPath) == nil,
+    "private Lilly cannot inherit public Lilly's avatar identity")
+check(reviewBust(agentID: CharacterMotion.skyleeLillyID,
+    avatarPath: "/images/" + CharacterMotion.skyleeLillyFile) != nil,
+    "private Lilly has an explicit own-avatar production registration")
+check(reviewBust(agentID: CharacterMotion.harleyID, avatarPath: lillyAvatarPath) == nil &&
+    reviewBust(agentID: CharacterMotion.kianaID, avatarPath: lillyAvatarPath) == nil,
+    "other characters cannot borrow public Lilly's body")
+check(reviewBust()!.requiredAssets == ["CharacterHarleyBustBody", "CharacterHarleyBustMask"] &&
+    reviewBust()!.headOutline == .harleyHead && reviewBust()!.accessoryOutlines.isEmpty,
+    "Harley retains his existing mask and has no Lilly accessories")
+check(bustValues(CharacterBustMotion.pose(.still, limits: lillyBust.motionLimits)) == [0, 0, 0, 0],
+    "Lilly's disabled motion parks every transform")
+let lillyBustLimits = [1.95, 0.22, 1.7, 0]
+for value in [-1000.0, -1, 0, 1, 1000, Double.nan, Double.infinity, -Double.infinity] {
+    let figure = CharacterFigurePose(headAngle: value, headNod: value,
+        torsoAngle: value, torsoLift: value, farArmAngle: value, nearArmAngle: value)
+    let pose = CharacterBustMotion.pose(figure, limits: lillyBust.motionLimits)
+    check(zip(bustValues(pose), lillyBustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "Lilly clamps corrupt motion to her own reviewed bounds without body translation")
+    if !value.isFinite {
+        check(bustValues(pose) == [0, 0, 0, 0], "nonfinite Lilly transforms park safely")
+    }
+}
+for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
+    for expression in CharacterExpression.allCases {
+        let state = CharacterPresentation(activity: activity, expression: expression, elapsed: 0.4)
+        let figure = CharacterFigureMotion.pose(id: CharacterMotion.lillyID,
+            time: 100, level: 1, active: true, presentation: state)
+        check(zip(bustValues(CharacterBustMotion.pose(figure, limits: lillyBust.motionLimits)), lillyBustLimits).allSatisfy {
+            $0.0.isFinite && abs($0.0) <= $0.1
+        }, "Lilly's authored states stay inside her conservative head and shoulder range")
+    }
+}
+print("Character bust review and transforms: \(count - bustBefore) checks passed")
+
+let productionBefore = count
+let productionPeople = [
+    (CharacterMotion.harleyID, CharacterMotion.harleyFile),
+    (CharacterMotion.kianaID, CharacterMotion.kianaFile),
+    (CharacterMotion.lillyID, CharacterMotion.lillyFile),
+    (CharacterMotion.dellaID, CharacterMotion.dellaFile),
+    (CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile),
+    (CharacterMotion.skyleeLillyID, CharacterMotion.skyleeLillyFile)
+]
+for (id, file) in productionPeople {
+    let path = "/images/" + file
+    let artwork = CharacterBustArtwork.approved(stage: true, side: 208,
+        agentID: id, avatarPath: path)!
+    check(artwork.isValid, "every exact registered production geometry is valid")
+    check(CharacterBustArtwork.approved(stage: false, side: 208,
+        agentID: id, avatarPath: path) == nil, "small inline portraits keep their established renderer")
+    for side in [84.0, 104, 132, 159.99, .nan, .infinity] {
+        check(CharacterBustArtwork.approved(stage: true, side: side,
+            agentID: id, avatarPath: path) == nil, "compact or corrupt stages fall back for every character")
+    }
+    for (_, otherFile) in productionPeople where otherFile != file {
+        check(CharacterBustArtwork.approved(stage: true, side: 208,
+            agentID: id, avatarPath: "/images/" + otherFile) == nil,
+            "no character borrows a different avatar's production pack")
+    }
+    check(CharacterBustArtwork.approved(stage: true, side: 208,
+        agentID: id, avatarPath: "/images/replaced.png") == nil,
+        "new avatar upload does not keep old body/face geometry")
+    check(bustValues(CharacterBustMotion.pose(.still, limits: artwork.motionLimits)) == [0, 0, 0, 0],
+        "still policy parks every registered body and head")
+    for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
+        for expression in CharacterExpression.allCases {
+            let figure = CharacterFigureMotion.pose(id: id, time: 100, level: 1,
+                active: true, presentation: CharacterPresentation(activity: activity,
+                    expression: expression, elapsed: 0.4))
+            let limits = artwork.motionLimits
+            check(zip(bustValues(CharacterBustMotion.pose(figure, limits: limits)),
+                [limits.headDegrees, limits.bodyDegrees, limits.headOffsetPixels, limits.bodyOffsetPixels])
+                .allSatisfy { $0.0.isFinite && abs($0.0) <= $0.1 },
+                "authored performance remains inside each character's native bounds")
+        }
+    }
+}
+var unsafeKiana = CharacterKianaBustGeometry.artwork
+unsafeKiana.bodyClipMinY = nil
+check(!unsafeKiana.isValid, "Kiana cannot expose the reused concept's generated face without the torso clip")
+unsafeKiana.bodyClipMinY = 0
+check(!unsafeKiana.isValid, "a zero-height Kiana clip cannot bypass exact-face registration")
+unsafeKiana.bodyClipMinY = 600
+check(!unsafeKiana.isValid, "the old y600 torso cutoff cannot expose Kiana's mismatched chest")
+let closeKiana = CharacterKianaBustGeometry.artwork
+let oldWideKiana = CharacterBustArtwork(
+    bodyAsset: closeKiana.bodyAsset, maskAsset: closeKiana.maskAsset,
+    bodyX: closeKiana.bodyX, bodyY: closeKiana.bodyY,
+    bodyWidth: closeKiana.bodyWidth, bodyHeight: closeKiana.bodyHeight,
+    cropX: 155, cropY: 0, cropSide: 740,
+    panelX: closeKiana.panelX, panelY: closeKiana.panelY, panelSide: closeKiana.panelSide,
+    neckX: closeKiana.neckX, neckY: closeKiana.neckY,
+    waistX: closeKiana.waistX, waistY: closeKiana.waistY,
+    faceCore: closeKiana.faceCore, headOutline: closeKiana.headOutline,
+    accessoryOutlines: closeKiana.accessoryOutlines, motionLimits: closeKiana.motionLimits,
+    maskPlacement: closeKiana.maskPlacement, bodyClipMinY: closeKiana.bodyClipMinY)
+check(!oldWideKiana.isValid, "the old wide Kiana crop cannot reveal the rectangular torso join")
+let kianaCropBottom = closeKiana.cropY + closeKiana.cropSide
+let kianaPanelBottom = closeKiana.panelY + closeKiana.panelSide
+check(kianaCropBottom <= (closeKiana.bodyClipMinY ?? -Double.infinity),
+    "Kiana's supporting concept starts entirely outside the visible crop")
+check(kianaPanelBottom > kianaCropBottom,
+    "the original Kiana panel has lower-edge overdraw before motion")
+let kianaAngle = closeKiana.motionLimits.headDegrees * Double.pi / 180
+for angle in [-kianaAngle, kianaAngle] {
+    for x in [closeKiana.panelX, closeKiana.panelX + closeKiana.panelSide] {
+        let movedBottom = closeKiana.neckY + (x - closeKiana.neckX) * sin(angle)
+            + (kianaPanelBottom - closeKiana.neckY) * cos(angle)
+            - closeKiana.motionLimits.headOffsetPixels
+        check(movedBottom > kianaCropBottom,
+            "Kiana's original lower edge remains outside the crop at the extreme allowed poses")
+    }
+}
+var invalidMask = CharacterDellaBustGeometry.artwork
+invalidMask.maskPlacement = CharacterBustMaskPlacement(x: 35, y: 0, side: .nan)
+check(!invalidMask.isValid, "invalid matte registration cannot enter the production renderer")
+check(CharacterDellaBustGeometry.artwork.maskPlacement?.side == 350,
+    "Della's independent head mask keeps its reviewed scale")
+check(CharacterAppearance.description(agentID: CharacterMotion.witherspoonID,
+    avatarPath: "/images/" + CharacterMotion.witherspoonFile)?.contains("woman") == true,
+    "the librarian retains her established female identity")
+print("Production puppet identity and safety: \(count - productionBefore) checks passed")
 
 let layoutBefore = count
 check(CharacterStageLayout.callSide(width: 320, height: 568, accessibilityText: false) == 132,
