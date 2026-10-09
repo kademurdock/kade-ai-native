@@ -60,6 +60,7 @@ extension IntentRouter.Destination {
         // The bridge's push for a finished described video (its agentId is
         // "described-video" too).
         case .describedVideo:  return "described-video"
+        case .agentChat:       return KadeFreshAgentChatParser.routeName
         // No outside name, and that is the decision: an agent call cannot be
         // asked for by name because it needs a payload (who is calling, why,
         // which plan). It arrives as its own push category with that payload

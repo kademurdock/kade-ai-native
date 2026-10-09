@@ -182,6 +182,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if category == "KADE_ROUTE",
            let routeName = response.notification.request.content.userInfo["kadeRoute"] as? String,
            let dest = IntentRouter.Destination(routeName: routeName) {
+            if dest == .agentChat {
+                let agentValue = response.notification.request.content.userInfo["kadeAgentId"]
+                if response.actionIdentifier != UNNotificationDismissActionIdentifier,
+                   let request = KadeFreshAgentChatParser.push(routeName: routeName, agentValue: agentValue) {
+                    Task { @MainActor in IntentRouter.shared.requestFreshAgentChat(request) }
+                }
+                completionHandler()
+                return
+            }
             let runId = response.notification.request.content.userInfo["kadeRunId"] as? String
             Task { @MainActor in
                 IntentRouter.shared.pendingHarnessRunId = runId.flatMap {

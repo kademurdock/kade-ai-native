@@ -16,3 +16,4 @@ trap 'rm -rf "$OUT"' EXIT
 CHARACTER_CUE_FIXTURES="${CHARACTER_CUE_FIXTURES:-$ROOT/CharacterMotionTests/cues.json}" \
 CHARACTER_ANGEL_ART="${CHARACTER_ANGEL_ART:-$ROOT/Sources/Assets.xcassets/CharacterAngelVectorArt.dataset/angel-vector.json}" \
 "$OUT/character-tests"
+bash "$ROOT/run-fresh-agent-chat-tests.sh"
