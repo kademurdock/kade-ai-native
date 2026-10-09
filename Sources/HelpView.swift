@@ -233,7 +233,11 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.7: One Library shelf",
+                title: "Newest build, 2.2.8: More room for your character",
+                body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.7: One Library shelf",
                 body: "The Library opens one list of everything your account can access. Search by title, topic, channel or year, or choose Type, Decade and Format. Newspapers, newsletters and yearbooks have their own types. Format chooses Read, Audio or Video; Order chooses Recently added or Title. Clear filters returns to the full list. Load more adds the next items and moves VoiceOver to the first new one. Continue and Family history remain above the list. Other library views keeps folders, My uploads, Recently opened and Collections, including uploads still in progress. Existing players, saved places and item actions still work. A completed chat now keeps VoiceOver where you left it whether Hear replies is on or off. The arrival sound and haptic still mark a new reply, and you can choose when to read it."
             ),
             HelpEntry(
@@ -338,6 +342,10 @@ struct HelpSection: Identifiable {
                 body: "The app shows your conversation as one straight line in the order it happened. Editing or deleting something from the middle would leave an answer to a question that no longer exists, so those actions are deliberately limited to the latest turn."
             ),
             HelpEntry(
+                title: "What your character looks like",
+                body: "Describe character at the top of a chat or call opens a description of the current portrait. It appears for characters with a reviewed description. You can also choose Describe appearance from a character's Actions in the picker. Descriptions are only read when you ask. In a chat, the face makes more room for messages when the keyboard is open, the phone is sideways, or you use larger accessibility text. Reduce Motion keeps the portrait still."
+            ),
+            HelpEntry(
                 title: "Switching characters",
                 body: "The Talking to row just above the message box opens the character picker, and so does tapping the face at the top of the conversation. The picker lands you in a search field with the keyboard up: start typing a name, or put the keyboard away to browse the characters with moving faces, your favorites, and the sections underneath."
             ),
@@ -360,6 +368,10 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Starting a call",
                 body: "The call button at the top of any conversation starts a real-time voice call with that character. Just talk; there's no button to hold."
+            ),
+            HelpEntry(
+                title: "Finding call controls",
+                body: "Mute and Hang Up stay at the bottom of the call screen. Scroll above them to read long captions or reach Camera, Spotter, Deep Think and Stop Talking. With larger accessibility text, Mute and Hang Up stack so their names have room. The title follows your Spotter when they take over the call."
             ),
             HelpEntry(
                 title: "Interrupting",

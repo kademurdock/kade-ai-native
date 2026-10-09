@@ -156,3 +156,39 @@ for sample in [CharacterPresentation.idle, CharacterPresentation(activity: .list
     }
 }
 print("Layered figure motion: \(count - figureBefore) checks passed")
+
+
+let layoutBefore = count
+check(CharacterStageLayout.callSide(width: 320, height: 568, accessibilityText: false) == 132,
+    "small call window keeps compact portrait")
+check(CharacterStageLayout.callSide(width: 430, height: 932, accessibilityText: false) == 208,
+    "large call window keeps full portrait")
+check(CharacterStageLayout.callSide(width: 430, height: 932, accessibilityText: true) == 104,
+    "call portrait leaves room for accessibility text")
+check(CharacterStageLayout.callSide(width: 210, height: 932, accessibilityText: false) == 138,
+    "narrow window contains portrait including its padding")
+for width in [200.0, 210, 280, 320, 430, 1024] {
+    for height in [320.0, 568, 699, 700, 859, 860, 932] {
+        for largeText in [false, true] {
+            let side = CharacterStageLayout.callSide(width: width, height: height,
+                accessibilityText: largeText)
+            check(side + 72 <= width && side > 0 && side <= 208,
+                "call stage always fits supported window width")
+        }
+    }
+}
+for invalid in [Double.nan, Double.infinity, -1, 0] {
+    check(CharacterStageLayout.callSide(width: invalid, height: 932, accessibilityText: false) == 104,
+        "invalid call geometry has a bounded fallback")
+    check(CharacterStageLayout.chatSide(height: invalid, keyboard: false,
+        compactHeight: false, accessibilityText: false) == 132, "invalid chat height stays bounded")
+}
+check(CharacterStageLayout.chatSide(height: 932, keyboard: false,
+    compactHeight: false, accessibilityText: false) == 208, "ordinary chat keeps full portrait")
+check(CharacterStageLayout.chatSide(height: 932, keyboard: false,
+    compactHeight: false, accessibilityText: true) == 104, "large chat text has more message space")
+check(CharacterStageLayout.chatSide(height: 932, keyboard: true,
+    compactHeight: false, accessibilityText: true) == 84, "keyboard stays compact with large text")
+check(CharacterStageLayout.chatSide(height: 430, keyboard: false,
+    compactHeight: true, accessibilityText: false) == 84, "landscape chat prioritizes message space")
+print("Character stage layout: \(count - layoutBefore) checks passed")

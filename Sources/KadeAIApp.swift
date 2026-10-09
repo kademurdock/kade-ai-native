@@ -53,8 +53,11 @@ struct KadeAIApp: App {
         WindowGroup {
             Group {
                 #if DEBUG && targetEnvironment(simulator)
-                if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" { CharacterPortraitAuditView() }
-                else { ContentView() }
+                if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
+                    if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
+                        CallView(agentId: CharacterMotion.kianaID, agentName: "Kiana", apiClient: client)
+                    } else { CharacterPortraitAuditView() }
+                } else { ContentView() }
                 #else
                 ContentView()
                 #endif

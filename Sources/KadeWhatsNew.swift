@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: One Library shelf"
-    static let body = "Browse books, newspapers, radio, audio and video in one Library list. Choose a Type, Decade or Format, search, and load more without opening more shelves. Continue and Family history stay easy to reach; folders, uploads and collections are in Other library views. Completed chats leave VoiceOver where you put it with Hear replies on or off."
+    static let title = "What's new: More room for your character"
+    static let body = "Calls show a larger character portrait, with Mute and Hang Up always within reach. Scroll to read longer captions or find the other call controls. Describe character reads the current portrait when you ask. Larger accessibility text gets more room in chat and calls."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

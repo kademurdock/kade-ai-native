@@ -90,6 +90,8 @@ struct ConversationDetailView: View {
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var voiceService: VoiceService
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject private var apiClient: KadeAPIClient
     /// Only actually dismisses anything when this view is the root of a
     /// sheet-presented `NavigationStack` (see `isStandalonePresentation`
@@ -824,6 +826,10 @@ struct ConversationDetailView: View {
                 .accessibilityHint(messageSearchActive
                     ? "Clears the search and shows the whole conversation again."
                     : "Opens a search field that narrows the messages to ones whose text matches.")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                CharacterAppearanceButton(agentID: voiceService.isClipPlaying
+                    ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId)
             }
             // Session 25 (Kade approved the audit list, "All four"): the
             // Voice button used to be a THIRD icon crammed into this bar
@@ -2738,7 +2744,9 @@ struct ConversationDetailView: View {
     private var faceStage: some View {
         let talking = voiceService.isClipPlaying
         let tall = UIScreen.main.bounds.height
-        let side = keyboardUp ? 84.0 : (tall < 700 ? 132.0 : (tall < 860 ? 176.0 : 208.0))
+        let side = CharacterStageLayout.chatSide(height: Double(tall), keyboard: keyboardUp,
+            compactHeight: verticalSizeClass == .compact,
+            accessibilityText: dynamicTypeSize.isAccessibilitySize)
         let thinking = isSending
         /* C5 (Sep 23 2026 redesign) — THE MOOD LIGHT reads the same
          * presentation the portrait performs (the voice's direction while a

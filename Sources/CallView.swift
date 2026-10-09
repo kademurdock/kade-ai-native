@@ -21,6 +21,7 @@ struct CallView: View {
     @StateObject private var callService: StreamingCallService
     @StateObject private var camera = CameraCaptureController()
     @EnvironmentObject private var conversationsService: ConversationsService
+    @EnvironmentObject private var agentsService: AgentsService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -69,61 +70,87 @@ struct CallView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                statusHeader
-                captionArea
-                if callService.liveOn || callService.videoOn {
-                    cameraPreview
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 20) {
+                        statusHeader
+                        captionArea
+                        if callService.liveOn || callService.videoOn {
+                            cameraPreview
+                        }
+                        // Session 27 (visual delight, VO-invisible): the call's
+                        // state as a breathing orb -- teal listening, amber
+                        // thinking (twin of the typing sound), green + ripples
+                        // speaking. See KadeCallStateOrb for the motion gates.
+                        if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
+                            CharacterPortraitView(agentID: agentId, name: agentName,
+                                playing: true,
+                                level: { callService.characterLevel }, listening: true,
+                                presentation: { callService.characterPresentation },
+                                stage: true, side: CharacterStageLayout.callSide(
+                                    width: Double(geometry.size.width), height: Double(geometry.size.height),
+                                    accessibilityText: dynamicTypeSize.isAccessibilitySize))
+                        } else {
+                            KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
+                        }
+                        if wrappingUp {
+                            wrapUpPanel
+                        }
+                        // Aug 9 2026 (her call): the audio-check readout only
+                        // appears when something is actually wrong — see
+                        // audioTrouble's doc comment in the service.
+                        if callService.audioTrouble {
+                            audioCheck
+                        }
+                        // The plain camera-describe lane belongs to the CURRENT
+                        // conversation agent. Once Spotter/Live is on, the Spotter
+                        // is who's actually holding the call and already owns the
+                        // camera (liveOn auto-starts capture) -- so a second button
+                        // reading "Let <original agent> see your camera" is both
+                        // redundant AND misattributed to whoever you WERE talking to
+                        // before the handoff, which is exactly the wrong-agent
+                        // camera control Kade reported after a transfer. Hide it
+                        // while Spotter is live; the Spotter's own camera controls
+                        // (the preview + flashlight, both agent-agnostic) stay, and
+                        // spotterButton is how you hand the call back.
+                        if !callService.liveOn {
+                            cameraButton
+                        }
+                        spotterButton
+                        deepThinkButton
+                        stopTalkingButton
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
                 }
-                Spacer(minLength: 0)
-                // Session 27 (visual delight, VO-invisible): the call's
-                // state as a breathing orb -- teal listening, amber
-                // thinking (twin of the typing sound), green + ripples
-                // speaking. See KadeCallStateOrb for the motion gates.
-                if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
-                    CharacterPortraitView(agentID: agentId, name: agentName,
-                        playing: true,
-                        level: { callService.characterLevel }, listening: true,
-                        presentation: { callService.characterPresentation },
-                        stage: true, side: callPortraitSide)
-                } else {
-                    KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
+                // Captions, the camera and secondary actions can grow freely.
+                // Mute and Hang Up keep one identity outside the scrolling content.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        Divider()
+                        controls.padding(.horizontal).padding(.top, 12)
+                    }
+                    .background(Color(.systemBackground))
                 }
-                Spacer(minLength: 0)
-                if wrappingUp {
-                    wrapUpPanel
-                }
-                // Aug 9 2026 (her call): the audio-check readout only
-                // appears when something is actually wrong — see
-                // audioTrouble's doc comment in the service.
-                if callService.audioTrouble {
-                    audioCheck
-                }
-                // The plain camera-describe lane belongs to the CURRENT
-                // conversation agent. Once Spotter/Live is on, the Spotter
-                // is who's actually holding the call and already owns the
-                // camera (liveOn auto-starts capture) -- so a second button
-                // reading "Let <original agent> see your camera" is both
-                // redundant AND misattributed to whoever you WERE talking to
-                // before the handoff, which is exactly the wrong-agent
-                // camera control Kade reported after a transfer. Hide it
-                // while Spotter is live; the Spotter's own camera controls
-                // (the preview + flashlight, both agent-agnostic) stay, and
-                // spotterButton is how you hand the call back.
-                if !callService.liveOn {
-                    cameraButton
-                }
-                spotterButton
-                deepThinkButton
-                stopTalkingButton
-                controls
             }
-            .padding()
-            .navigationTitle(agentName)
+            .navigationTitle(currentSpeakerName)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if !callService.liveOn {
+                    ToolbarItem(placement: .primaryAction) {
+                        CharacterAppearanceButton(agentID: agentId)
+                    }
+                }
+            }
         }
         .onAppear { LibraryNowPlaying.shared.pauseForOtherAudio("a call") }
         .task {
+            #if DEBUG && targetEnvironment(simulator)
+            if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
+                prepareLayoutAudit()
+                return
+            }
+            #endif
             // FIX (session 21e, Kade: "I don't think she can actually see my
             // camera... she might be hallucinating"). The camera captured
             // frames the whole time, but nothing ever wired `onFrame` to the
@@ -258,14 +285,6 @@ struct CallView: View {
     }
 
     // MARK: - Pieces
-
-    private var callPortraitSide: Double {
-        if dynamicTypeSize.isAccessibilitySize { return 104 }
-        let height = UIScreen.main.bounds.height
-        if height < 700 { return 132 }
-        if height < 860 { return 160 }
-        return 208
-    }
 
     private var statusHeader: some View {
         VStack(spacing: 6) {
@@ -555,7 +574,10 @@ struct CallView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 16) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 10))
+            : AnyLayout(HStackLayout(spacing: 16))
+        return layout {
             // Session 26, her spec exactly: "a mute button to mute your
             // mic" -- with auto barge-in, a hot mic means any cough or TV
             // line interrupts the agent mid-sentence; mute sends silence
@@ -575,7 +597,7 @@ struct CallView: View {
                 }
             } label: {
                 Label(callService.micMuted ? "Unmute" : "Mute", systemImage: callService.micMuted ? "mic.slash.fill" : "mic.slash")
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered)
             .tint(callService.micMuted ? .red : nil)
@@ -592,13 +614,33 @@ struct CallView: View {
                 hangUp()
             } label: {
                 Label("Hang Up", systemImage: "phone.down.fill")
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
         }
         .padding(.bottom, 8)
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Photograph the production screen with invented text. No call is started.
+    private func prepareLayoutAudit() {
+        agentsService.seedCharacterAudit()
+        UserDefaults.standard.set(true, forKey: "kadeVoicePortraits")
+        UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+        callService.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
+        let captions = [
+            ("user", "Tell me about a quiet afternoon by the lake."),
+            ("assistant", "The water is still, and the porch swing creaks in the shade. We can sit for a while, listen to the birds, and decide what to do next. There is no hurry.")
+        ]
+        for (role, text) in captions {
+            if let data = try? JSONSerialization.data(withJSONObject: ["type": "caption", "role": role, "text": text]),
+               let json = String(data: data, encoding: .utf8) { callService.auditControl(json) }
+        }
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try? "ready".write(to: folder.appendingPathComponent("call-layout-ready.txt"), atomically: true, encoding: .utf8)
+    }
+    #endif
 
     // MARK: - Actions
 
