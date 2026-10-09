@@ -492,8 +492,15 @@ workflows:
       vars:
         BUNDLE_ID: "com.kademurdock.kadeai"
         KADE_CHARACTER_AUDIT: "1"
+        KADE_PUPPET_AUDIT: "1"
       xcode: "26.4"
     scripts:
+      - name: Verify source and prepare simulator-only puppet art
+        script: |
+          set -euo pipefail
+          test -n "${KADE_EXPECTED_COMMIT:-}"
+          test "$CM_COMMIT" = "$KADE_EXPECTED_COMMIT"
+          python3 dev/prepare-puppet-review.py
       - name: Character motion tests
         script: |
           set -e
@@ -511,6 +518,7 @@ workflows:
       - character-audit/runtime.log
       - character-audit/compile.log
       - character-audit/*.png
+      - character-audit/playback.mp4
 
   # ─────────────────────────────────────────────────────────────────────────────
   # SEP 23 2026 — THE REDESIGN TOUR. Neither Kade nor a session can see the

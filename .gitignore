@@ -2,3 +2,7 @@
 DerivedData/
 build/
 .DS_Store
+# Staged only by dev/prepare-puppet-review.py for simulator art review.
+Sources/Assets.xcassets/CharacterHarleyBustBody.imageset/
+Sources/Assets.xcassets/CharacterHarleyBustMask.imageset/
+dev/__pycache__/

@@ -125,7 +125,8 @@ final class AgentsService: ObservableObject {
     func seedCharacterAudit() {
         let rows: [[String: Any]] = [
             ["id": CharacterMotion.kianaID, "name": "Kiana", "avatar": ["filepath": "/images/" + CharacterMotion.kianaFile]],
-            ["id": CharacterMotion.dellaID, "name": "Della", "avatar": ["filepath": "/images/" + CharacterMotion.dellaFile]]]
+            ["id": CharacterMotion.dellaID, "name": "Della", "avatar": ["filepath": "/images/" + CharacterMotion.dellaFile]],
+            ["id": CharacterMotion.harleyID, "name": "Harley", "avatar": ["filepath": "/images/" + CharacterMotion.harleyFile]]]
         if let data = try? JSONSerialization.data(withJSONObject: rows), let decoded = try? decoder.decode([KadeAgent].self, from: data) {
             agents = decoded; hasLoadedOnce = true
         }

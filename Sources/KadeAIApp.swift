@@ -32,6 +32,15 @@ struct KadeAIApp: App {
     // only, no server dependency either, same reasoning as pushService.
     @StateObject private var appearance = AppearancePreferences()
 
+    private var offlineCharacterReview: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" ||
+            (ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing)
+        #else
+        return false
+        #endif
+    }
+
     init() {
         // Session 20: register feedback defaults (sound/haptics on) BEFORE
         // anything reads FeedbackPrefs.shared, so first run is opt-out.
@@ -53,7 +62,9 @@ struct KadeAIApp: App {
         WindowGroup {
             Group {
                 #if DEBUG && targetEnvironment(simulator)
-                if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
+                if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
+                    CharacterPuppetLabView()
+                } else if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
                     if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
                         CallView(agentId: CharacterMotion.kianaID, agentName: "Kiana", apiClient: client)
                     } else { CharacterPortraitAuditView() }
@@ -80,9 +91,7 @@ struct KadeAIApp: App {
                 // light mode on someone who has their phone set to dark.
                 .preferredColorScheme(appearance.highContrast ? .dark : nil)
                 .task {
-                    #if DEBUG && targetEnvironment(simulator)
-                    if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" { return }
-                    #endif
+                    if offlineCharacterReview { return }
                     // Hand the delegate its PushService reference before
                     // anything can race a device token in (didFinishLaunching
                     // already ran by the time this .task body starts, but a
@@ -122,6 +131,7 @@ struct KadeAIApp: App {
                     KadeJobActivity.endLeftovers()
                 }
                 .onChange(of: auth.state) { _, newState in
+                    guard !offlineCharacterReview else { return }
                     // Link the device to whoever is actually signed in right
                     // now -- lets the bridge target push by userId (Phase 6)
                     // instead of only broadcasting to every device. Signing
@@ -137,6 +147,7 @@ struct KadeAIApp: App {
                     }
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    guard !offlineCharacterReview else { return }
                     if phase == .active { pushService.refreshRegistration() }
                 }
         }

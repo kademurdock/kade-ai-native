@@ -155,8 +155,104 @@ for sample in [CharacterPresentation.idle, CharacterPresentation(activity: .list
             "figure joints stay bounded")
     }
 }
+func figureValues(_ pose: CharacterFigurePose) -> [Double] {
+    [pose.headAngle, pose.headNod, pose.torsoAngle, pose.torsoLift,
+        pose.farArmAngle, pose.nearArmAngle]
+}
+let stillFigure = figureValues(.still)
+for clock in [Double.nan, Double.infinity, -Double.infinity, -0.001] {
+    check(figureValues(CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: clock, level: 1, active: true, presentation: figureSpeech)) == stillFigure,
+        "invalid or negative clock parks every Harley joint")
+}
+for activity in [CharacterActivity.idle, .listening, .thinking] {
+    let state = CharacterPresentation(activity: activity, elapsed: 0.4)
+    let quiet = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 0, active: true, presentation: state)
+    let unrelatedAudio = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 1, active: true, presentation: state)
+    check(figureValues(quiet) == figureValues(unrelatedAudio),
+        "listening thinking and idle cannot gesture to another speaker's audio")
+}
+let figureLimits = [7.0, 0.018, 3, 0.008, 14, 16]
+for expression in CharacterExpression.allCases {
+    for clock in [0.0, 0.4, 0.8, 1, 14.5, 80, 3600, 86400] {
+        let state = CharacterPresentation(activity: .speaking,
+            expression: expression, elapsed: clock)
+        let disabled = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+            time: clock, level: 1, active: false, presentation: state)
+        check(figureValues(disabled) == stillFigure,
+            "disabled preview parks all body joints across authored directions")
+        for level in [-1.0, 0, 0.5, 100, Double.nan, Double.infinity] {
+            let pose = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+                time: clock, level: level, active: true, presentation: state)
+            check(zip(figureValues(pose), figureLimits).allSatisfy {
+                $0.0.isFinite && abs($0.0) <= $0.1
+            }, "Harley joint output stays finite and inside the compositor's limits")
+        }
+    }
+}
+for elapsed in [Double.nan, Double.infinity, -Double.infinity, -1] {
+    let state = CharacterPresentation(activity: .speaking,
+        expression: .excited, elapsed: elapsed)
+    let pose = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 14.5, level: 0.5, active: true, presentation: state)
+    check(figureValues(pose).allSatisfy { $0.isFinite },
+        "invalid cue elapsed time cannot corrupt the body's transform")
+}
 print("Layered figure motion: \(count - figureBefore) checks passed")
 
+let bustBefore = count
+let harleyAvatarPath = "/images/" + CharacterMotion.harleyFile
+func reviewBust(enabled: Bool = true, stage: Bool = true, side: Double = 208,
+                agentID: String? = CharacterMotion.harleyID,
+                avatarPath: String? = "/images/" + CharacterMotion.harleyFile) -> CharacterBustArtwork? {
+    CharacterBustArtwork.review(enabled: enabled, stage: stage, side: side,
+        agentID: agentID, avatarPath: avatarPath)
+}
+check(reviewBust() != nil, "explicit Harley stage review resolves its matching art pack")
+check(reviewBust(enabled: false) == nil, "review opt-in is required")
+check(reviewBust(stage: false) == nil, "inline portraits cannot become review busts")
+check(reviewBust(side: 160) != nil, "minimum review stage is accepted")
+for side in [0.0, -1, 84, 104, 132, 159.99, Double.nan, Double.infinity, -Double.infinity] {
+    check(reviewBust(side: side) == nil, "compact or invalid stages keep the established face")
+}
+for agentID in [nil, "", "harley", CharacterMotion.kianaID, CharacterMotion.skyleeLillyID] as [String?] {
+    check(reviewBust(agentID: agentID) == nil, "foreign or absent identity never borrows Harley's body")
+}
+for avatarPath in [nil, "", "/images/replaced.png", "/images/" + CharacterMotion.kianaFile,
+                   harleyAvatarPath + ".backup", "/images/prefix-" + CharacterMotion.harleyFile] as [String?] {
+    check(reviewBust(avatarPath: avatarPath) == nil, "changed or foreign avatar cannot inherit review artwork")
+}
+check(reviewBust(avatarPath: "https://example.test" + harleyAvatarPath + "?version=1") != nil,
+    "a URL query does not change the verified avatar filename")
+
+func bustValues(_ pose: CharacterBustPose) -> [Double] {
+    [pose.headAngle, pose.bodyAngle, pose.headOffsetY, pose.bodyOffsetY]
+}
+check(bustValues(CharacterBustMotion.pose(.still)) == [0, 0, 0, 0],
+    "the motion gate parks the bust without a residual transform")
+let bustLimits = [2.0, 0.5, 3, 2]
+for value in [-1000.0, -1, 0, 1, 1000, Double.nan, Double.infinity, -Double.infinity] {
+    let figure = CharacterFigurePose(headAngle: value, headNod: value,
+        torsoAngle: value, torsoLift: value, farArmAngle: value, nearArmAngle: value)
+    let bust = CharacterBustMotion.pose(figure)
+    check(zip(bustValues(bust), bustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "review bust clamps every transform even with corrupt upstream motion")
+    if !value.isFinite {
+        check(bustValues(bust) == [0, 0, 0, 0], "invalid motion components park safely")
+    }
+}
+for expression in CharacterExpression.allCases {
+    let state = CharacterPresentation(activity: .speaking, expression: expression, elapsed: 0.4)
+    let figure = CharacterFigureMotion.pose(id: CharacterMotion.harleyID,
+        time: 100, level: 1, active: true, presentation: state)
+    check(zip(bustValues(CharacterBustMotion.pose(figure)), bustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "authored speech stays within the bust's conservative movement limits")
+}
+print("Character bust review and transforms: \(count - bustBefore) checks passed")
 
 let layoutBefore = count
 check(CharacterStageLayout.callSide(width: 320, height: 568, accessibilityText: false) == 132,

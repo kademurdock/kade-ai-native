@@ -1,6 +1,7 @@
 #if DEBUG && targetEnvironment(simulator)
 import SwiftUI
 import AVFoundation
+import UIKit
 
 enum CharacterAuditCheckpoint {
     static func mark(_ label: String) {
@@ -24,7 +25,13 @@ struct CharacterPortraitAuditView: View {
     @State private var ran = false
     @State private var ready = false
     @State private var checks: [String] = []
+    @State private var puppetPoses = false
+    @State private var reviewPerformance = CharacterPresentation.idle
+    @State private var reviewSide = 208.0
+    @State private var reviewStill = false
+    @State private var reviewDark = false
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
+    private let puppetEnabled = ProcessInfo.processInfo.environment["KADE_PUPPET_AUDIT"] == "1"
 
     var body: some View {
         VStack(spacing: 8) {
@@ -38,14 +45,23 @@ struct CharacterPortraitAuditView: View {
                         galleryPortrait(CharacterMotion.dellaID, "Della", expression)
                     }
                 }
+            } else if puppetPoses {
+                CharacterPortraitView(agentID: CharacterMotion.harleyID, name: "Harley",
+                    playing: false, level: { 0 },
+                    presentation: { reviewPerformance }, stage: true, side: reviewSide, reviewBust: true)
+                    .environment(\.accessibilityReduceMotion, reviewStill)
+                Text("Harley · native puppet study")
+                Text("Experimental head and shoulders. Compact stages retain the portrait.")
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
-                    presentation: { callMode ? call.characterPresentation : voice.characterPresentation() })
+                    presentation: { callMode ? call.characterPresentation : voice.characterPresentation() },
+                    stage: puppetEnabled && agentID == CharacterMotion.harleyID,
+                    side: agentID == CharacterMotion.harleyID ? 208 : 160, reviewBust: puppetEnabled)
                 Text(name).font(.title)
                 Text("Offline audio engine. Local synthetic test tones.")
             }
-        }.padding(8).task { await run() }
+        }.padding(8).preferredColorScheme(reviewDark ? .dark : .light).task { await run() }
     }
     private func galleryPortrait(_ id: String, _ name: String, _ expression: CharacterExpression) -> some View {
         VStack(spacing: 0) {
@@ -67,6 +83,17 @@ struct CharacterPortraitAuditView: View {
         phase = label
         try? label.write(to: output.appendingPathComponent("character-phase.txt"), atomically: true, encoding: .utf8)
     }
+    private func capturePose(_ label: String) async throws {
+        // Let SwiftUI lay out the changed mode before the runner sees its label.
+        await wait(0.6)
+        step(label)
+        for _ in 0..<25 {
+            if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == label { return }
+            await wait(0.2)
+        }
+        throw NSError(domain: "CharacterAudit", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Missing required screenshot: " + label])
+    }
     private func check(_ condition: Bool, _ label: String) throws {
         guard condition else { throw NSError(domain: "CharacterAudit", code: 1, userInfo: [NSLocalizedDescriptionKey: label]) }
         checks.append(label)
@@ -87,12 +114,36 @@ struct CharacterPortraitAuditView: View {
                 await wait(0.2)
             }
             gallery = false
+            if puppetEnabled {
+                try check(UIImage(named: "CharacterHarleyBustBody") != nil && UIImage(named: "CharacterHarleyBustMask") != nil,
+                    "experimental Harley resources staged for this simulator audit")
+                puppetPoses = true
+                for dark in [false, true] {
+                    reviewDark = dark
+                    for (activity, label) in [(CharacterActivity.idle, "idle"), (.listening, "listening"), (.thinking, "thinking")] {
+                        reviewPerformance = CharacterPresentation(activity: activity)
+                        try await capturePose("harley-puppet-\(label)-\(dark ? "dark" : "light")")
+                    }
+                }
+                reviewStill = true
+                try await capturePose("harley-puppet-reduce-motion")
+                reviewStill = false
+                for size in [84.0, 104.0] {
+                    reviewSide = size
+                    try await capturePose("harley-compact-portrait-\(Int(size))")
+                }
+                reviewSide = 208
+                reviewDark = false
+                puppetPoses = false
+            }
             let wav = Self.wav(seconds: 3)
             callMode = true
             CharacterAuditCheckpoint.mark("Starting offline call engine")
             try call.auditStart(agentID: agentID)
-            for (id, label, other) in [(CharacterMotion.kianaID, "Kiana", CharacterMotion.dellaID),
-                (CharacterMotion.dellaID, "Della", CharacterMotion.kianaID)] {
+            var roster = [(CharacterMotion.kianaID, "Kiana", CharacterMotion.dellaID),
+                (CharacterMotion.dellaID, "Della", CharacterMotion.kianaID)]
+            if puppetEnabled { roster.append((CharacterMotion.harleyID, "Harley", CharacterMotion.kianaID)) }
+            for (id, label, other) in roster {
             agentID = id; name = label; call.auditSpeaker(id)
             CharacterAuditCheckpoint.mark(label + " rendering offline call")
             call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
@@ -129,6 +180,7 @@ struct CharacterPortraitAuditView: View {
             step("passed")
             let result: [String: Any] = ["passed": true, "checks": checks,
                 "mode": "offline-AVAudioEngine", "physicalAudioVerified": false,
+                "puppetAuditEnabled": puppetEnabled, "puppetArtApproved": false,
                 "unverified": ["AVAudioPlayer real-time voice-message playback", "Physical speaker and Bluetooth", "Microphone and live network call", "Physical VoiceOver"]]
             try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted).write(to: output.appendingPathComponent("character-audit.json"))
         } catch {

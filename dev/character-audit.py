@@ -22,6 +22,8 @@ try:
     app=pathlib.Path('build/character-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app').resolve()
     run('install',sim,str(app))
     env=dict(os.environ,SIMCTL_CHILD_KADE_A11Y_AUDIT='1',SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1')
+    if os.environ.get('KADE_PUPPET_AUDIT') == '1':
+        env['SIMCTL_CHILD_KADE_PUPPET_AUDIT'] = '1'
     video=subprocess.Popen(['xcrun','simctl','io',sim,'recordVideo','--codec=h264',str(out/'playback.mp4')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)

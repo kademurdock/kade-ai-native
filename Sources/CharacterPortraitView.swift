@@ -1,4 +1,7 @@
 import SwiftUI
+#if DEBUG && targetEnvironment(simulator)
+import UIKit
+#endif
 
 /// Shared by saved replies and the streaming reply. Only this small decorative
 /// subtree updates; transcript text and VoiceOver focus never update per frame.
@@ -15,6 +18,8 @@ struct CharacterPortraitView: View {
     /// talking, and its movement is drawn several times larger than a row's.
     var stage = false
     var side = 160.0
+    /// Used only by the offline simulator review. Release always ignores it.
+    var reviewBust = false
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -25,6 +30,17 @@ struct CharacterPortraitView: View {
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
     private var figureArtwork: CharacterFigureArtwork? {
         stage ? CharacterFigureArtwork.approved(agentID: agentID, avatarPath: path) : nil
+    }
+    private var bustArtwork: CharacterBustArtwork? {
+        #if DEBUG && targetEnvironment(simulator)
+        guard let artwork = CharacterBustArtwork.review(enabled: reviewBust, stage: stage,
+                side: side, agentID: agentID, avatarPath: path),
+              UIImage(named: artwork.bodyAsset) != nil,
+              UIImage(named: artwork.maskAsset) != nil else { return nil }
+        return artwork
+        #else
+        return nil
+        #endif
     }
     private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
     private var url: URL? {
@@ -50,7 +66,12 @@ struct CharacterPortraitView: View {
                             .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
-                    if let artwork = figureArtwork, let sheet {
+                    if let artwork = bustArtwork {
+                        layeredBust(artwork, pose: pose, face: performance.face,
+                            motion: CharacterBustMotion.pose(CharacterFigureMotion.pose(
+                                id: agentID ?? "unknown", time: time, level: outputLevel,
+                                active: active, presentation: performance)))
+                    } else if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: performance.face,
                             body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
                                 time: time, level: outputLevel, active: active, presentation: performance))
@@ -147,6 +168,55 @@ struct CharacterPortraitView: View {
                 else { fallback }
             }
         } else { fallback }
+    }
+
+    /// The full original atlas panel supplies the neutral head as well as its
+    /// speaking and expression patches. Mask and cut path move with that whole
+    /// composite, so a gesture cannot slide a mouth across an unmoving face.
+    private func layeredBust(_ artwork: CharacterBustArtwork, pose: CharacterPose,
+                            face: CharacterFace, motion: CharacterBustPose) -> some View {
+        let unit = side / artwork.cropSide
+        let neck = UnitPoint(x: CGFloat((artwork.neckX - artwork.cropX) / artwork.cropSide),
+                             y: CGFloat((artwork.neckY - artwork.cropY) / artwork.cropSide))
+        let waist = UnitPoint(x: CGFloat((artwork.waistX - artwork.cropX) / artwork.cropSide),
+                              y: CGFloat((artwork.waistY - artwork.cropY) / artwork.cropSide))
+        return ZStack(alignment: .topLeading) {
+            Image(artwork.bodyAsset).resizable().interpolation(.high)
+                .frame(width: artwork.bodyWidth * unit, height: artwork.bodyHeight * unit)
+                .offset(x: -artwork.cropX * unit, y: -artwork.cropY * unit)
+                .frame(width: side, height: side, alignment: .topLeading)
+                .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
+                .offset(y: motion.bodyOffsetY * unit)
+            portrait(pose, face: face)
+                .frame(width: side, height: side)
+                .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
+                .offset(x: (artwork.panelX - artwork.cropX) * unit,
+                        y: (artwork.panelY - artwork.cropY) * unit)
+                .frame(width: side, height: side, alignment: .topLeading)
+                .mask(alignment: .topLeading) { bustMask(artwork, unit: unit) }
+                .clipShape(CharacterBustHeadCut(artwork: artwork))
+                .rotationEffect(.degrees(motion.headAngle), anchor: neck)
+                .offset(y: motion.headOffsetY * unit)
+        }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+
+    private func bustMask(_ artwork: CharacterBustArtwork, unit: Double) -> some View {
+        ZStack(alignment: .topLeading) {
+            Image(artwork.maskAsset).resizable().interpolation(.high)
+                .frame(width: artwork.panelSide * unit, height: artwork.panelSide * unit)
+                .offset(x: (artwork.panelX - artwork.cropX) * unit,
+                        y: (artwork.panelY - artwork.cropY) * unit)
+            // Exact opaque face core from the existing study: the source mask
+            // feathers the hair boundary without making facial patches ghost.
+            Ellipse().fill(.white)
+                .frame(width: artwork.coreRadiusX * 2 * unit,
+                       height: artwork.coreRadiusY * 2 * unit)
+                .offset(x: (artwork.coreX - artwork.coreRadiusX - artwork.cropX) * unit,
+                        y: (artwork.coreY - artwork.coreRadiusY - artwork.cropY) * unit)
+        }
+        .frame(width: side, height: side, alignment: .topLeading)
     }
 
     /// The authored head cutout and these atlas patches share one neck transform.
@@ -247,5 +317,38 @@ struct CharacterPortraitView: View {
             Color.accentColor.opacity(0.16)
             Text(String(name.prefix(1))).font(.system(size: side * 0.35, weight: .medium)).foregroundStyle(Color.accentColor)
         }
+    }
+}
+
+/// Unchanged cubic outline from the Harley exact-atlas study, transformed from
+/// its 1024-pixel world into the close crop. This clips both mask and face.
+private struct CharacterBustHeadCut: Shape {
+    let artwork: CharacterBustArtwork
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 406, y: 46))
+        path.addCurve(to: CGPoint(x: 493, y: 17), control1: CGPoint(x: 426, y: 20), control2: CGPoint(x: 461, y: 17))
+        path.addCurve(to: CGPoint(x: 578, y: 30), control1: CGPoint(x: 527, y: 7), control2: CGPoint(x: 556, y: 21))
+        path.addCurve(to: CGPoint(x: 645, y: 82), control1: CGPoint(x: 609, y: 30), control2: CGPoint(x: 632, y: 55))
+        path.addCurve(to: CGPoint(x: 667, y: 158), control1: CGPoint(x: 663, y: 98), control2: CGPoint(x: 669, y: 130))
+        path.addCurve(to: CGPoint(x: 663, y: 212), control1: CGPoint(x: 675, y: 178), control2: CGPoint(x: 671, y: 195))
+        path.addCurve(to: CGPoint(x: 665, y: 275), control1: CGPoint(x: 674, y: 235), control2: CGPoint(x: 674, y: 256))
+        path.addCurve(to: CGPoint(x: 647, y: 341), control1: CGPoint(x: 669, y: 301), control2: CGPoint(x: 661, y: 322))
+        path.addCurve(to: CGPoint(x: 610, y: 402), control1: CGPoint(x: 639, y: 367), control2: CGPoint(x: 625, y: 385))
+        path.addCurve(to: CGPoint(x: 600, y: 472), control1: CGPoint(x: 601, y: 420), control2: CGPoint(x: 598, y: 437))
+        path.addCurve(to: CGPoint(x: 447, y: 472), control1: CGPoint(x: 571, y: 489), control2: CGPoint(x: 488, y: 493))
+        path.addCurve(to: CGPoint(x: 432, y: 411), control1: CGPoint(x: 453, y: 445), control2: CGPoint(x: 448, y: 428))
+        path.addCurve(to: CGPoint(x: 397, y: 346), control1: CGPoint(x: 414, y: 390), control2: CGPoint(x: 403, y: 370))
+        path.addCurve(to: CGPoint(x: 381, y: 291), control1: CGPoint(x: 383, y: 332), control2: CGPoint(x: 379, y: 310))
+        path.addCurve(to: CGPoint(x: 376, y: 234), control1: CGPoint(x: 370, y: 274), control2: CGPoint(x: 369, y: 255))
+        path.addCurve(to: CGPoint(x: 378, y: 179), control1: CGPoint(x: 366, y: 215), control2: CGPoint(x: 368, y: 193))
+        path.addCurve(to: CGPoint(x: 384, y: 102), control1: CGPoint(x: 369, y: 149), control2: CGPoint(x: 376, y: 117))
+        path.addCurve(to: CGPoint(x: 406, y: 46), control1: CGPoint(x: 385, y: 76), control2: CGPoint(x: 391, y: 59))
+        path.closeSubpath()
+        let unit = rect.width / CGFloat(artwork.cropSide)
+        return path.applying(CGAffineTransform(a: unit, b: 0, c: 0, d: unit,
+            tx: rect.minX - CGFloat(artwork.cropX) * unit,
+            ty: rect.minY - CGFloat(artwork.cropY) * unit))
     }
 }
