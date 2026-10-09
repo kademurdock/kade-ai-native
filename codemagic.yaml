@@ -4,7 +4,7 @@
 workflows:
   ios-native-testflight:
     name: Kade-AI Native iOS -> TestFlight
-    max_build_duration: 15
+    max_build_duration: 35
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: KadeAI_ASC_Key
@@ -14,6 +14,9 @@ workflows:
       vars:
         BUNDLE_ID: "com.kademurdock.kadeai"
         APP_STORE_APPLE_ID: 6791024001
+        KADE_CHARACTER_AUDIT: "1"
+        KADE_CALL_LAYOUT_AUDIT: "1"
+        KADE_CHAT_LAYOUT_AUDIT: "1"
       # Repeatable toolchain; 26.6's simulator stalls inside AudioQueue on this VM.
       xcode: "26.4"
     scripts:
@@ -54,6 +57,7 @@ workflows:
           bash ./run-clubhouse-tests.sh
           bash ./run-caption-tests.sh
           python3 dev/art-check.py
+          python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -285,6 +289,7 @@ workflows:
           bash ./run-clubhouse-tests.sh
           bash ./run-caption-tests.sh
           python3 dev/art-check.py
+          python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -486,21 +491,23 @@ workflows:
   # would go green having tested NOTHING. Never move it back to the trigger.
   ios-character-audit-verify:
     name: Character audit verify (no signing, no upload)
-    max_build_duration: 20
+    max_build_duration: 25
     instance_type: mac_mini_m2
     environment:
       vars:
         BUNDLE_ID: "com.kademurdock.kadeai"
         KADE_CHARACTER_AUDIT: "1"
         KADE_PUPPET_AUDIT: "1"
+        KADE_CALL_LAYOUT_AUDIT: "1"
+        KADE_CHAT_LAYOUT_AUDIT: "1"
       xcode: "26.4"
     scripts:
-      - name: Verify source and prepare simulator-only puppet art
+      - name: Verify source and bundled character art
         script: |
           set -euo pipefail
           test -n "${KADE_EXPECTED_COMMIT:-}"
           test "$CM_COMMIT" = "$KADE_EXPECTED_COMMIT"
-          python3 dev/prepare-puppet-review.py
+          python3 dev/prepare-puppet-review.py --check
       - name: Character motion tests
         script: |
           set -e
@@ -519,6 +526,8 @@ workflows:
       - character-audit/compile.log
       - character-audit/*.png
       - character-audit/playback.mp4
+      - character-audit/call-layout.json
+      - character-audit/chat-stage-layout.json
 
   # ─────────────────────────────────────────────────────────────────────────────
   # SEP 23 2026 — THE REDESIGN TOUR. Neither Kade nor a session can see the
@@ -611,7 +620,7 @@ workflows:
   # One consolidated, exact-source run. No email, tester notification or distribution.
   ios-character-polish-release:
     name: Character polish - checks, simulator audit and signed upload
-    max_build_duration: 25
+    max_build_duration: 35
     instance_type: mac_mini_m2
     integrations:
       app_store_connect: KadeAI_ASC_Key
@@ -622,6 +631,7 @@ workflows:
         BUNDLE_ID: "com.kademurdock.kadeai"
         KADE_CHARACTER_AUDIT: "1"
         KADE_CALL_LAYOUT_AUDIT: "1"
+        KADE_CHAT_LAYOUT_AUDIT: "1"
         APP_STORE_APPLE_ID: 6791024001
       xcode: "26.4"
     scripts:
@@ -646,6 +656,7 @@ workflows:
           bash ./run-clubhouse-tests.sh
           bash ./run-caption-tests.sh
           python3 dev/art-check.py
+          python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py
       - name: Generate Xcode project (XcodeGen)
         script: |
@@ -724,3 +735,118 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: false
+
+  # Reviewed signed device artifact. Upload is a separate, exact-IPA action.
+  ios-puppet-device-verify:
+    name: Native puppets - signed device verification, no upload
+    max_build_duration: 35
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: KadeAI_ASC_Key
+    environment:
+      groups:
+        - signing
+      vars:
+        BUNDLE_ID: "com.kademurdock.kadeai"
+        KADE_CHARACTER_AUDIT: "1"
+        KADE_CALL_LAYOUT_AUDIT: "1"
+        KADE_CHAT_LAYOUT_AUDIT: "1"
+        APP_STORE_APPLE_ID: 6791024001
+      xcode: "26.4"
+    scripts:
+      - name: Speech pipeline tests (gate - a red suite blocks the build)
+        script: |
+          set -e
+          exec > >(tee "$CM_BUILD_DIR/foundation-tests.log") 2>&1
+          if [ -z "${KADE_EXPECTED_COMMIT:-}" ] || [ "${CM_COMMIT:-}" != "$KADE_EXPECTED_COMMIT" ]; then
+            echo "Build source does not match the approved release commit." >&2
+            exit 1
+          fi
+          ./run-speech-tests.sh
+          bash ./run-push-tests.sh
+          bash ./run-character-tests.sh
+          bash ./run-starter-tests.sh
+          bash ./run-memory-receipt-tests.sh
+          bash ./run-reply-focus-tests.sh
+          bash ./run-library-browse-tests.sh
+          python3 VoiceSelectionTests/run.py
+          bash ./run-world-tests.sh
+          bash ./run-family-tests.sh
+          bash ./run-clubhouse-tests.sh
+          bash ./run-caption-tests.sh
+          python3 dev/art-check.py
+          python3 dev/prepare-puppet-review.py --check
+          python3 scripts/test_release_receipt.py
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+      - name: Offline call engine and portrait simulator checks
+        script: |
+          bash dev/character-audit.sh
+      - name: Set up code signing (reusable certificate)
+        script: |
+          set -e
+          keychain initialize
+          printf '%s' "$CERT_KEY" | openssl base64 -d -A > /tmp/cert_key.pem
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID.keyboard" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID.widgets" \
+            --type IOS_APP_STORE \
+            --certificate-key=@file:/tmp/cert_key.pem \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Auto-increment the TestFlight build number (floor 100 for native)
+        script: |
+          set -e
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID")
+          case "$LATEST" in
+            ''|*[!0-9]*) echo "Could not read a valid latest TestFlight build number." >&2; exit 1 ;;
+          esac
+          NEXT=$(($LATEST + 1)); [ $NEXT -lt 100 ] && NEXT=100
+          agvtool new-version -all $NEXT
+      - name: Build signed .ipa
+        script: |
+          set +e
+          set -o pipefail
+          xcode-project build-ipa \
+            --project "KadeAI.xcodeproj" \
+            --scheme "KadeAI" 2>&1 | tee "$CM_BUILD_DIR/build-ipa.log"
+          STATUS=$?
+          printf '%s\n' "$STATUS" > "$CM_BUILD_DIR/archive-exit-status.txt"
+          if [ $STATUS -ne 0 ]; then
+            grep -m 20 -E '(error:|error :|Provisioning profile|doesn.t (include|support)|entitlement|No profiles|requires a provisioning)' "$CM_BUILD_DIR/build-ipa.log" \
+              > "$CM_BUILD_DIR/archive-first-errors.txt" || true
+            if [ ! -s "$CM_BUILD_DIR/archive-first-errors.txt" ]; then
+              tail -n 80 "$CM_BUILD_DIR/build-ipa.log" > "$CM_BUILD_DIR/archive-first-errors.txt"
+            fi
+            echo "--- archive first errors ---"
+            cat "$CM_BUILD_DIR/archive-first-errors.txt"
+            exit $STATUS
+          fi
+      - name: Save signed upload recovery receipt
+        script: |
+          set -e
+          IPA=$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          python3 scripts/release_receipt.py "$IPA" --source "$CM_COMMIT" --output "$CM_BUILD_DIR/signed-release.json"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - signed-release.json
+      - foundation-tests.log
+      - archive-first-errors.txt
+      - archive-exit-status.txt
+      - build-ipa.log
+      - character-audit/**

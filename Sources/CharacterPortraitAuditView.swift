@@ -11,6 +11,59 @@ enum CharacterAuditCheckpoint {
     }
 }
 
+/// Fixture identities remain exact even when public and private Lilly share art.
+/// This list never participates in authenticated agent discovery.
+enum CharacterAuditPerson: String, CaseIterable {
+    case harley, kiana, lilly, della, witherspoon
+    case privateLilly = "lilly-private"
+
+    static var appearanceCases: [Self] { allCases.filter { $0 != .privateLilly } }
+    var name: String {
+        switch self {
+        case .harley: return "Harley"
+        case .kiana: return "Kiana"
+        case .lilly, .privateLilly: return "Lilly"
+        case .della: return "Della"
+        case .witherspoon: return "Witherspoon"
+        }
+    }
+    var auditName: String { self == .privateLilly ? "Private Lilly" : name }
+    var agentID: String {
+        switch self {
+        case .harley: return CharacterMotion.harleyID
+        case .kiana: return CharacterMotion.kianaID
+        case .lilly: return CharacterMotion.lillyID
+        case .della: return CharacterMotion.dellaID
+        case .witherspoon: return CharacterMotion.witherspoonID
+        case .privateLilly: return CharacterMotion.skyleeLillyID
+        }
+    }
+    var avatarFile: String {
+        switch self {
+        case .harley: return CharacterMotion.harleyFile
+        case .kiana: return CharacterMotion.kianaFile
+        case .lilly: return CharacterMotion.lillyFile
+        case .della: return CharacterMotion.dellaFile
+        case .witherspoon: return CharacterMotion.witherspoonFile
+        case .privateLilly: return CharacterMotion.skyleeLillyFile
+        }
+    }
+    var atlasAssets: [String] {
+        let prefix = "Character" + name
+        let base = [prefix + "Faces", prefix + "Mouths"]
+        // Witherspoon deliberately uses basic expression panels only.
+        return self == .witherspoon ? base : base + [prefix + "Nuance"]
+    }
+    var otherSpeakerID: String {
+        switch self {
+        case .lilly: return CharacterMotion.skyleeLillyID
+        case .privateLilly: return CharacterMotion.lillyID
+        case .kiana: return CharacterMotion.harleyID
+        default: return CharacterMotion.kianaID
+        }
+    }
+}
+
 /// Offline CI fixtures around the production view and call adapter.
 /// No sign-in, provider, microphone, or real user data participates.
 struct CharacterPortraitAuditView: View {
@@ -18,8 +71,8 @@ struct CharacterPortraitAuditView: View {
     @EnvironmentObject private var voice: VoiceService
     @StateObject private var call = StreamingCallService(apiClient: KadeAPIClient())
     @State private var phase = "Starting"
-    @State private var name = "Kiana"
-    @State private var agentID = CharacterMotion.kianaID
+    @State private var name = "Harley"
+    @State private var agentID = CharacterMotion.harleyID
     @State private var callMode = false
     @State private var gallery = true
     @State private var ran = false
@@ -33,10 +86,6 @@ struct CharacterPortraitAuditView: View {
     @State private var reviewStill = false
     @State private var reviewDark = false
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
-    private let puppetEnabled = ProcessInfo.processInfo.environment["KADE_PUPPET_AUDIT"] == "1"
-    private var isPuppetSpeaker: Bool {
-        agentID == CharacterMotion.harleyID || agentID == CharacterMotion.lillyID
-    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -54,17 +103,16 @@ struct CharacterPortraitAuditView: View {
                 CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
-                    reviewBust: true, motionPaused: reviewStill)
-                Text(reviewName + " · native puppet study")
-                Text(reviewAgentID == CharacterMotion.lillyID
-                    ? "Experimental head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
-                    : "Experimental head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                    motionPaused: reviewStill)
+                Text(reviewName + " · production puppet")
+                Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
+                    ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
+                    : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
                     presentation: { callMode ? call.characterPresentation : voice.characterPresentation() },
-                    stage: puppetEnabled && isPuppetSpeaker,
-                    side: isPuppetSpeaker ? 208 : 160, reviewBust: puppetEnabled)
+                    stage: true, side: 208)
                 Text(name).font(.title)
                 Text("Offline audio engine. Local synthetic test tones.")
             }
@@ -124,101 +172,102 @@ struct CharacterPortraitAuditView: View {
         guard !ran else { return }; ran = true
         agents.seedCharacterAudit()
         UserDefaults.standard.set(true, forKey: "kadeVoicePortraits")
+        UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
         ready = true
         do {
-            step("expression-gallery")
-            for _ in 0..<100 {
-                if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == "expression-gallery" { break }
-                await wait(0.2)
-            }
+            try await capturePose("expression-gallery")
             gallery = false
-            if puppetEnabled {
-                puppetPoses = true
-                for (id, label, avatarFile) in [
-                    (CharacterMotion.harleyID, "Harley", CharacterMotion.harleyFile),
-                    (CharacterMotion.lillyID, "Lilly", CharacterMotion.lillyFile)
-                ] {
-                    let artwork = CharacterBustArtwork.review(enabled: true, stage: true, side: 208,
-                        agentID: id, avatarPath: "/images/" + avatarFile)
-                    let resourcesAvailable = artwork.map { pack in
-                        pack.requiredAssets.allSatisfy { UIImage(named: $0) != nil }
-                    } ?? false
-                    try check(resourcesAvailable, "experimental " + label + " resources staged for this simulator audit")
-                    reviewAgentID = id
-                    reviewName = label
-                    let prefix = label.lowercased()
-                    for dark in [false, true] {
-                        reviewDark = dark
-                        for (activity, state) in [(CharacterActivity.idle, "idle"), (.listening, "listening"), (.thinking, "thinking")] {
-                            reviewPerformance = CharacterPresentation(activity: activity)
-                            try await capturePose("\(prefix)-puppet-\(state)-\(dark ? "dark" : "light")")
-                        }
-                    }
-                    reviewStill = true
-                    try await capturePose("\(prefix)-puppet-still")
-                    reviewStill = false
-                    for size in [84.0, 104.0] {
-                        reviewSide = size
-                        try await capturePose("\(prefix)-compact-portrait-\(Int(size))")
-                    }
-                    reviewSide = 208
-                }
-                reviewDark = false
-                puppetPoses = false
+            let roster = CharacterAuditPerson.allCases
+            let resolved = roster.compactMap { person in
+                CharacterBustArtwork.approved(stage: true, side: 208,
+                    agentID: person.agentID, avatarPath: "/images/" + person.avatarFile)
             }
+            try check(resolved.count == 6 && Set(roster.map { $0.agentID }).count == 6,
+                "all six exact production puppet registrations resolve")
+            for person in roster {
+                let artwork = CharacterBustArtwork.approved(stage: true, side: 208,
+                    agentID: person.agentID, avatarPath: "/images/" + person.avatarFile)
+                let resourcesAvailable = artwork.map { pack in
+                    !pack.requiredAssets.isEmpty && (pack.requiredAssets + person.atlasAssets).allSatisfy { UIImage(named: $0) != nil }
+                } ?? false
+                try check(resourcesAvailable, person.auditName + " production resources are bundled")
+            }
+            puppetPoses = true
+            for person in CharacterAuditPerson.appearanceCases {
+                reviewAgentID = person.agentID
+                reviewName = person.name
+                for dark in [false, true] {
+                    reviewDark = dark
+                    for (activity, state) in [(CharacterActivity.idle, "idle"), (.listening, "listening"), (.thinking, "thinking")] {
+                        reviewPerformance = CharacterPresentation(activity: activity)
+                        try await capturePose("\(person.rawValue)-puppet-\(state)-\(dark ? "dark" : "light")")
+                    }
+                }
+                reviewStill = true
+                try await capturePose(person.rawValue + "-puppet-still")
+                reviewStill = false
+                for size in [84.0, 104.0, 132.0] {
+                    reviewSide = size
+                    try await capturePose("\(person.rawValue)-compact-portrait-\(Int(size))")
+                }
+                reviewSide = 208
+            }
+            // A separate exact-ID proof; the private agent keeps its own avatar gate.
+            reviewAgentID = CharacterAuditPerson.privateLilly.agentID
+            reviewName = CharacterAuditPerson.privateLilly.auditName
+            reviewPerformance = .idle
+            reviewDark = false
+            try await capturePose("lilly-private-production-puppet")
+            puppetPoses = false
             let wav = Self.wav(seconds: 3)
             callMode = true
             CharacterAuditCheckpoint.mark("Starting offline call engine")
             try call.auditStart(agentID: agentID)
-            var roster = [(CharacterMotion.kianaID, "Kiana", CharacterMotion.dellaID),
-                (CharacterMotion.dellaID, "Della", CharacterMotion.kianaID)]
-            if puppetEnabled {
-                roster.append(contentsOf: [
-                    (CharacterMotion.harleyID, "Harley", CharacterMotion.kianaID),
-                    (CharacterMotion.lillyID, "Lilly", CharacterMotion.kianaID)
-                ])
-            }
-            for (id, label, other) in roster {
-            agentID = id; name = label; call.auditSpeaker(id)
-            if id == CharacterMotion.lillyID {
-                try await capturePose("lilly-character-transition")
-            }
-            CharacterAuditCheckpoint.mark(label + " rendering offline call")
-            call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
-            call.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
-            try await advance(0.5)
-            try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, label + " rendered call output outlives early server listening")
-            try check(call.characterPresentation.expression == .surprised, label + " reaction belongs to the rendered clip")
-            try await capturePose(label.lowercased() + "-call-speaking"); try await advance(0.8)
-            call.auditControl("{\"type\":\"clear\"}"); try await advance(0.2)
-            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " barge-in clears mouth and expression")
-            try await capturePose(label.lowercased() + "-call-interrupted"); try await advance(0.4)
-            let shortWav = Self.wav(seconds: 1.4)
-            call.auditReceive(metadata: packet(agentID, expression: "concerned"), wav: shortWav)
-            call.auditReceive(metadata: packet(agentID, expression: "amused"), wav: shortWav)
-            try await advance(0.4)
-            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .concerned, label + " first queued reaction resumes correctly after interruption")
-            try await capturePose(label.lowercased() + "-call-queued-first"); try await advance(1.2)
-            try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .amused, label + " second queued reaction waits for its own audio")
-            try await capturePose(label.lowercased() + "-call-queued-second"); try await advance(1.4)
-            try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " completed call queue returns to listening")
-            call.auditReceive(metadata: packet(other, expression: "amused"), wav: wav)
-            try await advance(0.3)
-            try check(call.characterLevel == 0, "another speaker cannot animate " + label)
-            call.auditControl("{\"type\":\"clear\"}")
-            call.auditReceive(metadata: packet(agentID, expression: "warm", speech: false), wav: wav)
-            try await advance(0.3)
-            try check(call.characterLevel == 0, label + " sound effect output keeps the mouth closed")
-            call.auditControl("{\"type\":\"clear\"}")
-            call.auditReceive(metadata: "{\"type\":\"character-audio\",\"version\":99}", wav: wav)
-            try await advance(0.3)
-            try check(call.characterLevel == 0, label + " unsupported metadata cannot animate speech")
+            for person in roster {
+                let id = person.agentID, label = person.auditName, other = person.otherSpeakerID
+                agentID = id; name = person.name; call.auditSpeaker(id)
+                // Keep every character switch in the continuous video, including its
+                // first 0.45 seconds, then capture the settled production compositor.
+                try await capturePose(person.rawValue + "-character-transition")
+                CharacterAuditCheckpoint.mark(label + " rendering offline call")
+                call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
+                call.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
+                try await advance(0.5)
+                try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, label + " rendered call output outlives early server listening")
+                try check(call.characterPresentation.expression == .surprised, label + " reaction belongs to the rendered clip")
+                try await capturePose(person.rawValue + "-call-speaking"); try await advance(0.8)
+                call.auditControl("{\"type\":\"clear\"}"); try await advance(0.2)
+                try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " barge-in clears mouth and expression")
+                try await capturePose(person.rawValue + "-call-interrupted"); try await advance(0.4)
+                let shortWav = Self.wav(seconds: 1.4)
+                call.auditReceive(metadata: packet(agentID, expression: "concerned"), wav: shortWav)
+                call.auditReceive(metadata: packet(agentID, expression: "amused"), wav: shortWav)
+                try await advance(0.4)
+                try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .concerned, label + " first queued reaction resumes correctly after interruption")
+                try await capturePose(person.rawValue + "-call-queued-first"); try await advance(1.2)
+                try check(call.characterLevel > 0.01 && call.characterPresentation.expression == .amused, label + " second queued reaction waits for its own audio")
+                try await capturePose(person.rawValue + "-call-queued-second"); try await advance(1.4)
+                try check(call.characterLevel == 0 && call.characterPresentation.activity != .speaking, label + " completed call queue returns to listening")
+                call.auditReceive(metadata: packet(other, expression: "amused"), wav: wav)
+                try await advance(0.3)
+                try check(call.characterLevel == 0, "another speaker cannot animate " + label)
+                call.auditControl("{\"type\":\"clear\"}")
+                call.auditReceive(metadata: packet(agentID, expression: "warm", speech: false), wav: wav)
+                try await advance(0.3)
+                try check(call.characterLevel == 0, label + " sound effect output keeps the mouth closed")
+                call.auditControl("{\"type\":\"clear\"}")
+                call.auditReceive(metadata: "{\"type\":\"character-audio\",\"version\":99}", wav: wav)
+                try await advance(0.3)
+                try check(call.characterLevel == 0, label + " unsupported metadata cannot animate speech")
             }
             call.auditFinish()
-            step("passed")
+            try await capturePose("passed")
             let result: [String: Any] = ["passed": true, "checks": checks,
                 "mode": "offline-AVAudioEngine", "physicalAudioVerified": false,
-                "puppetAuditEnabled": puppetEnabled, "puppetArtApproved": false,
+                "productionPuppets": true, "registeredCharacterIDs": roster.map { $0.agentID },
+                "appearanceCount": CharacterAuditPerson.appearanceCases.count,
+                "registeredCount": resolved.count,
+                "ordinaryScreenLayoutVerified": false,
                 "unverified": ["AVAudioPlayer real-time voice-message playback", "Physical speaker and Bluetooth", "Microphone and live network call", "Physical VoiceOver"]]
             try JSONSerialization.data(withJSONObject: result, options: .prettyPrinted).write(to: output.appendingPathComponent("character-audit.json"))
         } catch {

@@ -65,8 +65,11 @@ struct KadeAIApp: App {
                 if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
                     CharacterPuppetLabView()
                 } else if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
-                    if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
-                        CallView(agentId: CharacterMotion.kianaID, agentName: "Kiana", apiClient: client)
+                    if ProcessInfo.processInfo.environment["KADE_CHAT_LAYOUT_AUDIT"] == "1" {
+                        CharacterChatStageAuditView()
+                    } else if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
+                        CallView(agentId: CharacterCallLayoutFixture.agentID,
+                            agentName: CharacterCallLayoutFixture.name, apiClient: client)
                     } else { CharacterPortraitAuditView() }
                 } else { ContentView() }
                 #else

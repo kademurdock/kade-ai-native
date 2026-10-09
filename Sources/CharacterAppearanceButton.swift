@@ -22,7 +22,7 @@ struct CharacterAppearanceButton: View {
                     Label("Describe character", systemImage: "person.crop.square")
                 }
                 .accessibilityLabel("Describe \(agent.name)'s appearance")
-                .accessibilityHint("Reads a description of this character's current portrait.")
+                .accessibilityHint("Reads a description of this character's appearance.")
             }
         }
         .alert("Appearance of \(notice?.name ?? "character")", isPresented: Binding(

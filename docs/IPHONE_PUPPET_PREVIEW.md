@@ -1,5 +1,7 @@
 # Native iPhone character puppet preview
 
+Historical simulator-only study, superseded by [the production path](IPHONE_CHARACTER_PUPPETS.md).
+
 October 9, 2026. Continue the existing character work with native iPhone first.
 
 Harley and public Lilly have native SwiftUI bust compositions for review. Their

@@ -1,8 +1,16 @@
-# Simulator-only source art
+# Registered character source art
 
-These masters are development review inputs. `prepare-puppet-review.py` verifies
-their exact hashes and RGBA canvases before staging ignored asset-catalog entries.
-Clean release workflows do not stage them.
+These masters back the committed asset-catalog entries used in simulator and
+device builds. `prepare-puppet-review.py --check` verifies both copies and the
+RGBA canvases. Native geometry is registered only for exact prepared avatars.
+
+Kiana reuses the earlier clothed concept below a mandatory worldy600 clip; its
+generated head is never drawn. Her original head, locs and shoulders are sourced
+from the existing atlas. The initial0.2degree candidate was increased to0.6degrees
+with0.6source-pixel nodding: the35pixel overlap exceeds the worst bottom-edge
+displacement of5pixels. Native seam review remains required before distribution.
+Della and Witherspoon provenance and overlap checks are recorded in their
+adjacent registration notes. The librarian is a woman and uses she/her.
 
 Harley's `body.png` and `mask.png` are unchanged experimental denim-body and
 head-alpha assets from the October 8 exact-atlas study. His face RGB continues

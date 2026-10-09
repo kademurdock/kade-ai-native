@@ -1,7 +1,5 @@
 import SwiftUI
-#if DEBUG && targetEnvironment(simulator)
 import UIKit
-#endif
 
 /// Shared by saved replies and the streaming reply. Only this small decorative
 /// subtree updates; transcript text and VoiceOver focus never update per frame.
@@ -18,8 +16,6 @@ struct CharacterPortraitView: View {
     /// talking, and its movement is drawn several times larger than a row's.
     var stage = false
     var side = 160.0
-    /// Used only by the offline simulator review. Release always ignores it.
-    var reviewBust = false
     /// A local preview may pause decoration; this never overrides system policy.
     var motionPaused = false
     @EnvironmentObject private var agents: AgentsService
@@ -34,14 +30,10 @@ struct CharacterPortraitView: View {
         stage ? CharacterFigureArtwork.approved(agentID: agentID, avatarPath: path) : nil
     }
     private var bustArtwork: CharacterBustArtwork? {
-        #if DEBUG && targetEnvironment(simulator)
-        guard let artwork = CharacterBustArtwork.review(enabled: reviewBust, stage: stage,
+        guard let artwork = CharacterBustArtwork.approved(stage: stage,
                 side: side, agentID: agentID, avatarPath: path),
               artwork.requiredAssets.allSatisfy({ UIImage(named: $0) != nil }) else { return nil }
         return artwork
-        #else
-        return nil
-        #endif
     }
     private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
     private var url: URL? {
@@ -195,6 +187,11 @@ struct CharacterPortraitView: View {
                 .offset(x: (artwork.bodyX - artwork.cropX) * unit,
                         y: (artwork.bodyY - artwork.cropY) * unit)
                 .frame(width: side, height: side, alignment: .topLeading)
+                .mask(alignment: .topLeading) {
+                    Rectangle().fill(.white)
+                        .frame(width: side, height: side - bodyVisibleStart(artwork, unit: unit))
+                        .offset(y: bodyVisibleStart(artwork, unit: unit))
+                }
                 .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
                 .offset(y: motion.bodyOffsetY * unit)
             if let sheet {
@@ -225,13 +222,20 @@ struct CharacterPortraitView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22))
     }
 
+    private func bodyVisibleStart(_ artwork: CharacterBustArtwork, unit: Double) -> Double {
+        guard let minimum = artwork.bodyClipMinY else { return 0 }
+        return min(side, max(0, (minimum - artwork.cropY) * unit))
+    }
+
     @ViewBuilder private func bustMask(_ artwork: CharacterBustArtwork, unit: Double) -> some View {
         if let maskAsset = artwork.maskAsset {
+            let placement = artwork.maskPlacement ?? CharacterBustMaskPlacement(
+                x: artwork.panelX, y: artwork.panelY, side: artwork.panelSide)
             ZStack(alignment: .topLeading) {
                 Image(maskAsset).resizable().interpolation(.high)
-                    .frame(width: artwork.panelSide * unit, height: artwork.panelSide * unit)
-                    .offset(x: (artwork.panelX - artwork.cropX) * unit,
-                            y: (artwork.panelY - artwork.cropY) * unit)
+                    .frame(width: placement.side * unit, height: placement.side * unit)
+                    .offset(x: (placement.x - artwork.cropX) * unit,
+                            y: (placement.y - artwork.cropY) * unit)
                 // Harley's source mask feathers the hair boundary without
                 // making facial patches ghost. Lilly uses the outline alone.
                 if let core = artwork.faceCore {
@@ -361,6 +365,9 @@ private struct CharacterBustCut: Shape {
         case .lillyHead: source = lillyHeadPath
         case .lillyLeftCat: source = lillyLeftCatPath
         case .lillyRightCat: source = lillyRightCatPath
+        case .kianaHead: source = CharacterKianaBustGeometry.headPath
+        case .dellaHead: source = CharacterDellaBustGeometry.headPath
+        case .witherspoonHead: source = CharacterWitherspoonBustGeometry.headPath
         }
         let unit = rect.width / CGFloat(artwork.cropSide)
         if outline.usesAtlasCoordinates {

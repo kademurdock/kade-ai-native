@@ -2755,25 +2755,14 @@ struct ConversationDetailView: View {
          * changes at clip boundaries, and every clip start and end publishes
          * on VoiceService (isClipPlaying, nowPlayingKey), which re-runs this
          * body. The stage's own TimelineView stays the only per-frame clock. */
-        let mood = StageMood(talking
-            ? voiceService.characterPresentation()
-            : (thinking ? CharacterPresentation(activity: .thinking) : .idle))
-        return HStack {
-            Spacer(minLength: 0)
-            CharacterPortraitView(agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
-                name: agentDisplayLabel, playing: talking && !voiceService.isPaused,
+        return CharacterConversationStage(
+                agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
+                name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
                     if voiceService.isClipPlaying { return voiceService.characterPresentation() }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
-                },
-                stage: true, side: side)
-            Spacer(minLength: 0)
-        }
-        .frame(height: side + 40)
-        // A background, so the glow can never change the stage's size.
-        .background(StageMoodLight(mood: mood))
-        .background(Color(.systemBackground))
+                })
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
          * character picker, for sighted people; it is the same sheet as the
          * "Talking to" row and is off while a send is out, like that row.

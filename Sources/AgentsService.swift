@@ -123,11 +123,12 @@ final class AgentsService: ObservableObject {
 
     #if DEBUG && targetEnvironment(simulator)
     func seedCharacterAudit() {
-        let rows: [[String: Any]] = [
-            ["id": CharacterMotion.kianaID, "name": "Kiana", "avatar": ["filepath": "/images/" + CharacterMotion.kianaFile]],
-            ["id": CharacterMotion.dellaID, "name": "Della", "avatar": ["filepath": "/images/" + CharacterMotion.dellaFile]],
-            ["id": CharacterMotion.harleyID, "name": "Harley", "avatar": ["filepath": "/images/" + CharacterMotion.harleyFile]],
-            ["id": CharacterMotion.lillyID, "name": "Lilly", "avatar": ["filepath": "/images/" + CharacterMotion.lillyFile]]]
+        // Offline fixtures only; the signed-in account's server roster and
+        // access rules remain authoritative outside this simulator audit.
+        let rows: [[String: Any]] = CharacterAuditPerson.allCases.map { person in
+            ["id": person.agentID, "name": person.name,
+             "avatar": ["filepath": "/images/" + person.avatarFile]]
+        }
         if let data = try? JSONSerialization.data(withJSONObject: rows), let decoded = try? decoder.decode([KadeAgent].self, from: data) {
             agents = decoded; hasLoadedOnce = true
         }

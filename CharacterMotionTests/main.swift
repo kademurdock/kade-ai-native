@@ -282,10 +282,11 @@ for avatarPath in [nil, "", "/images/replaced.png", harleyAvatarPath,
     check(reviewBust(agentID: CharacterMotion.lillyID, avatarPath: avatarPath) == nil,
         "public Lilly body requires her exact current public avatar")
 }
-for avatarPath in [lillyAvatarPath, "/images/" + CharacterMotion.skyleeLillyFile] {
-    check(reviewBust(agentID: CharacterMotion.skyleeLillyID, avatarPath: avatarPath) == nil,
-        "sharing a facial rig never opts private Lilly into the public body review")
-}
+check(reviewBust(agentID: CharacterMotion.skyleeLillyID, avatarPath: lillyAvatarPath) == nil,
+    "private Lilly cannot inherit public Lilly's avatar identity")
+check(reviewBust(agentID: CharacterMotion.skyleeLillyID,
+    avatarPath: "/images/" + CharacterMotion.skyleeLillyFile) != nil,
+    "private Lilly has an explicit own-avatar production registration")
 check(reviewBust(agentID: CharacterMotion.harleyID, avatarPath: lillyAvatarPath) == nil &&
     reviewBust(agentID: CharacterMotion.kianaID, avatarPath: lillyAvatarPath) == nil,
     "other characters cannot borrow public Lilly's body")
@@ -317,6 +318,64 @@ for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
     }
 }
 print("Character bust review and transforms: \(count - bustBefore) checks passed")
+
+let productionBefore = count
+let productionPeople = [
+    (CharacterMotion.harleyID, CharacterMotion.harleyFile),
+    (CharacterMotion.kianaID, CharacterMotion.kianaFile),
+    (CharacterMotion.lillyID, CharacterMotion.lillyFile),
+    (CharacterMotion.dellaID, CharacterMotion.dellaFile),
+    (CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile),
+    (CharacterMotion.skyleeLillyID, CharacterMotion.skyleeLillyFile)
+]
+for (id, file) in productionPeople {
+    let path = "/images/" + file
+    let artwork = CharacterBustArtwork.approved(stage: true, side: 208,
+        agentID: id, avatarPath: path)!
+    check(artwork.isValid, "every exact registered production geometry is valid")
+    check(CharacterBustArtwork.approved(stage: false, side: 208,
+        agentID: id, avatarPath: path) == nil, "small inline portraits keep their established renderer")
+    for side in [84.0, 104, 132, 159.99, .nan, .infinity] {
+        check(CharacterBustArtwork.approved(stage: true, side: side,
+            agentID: id, avatarPath: path) == nil, "compact or corrupt stages fall back for every character")
+    }
+    for (_, otherFile) in productionPeople where otherFile != file {
+        check(CharacterBustArtwork.approved(stage: true, side: 208,
+            agentID: id, avatarPath: "/images/" + otherFile) == nil,
+            "no character borrows a different avatar's production pack")
+    }
+    check(CharacterBustArtwork.approved(stage: true, side: 208,
+        agentID: id, avatarPath: "/images/replaced.png") == nil,
+        "new avatar upload does not keep old body/face geometry")
+    check(bustValues(CharacterBustMotion.pose(.still, limits: artwork.motionLimits)) == [0, 0, 0, 0],
+        "still policy parks every registered body and head")
+    for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
+        for expression in CharacterExpression.allCases {
+            let figure = CharacterFigureMotion.pose(id: id, time: 100, level: 1,
+                active: true, presentation: CharacterPresentation(activity: activity,
+                    expression: expression, elapsed: 0.4))
+            let limits = artwork.motionLimits
+            check(zip(bustValues(CharacterBustMotion.pose(figure, limits: limits)),
+                [limits.headDegrees, limits.bodyDegrees, limits.headOffsetPixels, limits.bodyOffsetPixels])
+                .allSatisfy { $0.0.isFinite && abs($0.0) <= $0.1 },
+                "authored performance remains inside each character's native bounds")
+        }
+    }
+}
+var unsafeKiana = CharacterKianaBustGeometry.artwork
+unsafeKiana.bodyClipMinY = nil
+check(!unsafeKiana.isValid, "Kiana cannot expose the reused concept's generated face without the torso clip")
+unsafeKiana.bodyClipMinY = 0
+check(!unsafeKiana.isValid, "a zero-height Kiana clip cannot bypass exact-face registration")
+var invalidMask = CharacterDellaBustGeometry.artwork
+invalidMask.maskPlacement = CharacterBustMaskPlacement(x: 35, y: 0, side: .nan)
+check(!invalidMask.isValid, "invalid matte registration cannot enter the production renderer")
+check(CharacterDellaBustGeometry.artwork.maskPlacement?.side == 350,
+    "Della's independent head mask keeps its reviewed scale")
+check(CharacterAppearance.description(agentID: CharacterMotion.witherspoonID,
+    avatarPath: "/images/" + CharacterMotion.witherspoonFile)?.contains("woman") == true,
+    "the librarian retains her established female identity")
+print("Production puppet identity and safety: \(count - productionBefore) checks passed")
 
 let layoutBefore = count
 check(CharacterStageLayout.callSide(width: 320, height: 568, accessibilityText: false) == 132,
