@@ -31,9 +31,11 @@ try:
     video=subprocess.Popen(['xcrun','simctl','io',sim,'recordVideo','--codec=h264',str(out/'playback.mp4')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)
-    # Six identities, both hand studies and authored laughter need additional
-    # capture acknowledgements. Keep the expanded offline audit bounded.
-    audit_seconds=360
+    # Seven identities, Angel's seventeen faces/nine mouths and both hand
+    # studies need more capture acknowledgements. The first expanded run
+    # reached Angel's final call segment at the old six-minute limit.
+    # Keep a seven-minute watchdog inside the workflow's 25/35-minute caps.
+    audit_seconds=420
     deadline=time.monotonic()+audit_seconds; seen=set(); result=None; died=None
     while time.monotonic()<deadline:
         phase=documents/'character-phase.txt'
