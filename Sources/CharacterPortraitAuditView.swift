@@ -85,6 +85,7 @@ struct CharacterPortraitAuditView: View {
     @State private var reviewSide = 208.0
     @State private var reviewStill = false
     @State private var reviewDark = false
+    @State private var handSample: Double? = nil
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -103,11 +104,15 @@ struct CharacterPortraitAuditView: View {
                 CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
-                    motionPaused: reviewStill)
-                Text(reviewName + " · production puppet")
-                Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
-                    ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
-                    : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                    motionPaused: reviewStill, handPrototypeElapsed: handSample)
+                Text(reviewName + (handSample == nil ? " · production puppet" : " · hand study"))
+                if handSample != nil {
+                    Text("Unregistered hand prototype. Controlled motion sample; not enabled in the app.")
+                } else {
+                    Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
+                        ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
+                        : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                }
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
@@ -218,6 +223,38 @@ struct CharacterPortraitAuditView: View {
             reviewPerformance = .idle
             reviewDark = false
             try await capturePose("lilly-private-production-puppet")
+            // A controlled study uses the existing production portrait and
+            // crop, with the candidate hand added only in DEBUG simulators.
+            reviewAgentID = CharacterMotion.harleyID
+            reviewName = "Harley"
+            reviewPerformance = CharacterPresentation(activity: .listening)
+            try check(UIImage(named: "CharacterHarleyGreetingHandPrototype") != nil,
+                "Harley hand study resource is bundled for simulator review")
+            try check(!CharacterHarleyHandPrototypeMotion.pose(elapsed: 1, active: false).visible,
+                "disabled motion hides the hand study entirely")
+            for dark in [false, true] {
+                reviewDark = dark
+                for (sample, label) in [(0.0, "rest"), (0.25, "entry"), (0.5, "raised"),
+                                       (0.625, "right"), (0.875, "left"), (1.75, "exit"), (2.0, "finished")] {
+                    handSample = sample
+                    try await capturePose("harley-hand-study-\(label)-\(dark ? "dark" : "light")")
+                }
+                handSample = 0.5
+                reviewStill = true
+                try await capturePose("harley-hand-study-motion-off-\(dark ? "dark" : "light")")
+                reviewStill = false
+                UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+                try await capturePose("harley-hand-study-reduce-motion-\(dark ? "dark" : "light")")
+                UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
+                handSample = 0
+                try await capturePose("harley-hand-study-full-cycle-\(dark ? "dark" : "light")")
+                for tick in 1...48 {
+                    handSample = Double(tick) / 24
+                    await wait(1.0 / 24)
+                }
+            }
+            handSample = nil
+            reviewDark = false
             puppetPoses = false
             let wav = Self.wav(seconds: 3)
             callMode = true
