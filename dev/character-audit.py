@@ -31,9 +31,9 @@ try:
     video=subprocess.Popen(['xcrun','simctl','io',sim,'recordVideo','--codec=h264',str(out/'playback.mp4')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)
-    # Four characters plus two puppet pose/crop galleries need additional
+    # Six identities, both hand studies and authored laughter need additional
     # capture acknowledgements. Keep the expanded offline audit bounded.
-    audit_seconds=300
+    audit_seconds=360
     deadline=time.monotonic()+audit_seconds; seen=set(); result=None; died=None
     while time.monotonic()<deadline:
         phase=documents/'character-phase.txt'

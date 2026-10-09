@@ -86,6 +86,7 @@ struct CharacterPortraitAuditView: View {
     @State private var reviewStill = false
     @State private var reviewDark = false
     @State private var handSample: Double? = nil
+    @State private var handVariant = CharacterHarleyHandPrototypeVariant.smallRight
     @State private var facialStudy = false
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
@@ -105,7 +106,8 @@ struct CharacterPortraitAuditView: View {
                 CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
-                    motionPaused: reviewStill, handPrototypeElapsed: handSample)
+                    motionPaused: reviewStill, handPrototypeElapsed: handSample,
+                    handPrototypeVariant: handVariant)
                 Text(reviewName + (facialStudy ? " · controlled face preview"
                     : (handSample == nil ? " · production puppet" : " · hand study")))
                 if facialStudy {
@@ -236,27 +238,32 @@ struct CharacterPortraitAuditView: View {
                 "Harley hand study resource is bundled for simulator review")
             try check(!CharacterHarleyHandPrototypeMotion.pose(elapsed: 1, active: false).visible,
                 "disabled motion hides the hand study entirely")
-            for dark in [false, true] {
-                reviewDark = dark
-                for (sample, label) in [(0.0, "rest"), (0.25, "entry"), (0.5, "raised"),
-                                       (0.625, "right"), (0.875, "left"), (1.75, "exit"), (2.0, "finished")] {
-                    handSample = sample
-                    try await capturePose("harley-hand-study-\(label)-\(dark ? "dark" : "light")")
-                }
-                handSample = 0.5
-                reviewStill = true
-                try await capturePose("harley-hand-study-motion-off-\(dark ? "dark" : "light")")
-                reviewStill = false
-                UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
-                try await capturePose("harley-hand-study-reduce-motion-\(dark ? "dark" : "light")")
-                UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
-                handSample = 0
-                try await capturePose("harley-hand-study-full-cycle-\(dark ? "dark" : "light")")
-                for tick in 1...48 {
-                    handSample = Double(tick) / 24
-                    await wait(1.0 / 24)
+            for variant in [CharacterHarleyHandPrototypeVariant.smallRight, .largeLeft] {
+                handVariant = variant
+                let prefix = variant == .smallRight ? "harley-hand-study" : "harley-hand-study-large-left"
+                for dark in [false, true] {
+                    reviewDark = dark
+                    for (sample, label) in [(0.0, "rest"), (0.25, "entry"), (0.5, "raised"),
+                                           (0.625, "right"), (0.875, "left"), (1.75, "exit"), (2.0, "finished")] {
+                        handSample = sample
+                        try await capturePose("\(prefix)-\(label)-\(dark ? "dark" : "light")")
+                    }
+                    handSample = 0.5
+                    reviewStill = true
+                    try await capturePose("\(prefix)-motion-off-\(dark ? "dark" : "light")")
+                    reviewStill = false
+                    UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+                    try await capturePose("\(prefix)-reduce-motion-\(dark ? "dark" : "light")")
+                    UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
+                    handSample = 0
+                    try await capturePose("\(prefix)-full-cycle-\(dark ? "dark" : "light")")
+                    for tick in 1...48 {
+                        handSample = Double(tick) / 24
+                        await wait(1.0 / 24)
+                    }
                 }
             }
+            handVariant = .smallRight
             handSample = nil
             facialStudy = true
             reviewDark = false

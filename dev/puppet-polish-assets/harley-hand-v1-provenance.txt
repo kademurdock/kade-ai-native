@@ -37,3 +37,20 @@ x670.169..776.767, y368.755..473.703, inside the existing viewport. At resting
 trace does not enter the original head contour; sampled minimum separation is
 53.554world pixels before head motion. This is geometric evidence, not native
 visual acceptance of the extraction or attachment.
+
+Second DEBUG simulator variant: largeLeft. Uses the same source PNG/RGB and
+same authored silhouette, mirrored in SwiftUI only after the source cut.
+World placement: x180,y325,width291.84,height437.76,pivot321.36,743.
+The source is1.5times the smallRight image scale; the face/crop stay unchanged.
+Negated gesture rotation puts rest at-72degrees outside the left side.
+
+Analytical second-variant check:17hand angles from-2to+2degrees in0.25degree
+steps,17Harley head angles over the same range and head offsets-3,0,+3pixels:
+867combined pose samples. No sampled hand/head contour intersection. Minimum
+sampled contour separation9.592world pixels. Raised fingers/palm above source
+y600 stay at world x248.706..408.569,y339.649..497.072, inside the rectangular
+crop x242..782,y0..540. Rest has zero sampled points in that viewport.
+These are sampled geometric bounds. The rounded native stage clip, visual
+forearm attachment, extraction edges and perceived scale are not yet verified
+for largeLeft; no production acceptance is claimed. Default remains smallRight,
+preserving the first native study's placement and angle behavior.

@@ -21,6 +21,7 @@ struct CharacterPortraitView: View {
     #if DEBUG && targetEnvironment(simulator)
     /// Controlled audit samples only; never a production speech-turn trigger.
     var handPrototypeElapsed: Double? = nil
+    var handPrototypeVariant: CharacterHarleyHandPrototypeVariant = .smallRight
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
@@ -86,7 +87,7 @@ struct CharacterPortraitView: View {
                        agentID == CharacterMotion.harleyID,
                        bustArtwork != nil, let sample = handPrototypeElapsed {
                         CharacterHarleyHandPrototype(side: side,
-                            sampleElapsed: sample, active: active)
+                            sampleElapsed: sample, active: active, variant: handPrototypeVariant)
                     }
                     #endif
                 }

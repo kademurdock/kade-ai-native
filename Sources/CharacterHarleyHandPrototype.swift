@@ -1,5 +1,34 @@
 import Foundation
 
+/// Two isolated studies using the identical source image and silhouette.
+/// Neither is registered as production art.
+enum CharacterHarleyHandPrototypeVariant: String, CaseIterable {
+    case smallRight, largeLeft
+
+    var placement: CharacterHarleyHandPrototypePlacement {
+        switch self {
+        case .smallRight:
+            return CharacterHarleyHandPrototypePlacement(imageX: 628, imageY: 359,
+                imageWidth: 194.56, imageHeight: 291.84,
+                elbowX: 728, elbowY: 638, mirrored: false)
+        case .largeLeft:
+            return CharacterHarleyHandPrototypePlacement(imageX: 180, imageY: 325,
+                imageWidth: 291.84, imageHeight: 437.76,
+                elbowX: 321.36, elbowY: 743, mirrored: true)
+        }
+    }
+}
+
+struct CharacterHarleyHandPrototypePlacement {
+    let imageX: Double
+    let imageY: Double
+    let imageWidth: Double
+    let imageHeight: Double
+    let elbowX: Double
+    let elbowY: Double
+    let mirrored: Bool
+}
+
 /// An isolated review study, not an approved figure pack or production gesture.
 /// The caller chooses one elapsed sample for one gesture. Feeding every speech
 /// clip's elapsed clock here would repeat the greeting and is not a turn policy.
@@ -45,6 +74,7 @@ struct CharacterHarleyHandPrototype: View {
     let side: Double
     let sampleElapsed: Double
     let active: Bool
+    var variant: CharacterHarleyHandPrototypeVariant = .smallRight
 
     private var pose: CharacterHarleyHandPrototypePose {
         CharacterHarleyHandPrototypeMotion.pose(elapsed: sampleElapsed, active: active)
@@ -52,28 +82,27 @@ struct CharacterHarleyHandPrototype: View {
 
     private let cropX = 242.0
     private let cropSide = 540.0
-    private let imageX = 628.0
-    private let imageY = 359.0
-    private let imageWidth = 194.56
-    private let imageHeight = 291.84
-    private let elbowX = 728.0
-    private let elbowY = 638.0
 
     @ViewBuilder var body: some View {
         if pose.visible && side.isFinite && side > 0 && pose.angle.isFinite {
             let unit = side / cropSide
+            let placement = variant.placement
+            let angle = min(72, max(-2, pose.angle))
             Image("CharacterHarleyGreetingHandPrototype")
                 .resizable()
                 .interpolation(.high)
-                .frame(width: imageWidth * unit, height: imageHeight * unit)
+                .frame(width: placement.imageWidth * unit, height: placement.imageHeight * unit)
                 // The generated source has diffuse alpha outside the anatomy.
                 // This authored path discards it without changing source RGB.
                 .clipShape(CharacterHarleyHandPrototypeCut())
-                .offset(x: (imageX - cropX) * unit, y: imageY * unit)
+                // Mirror the already-cut foreground, including its outline.
+                // The reference head and all atlas patches remain unchanged.
+                .scaleEffect(x: placement.mirrored ? -1 : 1, y: 1)
+                .offset(x: (placement.imageX - cropX) * unit, y: placement.imageY * unit)
                 .frame(width: side, height: side, alignment: .topLeading)
-                .rotationEffect(.degrees(min(72, max(-2, pose.angle))),
-                    anchor: UnitPoint(x: CGFloat((elbowX - cropX) / cropSide),
-                        y: CGFloat(elbowY / cropSide)))
+                .rotationEffect(.degrees(placement.mirrored ? -angle : angle),
+                    anchor: UnitPoint(x: CGFloat((placement.elbowX - cropX) / cropSide),
+                        y: CGFloat(placement.elbowY / cropSide)))
                 .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: 22))
                 .accessibilityHidden(true)
