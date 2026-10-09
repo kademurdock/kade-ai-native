@@ -1,4 +1,4 @@
-import json, os, pathlib, subprocess, time, signal
+import json, os, pathlib, subprocess, time, signal, sys
 
 out = pathlib.Path('character-audit').resolve()
 out.mkdir(exist_ok=True)
@@ -68,6 +68,8 @@ try:
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2),flush=True)
     assert result.get('passed'),result.get('error')
+    if os.environ.get('KADE_CALL_LAYOUT_AUDIT') == '1':
+        subprocess.run([sys.executable, 'dev/call-layout-audit.py', sim], check=True, timeout=100)
 finally:
     if video is not None:
         video.send_signal(signal.SIGINT)

@@ -63,6 +63,8 @@ struct AgentPickerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
+    @State private var appearanceText: String?
+    @State private var appearanceName = ""
     @FocusState private var isSearchFieldFocused: Bool
 
     private var isSearching: Bool {
@@ -199,6 +201,14 @@ struct AgentPickerView: View {
                 }
             }
             .task { await agentsService.loadIfNeeded() }
+            .alert("Appearance of \(appearanceName)", isPresented: Binding(
+                get: { appearanceText != nil },
+                set: { if !$0 { appearanceText = nil } }
+            )) {
+                Button("Done", role: .cancel) { appearanceText = nil }
+            } message: {
+                Text(appearanceText ?? "")
+            }
             .onAppear {
                 // Grabbing focus in the same tick a sheet starts
                 // presenting is unreliable -- the field isn't installed
@@ -365,6 +375,20 @@ struct AgentPickerView: View {
             }
             .tint(.yellow)
         }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if let description = CharacterAppearance.description(
+                agentID: agent.id, avatarPath: agent.avatar?.filepath
+            ) {
+                Button {
+                    isSearchFieldFocused = false
+                    appearanceName = agent.name
+                    appearanceText = description
+                } label: {
+                    Label("Describe appearance", systemImage: "person.crop.square")
+                }
+                .tint(.blue)
+            }
+        }
         .buttonStyle(.plain)
         // Session 26, the Amber rule (build 139 / the df915e2 sweep):
         // NO .accessibilityElement(children:.ignore) on a Button — it
@@ -377,7 +401,11 @@ struct AgentPickerView: View {
         // construction as the fix.
         .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
         .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
-        .accessibilityHint("Switches to this character for your next message.")
+        .accessibilityHint(CharacterAppearance.description(
+            agentID: agent.id, avatarPath: agent.avatar?.filepath
+        ) == nil
+            ? "Switches to this character for your next message."
+            : "Switches to this character for your next message. Actions include Describe appearance.")
     }
 
     private func row(for agent: KadeAgent) -> some View {

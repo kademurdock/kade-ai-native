@@ -12,6 +12,19 @@ check(!CharacterMotion.prepared(id: CharacterMotion.dellaID, path: "/images/" + 
 check(CharacterMotion.prepared(id: CharacterMotion.lillyID, path: "/images/" + CharacterMotion.lillyFile), "the public Lilly's own artwork")
 check(CharacterMotion.prepared(id: CharacterMotion.skyleeLillyID, path: "/images/" + CharacterMotion.skyleeLillyFile), "Skylee's Lilly's own artwork")
 check(!CharacterMotion.prepared(id: CharacterMotion.lillyID, path: "/images/" + CharacterMotion.skyleeLillyFile), "each Lilly matches only her own file")
+for (id, file) in [
+    (CharacterMotion.kianaID, CharacterMotion.kianaFile),
+    (CharacterMotion.dellaID, CharacterMotion.dellaFile),
+    (CharacterMotion.harleyID, CharacterMotion.harleyFile),
+    (CharacterMotion.lillyID, CharacterMotion.lillyFile),
+    (CharacterMotion.skyleeLillyID, CharacterMotion.skyleeLillyFile),
+    (CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile),
+] {
+    check(CharacterAppearance.description(agentID: id, avatarPath: "/images/" + file) != nil,
+        "current portrait has an optional description")
+    check(CharacterAppearance.description(agentID: id, avatarPath: "/images/replaced.png") == nil,
+        "replaced portrait has no stale description")
+}
 check(CharacterMotion.rigID(CharacterMotion.skyleeLillyID) == CharacterMotion.lillyID, "Skylee's Lilly wears the public Lilly's rig")
 check(CharacterMotion.rigID(CharacterMotion.kianaID) == CharacterMotion.kianaID, "everyone else is their own rig")
 check(CharacterMotion.animatedIDs.contains(CharacterMotion.lillyID) && CharacterMotion.animatedIDs.contains(CharacterMotion.skyleeLillyID), "both Lillys are on the moving-faces shelf")
@@ -117,3 +130,65 @@ check(shapes.count >= 3, "the mouth keeps changing shape")
 check(CharacterMotion.viseme(time: 3.01, strength: 0.4, seed: 7) == CharacterMotion.viseme(time: 3.05, strength: 0.4, seed: 7), "one shape per syllable slot, no flicker")
 check(CharacterMotion.pose(id: "a", time: 2, level: 1, active: false).viseme == 0, "off is a closed mouth")
 print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")
+
+let figureBefore = count
+let figureSpeech = CharacterPresentation(activity: .speaking, expression: .excited, elapsed: 0.4)
+let figureOn = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0.15,
+    active: true, presentation: figureSpeech)
+let figureQuiet = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0,
+    active: true, presentation: figureSpeech)
+check(figureOn.nearArmAngle != figureQuiet.nearArmAngle, "figure follows rendered speech energy")
+let figureOff = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 100, level: 0.15,
+    active: false, presentation: figureSpeech)
+check(figureOff.headAngle == 0 && figureOff.nearArmAngle == 0 && figureOff.torsoLift == 0,
+    "motion gate parks the entire figure")
+check(CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: .nan, level: 0.15,
+    active: true, presentation: figureSpeech).headAngle == 0, "invalid figure clock is still")
+for sample in [CharacterPresentation.idle, CharacterPresentation(activity: .listening),
+    CharacterPresentation(activity: .thinking), figureSpeech] {
+    for level in [0.0, 0.02, 0.5, 100.0, Double.nan] {
+        let p = CharacterFigureMotion.pose(id: CharacterMotion.kianaID, time: 14.5,
+            level: level, active: true, presentation: sample)
+        check(abs(p.headAngle) <= 7 && abs(p.headNod) <= 0.018 &&
+            abs(p.torsoAngle) <= 3 && abs(p.torsoLift) <= 0.008 &&
+            abs(p.farArmAngle) <= 14 && abs(p.nearArmAngle) <= 16,
+            "figure joints stay bounded")
+    }
+}
+print("Layered figure motion: \(count - figureBefore) checks passed")
+
+
+let layoutBefore = count
+check(CharacterStageLayout.callSide(width: 320, height: 568, accessibilityText: false) == 132,
+    "small call window keeps compact portrait")
+check(CharacterStageLayout.callSide(width: 430, height: 932, accessibilityText: false) == 208,
+    "large call window keeps full portrait")
+check(CharacterStageLayout.callSide(width: 430, height: 932, accessibilityText: true) == 104,
+    "call portrait leaves room for accessibility text")
+check(CharacterStageLayout.callSide(width: 210, height: 932, accessibilityText: false) == 138,
+    "narrow window contains portrait including its padding")
+for width in [200.0, 210, 280, 320, 430, 1024] {
+    for height in [320.0, 568, 699, 700, 859, 860, 932] {
+        for largeText in [false, true] {
+            let side = CharacterStageLayout.callSide(width: width, height: height,
+                accessibilityText: largeText)
+            check(side + 72 <= width && side > 0 && side <= 208,
+                "call stage always fits supported window width")
+        }
+    }
+}
+for invalid in [Double.nan, Double.infinity, -1, 0] {
+    check(CharacterStageLayout.callSide(width: invalid, height: 932, accessibilityText: false) == 104,
+        "invalid call geometry has a bounded fallback")
+    check(CharacterStageLayout.chatSide(height: invalid, keyboard: false,
+        compactHeight: false, accessibilityText: false) == 132, "invalid chat height stays bounded")
+}
+check(CharacterStageLayout.chatSide(height: 932, keyboard: false,
+    compactHeight: false, accessibilityText: false) == 208, "ordinary chat keeps full portrait")
+check(CharacterStageLayout.chatSide(height: 932, keyboard: false,
+    compactHeight: false, accessibilityText: true) == 104, "large chat text has more message space")
+check(CharacterStageLayout.chatSide(height: 932, keyboard: true,
+    compactHeight: false, accessibilityText: true) == 84, "keyboard stays compact with large text")
+check(CharacterStageLayout.chatSide(height: 430, keyboard: false,
+    compactHeight: true, accessibilityText: false) == 84, "landscape chat prioritizes message space")
+print("Character stage layout: \(count - layoutBefore) checks passed")

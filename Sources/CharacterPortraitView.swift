@@ -23,6 +23,9 @@ struct CharacterPortraitView: View {
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
+    private var figureArtwork: CharacterFigureArtwork? {
+        stage ? CharacterFigureArtwork.approved(agentID: agentID, avatarPath: path) : nil
+    }
     private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
     private var url: URL? {
         guard let path, !path.isEmpty else { return nil }
@@ -32,9 +35,10 @@ struct CharacterPortraitView: View {
         if enabled {
             TimelineView(.animation(minimumInterval: 1.0 / (playing ? 24.0 : 12.0), paused: !active)) { timeline in
                 let performance = active ? presentation() : .idle
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let outputLevel = active && playing ? level() : 0
                 let pose = CharacterMotion.pose(id: agentID ?? "unknown",
-                    time: timeline.date.timeIntervalSinceReferenceDate,
-                    level: active && playing ? level() : 0, active: active, presentation: performance)
+                    time: time, level: outputLevel, active: active, presentation: performance)
                 // Facial expression and individual gestures carry the performance;
                 // the larger stage adds a little reach without amplifying it sixfold.
                 let reach = stage ? 1.6 : 1.0
@@ -46,12 +50,18 @@ struct CharacterPortraitView: View {
                             .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
-                    portrait(pose, face: performance.face)
-                        .frame(width: side, height: side)
-                        .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .scaleEffect(active ? pose.scale : 1)
-                        .rotationEffect(.degrees(pose.tilt * reach))
-                        .offset(y: pose.lift * reach)
+                    if let artwork = figureArtwork, let sheet {
+                        layeredFigure(artwork, sheet: sheet, pose: pose, face: performance.face,
+                            body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
+                                time: time, level: outputLevel, active: active, presentation: performance))
+                    } else {
+                        portrait(pose, face: performance.face)
+                            .frame(width: side, height: side)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                            .scaleEffect(active ? pose.scale : 1)
+                            .rotationEffect(.degrees(pose.tilt * reach))
+                            .offset(y: pose.lift * reach)
+                    }
                 }
                 .frame(width: side + 12, height: side + 12)
                 .padding(stage ? 14 : 0)
@@ -137,6 +147,78 @@ struct CharacterPortraitView: View {
                 else { fallback }
             }
         } else { fallback }
+    }
+
+    /// The authored head cutout and these atlas patches share one neck transform.
+    /// The original photo portrait above keeps its established composition.
+    private func faceDetails(_ pose: CharacterPose, face: CharacterFace, sheet: Sheet) -> some View {
+        let basicOnly = agentID == CharacterMotion.witherspoonID
+        let shownFace = basicOnly ? face.basicSheetFace : face
+        return ZStack(alignment: .topLeading) {
+            // Every drawn face sits ready at zero opacity so a change dissolves.
+            ForEach(CharacterFace.allCases.filter { $0 != .neutral && $0 != .closed && (!basicOnly || $0.rawValue < 9) }, id: \.rawValue) { drawnFace in
+                let index = drawnFace.rawValue
+                feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
+                    .opacity(shownFace.rawValue == index ? 1 : 0)
+            }
+            .animation(active ? .easeInOut(duration: 0.45) : nil, value: face)
+            // A laugh keeps its own open mouth; every other face uses shapes.
+            if pose.viseme > 0 && pose.viseme < 9 && shownFace != .laugh {
+                feathered(panel(sheet.mouths, pose.viseme), region: sheet.mouth, inner: 0.5)
+            }
+            feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes, inner: 0.6)
+                .opacity(CharacterMotion.blend(pose.blink))
+        }
+        .frame(width: side, height: side)
+    }
+
+    private func figureLayer(_ image: String) -> some View {
+        Image(image).resizable().interpolation(.high)
+            .frame(width: side, height: side)
+    }
+
+    private func figureFaceDetails(_ pose: CharacterPose, face: CharacterFace,
+                                   sheet: Sheet, artwork: CharacterFigureArtwork) -> some View {
+        // Each atlas panel is a full square. Scaling that square preserves the
+        // face, mouth, and blink regions' authored positions inside it.
+        let scale = artwork.faceRect.width
+        return faceDetails(pose, face: face, sheet: sheet)
+            .scaleEffect(x: scale, y: scale, anchor: .topLeading)
+            .offset(x: artwork.faceRect.minX * CGFloat(side),
+                    y: artwork.faceRect.minY * CGFloat(side))
+    }
+
+    private func layeredFigure(_ artwork: CharacterFigureArtwork, sheet: Sheet,
+                               pose: CharacterPose, face: CharacterFace,
+                               body: CharacterFigurePose) -> some View {
+        ZStack(alignment: .topLeading) {
+            if let backHair = artwork.backHair {
+                figureLayer(backHair)
+                    .rotationEffect(.degrees(body.headAngle), anchor: artwork.neck.anchor)
+                    .offset(y: body.headNod * side)
+            }
+            figureLayer(artwork.farArm)
+                .rotationEffect(.degrees(body.farArmAngle), anchor: artwork.farShoulder.anchor)
+            figureLayer(artwork.torso)
+            ZStack(alignment: .topLeading) {
+                figureLayer(artwork.head)
+                figureFaceDetails(pose, face: face, sheet: sheet, artwork: artwork)
+            }
+            .frame(width: side, height: side)
+            .rotationEffect(.degrees(body.headAngle), anchor: artwork.neck.anchor)
+            .offset(y: body.headNod * side)
+            figureLayer(artwork.nearArm)
+                .rotationEffect(.degrees(body.nearArmAngle), anchor: artwork.nearShoulder.anchor)
+            if let frontHair = artwork.frontHair {
+                figureLayer(frontHair)
+                    .rotationEffect(.degrees(body.headAngle), anchor: artwork.neck.anchor)
+                    .offset(y: body.headNod * side)
+            }
+        }
+        .frame(width: side, height: side)
+        .rotationEffect(.degrees(body.torsoAngle), anchor: artwork.waist.anchor)
+        .offset(y: -body.torsoLift * side)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
     }
     /// One panel cut from a 3 by 3 sheet.
     private func panel(_ image: String, _ index: Int) -> some View {
