@@ -88,6 +88,7 @@ struct CharacterPortraitAuditView: View {
     @State private var handSample: Double? = nil
     @State private var handVariant = CharacterHarleyHandPrototypeVariant.smallRight
     @State private var facialStudy = false
+    @State private var blinkSample: Double? = nil
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -107,7 +108,7 @@ struct CharacterPortraitAuditView: View {
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
                     motionPaused: reviewStill, handPrototypeElapsed: handSample,
-                    handPrototypeVariant: handVariant)
+                    handPrototypeVariant: handVariant, blinkAuditAmount: blinkSample)
                 Text(reviewName + (facialStudy ? " · controlled face preview"
                     : (handSample == nil ? " · production puppet" : " · hand study")))
                 if facialStudy {
@@ -284,6 +285,22 @@ struct CharacterPortraitAuditView: View {
                 try await capturePose(person.rawValue + "-authored-excited-light")
                 await wait(2)
             }
+            // Review the full authored eyelid over three different faces.
+            // Deterministic samples make the remaining spatial edge observable
+            // even when an ordinary blink falls between screenshot captures.
+            for person in [CharacterAuditPerson.lilly, .privateLilly] {
+                reviewAgentID = person.agentID
+                reviewName = person.auditName
+                for (expression, label) in [(CharacterExpression.neutral, "neutral"),
+                                           (.concerned, "concerned"), (.warm, "smile")] {
+                    reviewPerformance = CharacterPresentation(activity: .listening, expression: expression)
+                    for (amount, state) in [(0.0, "open"), (1.0, "closed")] {
+                        blinkSample = amount
+                        try await capturePose("\(person.rawValue)-blink-mask-\(label)-\(state)-light")
+                    }
+                }
+            }
+            blinkSample = nil
             facialStudy = false
             reviewPerformance = .idle
             reviewDark = false

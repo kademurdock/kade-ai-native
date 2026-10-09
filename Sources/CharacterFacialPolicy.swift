@@ -5,6 +5,12 @@ import Foundation
 enum CharacterFacialPolicy {
     static let blinkThreshold = 0.35
 
+    static func blinkInnerRadius(agentID: String?) -> Double {
+        // Lilly's outer right eye reaches into the old feathered band. Keep
+        // the same ellipse, but cover her complete eye with authored pixels.
+        CharacterMotion.rigID(agentID) == CharacterMotion.lillyID ? 0.9 : 0.6
+    }
+
     static func face(for presentation: CharacterPresentation, agentID: String?) -> CharacterFace {
         // Harley's curious panel has wide, startled eyes. A neutral listener
         // keeps his resting face while the existing listening gesture nods.

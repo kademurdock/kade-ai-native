@@ -22,6 +22,8 @@ struct CharacterPortraitView: View {
     /// Controlled audit samples only; never a production speech-turn trigger.
     var handPrototypeElapsed: Double? = nil
     var handPrototypeVariant: CharacterHarleyHandPrototypeVariant = .smallRight
+    /// Stable open/closed samples for native mask review, never ordinary UI.
+    var blinkAuditAmount: Double? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
@@ -52,8 +54,8 @@ struct CharacterPortraitView: View {
                 let face = CharacterFacialPolicy.face(for: performance, agentID: agentID)
                 let time = timeline.date.timeIntervalSinceReferenceDate
                 let outputLevel = active && playing ? level() : 0
-                let pose = CharacterMotion.pose(id: agentID ?? "unknown",
-                    time: time, level: outputLevel, active: active, presentation: performance)
+                let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
+                    time: time, level: outputLevel, active: active, presentation: performance))
                 // Facial expression and individual gestures carry the performance;
                 // the larger stage adds a little reach without amplifying it sixfold.
                 let reach = stage ? 1.6 : 1.0
@@ -120,6 +122,15 @@ struct CharacterPortraitView: View {
     private struct RenderIdentity: Hashable {
         let agentID: String?
         let avatarPath: String?
+    }
+    private func reviewedPose(_ pose: CharacterPose) -> CharacterPose {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, let amount = blinkAuditAmount {
+            return CharacterPose(mouth: pose.mouth, blink: amount, tilt: pose.tilt,
+                lift: pose.lift, brow: pose.brow, viseme: pose.viseme, scale: pose.scale)
+        }
+        #endif
+        return pose
     }
     /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
     private var rig: String? { CharacterMotion.rigID(agentID) }
@@ -286,7 +297,8 @@ struct CharacterPortraitView: View {
             // follows the existing blink wave without inventing ghost eyelids.
             if CharacterFacialPolicy.shouldBlink(amount: pose.blink,
                     face: shownFace, agentID: agentID) {
-                feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes, inner: 0.6)
+                feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes,
+                    inner: CharacterFacialPolicy.blinkInnerRadius(agentID: agentID))
             }
         }
         .frame(width: side, height: side)

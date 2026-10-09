@@ -132,6 +132,15 @@ check(CharacterMotion.pose(id: "a", time: 2, level: 1, active: false).viseme == 
 print("Character reactions and playback ownership: \(count - beforeReactions) checks passed")
 
 let facialBefore = count
+for id in [CharacterMotion.lillyID, CharacterMotion.skyleeLillyID] {
+    check(CharacterFacialPolicy.blinkInnerRadius(agentID: id) == 0.9,
+        "both exact Lilly identities use her complete authored eye core")
+}
+for id in [nil, "unknown", CharacterMotion.harleyID, CharacterMotion.kianaID,
+           CharacterMotion.dellaID, CharacterMotion.witherspoonID] as [String?] {
+    check(CharacterFacialPolicy.blinkInnerRadius(agentID: id) == 0.6,
+        "Lilly's eye-core adjustment cannot affect another identity")
+}
 let neutralListener = CharacterPresentation(activity: .listening)
 check(CharacterFacialPolicy.face(for: neutralListener, agentID: CharacterMotion.harleyID) == .neutral,
     "Harley listens with his resting face instead of startled curious eyes")
