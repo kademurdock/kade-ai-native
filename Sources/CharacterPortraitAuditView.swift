@@ -100,6 +100,10 @@ struct CharacterPortraitAuditView: View {
     private func capturePose(_ label: String) async throws {
         // Let SwiftUI lay out the changed mode before the runner sees its label.
         await wait(0.6)
+        // Publishing the file can wake the runner before the phase Text has
+        // committed its new label. Set it first, then allow a UI frame to pass.
+        phase = label
+        await wait(0.12)
         step(label)
         for _ in 0..<25 {
             if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == label { return }
@@ -176,6 +180,9 @@ struct CharacterPortraitAuditView: View {
             }
             for (id, label, other) in roster {
             agentID = id; name = label; call.auditSpeaker(id)
+            if id == CharacterMotion.lillyID {
+                try await capturePose("lilly-character-transition")
+            }
             CharacterAuditCheckpoint.mark(label + " rendering offline call")
             call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
             call.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")

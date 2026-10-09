@@ -86,6 +86,10 @@ struct CharacterPortraitView: View {
                     }
                 }
                 .frame(width: side + 12, height: side + 12)
+                // Image/opacity animation state belongs to one exact portrait.
+                // Reset the decorative tree when identity changes so a new
+                // body cannot briefly inherit the previous character's face.
+                .id(RenderIdentity(agentID: agentID, avatarPath: path))
                 .padding(stage ? 14 : 0)
             }
             .accessibilityHidden(true)
@@ -106,6 +110,10 @@ struct CharacterPortraitView: View {
     private struct Sheet {
         let faces: String, mouths: String
         let face: CGRect, mouth: CGRect, eyes: CGRect
+    }
+    private struct RenderIdentity: Hashable {
+        let agentID: String?
+        let avatarPath: String?
     }
     /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
     private var rig: String? { CharacterMotion.rigID(agentID) }
