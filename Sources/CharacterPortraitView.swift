@@ -37,8 +37,7 @@ struct CharacterPortraitView: View {
         #if DEBUG && targetEnvironment(simulator)
         guard let artwork = CharacterBustArtwork.review(enabled: reviewBust, stage: stage,
                 side: side, agentID: agentID, avatarPath: path),
-              UIImage(named: artwork.bodyAsset) != nil,
-              UIImage(named: artwork.maskAsset) != nil else { return nil }
+              artwork.requiredAssets.allSatisfy({ UIImage(named: $0) != nil }) else { return nil }
         return artwork
         #else
         return nil
@@ -72,7 +71,7 @@ struct CharacterPortraitView: View {
                         layeredBust(artwork, pose: pose, face: performance.face,
                             motion: CharacterBustMotion.pose(CharacterFigureMotion.pose(
                                 id: agentID ?? "unknown", time: time, level: outputLevel,
-                                active: active, presentation: performance)))
+                                active: active, presentation: performance), limits: artwork.motionLimits))
                     } else if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: performance.face,
                             body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
@@ -185,10 +184,24 @@ struct CharacterPortraitView: View {
         return ZStack(alignment: .topLeading) {
             Image(artwork.bodyAsset).resizable().interpolation(.high)
                 .frame(width: artwork.bodyWidth * unit, height: artwork.bodyHeight * unit)
-                .offset(x: -artwork.cropX * unit, y: -artwork.cropY * unit)
+                .offset(x: (artwork.bodyX - artwork.cropX) * unit,
+                        y: (artwork.bodyY - artwork.cropY) * unit)
                 .frame(width: side, height: side, alignment: .topLeading)
                 .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
                 .offset(y: motion.bodyOffsetY * unit)
+            if let sheet {
+                ForEach(artwork.accessoryOutlines, id: \.self) { outline in
+                    // Companions keep their exact original RGB and stay still;
+                    // speaking, blink and head transforms never reach them.
+                    panel(sheet.faces, CharacterFace.neutral.rawValue)
+                        .frame(width: side, height: side)
+                        .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
+                        .offset(x: (artwork.panelX - artwork.cropX) * unit,
+                                y: (artwork.panelY - artwork.cropY) * unit)
+                        .frame(width: side, height: side, alignment: .topLeading)
+                        .clipShape(CharacterBustCut(artwork: artwork, outline: outline))
+                }
+            }
             portrait(pose, face: face)
                 .frame(width: side, height: side)
                 .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
@@ -196,7 +209,7 @@ struct CharacterPortraitView: View {
                         y: (artwork.panelY - artwork.cropY) * unit)
                 .frame(width: side, height: side, alignment: .topLeading)
                 .mask(alignment: .topLeading) { bustMask(artwork, unit: unit) }
-                .clipShape(CharacterBustHeadCut(artwork: artwork))
+                .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
                 .rotationEffect(.degrees(motion.headAngle), anchor: neck)
                 .offset(y: motion.headOffsetY * unit)
         }
@@ -204,21 +217,26 @@ struct CharacterPortraitView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22))
     }
 
-    private func bustMask(_ artwork: CharacterBustArtwork, unit: Double) -> some View {
-        ZStack(alignment: .topLeading) {
-            Image(artwork.maskAsset).resizable().interpolation(.high)
-                .frame(width: artwork.panelSide * unit, height: artwork.panelSide * unit)
-                .offset(x: (artwork.panelX - artwork.cropX) * unit,
-                        y: (artwork.panelY - artwork.cropY) * unit)
-            // Exact opaque face core from the existing study: the source mask
-            // feathers the hair boundary without making facial patches ghost.
-            Ellipse().fill(.white)
-                .frame(width: artwork.coreRadiusX * 2 * unit,
-                       height: artwork.coreRadiusY * 2 * unit)
-                .offset(x: (artwork.coreX - artwork.coreRadiusX - artwork.cropX) * unit,
-                        y: (artwork.coreY - artwork.coreRadiusY - artwork.cropY) * unit)
+    @ViewBuilder private func bustMask(_ artwork: CharacterBustArtwork, unit: Double) -> some View {
+        if let maskAsset = artwork.maskAsset {
+            ZStack(alignment: .topLeading) {
+                Image(maskAsset).resizable().interpolation(.high)
+                    .frame(width: artwork.panelSide * unit, height: artwork.panelSide * unit)
+                    .offset(x: (artwork.panelX - artwork.cropX) * unit,
+                            y: (artwork.panelY - artwork.cropY) * unit)
+                // Harley's source mask feathers the hair boundary without
+                // making facial patches ghost. Lilly uses the outline alone.
+                if let core = artwork.faceCore {
+                    Ellipse().fill(.white)
+                        .frame(width: core.radiusX * 2 * unit, height: core.radiusY * 2 * unit)
+                        .offset(x: (core.x - core.radiusX - artwork.cropX) * unit,
+                                y: (core.y - core.radiusY - artwork.cropY) * unit)
+                }
+            }
+            .frame(width: side, height: side, alignment: .topLeading)
+        } else {
+            Rectangle().fill(.white).frame(width: side, height: side)
         }
-        .frame(width: side, height: side, alignment: .topLeading)
     }
 
     /// The authored head cutout and these atlas patches share one neck transform.
@@ -322,12 +340,33 @@ struct CharacterPortraitView: View {
     }
 }
 
-/// Unchanged cubic outline from the Harley exact-atlas study, transformed from
-/// its 1024-pixel world into the close crop. This clips both mask and face.
-private struct CharacterBustHeadCut: Shape {
+/// Exact study outlines. Harley's path is already in world coordinates;
+/// Lilly's paths first map the unchanged 414-pixel panel into its destination.
+private struct CharacterBustCut: Shape {
     let artwork: CharacterBustArtwork
+    let outline: CharacterBustOutline
 
     func path(in rect: CGRect) -> Path {
+        let source: Path
+        switch outline {
+        case .harleyHead: source = harleyPath
+        case .lillyHead: source = lillyHeadPath
+        case .lillyLeftCat: source = lillyLeftCatPath
+        case .lillyRightCat: source = lillyRightCatPath
+        }
+        let unit = rect.width / CGFloat(artwork.cropSide)
+        if outline.usesAtlasCoordinates {
+            let scale = unit * CGFloat(artwork.panelSide / 414)
+            return source.applying(CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+                tx: rect.minX + CGFloat(artwork.panelX - artwork.cropX) * unit,
+                ty: rect.minY + CGFloat(artwork.panelY - artwork.cropY) * unit))
+        }
+        return source.applying(CGAffineTransform(a: unit, b: 0, c: 0, d: unit,
+            tx: rect.minX - CGFloat(artwork.cropX) * unit,
+            ty: rect.minY - CGFloat(artwork.cropY) * unit))
+    }
+
+    private var harleyPath: Path {
         var path = Path()
         path.move(to: CGPoint(x: 406, y: 46))
         path.addCurve(to: CGPoint(x: 493, y: 17), control1: CGPoint(x: 426, y: 20), control2: CGPoint(x: 461, y: 17))
@@ -348,9 +387,90 @@ private struct CharacterBustHeadCut: Shape {
         path.addCurve(to: CGPoint(x: 384, y: 102), control1: CGPoint(x: 369, y: 149), control2: CGPoint(x: 376, y: 117))
         path.addCurve(to: CGPoint(x: 406, y: 46), control1: CGPoint(x: 385, y: 76), control2: CGPoint(x: 391, y: 59))
         path.closeSubpath()
-        let unit = rect.width / CGFloat(artwork.cropSide)
-        return path.applying(CGAffineTransform(a: unit, b: 0, c: 0, d: unit,
-            tx: rect.minX - CGFloat(artwork.cropX) * unit,
-            ty: rect.minY - CGFloat(artwork.cropY) * unit))
+        return path
+    }
+
+    private var lillyHeadPath: Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 222, y: 22))
+        path.addCurve(to: CGPoint(x: 124, y: 108), control1: CGPoint(x: 177, y: 21), control2: CGPoint(x: 137, y: 53))
+        path.addLine(to: CGPoint(x: 121, y: 120))
+        path.addLine(to: CGPoint(x: 125, y: 128))
+        path.addLine(to: CGPoint(x: 119, y: 137))
+        path.addCurve(to: CGPoint(x: 94, y: 181), control1: CGPoint(x: 100, y: 145), control2: CGPoint(x: 91, y: 161))
+        path.addLine(to: CGPoint(x: 98, y: 197))
+        path.addCurve(to: CGPoint(x: 58, y: 223), control1: CGPoint(x: 80, y: 205), control2: CGPoint(x: 66, y: 212))
+        path.addCurve(to: CGPoint(x: 78, y: 250), control1: CGPoint(x: 56, y: 236), control2: CGPoint(x: 66, y: 246))
+        path.addLine(to: CGPoint(x: 103, y: 253))
+        path.addLine(to: CGPoint(x: 126, y: 260))
+        path.addLine(to: CGPoint(x: 143, y: 280))
+        path.addLine(to: CGPoint(x: 177, y: 285))
+        path.addLine(to: CGPoint(x: 211, y: 292))
+        path.addLine(to: CGPoint(x: 239, y: 302))
+        path.addLine(to: CGPoint(x: 267, y: 320))
+        path.addLine(to: CGPoint(x: 294, y: 321))
+        path.addLine(to: CGPoint(x: 305, y: 300))
+        path.addLine(to: CGPoint(x: 319, y: 278))
+        path.addLine(to: CGPoint(x: 331, y: 257))
+        path.addLine(to: CGPoint(x: 351, y: 244))
+        path.addCurve(to: CGPoint(x: 375, y: 203), control1: CGPoint(x: 369, y: 234), control2: CGPoint(x: 378, y: 221))
+        path.addCurve(to: CGPoint(x: 353, y: 151), control1: CGPoint(x: 374, y: 186), control2: CGPoint(x: 357, y: 172))
+        path.addCurve(to: CGPoint(x: 340, y: 83), control1: CGPoint(x: 355, y: 129), control2: CGPoint(x: 347, y: 107))
+        path.addCurve(to: CGPoint(x: 296, y: 35), control1: CGPoint(x: 334, y: 59), control2: CGPoint(x: 315, y: 42))
+        path.addLine(to: CGPoint(x: 279, y: 38))
+        path.addCurve(to: CGPoint(x: 222, y: 22), control1: CGPoint(x: 261, y: 29), control2: CGPoint(x: 241, y: 23))
+        path.closeSubpath()
+        return path
+    }
+
+    private var lillyLeftCatPath: Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 23, y: 269))
+        path.addLine(to: CGPoint(x: 44, y: 274))
+        path.addLine(to: CGPoint(x: 63, y: 261))
+        path.addLine(to: CGPoint(x: 83, y: 259))
+        path.addLine(to: CGPoint(x: 97, y: 229))
+        path.addLine(to: CGPoint(x: 105, y: 223))
+        path.addLine(to: CGPoint(x: 117, y: 244))
+        path.addLine(to: CGPoint(x: 123, y: 260))
+        path.addCurve(to: CGPoint(x: 138, y: 309), control1: CGPoint(x: 140, y: 271), control2: CGPoint(x: 146, y: 292))
+        path.addCurve(to: CGPoint(x: 123, y: 341), control1: CGPoint(x: 139, y: 323), control2: CGPoint(x: 131, y: 333))
+        path.addLine(to: CGPoint(x: 120, y: 351))
+        path.addLine(to: CGPoint(x: 105, y: 360))
+        path.addLine(to: CGPoint(x: 84, y: 364))
+        path.addLine(to: CGPoint(x: 77, y: 354))
+        path.addLine(to: CGPoint(x: 76, y: 340))
+        path.addCurve(to: CGPoint(x: 43, y: 302), control1: CGPoint(x: 55, y: 332), control2: CGPoint(x: 46, y: 316))
+        path.addLine(to: CGPoint(x: 33, y: 286))
+        path.closeSubpath()
+        return path
+    }
+
+    private var lillyRightCatPath: Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 306, y: 286))
+        path.addLine(to: CGPoint(x: 320, y: 267))
+        path.addLine(to: CGPoint(x: 325, y: 250))
+        path.addLine(to: CGPoint(x: 340, y: 235))
+        path.addLine(to: CGPoint(x: 348, y: 233))
+        path.addLine(to: CGPoint(x: 355, y: 262))
+        path.addLine(to: CGPoint(x: 357, y: 276))
+        path.addLine(to: CGPoint(x: 381, y: 284))
+        path.addLine(to: CGPoint(x: 411, y: 292))
+        path.addLine(to: CGPoint(x: 402, y: 304))
+        path.addLine(to: CGPoint(x: 392, y: 313))
+        path.addCurve(to: CGPoint(x: 383, y: 361), control1: CGPoint(x: 403, y: 331), control2: CGPoint(x: 400, y: 351))
+        path.addLine(to: CGPoint(x: 365, y: 369))
+        path.addLine(to: CGPoint(x: 352, y: 366))
+        path.addLine(to: CGPoint(x: 350, y: 380))
+        path.addLine(to: CGPoint(x: 344, y: 399))
+        path.addLine(to: CGPoint(x: 332, y: 412))
+        path.addLine(to: CGPoint(x: 319, y: 411))
+        path.addLine(to: CGPoint(x: 319, y: 392))
+        path.addLine(to: CGPoint(x: 307, y: 375))
+        path.addLine(to: CGPoint(x: 294, y: 353))
+        path.addCurve(to: CGPoint(x: 306, y: 286), control1: CGPoint(x: 284, y: 336), control2: CGPoint(x: 289, y: 308))
+        path.closeSubpath()
+        return path
     }
 }

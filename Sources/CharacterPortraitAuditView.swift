@@ -26,12 +26,17 @@ struct CharacterPortraitAuditView: View {
     @State private var ready = false
     @State private var checks: [String] = []
     @State private var puppetPoses = false
+    @State private var reviewAgentID = CharacterMotion.harleyID
+    @State private var reviewName = "Harley"
     @State private var reviewPerformance = CharacterPresentation.idle
     @State private var reviewSide = 208.0
     @State private var reviewStill = false
     @State private var reviewDark = false
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
     private let puppetEnabled = ProcessInfo.processInfo.environment["KADE_PUPPET_AUDIT"] == "1"
+    private var isPuppetSpeaker: Bool {
+        agentID == CharacterMotion.harleyID || agentID == CharacterMotion.lillyID
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -46,18 +51,20 @@ struct CharacterPortraitAuditView: View {
                     }
                 }
             } else if puppetPoses {
-                CharacterPortraitView(agentID: CharacterMotion.harleyID, name: "Harley",
+                CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
                     playing: false, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
                     reviewBust: true, motionPaused: reviewStill)
-                Text("Harley · native puppet study")
-                Text("Experimental head and shoulders. Compact stages retain the portrait.")
+                Text(reviewName + " · native puppet study")
+                Text(reviewAgentID == CharacterMotion.lillyID
+                    ? "Experimental head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
+                    : "Experimental head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
                     presentation: { callMode ? call.characterPresentation : voice.characterPresentation() },
-                    stage: puppetEnabled && agentID == CharacterMotion.harleyID,
-                    side: agentID == CharacterMotion.harleyID ? 208 : 160, reviewBust: puppetEnabled)
+                    stage: puppetEnabled && isPuppetSpeaker,
+                    side: isPuppetSpeaker ? 208 : 160, reviewBust: puppetEnabled)
                 Text(name).font(.title)
                 Text("Offline audio engine. Local synthetic test tones.")
             }
@@ -122,24 +129,36 @@ struct CharacterPortraitAuditView: View {
             }
             gallery = false
             if puppetEnabled {
-                try check(UIImage(named: "CharacterHarleyBustBody") != nil && UIImage(named: "CharacterHarleyBustMask") != nil,
-                    "experimental Harley resources staged for this simulator audit")
                 puppetPoses = true
-                for dark in [false, true] {
-                    reviewDark = dark
-                    for (activity, label) in [(CharacterActivity.idle, "idle"), (.listening, "listening"), (.thinking, "thinking")] {
-                        reviewPerformance = CharacterPresentation(activity: activity)
-                        try await capturePose("harley-puppet-\(label)-\(dark ? "dark" : "light")")
+                for (id, label, avatarFile) in [
+                    (CharacterMotion.harleyID, "Harley", CharacterMotion.harleyFile),
+                    (CharacterMotion.lillyID, "Lilly", CharacterMotion.lillyFile)
+                ] {
+                    let artwork = CharacterBustArtwork.review(enabled: true, stage: true, side: 208,
+                        agentID: id, avatarPath: "/images/" + avatarFile)
+                    let resourcesAvailable = artwork.map { pack in
+                        pack.requiredAssets.allSatisfy { UIImage(named: $0) != nil }
+                    } ?? false
+                    try check(resourcesAvailable, "experimental " + label + " resources staged for this simulator audit")
+                    reviewAgentID = id
+                    reviewName = label
+                    let prefix = label.lowercased()
+                    for dark in [false, true] {
+                        reviewDark = dark
+                        for (activity, state) in [(CharacterActivity.idle, "idle"), (.listening, "listening"), (.thinking, "thinking")] {
+                            reviewPerformance = CharacterPresentation(activity: activity)
+                            try await capturePose("\(prefix)-puppet-\(state)-\(dark ? "dark" : "light")")
+                        }
                     }
+                    reviewStill = true
+                    try await capturePose("\(prefix)-puppet-still")
+                    reviewStill = false
+                    for size in [84.0, 104.0] {
+                        reviewSide = size
+                        try await capturePose("\(prefix)-compact-portrait-\(Int(size))")
+                    }
+                    reviewSide = 208
                 }
-                reviewStill = true
-                try await capturePose("harley-puppet-still")
-                reviewStill = false
-                for size in [84.0, 104.0] {
-                    reviewSide = size
-                    try await capturePose("harley-compact-portrait-\(Int(size))")
-                }
-                reviewSide = 208
                 reviewDark = false
                 puppetPoses = false
             }
@@ -149,7 +168,12 @@ struct CharacterPortraitAuditView: View {
             try call.auditStart(agentID: agentID)
             var roster = [(CharacterMotion.kianaID, "Kiana", CharacterMotion.dellaID),
                 (CharacterMotion.dellaID, "Della", CharacterMotion.kianaID)]
-            if puppetEnabled { roster.append((CharacterMotion.harleyID, "Harley", CharacterMotion.kianaID)) }
+            if puppetEnabled {
+                roster.append(contentsOf: [
+                    (CharacterMotion.harleyID, "Harley", CharacterMotion.kianaID),
+                    (CharacterMotion.lillyID, "Lilly", CharacterMotion.kianaID)
+                ])
+            }
             for (id, label, other) in roster {
             agentID = id; name = label; call.auditSpeaker(id)
             CharacterAuditCheckpoint.mark(label + " rendering offline call")

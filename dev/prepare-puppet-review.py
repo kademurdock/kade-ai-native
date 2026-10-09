@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = (
     ("body.png", "CharacterHarleyBustBody", "83c301e933b2503090f01f2cc75f249f8711f0573bb82e604c160be00e4683d4", (1024, 1536)),
     ("mask.png", "CharacterHarleyBustMask", "26e0133c20e0d69d6f6dc3a262cdfd6d466d3dbfdbd582f2a2742ff7a3ac7dc1", (1254, 1254)),
+    ("lilly-body-support.png", "CharacterLillyBustBody", "237505b328b8a056a4f58aab5f7becbbac1760ee0d33dd49fd8b48f1d4dfd630", (1254, 1254)),
 )
 
 def prepare(check=False):

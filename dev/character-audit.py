@@ -28,7 +28,10 @@ try:
     launch=subprocess.check_output(['xcrun','simctl','launch','--stdout='+str((out/'app.stdout').resolve()),'--stderr='+str((out/'app.stderr').resolve()),sim,'com.kademurdock.kadeai'],env=env,text=True)
     pid=launch.strip().split()[-1];print(launch,flush=True)
     documents=pathlib.Path(run('get_app_container',sim,'com.kademurdock.kadeai','data'))/'Documents'
-    deadline=time.monotonic()+90; seen=set(); result=None; died=None
+    # Four characters plus two puppet pose/crop galleries need additional
+    # capture acknowledgements. Keep the expanded offline audit bounded.
+    audit_seconds=150 if os.environ.get('KADE_PUPPET_AUDIT') == '1' else 90
+    deadline=time.monotonic()+audit_seconds; seen=set(); result=None; died=None
     while time.monotonic()<deadline:
         phase=documents/'character-phase.txt'
         if phase.exists():
@@ -57,7 +60,7 @@ try:
             except Exception:
                 pass
         checkpoint=documents/'character-checkpoint.txt'
-        result={'passed':False,'error':died or 'No completed native runtime receipt within ninety seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
+        result={'passed':False,'error':died or f'No completed native runtime receipt within {audit_seconds} seconds','phases':list(seen),'checkpoint':checkpoint.read_text() if checkpoint.exists() else None}
     # Sep 10 2026: this is DIAGNOSTICS, gathered after the verdict is already
     # decided, and it must never be the thing that fails a passing run. On a
     # loaded worker `log show` can outrun its timeout, and an uncaught

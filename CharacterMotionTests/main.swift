@@ -252,6 +252,70 @@ for expression in CharacterExpression.allCases {
         $0.0.isFinite && abs($0.0) <= $0.1
     }, "authored speech stays within the bust's conservative movement limits")
 }
+
+let lillyAvatarPath = "/images/" + CharacterMotion.lillyFile
+let lillyBust = reviewBust(agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath)!
+check(lillyBust.requiredAssets == ["CharacterLillyBustBody"] && lillyBust.maskAsset == nil,
+    "Lilly needs her body support and uses original atlas outlines rather than a generated head")
+check(lillyBust.headOutline == .lillyHead &&
+    lillyBust.accessoryOutlines == [.lillyLeftCat, .lillyRightCat],
+    "Lilly keeps two static original companions separate from her moving head")
+check(lillyBust.panelSide / lillyBust.cropSide >= 0.88 &&
+    lillyBust.panelSide / lillyBust.cropSide <= 1,
+    "close Lilly crop preserves a readable face at native stage size")
+check(lillyBust.panelX >= lillyBust.cropX && lillyBust.panelY >= lillyBust.cropY &&
+    lillyBust.panelX + lillyBust.panelSide <= lillyBust.cropX + lillyBust.cropSide &&
+    lillyBust.panelY + lillyBust.panelSide <= lillyBust.cropY + lillyBust.cropSide,
+    "complete Lilly atlas destination and both cats fit the close crop")
+check(reviewBust(enabled: false, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil &&
+    reviewBust(stage: false, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil,
+    "Lilly requires the same explicit stage review gates as Harley")
+check(reviewBust(side: 160, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) != nil,
+    "Lilly is eligible at the minimum readable stage size")
+for side in [0.0, -1, 84, 104, 132, 159.99, Double.nan, Double.infinity, -Double.infinity] {
+    check(reviewBust(side: side, agentID: CharacterMotion.lillyID, avatarPath: lillyAvatarPath) == nil,
+        "Lilly stays an ordinary portrait in compact or invalid stages")
+}
+for avatarPath in [nil, "", "/images/replaced.png", harleyAvatarPath,
+                   lillyAvatarPath + ".backup", "/images/prefix-" + CharacterMotion.lillyFile,
+                   "/images/" + CharacterMotion.skyleeLillyFile] as [String?] {
+    check(reviewBust(agentID: CharacterMotion.lillyID, avatarPath: avatarPath) == nil,
+        "public Lilly body requires her exact current public avatar")
+}
+for avatarPath in [lillyAvatarPath, "/images/" + CharacterMotion.skyleeLillyFile] {
+    check(reviewBust(agentID: CharacterMotion.skyleeLillyID, avatarPath: avatarPath) == nil,
+        "sharing a facial rig never opts private Lilly into the public body review")
+}
+check(reviewBust(agentID: CharacterMotion.harleyID, avatarPath: lillyAvatarPath) == nil &&
+    reviewBust(agentID: CharacterMotion.kianaID, avatarPath: lillyAvatarPath) == nil,
+    "other characters cannot borrow public Lilly's body")
+check(reviewBust()!.requiredAssets == ["CharacterHarleyBustBody", "CharacterHarleyBustMask"] &&
+    reviewBust()!.headOutline == .harleyHead && reviewBust()!.accessoryOutlines.isEmpty,
+    "Harley retains his existing mask and has no Lilly accessories")
+check(bustValues(CharacterBustMotion.pose(.still, limits: lillyBust.motionLimits)) == [0, 0, 0, 0],
+    "Lilly's disabled motion parks every transform")
+let lillyBustLimits = [1.95, 0.22, 1.7, 0]
+for value in [-1000.0, -1, 0, 1, 1000, Double.nan, Double.infinity, -Double.infinity] {
+    let figure = CharacterFigurePose(headAngle: value, headNod: value,
+        torsoAngle: value, torsoLift: value, farArmAngle: value, nearArmAngle: value)
+    let pose = CharacterBustMotion.pose(figure, limits: lillyBust.motionLimits)
+    check(zip(bustValues(pose), lillyBustLimits).allSatisfy {
+        $0.0.isFinite && abs($0.0) <= $0.1
+    }, "Lilly clamps corrupt motion to her own reviewed bounds without body translation")
+    if !value.isFinite {
+        check(bustValues(pose) == [0, 0, 0, 0], "nonfinite Lilly transforms park safely")
+    }
+}
+for activity in [CharacterActivity.idle, .listening, .thinking, .speaking] {
+    for expression in CharacterExpression.allCases {
+        let state = CharacterPresentation(activity: activity, expression: expression, elapsed: 0.4)
+        let figure = CharacterFigureMotion.pose(id: CharacterMotion.lillyID,
+            time: 100, level: 1, active: true, presentation: state)
+        check(zip(bustValues(CharacterBustMotion.pose(figure, limits: lillyBust.motionLimits)), lillyBustLimits).allSatisfy {
+            $0.0.isFinite && abs($0.0) <= $0.1
+        }, "Lilly's authored states stay inside her conservative head and shoulder range")
+    }
+}
 print("Character bust review and transforms: \(count - bustBefore) checks passed")
 
 let layoutBefore = count
