@@ -5,7 +5,6 @@ import SwiftUI
 /// the automatic audit separately drives this compositor from rendered PCM.
 struct CharacterPuppetLabView: View {
     @EnvironmentObject private var agents: AgentsService
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var mode = Mode.listening
     @State private var expression = CharacterExpression.warm
     @State private var started = Date()
@@ -37,8 +36,7 @@ struct CharacterPuppetLabView: View {
                     presentation: { CharacterPresentation(activity: mode.activity,
                         expression: mode == .speaking ? expression : .neutral,
                         elapsed: Date().timeIntervalSince(started)) },
-                    stage: true, side: side, reviewBust: true)
-                    .environment(\.accessibilityReduceMotion, still || systemReduceMotion)
+                    stage: true, side: side, reviewBust: true, motionPaused: still)
                     .frame(maxWidth: .infinity)
                 }
                 Text(description)

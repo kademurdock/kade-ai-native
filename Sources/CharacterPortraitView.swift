@@ -20,6 +20,8 @@ struct CharacterPortraitView: View {
     var side = 160.0
     /// Used only by the offline simulator review. Release always ignores it.
     var reviewBust = false
+    /// A local preview may pause decoration; this never overrides system policy.
+    var motionPaused = false
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
@@ -42,7 +44,7 @@ struct CharacterPortraitView: View {
         return nil
         #endif
     }
-    private var active: Bool { enabled && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
+    private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
     private var url: URL? {
         guard let path, !path.isEmpty else { return nil }
         return URL(string: path.hasPrefix("/") ? "https://kademurdock.com" + path : path)

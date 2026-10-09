@@ -48,8 +48,8 @@ struct CharacterPortraitAuditView: View {
             } else if puppetPoses {
                 CharacterPortraitView(agentID: CharacterMotion.harleyID, name: "Harley",
                     playing: false, level: { 0 },
-                    presentation: { reviewPerformance }, stage: true, side: reviewSide, reviewBust: true)
-                    .environment(\.accessibilityReduceMotion, reviewStill)
+                    presentation: { reviewPerformance }, stage: true, side: reviewSide,
+                    reviewBust: true, motionPaused: reviewStill)
                 Text("Harley · native puppet study")
                 Text("Experimental head and shoulders. Compact stages retain the portrait.")
             } else {
@@ -126,7 +126,7 @@ struct CharacterPortraitAuditView: View {
                     }
                 }
                 reviewStill = true
-                try await capturePose("harley-puppet-reduce-motion")
+                try await capturePose("harley-puppet-still")
                 reviewStill = false
                 for size in [84.0, 104.0] {
                     reviewSide = size
