@@ -20,15 +20,20 @@ enum CharacterDellaHostReview {
 extension View {
     /// Discrete layout observations for the local host fixture. This neither
     /// measures ideal sizes nor publishes state back into the composer.
+    /// Parent probes stay geometry-only so native controls keep their own IDs.
     @ViewBuilder
     @MainActor
     func dellaHostProbe(_ key: String, identifier: String? = nil) -> some View {
         #if DEBUG && targetEnvironment(simulator)
         if CharacterDellaHostAudit.isEnabled {
-            self.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+            let observed = self.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
                 CharacterDellaHostAuditRecorder.record(key, frame: $0)
             }
-            .accessibilityIdentifier(identifier ?? "della-host." + key)
+            if let identifier {
+                observed.accessibilityIdentifier(identifier)
+            } else {
+                observed
+            }
         } else { self }
         #else
         self

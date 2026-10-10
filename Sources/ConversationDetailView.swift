@@ -706,7 +706,7 @@ struct ConversationDetailView: View {
                     }
                     contextMeter
                     if !chatControlsInTranscript {
-                        chatControlRow.dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+                        chatControlRow.dellaHostProbe("chatControls")
                     }
                     composer.dellaHostProbe("composer")
                 }
@@ -1591,7 +1591,7 @@ struct ConversationDetailView: View {
         if chatControlsInTranscript {
             chatControlRow
                 .id(Self.chatControlsTranscriptId)
-                .dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+                .dellaHostProbe("chatControls")
         }
         if invitationInTranscript {
             pushInvitation
