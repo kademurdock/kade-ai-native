@@ -850,3 +850,44 @@ workflows:
       - archive-exit-status.txt
       - build-ipa.log
       - character-audit/**
+
+  # Bounded body-language acceptance: unsigned, included-minute only.
+  ios-body-language-audit:
+    name: Character audit verify (no signing, no upload)
+    max_build_duration: 23
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        BUNDLE_ID: "com.kademurdock.kadeai"
+        KADE_CHARACTER_AUDIT: "1"
+        KADE_PUPPET_AUDIT: "1"
+        KADE_CALL_LAYOUT_AUDIT: "1"
+        KADE_CHAT_LAYOUT_AUDIT: "1"
+      xcode: "26.4"
+    scripts:
+      - name: Verify source and bundled character art
+        script: |
+          set -euo pipefail
+          test -n "${KADE_EXPECTED_COMMIT:-}"
+          test "$CM_COMMIT" = "$KADE_EXPECTED_COMMIT"
+          python3 dev/prepare-puppet-review.py --check
+      - name: Character motion tests
+        script: |
+          set -e
+          bash ./run-character-tests.sh
+      - name: Generate Xcode project (XcodeGen)
+        script: |
+          set -e
+          brew install xcodegen || brew link --overwrite xcodegen
+          xcodegen generate
+      - name: Offline call engine and portrait simulator checks
+        script: |
+          bash dev/character-audit.sh
+    artifacts:
+      - character-audit/result.json
+      - character-audit/runtime.log
+      - character-audit/compile.log
+      - character-audit/*.png
+      - character-audit/playback.mp4
+      - character-audit/call-layout.json
+      - character-audit/chat-stage-layout.json

@@ -196,7 +196,11 @@ struct CharacterPortraitAuditView: View {
         phase = label
         await wait(0.12)
         step(label)
-        for _ in 0..<25 {
+        // simctl can finish writing a valid image after five seconds on a cold
+        // worker. Await its matching acknowledgement with a monotonic bound;
+        // the runner's separate full-audit watchdog still limits the session.
+        let deadline = ProcessInfo.processInfo.systemUptime + 15
+        while ProcessInfo.processInfo.systemUptime < deadline {
             if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == label { return }
             await wait(0.2)
         }
