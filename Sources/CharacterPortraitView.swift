@@ -18,6 +18,9 @@ struct CharacterPortraitView: View {
     var side = 160.0
     /// A local preview may pause decoration; this never overrides system policy.
     var motionPaused = false
+    /// Call stages can scroll outside their visible viewport without leaving
+    /// the view tree. Stop their decorative clock there as well.
+    var viewport: CGRect? = nil
     #if DEBUG && targetEnvironment(simulator)
     /// Controlled audit samples only; never a production speech-turn trigger.
     var handPrototypeElapsed: Double? = nil
@@ -29,12 +32,15 @@ struct CharacterPortraitView: View {
     var angelMouthAudit: Int? = nil
     var angelMotionAudit: CharacterBustPose? = nil
     var angelOrnamentsAudit: AngelVectorOrnamentPose? = nil
+    var angelArmAudit: AngelVectorArmPose? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
     @AppStorage("kadeVoicePortraits") private var enabled = true
     @State private var visible = false
+    @State private var onScreen = true
+    @State private var bodyClock = CharacterBodyPerformanceClock()
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
@@ -50,29 +56,41 @@ struct CharacterPortraitView: View {
               artwork.requiredAssets.allSatisfy({ UIImage(named: $0) != nil }) else { return nil }
         return artwork
     }
-    private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && (playing || listening || stage) }
+    private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && onScreen && (playing || listening || stage) }
     private var url: URL? {
         guard let path, !path.isEmpty else { return nil }
         return URL(string: path.hasPrefix("/") ? "https://kademurdock.com" + path : path)
     }
     var body: some View {
         if enabled {
-            TimelineView(.animation(minimumInterval: 1.0 / (playing ? 24.0 : 12.0), paused: !active)) { timeline in
+            let budget = CharacterAnimationBudget(active: active,
+                activity: playing ? .speaking : presentation().activity, thermal: $motionAllowed)
+            let viewportBounds = viewport ?? UIScreen.main.bounds
+            TimelineView(.animation(minimumInterval: budget.minimumInterval, paused: budget.paused)) { timeline in
                 let performance = active ? presentation() : .idle
                 let face = reviewedFace(CharacterFacialPolicy.face(for: performance, agentID: agentID))
                 let time = timeline.date.timeIntervalSinceReferenceDate
-                let outputLevel = active && playing ? level() : 0
+                // Server status can become listening before the last rendered
+                // audio drains. The output presentation owns the visible mouth.
+                let speaking = active && performance.activity == .speaking
+                let outputLevel = speaking ? level() : 0
+                let performanceElapsed = bodyClock.elapsed(
+                    identity: (agentID ?? "unknown") + "|" + (path ?? ""),
+                    time: time, active: active, presentation: performance)
+                let bodyPose = CharacterFigureMotion.pose(id: agentID ?? "unknown",
+                    time: time, level: outputLevel, active: active,
+                    presentation: performance, performanceElapsed: performanceElapsed)
                 let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
                     time: time, level: outputLevel, active: active, presentation: performance))
                 // Facial expression and individual gestures carry the performance;
                 // the larger stage adds a little reach without amplifying it sixfold.
                 let reach = stage ? 1.6 : 1.0
-                let voice = active && playing ? pose.mouth : 0
+                let voice = speaking ? pose.mouth : 0
                 ZStack {
                     RoundedRectangle(cornerRadius: 24).fill(Color.accentColor.opacity(0.08))
                     if stage {
                         RoundedRectangle(cornerRadius: 26)
-                            .stroke(Color.accentColor.opacity(playing ? 0.45 + voice * 0.55 : 0.2), lineWidth: playing ? 4 + voice * 9 : 2)
+                            .stroke(Color.accentColor.opacity(speaking ? 0.45 + voice * 0.55 : 0.2), lineWidth: speaking ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
                     if let art = angelArtwork {
@@ -82,20 +100,19 @@ struct CharacterPortraitView: View {
                                 face: face, active: active),
                             ornaments: reviewedAngelOrnaments(AngelVectorMotion.ornaments(time: time, active: active,
                                 expression: performance.expression)),
-                            motion: reviewedAngelMotion(CharacterBustMotion.pose(CharacterFigureMotion.pose(
-                                id: agentID ?? "unknown", time: time, level: outputLevel,
-                                active: active, presentation: performance), limits: CharacterAngelArtwork.limits)))
+                            arms: reviewedAngelArms(AngelVectorMotion.arms(time: time,
+                                level: outputLevel, active: active, presentation: performance,
+                                performanceElapsed: performanceElapsed)),
+                            motion: reviewedAngelMotion(CharacterBustMotion.pose(bodyPose,
+                                limits: CharacterAngelArtwork.limits)))
                             .frame(width: side, height: side)
                             .clipShape(RoundedRectangle(cornerRadius: 22))
                     } else if let artwork = bustArtwork {
                         layeredBust(artwork, pose: pose, face: face,
-                            motion: CharacterBustMotion.pose(CharacterFigureMotion.pose(
-                                id: agentID ?? "unknown", time: time, level: outputLevel,
-                                active: active, presentation: performance), limits: artwork.motionLimits))
+                            motion: CharacterBustMotion.pose(bodyPose, limits: artwork.motionLimits))
                     } else if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: face,
-                            body: CharacterFigureMotion.pose(id: agentID ?? "unknown",
-                                time: time, level: outputLevel, active: active, presentation: performance))
+                            body: bodyPose)
                     } else {
                         portrait(pose, face: face)
                             .frame(width: side, height: side)
@@ -122,8 +139,12 @@ struct CharacterPortraitView: View {
             }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
+            .onGeometryChange(for: Bool.self, of: { geometry in
+                let frame = geometry.frame(in: .global)
+                return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
+            }) { onScreen = $0 }
             .onAppear { visible = true }
-            .onDisappear { visible = false }
+            .onDisappear { visible = false; bodyClock.reset() }
             .task { await agents.loadIfNeeded() }
         }
     }
@@ -168,6 +189,12 @@ struct CharacterPortraitView: View {
     private func reviewedAngelOrnaments(_ pose: AngelVectorOrnamentPose) -> AngelVectorOrnamentPose {
         #if DEBUG && targetEnvironment(simulator)
         if active, let sample = angelOrnamentsAudit { return sample }
+        #endif
+        return pose
+    }
+    private func reviewedAngelArms(_ pose: AngelVectorArmPose) -> AngelVectorArmPose {
+        #if DEBUG && targetEnvironment(simulator)
+        if active, let sample = angelArmAudit { return sample }
         #endif
         return pose
     }

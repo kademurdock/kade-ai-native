@@ -225,7 +225,12 @@ final class StreamingClipPlayer {
     private var characterEnvelope = CharacterEnvelope()
     private var characterEnd: Double = 0
     private func characterTime() -> Double? {
-        guard let render = node.lastRenderTime, let time = node.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
+        // A newly started node may have a lastRenderTime with neither valid
+        // clock. Asking playerTime about it raises an ObjC exception; match
+        // the call renderer's guard before reading this decorative playhead.
+        guard node.isPlaying, !stopped, let render = node.lastRenderTime,
+              render.isSampleTimeValid || render.isHostTimeValid,
+              let time = node.playerTime(forNodeTime: render), time.sampleRate > 0 else { return nil }
         return Double(time.sampleTime) / time.sampleRate
     }
     var characterElapsed: Double { characterTime() ?? 0 }
