@@ -1,0 +1,103 @@
+name: Puppet production approved manual signing and upload
+
+'on':
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact approved production commit (40 lowercase hex characters)
+        type: string
+        required: true
+      native_host_run_id:
+        description: Successful native host proof run on this exact production commit
+        type: string
+        required: true
+      unsigned_device_run_id:
+        description: Successful unsigned device proof run on the same commit
+        type: string
+        required: true
+      family_certificate_sha256:
+        description: Approved existing family distribution certificate DER SHA256
+        type: string
+        required: true
+        default: '204a2f30ebd65d84987704393bc972b750009d4690a10ff132f10fdf4886785d'
+      upload:
+        description: Sign with approved existing family material and upload the IPA only
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: puppet-production-manual-upload
+  cancel-in-progress: false
+
+jobs:
+  approved-upload:
+    # Register this tooling-only workflow on main after reviewing Codemagic's
+    # service-side triggers. Never merge it into the proved production source.
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.upload == true &&
+      github.repository_owner == 'kademurdock' &&
+      github.actor == 'kademurdock' && github.triggering_actor == 'kademurdock' &&
+      github.repository == 'kademurdock/kade-ai-native' &&
+      toJSON(github.event.repository.private) == 'false' &&
+      github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      KADE_TOOL_COMMIT: ${{ github.workflow_sha }}
+      KADE_EXPECTED_COMMIT: ${{ inputs.expected_sha }}
+      KADE_HOST_PROOF_RUN: ${{ inputs.native_host_run_id }}
+      KADE_DEVICE_PROOF_RUN: ${{ inputs.unsigned_device_run_id }}
+      KADE_FAMILY_CERT_SHA256: ${{ inputs.family_certificate_sha256 }}
+      KADE_UPLOAD_CONFIRMED: ${{ inputs.upload }}
+    steps:
+      - name: Start the bounded budget before either checkout
+        run: |
+          set -euo pipefail
+          echo "KADE_UPLOAD_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Check out the trusted signing tool revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # official v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-tools
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out the independently proved production source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # official v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: app-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require both exact successful proof jobs before signing credentials
+        id: proof-gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B trusted-tools/dev/puppet-production-upload.py gate --app-source "$GITHUB_WORKSPACE/app-source"
+
+      - name: Reuse approved family signing material and upload only
+        if: ${{ steps.proof-gates.outcome == 'success' }}
+        env:
+          # These are deliberately unconfigured. Provisioning this new CI
+          # destination and using it require the user's final approval.
+          KADE_FAMILY_CERT_KEY_BASE64: ${{ secrets.KADE_FAMILY_CERT_KEY_BASE64 }}
+          KADE_ASC_ISSUER_ID: ${{ secrets.KADE_ASC_ISSUER_ID }}
+          KADE_ASC_KEY_ID: ${{ secrets.KADE_ASC_KEY_ID }}
+          KADE_ASC_PRIVATE_KEY_PEM: ${{ secrets.KADE_ASC_PRIVATE_KEY_PEM }}
+        run: python3 -B trusted-tools/dev/puppet-production-upload.py sign --app-source "$GITHUB_WORKSPACE/app-source"
+
+      - name: Remove ephemeral signing key and keychain
+        if: ${{ always() }}
+        run: python3 -B trusted-tools/dev/puppet-production-upload.py cleanup
+        # No artifact/cache upload, paid CI, review submission, beta group,
+        # notification preference changes or automatic retry.
