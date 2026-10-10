@@ -3161,7 +3161,8 @@ struct ConversationDetailView: View {
                 }
             }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 16)
         .background(.bar)
     }
 
