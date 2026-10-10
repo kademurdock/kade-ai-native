@@ -435,6 +435,9 @@ def validate_ready(data,phase,device):
         else:
             require(invite_keys<=set(geometry),'Requested real invitation/button observations missing')
         require(geometry['transcript'][3]>=44,'Actual transcript is smaller than one usable44ptrow')
+        if '-a11y-' in phase:
+            require(geometry['composerField'][2]>=points[0]-64,
+                    'Accessibility composer field does not retain nearly full real window width')
         transcript=geometry['transcript']
         require(transcript[0]>=-1 and transcript[1]>=-1 and transcript[0]+transcript[2]<=points[0]+1
                 and transcript[1]+transcript[3]<=points[1]+1,'Actual transcript viewport is outside the real screen')

@@ -126,6 +126,10 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(field.label == "Message", "composer label is Message")
         try require(field.isEnabled && field.isHittable, "composer is enabled and reachable")
         let fieldFrame = try visibleFrame(field, in: app, name: "composer")
+        if requestedPhase.contains("-a11y-") {
+            try require(fieldFrame.width >= app.frame.width - 64,
+                        "accessibility composer uses the full-width editor row")
+        }
 
         let send = try button(app, identifier: "della-host.chat.send", label: "Send message")
         let attach = try button(app, identifier: "della-host.chat.attach",

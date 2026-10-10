@@ -5,6 +5,17 @@ art into the actual `CallView` and `ConversationDetailView`. It preserves the
 original portrait compositor, authored contours, face scale and four source
 images from `3b0bf16dcaee5330167e0031c67461b3d2eae9d9`.
 
+The native composer reserves one line at accessibility text sizes, two while
+the keyboard or editing is active, and five in ordinary composition. The
+accessibility attachment chip displays its filename on one truncated line;
+its complete review-before-sending accessibility label and separate 44-point
+Remove attachment control remain available.
+At accessibility sizes the native editor occupies its own nearly full-width
+row, with four separate composer actions below. The visible notification CTA
+reads "Turn on" while its spoken label remains "Turn on notifications" and
+its full reason and original action remain available. The ordinary horizontal
+composer layout and fonts stay intact.
+
 The lab's explicit review toggle enables the host preview only when Della's
 exact identity/avatar and all review assets are present. One resolved layout
 supplies the portrait side and reserved host height. Roomy screens can show the

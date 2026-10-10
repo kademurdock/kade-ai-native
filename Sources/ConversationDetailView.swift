@@ -1083,7 +1083,7 @@ struct ConversationDetailView: View {
                 // Build 218: the trail now says which composer was on screen,
                 // so a freeze report is self-describing without asking her.
                 KadeBreadcrumbs.drop(
-                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(\(composerNeedsCompactLayout ? 2 : 5))")"
+                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(\(composerLineLimit))")"
                     + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
                 )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
@@ -2344,6 +2344,11 @@ struct ConversationDetailView: View {
         composerEditing || keyboardUp || dynamicTypeSize.isAccessibilitySize
     }
 
+    private var composerLineLimit: Int {
+        if dynamicTypeSize.isAccessibilitySize { return 1 }
+        return composerEditing || keyboardUp ? 2 : 5
+    }
+
     private var invitationInTranscript: Bool {
         pushCardOnScreen && !messages.isEmpty && composerNeedsCompactLayout
     }
@@ -2967,12 +2972,18 @@ struct ConversationDetailView: View {
     }
 
     private var attachmentChipRow: some View {
-        HStack(spacing: 8) {
+        let compactReadyStatus = dynamicTypeSize.isAccessibilitySize
+            && !attachmentIsBusy && pendingAttachment != nil
+        let fullStatus = attachmentIsBusy
+            ? (checkingAttachCamera ? "Checking camera access." : attachmentPreparation.statusMessage)
+            : "Attached: \(pendingAttachment?.displayName ?? ""). Review before sending."
+        return HStack(spacing: 8) {
             Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
-            Text(attachmentIsBusy
-                 ? (checkingAttachCamera ? "Checking camera access." : attachmentPreparation.statusMessage)
-                 : "Attached: \(pendingAttachment?.displayName ?? ""). Review before sending.")
+            Text(compactReadyStatus ? (pendingAttachment?.displayName ?? "") : fullStatus)
                 .font(.footnote)
+                .lineLimit(compactReadyStatus ? 1 : nil)
+                .truncationMode(.middle)
+                .accessibilityLabel(fullStatus)
                 .accessibilityFocused($a11yFocus, equals: .attachmentStatus)
             Spacer()
             if attachmentIsBusy {
@@ -3129,124 +3140,146 @@ struct ConversationDetailView: View {
             if attachmentIsBusy || pendingAttachment != nil {
                 attachmentChipRow.dellaHostProbe("attachment")
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                attachButton
-                deepThinkButton
-                /* ⭐⭐ BUILD 218 -- THE FIRST CHANGE IN THIS HUNT AIMED AT A LEAF
-                 * FRAME INSTEAD OF A THEORY.
-                 *
-                 * Her two build-217 stacks (17:55:42Z, both Foreground kills,
-                 * 10.087s and 10.131s of app CPU against a 10.00s allowance --
-                 * a pegged core) bottom out in **UIFoundation text
-                 * measurement** reached through UIKitCore from SwiftUI, and
-                 * they RECURSE: `SwiftUICore +464312` appears SEVEN times in
-                 * one and SIX in the other, 17 distinct frames repeating for
-                 * 56 duplicate frames total. Same family as builds 204 and
-                 * 208. The shallower AttributeGraph-topped samples on 211/215/
-                 * 216 were the same loop caught at a different instant.
-                 *
-                 * And the Simple-transcript toggle cleared the message rows:
-                 * she froze with every row rendered as one bare `Text` with no
-                 * accessibility modifiers at all. So the text being measured
-                 * recursively is not in the transcript -- and this is the only
-                 * other text-measuring surface on the screen.
-                 *
-                 * Two things about the old line were wrong together:
-                 *   - `axis: .vertical` makes this a MULTI-LINE, UITextView-
-                 *     backed control, but `.textFieldStyle(.roundedBorder)` is
-                 *     UIKit's single-line bordered style. Sizing that pair is a
-                 *     negotiation between a control that wants one line and a
-                 *     container that permits several -- and it resolves through
-                 *     exactly the UIFoundation/UIKitCore frames at her leaf.
-                 *   - `.lineLimit(1...5)` is a RANGE, so the layout has to
-                 *     measure the text at multiple candidate heights and pick.
-                 *     Nested in flexible stacks, those probes multiply. That is
-                 *     the recursion.
-                 * `isSending` flipping is what dirties this subtree at the
-                 * exact moment she freezes, and no swing in this hunt --
-                 * feedback, decorations, chunking, windows, rotors, rows -- has
-                 * ever touched it.
-                 *
-                 * ⚠️ HONEST LIMIT: this is not proven. I checked the obvious
-                 * corollary (longer drafts = more line candidates = more work)
-                 * against every send in the ring and it did NOT hold -- 37
-                 * chars froze, 199 chars was fine, 72 chars did both. Length is
-                 * at most an amplifier. What is solid is the leaf, the
-                 * recursion, and that the rows are eliminated. Hence the
-                 * `simpleComposer` bisect below, so a wrong guess here costs
-                 * her a tap instead of another day. */
-                if simpleComposer {
-                    TextField("Message", text: $draftText)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(Color(uiColor: .separator))
-                        )
-                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
-                        .focused($composerEditing)
-                        .accessibilityLabel("Message")
-                        .accessibilityFocused($a11yFocus, equals: .composerField)
-                        .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
-                } else {
-                    TextField("Message", text: $draftText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(composerNeedsCompactLayout ? 2 : 5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(Color(uiColor: .separator))
-                        )
-                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
-                        .focused($composerEditing)
-                        .accessibilityLabel("Message")
-                        .accessibilityFocused($a11yFocus, equals: .composerField)
-                        .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
+            if dynamicTypeSize.isAccessibilitySize {
+                // Large text gets the whole row instead of sharing the editor
+                // width with four independently accessible message controls.
+                composerEditor.frame(maxWidth: .infinity)
+                HStack(alignment: .bottom, spacing: 8) {
+                    attachButton
+                    deepThinkButton
+                    Spacer(minLength: 8)
+                    micButton
+                    composerSendButton
                 }
-                micButton
-                // Session 17: one button, two jobs, matching how `isSending`
-                // already gates it -- Send while idle, Stop while a reply is
-                // generating (`POST /api/agents/chat/abort` had sat
-                // "source-confirmed, not yet wired into the app" in
-                // docs/ENDPOINTS.md since Phase 3; see `stopGenerating()`
-                // and `MessageSendingService.abortActive()`). Recording/
-                // transcribing/empty-draft still block a SEND, but never
-                // block a STOP -- those three conditions describe whether
-                // there's anything sendABLE, which is irrelevant once
-                // something is already sending.
-                Button {
-                    if isSending {
-                        stopGenerating()
-                    } else {
-                        if let reason = sendUnavailableReason {
-                            UIAccessibility.post(notification: .announcement, argument: reason)
-                            return
-                        }
-                        sendTask = Task { await send() }
-                    }
-                } label: {
-                    Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
-                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            } else {
+                HStack(alignment: .bottom, spacing: 8) {
+                    attachButton
+                    deepThinkButton
+                    composerEditor
+                    micButton
+                    composerSendButton
                 }
-                // Keep the same accessible button through draft clearing,
-                // generation and arrival, as the recording button already
-                // does. Disabling it while the draft is empty used to retire
-                // VoiceOver's anchor twice on every send. Guard the action
-                // above and dim it visually instead.
-                .accessibilityLabel(isSending ? "Stop" : "Send message")
-                .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
-                // Build 254: the send moment's focus anchor -- see `case
-                // sendButton`. Focus lands here instead of on her own message.
-                .accessibilityFocused($a11yFocus, equals: .sendButton)
-                .dellaHostProbe("send", identifier: "della-host.chat.send")
             }
         }
         .padding()
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private var composerEditor: some View {
+        /* ⭐⭐ BUILD 218 -- THE FIRST CHANGE IN THIS HUNT AIMED AT A LEAF
+         * FRAME INSTEAD OF A THEORY.
+         *
+         * Her two build-217 stacks (17:55:42Z, both Foreground kills,
+         * 10.087s and 10.131s of app CPU against a 10.00s allowance --
+         * a pegged core) bottom out in **UIFoundation text
+         * measurement** reached through UIKitCore from SwiftUI, and
+         * they RECURSE: `SwiftUICore +464312` appears SEVEN times in
+         * one and SIX in the other, 17 distinct frames repeating for
+         * 56 duplicate frames total. Same family as builds 204 and
+         * 208. The shallower AttributeGraph-topped samples on 211/215/
+         * 216 were the same loop caught at a different instant.
+         *
+         * And the Simple-transcript toggle cleared the message rows:
+         * she froze with every row rendered as one bare `Text` with no
+         * accessibility modifiers at all. So the text being measured
+         * recursively is not in the transcript -- and this is the only
+         * other text-measuring surface on the screen.
+         *
+         * Two things about the old line were wrong together:
+         *   - `axis: .vertical` makes this a MULTI-LINE, UITextView-
+         *     backed control, but `.textFieldStyle(.roundedBorder)` is
+         *     UIKit's single-line bordered style. Sizing that pair is a
+         *     negotiation between a control that wants one line and a
+         *     container that permits several -- and it resolves through
+         *     exactly the UIFoundation/UIKitCore frames at her leaf.
+         *   - `.lineLimit(1...5)` is a RANGE, so the layout has to
+         *     measure the text at multiple candidate heights and pick.
+         *     Nested in flexible stacks, those probes multiply. That is
+         *     the recursion.
+         * `isSending` flipping is what dirties this subtree at the
+         * exact moment she freezes, and no swing in this hunt --
+         * feedback, decorations, chunking, windows, rotors, rows -- has
+         * ever touched it.
+         *
+         * ⚠️ HONEST LIMIT: this is not proven. I checked the obvious
+         * corollary (longer drafts = more line candidates = more work)
+         * against every send in the ring and it did NOT hold -- 37
+         * chars froze, 199 chars was fine, 72 chars did both. Length is
+         * at most an amplifier. What is solid is the leaf, the
+         * recursion, and that the rows are eliminated. Hence the
+         * `simpleComposer` bisect below, so a wrong guess here costs
+         * her a tap instead of another day. */
+        if simpleComposer {
+            TextField("Message", text: $draftText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(uiColor: .separator))
+                )
+                .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                .focused($composerEditing)
+                .accessibilityLabel("Message")
+                .accessibilityFocused($a11yFocus, equals: .composerField)
+                .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
+        } else {
+            TextField("Message", text: $draftText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(composerLineLimit)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(uiColor: .separator))
+                )
+                .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                .focused($composerEditing)
+                .accessibilityLabel("Message")
+                .accessibilityFocused($a11yFocus, equals: .composerField)
+                .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
+        }
+    }
+
+    private var composerSendButton: some View {
+        // Session 17: one button, two jobs, matching how `isSending`
+        // already gates it -- Send while idle, Stop while a reply is
+        // generating (`POST /api/agents/chat/abort` had sat
+        // "source-confirmed, not yet wired into the app" in
+        // docs/ENDPOINTS.md since Phase 3; see `stopGenerating()`
+        // and `MessageSendingService.abortActive()`). Recording/
+        // transcribing/empty-draft still block a SEND, but never
+        // block a STOP -- those three conditions describe whether
+        // there's anything sendABLE, which is irrelevant once
+        // something is already sending.
+        Button {
+            if isSending {
+                stopGenerating()
+            } else {
+                if let reason = sendUnavailableReason {
+                    UIAccessibility.post(notification: .announcement, argument: reason)
+                    return
+                }
+                sendTask = Task { await send() }
+            }
+        } label: {
+            Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
+                .font(.title)
+                .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }
+        // Keep the same accessible button through draft clearing,
+        // generation and arrival, as the recording button already
+        // does. Disabling it while the draft is empty used to retire
+        // VoiceOver's anchor twice on every send. Guard the action
+        // above and dim it visually instead.
+        .accessibilityLabel(isSending ? "Stop" : "Send message")
+        .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
+        // Build 254: the send moment's focus anchor -- see `case
+        // sendButton`. Focus lands here instead of on her own message.
+        .accessibilityFocused($a11yFocus, equals: .sendButton)
+        .dellaHostProbe("send", identifier: "della-host.chat.send")
     }
 
     /// Session 23: the Deep Think toggle. Built to the Amber rule from
@@ -5236,6 +5269,7 @@ private struct PushInviteCard: View {
     let onTurnOn: () -> Void
     let onNotNow: () -> Void
     @KadeContrastPolicy private var highContrast: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -5249,11 +5283,12 @@ private struct PushInviteCard: View {
                 Button {
                     onTurnOn()
                 } label: {
-                    Text("Turn on notifications")
+                    Text(dynamicTypeSize.isAccessibilitySize ? "Turn on" : "Turn on notifications")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(KadeCardButtonStyle())
+                .accessibilityLabel("Turn on notifications")
                 .dellaHostProbe("inviteTurnOn", identifier: "della-host.chat.invite-turn-on")
                 Button {
                     onNotNow()
