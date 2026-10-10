@@ -33,6 +33,11 @@ struct CharacterPortraitView: View {
     var angelMotionAudit: CharacterBustPose? = nil
     var angelOrnamentsAudit: AngelVectorOrnamentPose? = nil
     var angelArmAudit: AngelVectorArmPose? = nil
+    /// An explicit offline study only. Resource preparation and this flag are
+    /// both required; ordinary conversations retain their accepted square bust.
+    var dellaArticulatedReview = false
+    var dellaArmAudit: CharacterDellaArmPose? = nil
+    var dellaHeadAudit: CharacterBustPose? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
@@ -55,6 +60,23 @@ struct CharacterPortraitView: View {
                 side: side, agentID: agentID, avatarPath: path),
               artwork.requiredAssets.allSatisfy({ UIImage(named: $0) != nil }) else { return nil }
         return artwork
+    }
+    private var articulatedDellaAvailable: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        guard dellaArticulatedReview, stage, side.isFinite, side >= 160,
+              agentID == CharacterMotion.dellaID, prepared else { return false }
+        return CharacterDellaArticulatedGeometry.eligible(enabled: dellaArticulatedReview,
+            stage: stage, side: side, agentID: agentID, avatarPath: path,
+            resourcesPresent: CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil })
+        #else
+        return false
+        #endif
+    }
+    private var renderedPortraitHeight: Double {
+        #if DEBUG && targetEnvironment(simulator)
+        if articulatedDellaAvailable { return CharacterDellaArticulatedGeometry.stageHeight(side: side) }
+        #endif
+        return side
     }
     private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && onScreen && (playing || listening || stage) }
     private var url: URL? {
@@ -93,7 +115,15 @@ struct CharacterPortraitView: View {
                             .stroke(Color.accentColor.opacity(speaking ? 0.45 + voice * 0.55 : 0.2), lineWidth: speaking ? 4 + voice * 9 : 2)
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
-                    if let art = angelArtwork {
+                    if articulatedDellaAvailable {
+                        #if DEBUG && targetEnvironment(simulator)
+                        articulatedDella(pose: pose, face: face,
+                            motion: reviewedDellaMotion(CharacterBustMotion.pose(bodyPose,
+                                limits: CharacterDellaBustGeometry.artwork.motionLimits)),
+                            arms: reviewedDellaArms(CharacterDellaArmMotion.pose(time: time, level: outputLevel,
+                                active: active, presentation: performance, performanceElapsed: performanceElapsed)))
+                        #endif
+                    } else if let art = angelArtwork {
                         CharacterAngelVectorView(art: art,
                             facial: AngelVectorMotion.facial(face, blink: pose.blink, active: active),
                             mouth: AngelVectorMotion.mouth(role: pose.viseme, strength: voice,
@@ -130,7 +160,7 @@ struct CharacterPortraitView: View {
                     }
                     #endif
                 }
-                .frame(width: side + 12, height: side + 12)
+                .frame(width: side + 12, height: renderedPortraitHeight + 12)
                 // Image/opacity animation state belongs to one exact portrait.
                 // Reset the decorative tree when identity changes so a new
                 // body cannot briefly inherit the previous character's face.
@@ -198,6 +228,29 @@ struct CharacterPortraitView: View {
         #endif
         return pose
     }
+    #if DEBUG && targetEnvironment(simulator)
+    private func reviewedDellaArms(_ pose: CharacterDellaArmPose) -> CharacterDellaArmPose {
+        guard active else { return .still }
+        let selected = dellaArmAudit ?? pose
+        func bounded(_ value: Double) -> Double {
+            value.isFinite ? min(CharacterDellaArmPose.maximumDegrees,
+                max(-CharacterDellaArmPose.maximumDegrees, value)) : 0
+        }
+        return CharacterDellaArmPose(viewerLeftDegrees: bounded(selected.viewerLeftDegrees),
+            viewerRightDegrees: bounded(selected.viewerRightDegrees))
+    }
+    private func reviewedDellaMotion(_ pose: CharacterBustPose) -> CharacterBustPose {
+        guard active, let sample = dellaHeadAudit else { return pose }
+        let limits = CharacterDellaBustGeometry.artwork.motionLimits
+        func bounded(_ value: Double, limit: Double) -> Double {
+            value.isFinite ? min(limit, max(-limit, value)) : 0
+        }
+        return CharacterBustPose(headAngle: bounded(sample.headAngle, limit: limits.headDegrees),
+            bodyAngle: bounded(sample.bodyAngle, limit: limits.bodyDegrees),
+            headOffsetY: bounded(sample.headOffsetY, limit: limits.headOffsetPixels),
+            bodyOffsetY: bounded(sample.bodyOffsetY, limit: limits.bodyOffsetPixels))
+    }
+    #endif
     /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
     private var rig: String? { CharacterMotion.rigID(agentID) }
     private var nuanceAsset: String {
@@ -292,6 +345,58 @@ struct CharacterPortraitView: View {
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: 22))
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Same native face/patch/matte compositor, with the accepted square's
+    /// width and face scale. Only this explicit study adds room below the bust.
+    private func articulatedDella(pose: CharacterPose, face: CharacterFace,
+                                  motion: CharacterBustPose, arms: CharacterDellaArmPose) -> some View {
+        let geometry = CharacterDellaArticulatedGeometry.self
+        let artwork = CharacterDellaBustGeometry.artwork
+        let height = geometry.stageHeight(side: side)
+        let unit = side / geometry.cropWidth
+        let left = geometry.worldPoint(geometry.viewerLeftShoulder)
+        let right = geometry.worldPoint(geometry.viewerRightShoulder)
+        let waist = UnitPoint(x: CGFloat(artwork.waistX / geometry.cropWidth),
+            y: CGFloat(artwork.waistY / geometry.cropHeight))
+        let neck = UnitPoint(x: CGFloat(artwork.neckX / artwork.cropSide),
+            y: CGFloat(artwork.neckY / artwork.cropSide))
+        return ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                articulatedDellaLayer(geometry.torsoAsset, cut: geometry.cachedTorsoPath, height: height)
+                articulatedDellaLayer(geometry.masterAsset, cut: geometry.cachedViewerLeftArmPath, height: height)
+                    .rotationEffect(.degrees(-arms.viewerLeftDegrees),
+                        anchor: UnitPoint(x: CGFloat(left[0] / geometry.cropWidth),
+                            y: CGFloat(left[1] / geometry.cropHeight)))
+                articulatedDellaLayer(geometry.masterAsset, cut: geometry.cachedViewerRightArmPath, height: height)
+                    .rotationEffect(.degrees(-arms.viewerRightDegrees),
+                        anchor: UnitPoint(x: CGFloat(right[0] / geometry.cropWidth),
+                            y: CGFloat(right[1] / geometry.cropHeight)))
+            }
+            .frame(width: side, height: height, alignment: .topLeading)
+            .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
+            .offset(y: motion.bodyOffsetY * unit)
+            // The original atlas and generated alpha-only mask remain at their
+            // accepted destinations. Tall framing never stretches the head.
+            maskedBustHead(artwork, pose: pose, face: face, unit: unit)
+                .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
+                .rotationEffect(.degrees(motion.headAngle), anchor: neck)
+                .offset(y: motion.headOffsetY * unit)
+        }
+        .frame(width: side, height: height, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+
+    private func articulatedDellaLayer(_ asset: String, cut: Path, height: Double) -> some View {
+        let geometry = CharacterDellaArticulatedGeometry.self
+        let unit = side / geometry.cropWidth
+        return Image(asset).resizable().interpolation(.high)
+            .frame(width: geometry.bodySide * unit, height: geometry.bodySide * unit)
+            .clipShape(CharacterDellaSourceCut(source: cut))
+            .offset(x: geometry.bodyX * unit, y: geometry.bodyY * unit)
+            .frame(width: side, height: height, alignment: .topLeading)
+    }
+    #endif
 
     private func scaledBustHead(_ artwork: CharacterBustArtwork, pose: CharacterPose,
                                 face: CharacterFace, unit: Double) -> some View {
@@ -451,6 +556,17 @@ struct CharacterPortraitView: View {
 
 /// Exact study outlines. Harley's path is already in world coordinates;
 /// Lilly's paths first map the unchanged 414-pixel panel into its destination.
+#if DEBUG && targetEnvironment(simulator)
+private struct CharacterDellaSourceCut: Shape {
+    let source: Path
+    func path(in rect: CGRect) -> Path {
+        source.applying(CGAffineTransform(a: rect.width / CharacterDellaArticulatedGeometry.sourceSide,
+            b: 0, c: 0, d: rect.height / CharacterDellaArticulatedGeometry.sourceSide,
+            tx: rect.minX, ty: rect.minY))
+    }
+}
+#endif
+
 private struct CharacterBustCut: Shape {
     let artwork: CharacterBustArtwork
     let outline: CharacterBustOutline

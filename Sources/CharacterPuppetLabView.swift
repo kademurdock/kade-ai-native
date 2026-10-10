@@ -12,6 +12,7 @@ struct CharacterPuppetLabView: View {
     @State private var still = false
     @State private var side = 208.0
     @State private var ready = false
+    @State private var articulatedDella = false
 
     private enum Mode: String, CaseIterable {
         case idle = "Resting", listening = "Listening", thinking = "Thinking", speaking = "Speaking"
@@ -40,7 +41,8 @@ struct CharacterPuppetLabView: View {
                     presentation: { CharacterPresentation(activity: mode.activity,
                         expression: mode == .speaking ? expression : .neutral,
                         elapsed: Date().timeIntervalSince(started)) },
-                    stage: true, side: side, motionPaused: still)
+                    stage: true, side: side, motionPaused: still,
+                    dellaArticulatedReview: articulatedDella && character == .della)
                     .frame(maxWidth: .infinity)
                 }
                 Text(description)
@@ -56,6 +58,13 @@ struct CharacterPuppetLabView: View {
                     ForEach([84.0, 104, 132, 160, 208], id: \.self) { Text("\(Int($0)) points").tag($0) }
                 }.pickerStyle(.menu)
                 Toggle("Keep the character still", isOn: $still)
+                if character == .della {
+                    Toggle("Preview Della’s articulated body study", isOn: $articulatedDella)
+                    if articulatedDella {
+                        Text("Optional taller art study: the original face keeps its size above two attached sleeves and hands. It requires the review asset to be staged; compact sizes retain the accepted portrait. Production layout and phone review are pending.")
+                            .font(.footnote)
+                    }
+                }
                 Button("Interrupt and listen") { mode = .listening; started = Date() }
                 if let appearance = CharacterAppearance.description(agentID: character.agentID,
                         avatarPath: "/images/" + character.avatarFile) {
