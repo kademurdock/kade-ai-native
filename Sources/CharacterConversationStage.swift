@@ -10,15 +10,25 @@ struct CharacterConversationStage: View {
     let side: Double
     let level: () -> Double
     let presentation: () -> CharacterPresentation
+    var hostLayout: CharacterDellaHostStage? = nil
+
+    private var portrait: CharacterPortraitView {
+        var view = CharacterPortraitView(agentID: agentID, name: name, playing: playing,
+            level: level, presentation: presentation, stage: true, side: hostLayout?.side ?? side)
+        #if DEBUG && targetEnvironment(simulator)
+        view.dellaArticulatedReview = hostLayout?.articulated ?? false
+        #endif
+        return view
+    }
 
     var body: some View {
         HStack {
             Spacer(minLength: 0)
-            CharacterPortraitView(agentID: agentID, name: name, playing: playing,
-                level: level, presentation: presentation, stage: true, side: side)
+            portrait
             Spacer(minLength: 0)
         }
-        .frame(height: side + 40)
+        .frame(height: hostLayout?.frameHeight ?? side + 40)
+        .dellaHostProbe("stage")
         .background(StageMoodLight(mood: StageMood(presentation())))
         .background(Color(.systemBackground))
         .accessibilityHidden(true)

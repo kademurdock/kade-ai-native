@@ -610,6 +610,9 @@ struct ConversationDetailView: View {
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
     @AppStorage("kadeVoicePortraits") private var voicePortraitsOn = true
     @State private var keyboardUp = false
+    #if DEBUG && targetEnvironment(simulator)
+    @AppStorage("kade.della.articulatedReview") private var dellaHostReview = false
+    #endif
     /* ⭐ BUILD 218 bisect, default OFF. ON = the composer is a plain
      * SINGLE-LINE field: no vertical growth, no line-limit range, nothing for
      * the layout to negotiate. Freeze stops when she flips this and the
@@ -635,25 +638,7 @@ struct ConversationDetailView: View {
                     errorState(loadError)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if messages.isEmpty {
-                    // Sep 23 2026 redesign (B4): a brand-new chat used to say
-                    // "Pick an agent below…" although the character was
-                    // usually already picked. It now welcomes you instead.
-                    if conversationId == nil {
-                        // A plain (not lazy) ScrollView: at the largest text
-                        // sizes the welcome is taller than the space above
-                        // the composer, and "Pick up where you left off" was
-                        // pushed out of reach (seen on the Sep 23 tour).
-                        ScrollView {
-                            firstChatWelcome
-                                .frame(maxWidth: .infinity)
-                        }
-                        .scrollBounceBehavior(.basedOnSize)
-                    } else {
-                        Text("No messages in this conversation.")
-                            .foregroundStyle(.secondary)
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                    emptyChatTranscript
                 } else {
                     if messageSearchActive {
                         messageSearchBar
@@ -662,6 +647,7 @@ struct ConversationDetailView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            .dellaHostTranscriptRegionProbe()
         }
         /* ⭐⭐ BUILD 219 -- AIMED AT THE RECURSION ITSELF, NOT AT WHAT IT WAS
          * MEASURING.
@@ -708,22 +694,21 @@ struct ConversationDetailView: View {
                 /* Sep 23 2026 redesign (B5): the agent row and the read-aloud
                  * row are ONE line now (`chatControlRow`), so the stack is
                  * one sibling shorter. The meter keeps its rules and sits
-                 * just above that line; the composer is untouched. B13's
-                 * notification card, when it is up, is the top row. Still
-                 * no fixedSize here (build 220's note below stands). */
+                 * just above that line. The optional notification card joins
+                 * the transcript while editing or using accessibility text.
+                 * Still no fixedSize here (build 220's note below stands). */
                 VStack(spacing: 0) {
-                    if pushCardOnScreen {
-                        PushInviteCard(
-                            name: agentsService.name(for: selectedAgentId) ?? "your character",
-                            onTurnOn: { turnOnNotificationsFromCard() },
-                            onNotNow: { notNowFromCard() }
-                        )
-                        .padding(.horizontal)
-                        .padding(.top, 8)
+                    if pushCardOnScreen && !invitationInTranscript {
+                        pushInvitation
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                            .dellaHostProbe("invite")
                     }
                     contextMeter
-                    chatControlRow
-                    composer
+                    if !chatControlsInTranscript {
+                        chatControlRow.dellaHostProbe("chatControls")
+                    }
+                    composer.dellaHostProbe("composer")
                 }
                 /* ⭐ BUILD 220: 219's `.fixedSize(horizontal: false,
                  * vertical: true)` is GONE from here. It did help -- the
@@ -751,8 +736,17 @@ struct ConversationDetailView: View {
          * so the stage stays hidden. A soft mood light behind it follows the
          * face (C5) -- see `faceStage`. */
         .safeAreaInset(edge: .top, spacing: 0) {
-            if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil {
+            if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil
+                && chatChrome.portraitVisible {
                 faceStage
+                    .onDisappear {
+                        #if DEBUG && targetEnvironment(simulator)
+                        if CharacterDellaHostAudit.isEnabled {
+                            CharacterDellaHostAuditRecorder.stage = nil
+                            CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "stage")
+                        }
+                        #endif
+                    }
             }
         }
         .onAppear {
@@ -769,8 +763,29 @@ struct ConversationDetailView: View {
                 cancelAttachment(announce: false)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            keyboardUp = true
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                CharacterDellaHostAuditRecorder.keyboardVisible = true
+                if let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                    CharacterDellaHostAuditRecorder.record("keyboard", frame: frame)
+                    if frame.width > 0 && frame.height > 0 {
+                        CharacterDellaHostAuditRecorder.keyboardPresentedInitially = true
+                    }
+                }
+            }
+            #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardUp = false
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                CharacterDellaHostAuditRecorder.keyboardVisible = false
+                CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "keyboard")
+            }
+            #endif
+        }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         // Sep 23 2026 redesign (A1): the app root is a TabView now. Inside a
@@ -864,6 +879,12 @@ struct ConversationDetailView: View {
             )
         }
         .task {
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                await prepareDellaHostAudit()
+                return
+            }
+            #endif
             // Session 17 (Kade: "a native way to access settings like
             // speech and whatnot"): seed this view's own "Hear replies"
             // toggle (called "Voice messages" until the Sep 23 2026
@@ -1061,7 +1082,7 @@ struct ConversationDetailView: View {
                 // Build 218: the trail now says which composer was on screen,
                 // so a freeze report is self-describing without asking her.
                 KadeBreadcrumbs.drop(
-                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
+                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(\(composerLineLimit))")"
                     + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
                 )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
@@ -1540,6 +1561,53 @@ struct ConversationDetailView: View {
         messageSearchFocused = false
     }
 
+    /// Both empty-chat branches keep their existing content in an eager scroll
+    /// so optional controls have the same reachable home as a real transcript.
+    private var emptyChatTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if conversationId == nil {
+                        firstChatWelcome.frame(maxWidth: .infinity)
+                    } else {
+                        Text("No messages in this conversation.")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                    }
+                    transcriptChatOptions.padding(.horizontal)
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(shortScreenAccessibility ? .immediately : .automatic)
+            .dellaHostProbe("transcriptScroll", identifier: "della-host.chat.transcript-scroll")
+            .onAppear { registerDellaHostScrollProxy(proxy) }
+            .onDisappear { registerDellaHostScrollProxy(nil) }
+        }
+    }
+
+    @ViewBuilder
+    private var transcriptChatOptions: some View {
+        if chatControlsInTranscript {
+            chatControlRow
+                .id(Self.chatControlsTranscriptId)
+                .dellaHostProbe("chatControls")
+        }
+        if invitationInTranscript {
+            pushInvitation
+                .id(Self.pushInviteTranscriptId)
+                .dellaHostProbe("invite")
+        }
+    }
+
+    private func registerDellaHostScrollProxy(_ proxy: ScrollViewProxy?) {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            CharacterDellaHostAuditRecorder.chatScrollProxy = proxy
+        }
+        #endif
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -1641,10 +1709,17 @@ struct ConversationDetailView: View {
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
                     }
+                    transcriptChatOptions
                 }
                 .padding()
             }
+            .scrollDismissesKeyboard(shortScreenAccessibility ? .immediately : .automatic)
+            .dellaHostProbe("transcriptScroll", identifier: "della-host.chat.transcript-scroll")
+            .onDisappear {
+                registerDellaHostScrollProxy(nil)
+            }
             .onAppear {
+                registerDellaHostScrollProxy(proxy)
                 scrollToBottom(proxy)
                 rebuildRotorItems()
             }
@@ -2296,6 +2371,64 @@ struct ConversationDetailView: View {
         pushCard == .shown || pushCard == .announced
     }
 
+    private static let pushInviteTranscriptId = "kade-push-invitation"
+    private static let chatControlsTranscriptId = "kade-chat-voice-controls"
+
+    private var shortScreenAccessibility: Bool {
+        dynamicTypeSize.isAccessibilitySize && UIScreen.main.bounds.height < 700
+    }
+
+    private var chatChrome: CharacterDellaChatChrome {
+        let layout = CharacterDellaHostLayout.chatChrome(
+            availableHeight: Double(UIScreen.main.bounds.height),
+            accessibilityText: dynamicTypeSize.isAccessibilitySize,
+            editing: composerEditing, keyboardVisible: keyboardUp)
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            let visible = layout.portraitVisible && voicePortraitsOn
+                && !isLoading && loadError == nil && selectedAgentId != nil
+            CharacterDellaHostAuditRecorder.portraitVisible = visible
+            CharacterDellaHostAuditRecorder.chatControlsPlacement = layout.controlsInTranscript
+                ? "transcript" : "footer"
+            CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+            CharacterDellaHostAuditRecorder.invitationPlacement = pushCardOnScreen
+                ? (invitationInTranscript ? "transcript" : "footer") : "none"
+            if !visible {
+                CharacterDellaHostAuditRecorder.stage = nil
+                CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "stage")
+            }
+        }
+        #endif
+        return layout
+    }
+
+    private var chatControlsInTranscript: Bool {
+        chatChrome.controlsInTranscript
+    }
+
+    /// Stable screen state chooses a finite line count without measuring the
+    /// composer's ideal size or feeding its geometry back into layout.
+    private var composerNeedsCompactLayout: Bool {
+        composerEditing || keyboardUp || dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var composerLineLimit: Int {
+        if dynamicTypeSize.isAccessibilitySize { return 1 }
+        return composerEditing || keyboardUp ? 2 : 5
+    }
+
+    private var invitationInTranscript: Bool {
+        pushCardOnScreen && composerNeedsCompactLayout
+    }
+
+    private var pushInvitation: some View {
+        PushInviteCard(
+            name: agentsService.name(for: selectedAgentId) ?? "your character",
+            onTurnOn: { turnOnNotificationsFromCard() },
+            onNotNow: { notNowFromCard() }
+        )
+    }
+
     /// True while something covers this chat: another screen pushed over it
     /// (or this one gone), a sheet, a call, or the reading view.
     private var pushCardHeldBack: Bool {
@@ -2411,7 +2544,7 @@ struct ConversationDetailView: View {
             readAloudToggle
                 .layoutPriority(1)
         }
-        .padding(.horizontal)
+        .padding(.horizontal, chatControlsInTranscript ? 0 : nil)
         .background(ChatControlRowBackground())
     }
 
@@ -2439,6 +2572,7 @@ struct ConversationDetailView: View {
             .accessibilityLabel("Talking to \(agentDisplayLabel)")
             .accessibilityHint("Opens the list of characters to switch who answers your next message.")
             .accessibilityFocused($a11yFocus, equals: .agentButton)
+            .dellaHostProbe("agentButton", identifier: "della-host.chat.agent")
 
             // Session 25: moved here from the toolbar (see the toolbar
             // comment). Session 21g's original design note still applies:
@@ -2461,6 +2595,7 @@ struct ConversationDetailView: View {
             .disabled(selectedAgentId == nil)
             .accessibilityLabel("Voice")
             .accessibilityHint("Change the voice \(agentDisplayLabel) speaks in.")
+            .dellaHostProbe("voiceButton", identifier: "della-host.chat.voice")
         }
     }
 
@@ -2692,6 +2827,7 @@ struct ConversationDetailView: View {
             .sensoryFeedback(trigger: readAloudEnabled) { _, _ in
                 FeedbackPrefs.gate(.selection)
             }
+            .dellaHostProbe("hearRepliesButton", identifier: "della-host.chat.hear-replies")
 
             speedButton
         }
@@ -2731,6 +2867,7 @@ struct ConversationDetailView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Voice speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
+        .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
         .accessibilityHint("Double-tap to change how fast voice messages play.")
     }
 
@@ -2741,12 +2878,123 @@ struct ConversationDetailView: View {
         return false
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// Populate the real transcript and composer locally before any ordinary
+    /// history, roster, shared-file or read-aloud work is dispatched.
+    private func prepareDellaHostAudit() async {
+        guard let scenario = CharacterDellaHostAudit.scenario, scenario.chat else { return }
+        CharacterDellaHostAudit.configure(scenario)
+        agentsService.seedCharacterAudit()
+        selectedAgentId = CharacterMotion.dellaID
+        conversationId = nil
+        generatedTitle = "Offline Della layout check"
+        readAloudEnabled = false
+        thinkMode = .auto
+        sendState = .idle
+        let rows: [(Bool, String)] = [
+            (true, "Can we talk about a quiet afternoon by the lake?"),
+            (false, "Of course. We can sit on the porch, listen to the birds, and take our time."),
+            (true, "I have a few notes to share before we decide what to do next."),
+            (false, "I’m listening. You can keep writing while the conversation stays here.")
+        ]
+        messages = scenario.empty ? [] : rows.enumerated().map { index, row in
+            var message = KadeMessage(messageId: "offline-della-\(index)",
+                conversationId: "offline-della-host", createdAt: "2026-10-10T00:00:00Z",
+                isCreatedByUser: row.0, sender: row.0 ? "You" : "Della", text: row.1,
+                content: nil, parentMessageId: index == 0 ? KadeMessage.noParent : "offline-della-\(index - 1)",
+                agentId: row.0 ? nil : CharacterMotion.dellaID)
+            message.tokenCount = 720
+            return message
+        }
+        draftText = scenario.packed
+            ? "First line\nSecond line\nThird line\nFourth line\nFifth line"
+            : "A quiet afternoon\nSome notes to share"
+        if scenario.packed {
+            pendingAttachment = ChatAttachment(id: "offline-notes", filepath: "/offline/fixture-notes.txt",
+                type: "text/plain", width: nil, height: nil, displayName: "fixture-notes.txt")
+            pushCard = .announced
+        }
+        isLoading = false
+        // One parent task owns insertion, focus, keyboard transitions, scrolling
+        // and the final receipt. It does not depend on a scroll subtree task
+        // staying alive while its content and safe-area reservations change.
+        guard await waitForDellaHostAudit({ CharacterDellaHostAuditRecorder.chatScrollProxy != nil }) else { return }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        guard !Task.isCancelled else { return }
+        composerEditing = scenario.keyboardInitially
+        if scenario.keyboardInitially {
+            guard await waitForDellaHostAudit({
+                CharacterDellaHostAuditRecorder.keyboardPresentedInitially
+                    && CharacterDellaHostAuditRecorder.keyboardVisible
+                    && CharacterDellaHostAuditRecorder.geometry["keyboard"] != nil
+            }) else { return }
+        }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard !Task.isCancelled else { return }
+        let uiDrag = scenario.requiresKeyboardDismissal
+            && ProcessInfo.processInfo.environment["KADE_DELLA_HOST_UI_DRAG"] == "1"
+        // Gesture tests own the real drag and produce XCTest proof. They must
+        // never receive a scripted dismissal/scroll or a canonical ready file
+        // claiming a transition that has not happened yet.
+        if uiDrag { return }
+        if scenario.requiresKeyboardDismissal {
+            composerEditing = false
+            guard await waitForDellaHostAudit({
+                !CharacterDellaHostAuditRecorder.keyboardVisible
+                    && CharacterDellaHostAuditRecorder.geometry["keyboard"] == nil
+            }) else { return }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+        }
+        guard let proxy = CharacterDellaHostAuditRecorder.chatScrollProxy else { return }
+        switch scenario.scrollTarget {
+        case .none: break
+        case .invitation: proxy.scrollTo(Self.pushInviteTranscriptId, anchor: .bottom)
+        case .chatControls: proxy.scrollTo(Self.chatControlsTranscriptId, anchor: .bottom)
+        case .callControls: return
+        }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard !Task.isCancelled else { return }
+        _ = chatChrome
+        CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+        await CharacterDellaHostAuditRecorder.ready()
+    }
+
+    private func waitForDellaHostAudit(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<60 {
+            guard !Task.isCancelled else { return false }
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+    #endif
+
     private var faceStage: some View {
         let talking = voiceService.isClipPlaying
         let tall = UIScreen.main.bounds.height
         let side = CharacterStageLayout.chatSide(height: Double(tall), keyboard: keyboardUp,
             compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
+        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId
+        var hostLayout: CharacterDellaHostStage? = nil
+        #if DEBUG && targetEnvironment(simulator)
+        let avatar = agentsService.agents.first { $0.id == portraitAgentID }?.avatar?.filepath
+        let eligible = CharacterDellaHostReview.available(enabled: dellaHostReview,
+            agentID: portraitAgentID, avatarPath: avatar)
+        hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
+            keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
+            accessibilityText: dynamicTypeSize.isAccessibilitySize,
+            competingControls: pendingAttachment != nil || attachmentIsBusy || pushCardOnScreen
+                || isSending || voiceInputError != nil,
+            candidateEligible: eligible)
+        if CharacterDellaHostAudit.isEnabled {
+            CharacterDellaHostAuditRecorder.stage = hostLayout
+            CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+            CharacterDellaHostAuditRecorder.invitationPlacement = pushCardOnScreen
+                ? (invitationInTranscript ? "transcript" : "footer") : "none"
+        }
+        #endif
         let thinking = isSending
         /* C5 (Sep 23 2026 redesign) — THE MOOD LIGHT reads the same
          * presentation the portrait performs (the voice's direction while a
@@ -2756,13 +3004,13 @@ struct ConversationDetailView: View {
          * on VoiceService (isClipPlaying, nowPlayingKey), which re-runs this
          * body. The stage's own TimelineView stays the only per-frame clock. */
         return CharacterConversationStage(
-                agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
+                agentID: portraitAgentID,
                 name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
                     if voiceService.isClipPlaying { return voiceService.characterPresentation() }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
-                })
+                }, hostLayout: hostLayout)
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
          * character picker, for sighted people; it is the same sheet as the
          * "Talking to" row and is off while a send is out, like that row.
@@ -2783,11 +3031,13 @@ struct ConversationDetailView: View {
     private var attachButton: some View {
         Button { showingAttachMenu = true } label: {
             Image(systemName: "paperclip").font(.title3)
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .disabled(isSending || attachmentIsBusy || pendingAttachment != nil)
         .accessibilityLabel(pendingAttachment == nil ? "Attach a photo or file" : "Attachment added")
         .accessibilityHint("Take a photo, choose a photo or file, or paste one. Review the attachment before sending your message.")
         .accessibilityFocused($a11yFocus, equals: .attachButton)
+        .dellaHostProbe("attach", identifier: "della-host.chat.attach")
         .confirmationDialog("Attach to your next message", isPresented: $showingAttachMenu) {
             Button("Take a photo") { takeAttachmentPhoto() }
             Button("Choose a photo") { showingAttachPhotos = true }
@@ -2838,12 +3088,18 @@ struct ConversationDetailView: View {
     }
 
     private var attachmentChipRow: some View {
-        HStack(spacing: 8) {
+        let compactReadyStatus = dynamicTypeSize.isAccessibilitySize
+            && !attachmentIsBusy && pendingAttachment != nil
+        let fullStatus = attachmentIsBusy
+            ? (checkingAttachCamera ? "Checking camera access." : attachmentPreparation.statusMessage)
+            : "Attached: \(pendingAttachment?.displayName ?? ""). Review before sending."
+        return HStack(spacing: 8) {
             Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
-            Text(attachmentIsBusy
-                 ? (checkingAttachCamera ? "Checking camera access." : attachmentPreparation.statusMessage)
-                 : "Attached: \(pendingAttachment?.displayName ?? ""). Review before sending.")
+            Text(compactReadyStatus ? (pendingAttachment?.displayName ?? "") : fullStatus)
                 .font(.footnote)
+                .lineLimit(compactReadyStatus ? 1 : nil)
+                .truncationMode(.middle)
+                .accessibilityLabel(fullStatus)
                 .accessibilityFocused($a11yFocus, equals: .attachmentStatus)
             Spacer()
             if attachmentIsBusy {
@@ -2856,7 +3112,12 @@ struct ConversationDetailView: View {
                     pendingAttachment = nil
                     a11yFocus = .attachButton
                     UIAccessibility.post(notification: .announcement, argument: "Attachment removed.")
-                } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
                 .accessibilityLabel("Remove attachment")
                 .accessibilityHint("Removes the attachment from your next message. The uploaded file isn't deleted.")
             }
@@ -2993,122 +3254,149 @@ struct ConversationDetailView: View {
                     .accessibilityFocused($a11yFocus, equals: .voiceError)
             }
             if attachmentIsBusy || pendingAttachment != nil {
-                attachmentChipRow
+                attachmentChipRow.dellaHostProbe("attachment")
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                attachButton
-                deepThinkButton
-                /* ⭐⭐ BUILD 218 -- THE FIRST CHANGE IN THIS HUNT AIMED AT A LEAF
-                 * FRAME INSTEAD OF A THEORY.
-                 *
-                 * Her two build-217 stacks (17:55:42Z, both Foreground kills,
-                 * 10.087s and 10.131s of app CPU against a 10.00s allowance --
-                 * a pegged core) bottom out in **UIFoundation text
-                 * measurement** reached through UIKitCore from SwiftUI, and
-                 * they RECURSE: `SwiftUICore +464312` appears SEVEN times in
-                 * one and SIX in the other, 17 distinct frames repeating for
-                 * 56 duplicate frames total. Same family as builds 204 and
-                 * 208. The shallower AttributeGraph-topped samples on 211/215/
-                 * 216 were the same loop caught at a different instant.
-                 *
-                 * And the Simple-transcript toggle cleared the message rows:
-                 * she froze with every row rendered as one bare `Text` with no
-                 * accessibility modifiers at all. So the text being measured
-                 * recursively is not in the transcript -- and this is the only
-                 * other text-measuring surface on the screen.
-                 *
-                 * Two things about the old line were wrong together:
-                 *   - `axis: .vertical` makes this a MULTI-LINE, UITextView-
-                 *     backed control, but `.textFieldStyle(.roundedBorder)` is
-                 *     UIKit's single-line bordered style. Sizing that pair is a
-                 *     negotiation between a control that wants one line and a
-                 *     container that permits several -- and it resolves through
-                 *     exactly the UIFoundation/UIKitCore frames at her leaf.
-                 *   - `.lineLimit(1...5)` is a RANGE, so the layout has to
-                 *     measure the text at multiple candidate heights and pick.
-                 *     Nested in flexible stacks, those probes multiply. That is
-                 *     the recursion.
-                 * `isSending` flipping is what dirties this subtree at the
-                 * exact moment she freezes, and no swing in this hunt --
-                 * feedback, decorations, chunking, windows, rotors, rows -- has
-                 * ever touched it.
-                 *
-                 * ⚠️ HONEST LIMIT: this is not proven. I checked the obvious
-                 * corollary (longer drafts = more line candidates = more work)
-                 * against every send in the ring and it did NOT hold -- 37
-                 * chars froze, 199 chars was fine, 72 chars did both. Length is
-                 * at most an amplifier. What is solid is the leaf, the
-                 * recursion, and that the rows are eliminated. Hence the
-                 * `simpleComposer` bisect below, so a wrong guess here costs
-                 * her a tap instead of another day. */
-                if simpleComposer {
-                    TextField("Message", text: $draftText)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(Color(uiColor: .separator))
-                        )
-                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
-                        .focused($composerEditing)
-                        .accessibilityLabel("Message")
-                        .accessibilityFocused($a11yFocus, equals: .composerField)
-                } else {
-                    TextField("Message", text: $draftText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(5)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(Color(uiColor: .separator))
-                        )
-                        .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
-                        .focused($composerEditing)
-                        .accessibilityLabel("Message")
-                        .accessibilityFocused($a11yFocus, equals: .composerField)
+            if dynamicTypeSize.isAccessibilitySize {
+                // Large text gets the whole row instead of sharing the editor
+                // width with four independently accessible message controls.
+                composerEditor.frame(maxWidth: .infinity)
+                HStack(alignment: .bottom, spacing: 8) {
+                    attachButton
+                    deepThinkButton
+                    Spacer(minLength: 8)
+                    micButton
+                    composerSendButton
                 }
-                micButton
-                // Session 17: one button, two jobs, matching how `isSending`
-                // already gates it -- Send while idle, Stop while a reply is
-                // generating (`POST /api/agents/chat/abort` had sat
-                // "source-confirmed, not yet wired into the app" in
-                // docs/ENDPOINTS.md since Phase 3; see `stopGenerating()`
-                // and `MessageSendingService.abortActive()`). Recording/
-                // transcribing/empty-draft still block a SEND, but never
-                // block a STOP -- those three conditions describe whether
-                // there's anything sendABLE, which is irrelevant once
-                // something is already sending.
-                Button {
-                    if isSending {
-                        stopGenerating()
-                    } else {
-                        if let reason = sendUnavailableReason {
-                            UIAccessibility.post(notification: .announcement, argument: reason)
-                            return
-                        }
-                        sendTask = Task { await send() }
-                    }
-                } label: {
-                    Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
+            } else {
+                HStack(alignment: .bottom, spacing: 8) {
+                    attachButton
+                    deepThinkButton
+                    composerEditor
+                    micButton
+                    composerSendButton
                 }
-                // Keep the same accessible button through draft clearing,
-                // generation and arrival, as the recording button already
-                // does. Disabling it while the draft is empty used to retire
-                // VoiceOver's anchor twice on every send. Guard the action
-                // above and dim it visually instead.
-                .accessibilityLabel(isSending ? "Stop" : "Send message")
-                .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
-                // Build 254: the send moment's focus anchor -- see `case
-                // sendButton`. Focus lands here instead of on her own message.
-                .accessibilityFocused($a11yFocus, equals: .sendButton)
             }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 8 : 16)
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private var composerEditor: some View {
+        /* ⭐⭐ BUILD 218 -- THE FIRST CHANGE IN THIS HUNT AIMED AT A LEAF
+         * FRAME INSTEAD OF A THEORY.
+         *
+         * Her two build-217 stacks (17:55:42Z, both Foreground kills,
+         * 10.087s and 10.131s of app CPU against a 10.00s allowance --
+         * a pegged core) bottom out in **UIFoundation text
+         * measurement** reached through UIKitCore from SwiftUI, and
+         * they RECURSE: `SwiftUICore +464312` appears SEVEN times in
+         * one and SIX in the other, 17 distinct frames repeating for
+         * 56 duplicate frames total. Same family as builds 204 and
+         * 208. The shallower AttributeGraph-topped samples on 211/215/
+         * 216 were the same loop caught at a different instant.
+         *
+         * And the Simple-transcript toggle cleared the message rows:
+         * she froze with every row rendered as one bare `Text` with no
+         * accessibility modifiers at all. So the text being measured
+         * recursively is not in the transcript -- and this is the only
+         * other text-measuring surface on the screen.
+         *
+         * Two things about the old line were wrong together:
+         *   - `axis: .vertical` makes this a MULTI-LINE, UITextView-
+         *     backed control, but `.textFieldStyle(.roundedBorder)` is
+         *     UIKit's single-line bordered style. Sizing that pair is a
+         *     negotiation between a control that wants one line and a
+         *     container that permits several -- and it resolves through
+         *     exactly the UIFoundation/UIKitCore frames at her leaf.
+         *   - `.lineLimit(1...5)` is a RANGE, so the layout has to
+         *     measure the text at multiple candidate heights and pick.
+         *     Nested in flexible stacks, those probes multiply. That is
+         *     the recursion.
+         * `isSending` flipping is what dirties this subtree at the
+         * exact moment she freezes, and no swing in this hunt --
+         * feedback, decorations, chunking, windows, rotors, rows -- has
+         * ever touched it.
+         *
+         * ⚠️ HONEST LIMIT: this is not proven. I checked the obvious
+         * corollary (longer drafts = more line candidates = more work)
+         * against every send in the ring and it did NOT hold -- 37
+         * chars froze, 199 chars was fine, 72 chars did both. Length is
+         * at most an amplifier. What is solid is the leaf, the
+         * recursion, and that the rows are eliminated. Hence the
+         * `simpleComposer` bisect below, so a wrong guess here costs
+         * her a tap instead of another day. */
+        if simpleComposer {
+            TextField("Message", text: $draftText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(uiColor: .separator))
+                )
+                .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                .focused($composerEditing)
+                .accessibilityLabel("Message")
+                .accessibilityFocused($a11yFocus, equals: .composerField)
+                .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
+        } else {
+            TextField("Message", text: $draftText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(composerLineLimit)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(uiColor: .separator))
+                )
+                .disabled(isSending || voiceService.isRecording || voiceService.isTranscribing)
+                .focused($composerEditing)
+                .accessibilityLabel("Message")
+                .accessibilityFocused($a11yFocus, equals: .composerField)
+                .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
+        }
+    }
+
+    private var composerSendButton: some View {
+        // Session 17: one button, two jobs, matching how `isSending`
+        // already gates it -- Send while idle, Stop while a reply is
+        // generating (`POST /api/agents/chat/abort` had sat
+        // "source-confirmed, not yet wired into the app" in
+        // docs/ENDPOINTS.md since Phase 3; see `stopGenerating()`
+        // and `MessageSendingService.abortActive()`). Recording/
+        // transcribing/empty-draft still block a SEND, but never
+        // block a STOP -- those three conditions describe whether
+        // there's anything sendABLE, which is irrelevant once
+        // something is already sending.
+        Button {
+            if isSending {
+                stopGenerating()
+            } else {
+                if let reason = sendUnavailableReason {
+                    UIAccessibility.post(notification: .announcement, argument: reason)
+                    return
+                }
+                sendTask = Task { await send() }
+            }
+        } label: {
+            Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
+                .font(.title)
+                .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }
+        // Keep the same accessible button through draft clearing,
+        // generation and arrival, as the recording button already
+        // does. Disabling it while the draft is empty used to retire
+        // VoiceOver's anchor twice on every send. Guard the action
+        // above and dim it visually instead.
+        .accessibilityLabel(isSending ? "Stop" : "Send message")
+        .accessibilityHint(isSending ? "Stops the reply that's currently generating." : "Sends your message to \(conversationTitleForCopy).")
+        // Build 254: the send moment's focus anchor -- see `case
+        // sendButton`. Focus lands here instead of on her own message.
+        .accessibilityFocused($a11yFocus, equals: .sendButton)
+        .dellaHostProbe("send", identifier: "della-host.chat.send")
     }
 
     /// Session 23: the Deep Think toggle. Built to the Amber rule from
@@ -3132,8 +3420,10 @@ struct ConversationDetailView: View {
             UIAccessibility.post(notification: .announcement, argument: next.spoken)
         } label: {
             VStack(spacing: 1) {
-                Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
-                    .font(.title3)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
+                        .font(.title3)
+                }
                 Text(thinkMode.caption)
                     .font(.caption2)
                     .accessibilityHidden(true)
@@ -3159,6 +3449,7 @@ struct ConversationDetailView: View {
         .sensoryFeedback(trigger: thinkMode) { _, _ in
             FeedbackPrefs.gate(.selection)
         }
+        .dellaHostProbe("thinkingButton", identifier: "della-host.chat.thinking")
     }
 
     /// Phase 5: tap to start recording, tap again to stop -- deliberately
@@ -3192,8 +3483,10 @@ struct ConversationDetailView: View {
                 : voiceService.isRecording ? "stop.circle.fill" : "mic.circle.fill")
             .font(.title)
             .foregroundStyle(voiceService.isRecording ? .red : .accentColor)
+            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .accessibilityFocused($a11yFocus, equals: .micButton)
+        .dellaHostProbe("micButton", identifier: "della-host.chat.mic")
         .accessibilityLabel(micAccessibilityLabel)
         .accessibilityHint(
             voiceService.isRecording
@@ -5084,10 +5377,30 @@ private struct ChatControlRowBackground: View {
     }
 }
 
+private extension View {
+    /// Geometry only: an identifier on the transparent outer Group could
+    /// override its native ScrollView's independent accessibility identifier.
+    @ViewBuilder @MainActor
+    func dellaHostTranscriptRegionProbe() -> some View {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            self.onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                CharacterDellaHostAuditRecorder.record("transcript", frame: frame)
+            }
+        } else { self }
+        #else
+        self
+        #endif
+    }
+}
+
 /// B13 (Sep 23 2026 redesign, "first-run manners"): the notification ask,
-/// with its reason, as a small non-modal card at the top of the chat's bottom
-/// bar. Never inside the transcript or the composer's own layout, and never
-/// given VoiceOver focus: the chat posts one announcement when it appears.
+/// with its reason, as a small non-modal card above the message bar. While
+/// editing or using accessibility text it joins the scrolling transcript so
+/// the pinned message controls keep their room. It never receives VoiceOver
+/// focus: the chat posts one announcement when it appears.
 /// A heading, the reason, then two sibling buttons that each own their label
 /// (the Amber rule), side by side and stacked at accessibility text sizes.
 /// Solid fills and a real border, thicker in high contrast.
@@ -5096,6 +5409,7 @@ private struct PushInviteCard: View {
     let onTurnOn: () -> Void
     let onNotNow: () -> Void
     @KadeContrastPolicy private var highContrast: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -5109,11 +5423,13 @@ private struct PushInviteCard: View {
                 Button {
                     onTurnOn()
                 } label: {
-                    Text("Turn on notifications")
+                    Text(dynamicTypeSize.isAccessibilitySize ? "Turn on" : "Turn on notifications")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(KadeCardButtonStyle())
+                .accessibilityLabel("Turn on notifications")
+                .dellaHostProbe("inviteTurnOn", identifier: "della-host.chat.invite-turn-on")
                 Button {
                     onNotNow()
                 } label: {
@@ -5122,6 +5438,7 @@ private struct PushInviteCard: View {
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(KadeCardButtonStyle())
+                .dellaHostProbe("inviteNotNow", identifier: "della-host.chat.invite-not-now")
             }
         }
         .padding(12)
