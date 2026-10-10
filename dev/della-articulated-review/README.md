@@ -65,11 +65,15 @@ review. Native compilation and model checks passed at the earlier candidate;
 its partial capture exposed a screenshot acknowledgement timing mismatch.
 The runner records per-phase timings and allows 480 seconds for the whole
 capture. A later capture compiled and returned eleven valid PNGs before a
-30-second simulator screenshot timeout. The audit now uses the standard free
-Intel Mac runner with 14 GB RAM, retaining Xcode 26.4.1 and iOS 26.4. Each
-screenshot is bounded to 75 seconds and the fixture allows 90 seconds for its
-validated acknowledgement. This is a bounded host/capture adjustment, not a
-diagnosis of the simulator stall. The job remains capped at 25 minutes.
+30-second simulator screenshot timeout. A subsequent standard free Intel Mac
+run with 14 GB RAM, retaining Xcode 26.4.1 and iOS 26.4, compiled successfully
+but exceeded the 60-second install bound before capture.
+The current audit returns to the standard M1 host that already rendered the
+candidate. Each screenshot remains bounded to 75 seconds, with 90 seconds for
+its validated acknowledgement. Installation is bounded to 180 seconds and
+records its elapsed time; the job is capped at 35 minutes. Compile and capture
+are separate workflow steps so their progress is visible. These are bounded
+host/capture adjustments, not diagnoses of the simulator stalls.
 Its own exact-source receipt determines complete verification status.
 
 Before production registration, review shoulder seams throughout the motion

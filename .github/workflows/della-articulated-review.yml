@@ -35,10 +35,10 @@ jobs:
       github.repository == 'kademurdock/kade-ai-native' &&
       github.ref == 'refs/heads/codex/puppet-articulated-bodies-20261009' &&
       toJSON(github.event.deleted) == 'false'
-    # Standard public-repository Intel runner: 4 CPUs and 14 GB RAM.
-    # Keep Xcode/runtime fixed while avoiding the smaller M1 review host.
-    runs-on: macos-26-intel
-    timeout-minutes: 25
+    # Standard public-repository M1 runner, retaining the fixed Xcode/runtime.
+    # This host has already compiled and rendered the candidate successfully.
+    runs-on: macos-26
+    timeout-minutes: 35
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       KADE_EXPECTED_COMMIT: ${{ github.sha }}
@@ -73,7 +73,7 @@ jobs:
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate
 
-      - name: Compile unsigned native Debug and capture the silent Della fixture
+      - name: Compile unsigned native Debug
         run: |
           set -euo pipefail
           mkdir -p della-articulated-audit
@@ -82,7 +82,9 @@ jobs:
             -derivedDataPath build/della-articulated-simulator \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             build > della-articulated-audit/compile.log 2>&1 || { tail -n 80 della-articulated-audit/compile.log; exit 1; }
-          python3 dev/della-articulated-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Capture the silent Della native fixture
+        run: python3 dev/della-articulated-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Remove the optional study catalog after the simulator review
         if: ${{ always() }}

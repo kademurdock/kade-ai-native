@@ -40,6 +40,7 @@ MAX_ENCODED = 44 * 1024 * 1024
 CAPTURE_SECONDS = 480
 SCREENSHOT_SECONDS = 75
 BOOT_SECONDS = 420
+INSTALL_SECONDS = 180
 MAX_FILES = 32
 NATIVE_CHECKS = {
     'Optional gesture master and accepted Della torso/matte are bundled',
@@ -210,7 +211,14 @@ def capture(expected):
         sim('bootstatus',identifier,'-b',timeout=BOOT_SECONDS)
         receipt['simulator']['bootReady']=True
         receipt['simulator']['bootSeconds']=round(time.monotonic()-boot_started,3)
-        sim('install',identifier,str(app),timeout=60)
+        receipt['simulator']['installTimeoutSeconds']=INSTALL_SECONDS
+        receipt['simulator']['installReady']=False
+        install_started=time.monotonic()
+        try:
+            sim('install',identifier,str(app),timeout=INSTALL_SECONDS)
+            receipt['simulator']['installReady']=True
+        finally:
+            receipt['simulator']['installSeconds']=round(time.monotonic()-install_started,3)
         documents=Path(sim('get_app_container',identifier,BUNDLE_ID,'data'))/'Documents'
         documents.mkdir(exist_ok=True)
         env=dict(os.environ,SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1',
