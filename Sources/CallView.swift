@@ -42,9 +42,6 @@ struct CallView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var scrollBounds: CGRect?
     @State private var primaryControlBounds: CGRect?
-    #if DEBUG && targetEnvironment(simulator)
-    @AppStorage("kade.della.articulatedReview") private var dellaHostReview = false
-    #endif
 
     @State private var startError: String?
     @State private var didAnnounceConnected = false
@@ -337,12 +334,8 @@ struct CallView: View {
             width: Double(geometry.size.width), height: Double(geometry.size.height),
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
         let avatarPath = agentsService.agents.first { $0.id == agentId }?.avatar?.filepath
-        #if DEBUG && targetEnvironment(simulator)
-        let candidateEligible = CharacterDellaHostReview.available(enabled: dellaHostReview,
+        let candidateEligible = CharacterDellaHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
             agentID: agentId, avatarPath: avatarPath)
-        #else
-        let candidateEligible = false
-        #endif
         let layout = CharacterDellaHostLayout.call(preferredSide: preferredSide,
             availableHeight: Double(geometry.size.height),
             camera: callService.videoOn || callService.liveOn,
@@ -354,8 +347,8 @@ struct CallView: View {
             level: { callService.characterLevel }, listening: true,
             presentation: { callService.characterPresentation },
             stage: true, side: layout.side, viewport: viewport)
-        #if DEBUG && targetEnvironment(simulator)
         portrait.dellaArticulatedReview = layout.articulated
+        #if DEBUG && targetEnvironment(simulator)
         if CharacterDellaHostAudit.isEnabled {
             CharacterDellaHostAuditRecorder.stage = layout
             CharacterDellaHostAuditRecorder.record("viewport", frame: viewport)

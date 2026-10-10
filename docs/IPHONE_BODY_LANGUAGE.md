@@ -13,7 +13,10 @@ scene or a motion-policy stop. Mouths and expressions still follow the actual
 rendered output, including audio that outlasts early server listening status.
 
 Angel's original clasped hands, sleeves and finger seam move as one connected
-unit. The other busts retain their supporting plates and original crop: they gain
+unit. Della's registered taller body moves each original sleeve and attached palm
+at its authored shoulder, bounded to three degrees on the same portrait clock.
+Her original face keeps its size, and constrained hosts retain square framing.
+The remaining busts retain their supporting plates and original crop: they gain
 head and torso choreography, not independent articulated hands. Kiana's rejected
 torso stays excluded; Lilly's original cats stay still. Original face pixels,
 avatar registrations and portrait fallbacks remain authoritative.

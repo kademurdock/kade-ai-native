@@ -1,19 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// One opt-in decision for the host's reserved height and its portrait.
-/// The review resource and controls exist only in unsigned simulator builds.
+/// One registered-body decision for the host's reserved height and portrait.
+/// Ordinary hosts enable the accepted body; only offline audits override it.
 enum CharacterDellaHostReview {
     static let defaultsKey = "kade.della.articulatedReview"
 
-    static func available(enabled: Bool, agentID: String?, avatarPath: String?) -> Bool {
+    static var enabledForHost: Bool {
         #if DEBUG && targetEnvironment(simulator)
+        if let scenario = CharacterDellaHostAudit.scenario { return scenario.candidate }
+        #endif
+        return true
+    }
+
+    static func available(enabled: Bool, agentID: String?, avatarPath: String?) -> Bool {
         return CharacterDellaArticulatedGeometry.eligible(enabled: enabled, stage: true,
             side: 208, agentID: agentID, avatarPath: avatarPath,
             resourcesPresent: CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil })
-        #else
-        return false
-        #endif
     }
 }
 

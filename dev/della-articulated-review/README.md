@@ -1,8 +1,9 @@
-# Della articulated body study
+# Della articulated body
 
-This optional simulator study gives Della two complete plum sleeves and open
+This registered body gives Della two complete plum sleeves and open
 hands while preserving her original face, mouth and expression atlas. It is
-not registered in a production portrait, conversation or call.
+enabled by default on roomy ordinary conversation and call stages in the source.
+Its source promotion is separate from native verification and distribution.
 
 The built-in imagegen tool created `della-body-gesture-master-v1.png` from the
 approved headless cardigan plate and an existing waist-up style reference.
@@ -29,26 +30,30 @@ is smaller and sparse. No extra timer, audio service or publisher is created.
 
 On a Mac with Xcode and XcodeGen:
 
-1. Run `python3 dev/prepare-della-articulated-review.py --prepare`.
+1. Run `python3 dev/prepare-puppet-review.py --check` and
+   `python3 dev/prepare-della-articulated-review.py`.
 2. Generate and build the Debug simulator project with the ordinary project
    tools. No signing, publishing or upload is needed.
 3. Open the existing puppet lab, choose Della at 160 or 208 points, and enable
    the articulated body study. Compare delivery states, interruption, the still
    toggle and light/dark appearance.
 4. Run `bash run-character-tests.sh` for model checks.
-5. Run `python3 dev/prepare-della-articulated-review.py --clean` when finished.
-   The helper verifies the exact study files before removing them. Always clean
-   the study catalog before a Release archive.
+5. The legacy `--prepare` and `--clean` arguments now verify the same committed
+   catalog without modifying or deleting production resources.
 
-The master lives outside `Sources`; normal builds do not include it. The
-temporary catalog is ignored by Git and availability-gated in the Debug-only
-renderer. Missing art, changed identity, compact sizes and an unset study
-toggle retain the accepted portrait.
-The ordinary source-art preflight rejects a staged study catalog, so signed
-build lanes stop until it has been cleaned. For the optional simulator study,
-run ordinary source-art checks before staging its resource.
+The unchanged source master remains in this directory; its byte-identical asset
+catalog is committed under `Sources` for simulator and device Release builds.
+The ordinary source-art preflight checks its exact hash and catalog entry alongside
+the existing seven resources. Missing art, changed identity and compact sizes
+retain the accepted portrait. Host layout and rendering share one resolved height.
+Synthetic pose overrides and the local lab remain DEBUG simulator only.
 
-## Verification status
+## Verification history
+
+The history below records earlier simulator-only revisions. The new production
+registration requires its own exact-source host/control and unsigned Release
+verification; none of these historical results proves its distribution or physical
+phone performance. The frozen signed Angel release remains untouched.
 
 Local static source-art and offline composition checks are recorded alongside
 the workspace review artifacts. They do not establish Swift compilation,
@@ -84,7 +89,7 @@ at the inward extreme; the local authored contour is tightened along the real
 skin and thumbnail boundary. The source image is unchanged. That final contour
 requires its own exact-source native recheck.
 
-Before production registration, review shoulder seams throughout the motion
-range, fit at 160/208 points, the original face and atlas patch alignment, and
-call/chat control space on native iPhone. A taller production stage requires
-explicit layout integration and its own native verification.
+The production source uses the accepted shoulder contours and exact face/mask
+registration. Its taller stage is integrated with real call/chat layout and must
+pass the source-bound native verification. Physical voice, VoiceOver and sustained
+battery/frame behavior remain separate measurements.

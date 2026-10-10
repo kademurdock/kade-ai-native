@@ -6,6 +6,4 @@ build/
 dev/__pycache__/
 dev/angel-puppet/__pycache__/
 
-# Optional unsigned Della art study; staged only by its explicit review helper.
-Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/
 della-articulated-audit/

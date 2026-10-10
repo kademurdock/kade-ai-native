@@ -1,7 +1,8 @@
 # Della call/chat host review
 
-This optional DEBUG simulator preview carries the accepted articulated Della
-art into the actual `CallView` and `ConversationDetailView`. It preserves the
+The production source carries the accepted articulated Della art into the actual
+`CallView` and `ConversationDetailView`. The separate DEBUG simulator audit
+verifies these same hosts with local data. This integration preserves the
 original portrait compositor, authored contours, face scale and four source
 images from `3b0bf16dcaee5330167e0031c67461b3d2eae9d9`.
 
@@ -16,8 +17,9 @@ reads "Turn on" while its spoken label remains "Turn on notifications" and
 its full reason and original action remain available. The ordinary horizontal
 composer layout and fonts stay intact.
 
-The lab's explicit review toggle enables the host preview only when Della's
-exact identity/avatar and all review assets are present. One resolved layout
+Ordinary hosts enable the registered body only when Della's exact identity/avatar
+and all bundled assets are present. The lab toggle affects its local sample;
+candidate/off fixture overrides remain DEBUG simulator only. One resolved layout
 supplies the portrait side and reserved host height. Roomy screens can show the
 taller body; editing, crowded controls, camera and accessibility text retain
 square framing. At accessibility sizes, a focused editor or a window shorter
