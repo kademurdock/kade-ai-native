@@ -5,6 +5,12 @@ The production source carries the accepted articulated Della art into the actual
 verifies these same hosts with local data. This integration preserves the
 original portrait compositor, authored contours, face scale and four source
 images from `3b0bf16dcaee5330167e0031c67461b3d2eae9d9`.
+The committed catalog contains the same 1254-square RGBA master. Native source
+proof freezes 36 inputs and seven pins, including that registered PNG. Portrait
+and geometry code pins were deliberately rebound after reviewing only their
+production eligibility changes; authored numbers and compositor remain intact.
+Every clean/staged check requires the exact two-file catalog and byte-identical
+master. Legacy prepare/cleanup commands verify it without adding or removing files.
 
 The native composer reserves one line at accessibility text sizes, two while
 the keyboard or editing is active, and five in ordinary composition. The
@@ -88,7 +94,7 @@ The outer job is limited to 55 minutes. A shared 52-minute operation deadline
 starts before checkout and cannot reset between setup, compilation, tests and
 capture. Each operation uses the remaining shared time; its individual maximum
 is not a promise that every maximum will fit together. The final three minutes
-reserve 90 seconds for UI collection, 15 for the optional study cleanup, 60 for
+reserve 90 seconds for UI collection, 15 for registered-catalog verification, 60 for
 evidence emission and 15 for teardown. Launcher action guards also reserve
 cleanup time before their workflow step ends. Capture retains its 480-second
 per-device and 960-second aggregate limits, 30-second readiness and 75-second

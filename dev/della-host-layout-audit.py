@@ -1,6 +1,6 @@
 """Exact-source silent actual-host simulator QA; bounded evidence uses logs only.
 
-This separate lane preserves the accepted puppet and previous art audit. Only
+This separate lane verifies the registered puppet and preserves the prior art audit. Only
 synthetic host readiness, PNGs and receipts enter the bounded evidence archive.
 No server, signing, app package, account transcript, artifact storage or release.
 """
@@ -37,8 +37,9 @@ PINS={
     'dev/puppet-review-assets/della-head-alpha.png':'036d2ce6292fec1cb0226fe69f584789d46eadf4625e925e293ed717fecc1b1a',
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'09d76168ae6ca6084bbf0595c6ced3f3894fd04860ace64beee1ad75411a16ca',
-    'Sources/CharacterDellaArticulatedGeometry.swift':'51ae3a0aed8b9d122287b3ede13eaffb81d9a646bedbe8329930788ed3f568fb',
+    'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
+    'Sources/CharacterPortraitView.swift':'ad617ccbd0e830e819b5f4b0e8620825a5d33c6c8282dec8fdaf2f58c6168d3a',
+    'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(
     'Sources/CallView.swift','Sources/ConversationDetailView.swift',
@@ -55,6 +56,7 @@ SOURCE_INPUTS=(
     'run-fresh-agent-chat-tests.sh','dev/prepare-puppet-review.py',
     'dev/prepare-della-articulated-review.py','dev/validate-angel-vector.py',
     '.github/workflows/della-host-layout-review.yml','dev/della-host-layout-audit.py',
+    'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/Contents.json',
 )
 HOST_MODEL_INPUTS=('Sources/CharacterDellaHostLayout.swift',
                    'CharacterMotionTests/CharacterDellaHostLayoutTests.swift')
@@ -253,6 +255,10 @@ def required_phases():
             'Targeted two-device UI method/phase contract drift')
     require(all(re.fullmatch(r'(chat|call)-[a-z0-9-]+',phase) for phase in PHASES),
             'Invalid frozen host case label')
+    require(len(set(PINS)|set(SOURCE_INPUTS)|set(HOST_MODEL_INPUTS))==36 and len(PINS)==7
+            and PINS.get('Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png')==MASTER_SHA
+            and 'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/Contents.json' in SOURCE_INPUTS,
+            'Exact registered production source/catalog pin contract drift')
     return set(PHASES)
 
 
@@ -283,15 +289,8 @@ def source(expected,clean=False,require_staged=False):
     data=master.read_bytes()
     require(data[:8]==b'\x89PNG\r\n\x1a\n' and struct.unpack('>II',data[16:24])==(1254,1254)
             and data[24]==8 and data[25]==6,'Unchanged master must remain1254-square8bitRGBA')
-    catalog=ROOT/'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset'
-    if clean:
-        require(not catalog.exists(),'Initial host source must exclude optional study catalog')
-    if require_staged:
-        contents=json.loads((catalog/'Contents.json').read_text())
-        require(contents=={'images':[{'filename':master.name,'idiom':'universal'}],
-                           'info':{'author':'xcode','version':1}},'Staged catalog metadata drift')
-        require({path.name for path in catalog.iterdir()}=={master.name,'Contents.json'}
-                and (catalog/master.name).read_bytes()==data,'Staged master byte drift')
+    # The legacy staged check now always verifies the committed production catalog.
+    validate_registered_catalog(data)
     for name in SOURCE_INPUTS+HOST_MODEL_INPUTS:
         inputs[name]=sha(ROOT/name)
     declared=set(re.findall(r'\bfunc (test[A-Za-z]+)\(',
@@ -302,6 +301,22 @@ def source(expected,clean=False,require_staged=False):
             'releasePublished':False,'physicalPhoneVerified':False,'batteryPerformanceVerified':False,
             'physicalVoiceOverVerified':False,'audioStarted':False,'microphoneStarted':False,
             'cameraStarted':False,'networkStarted':False}
+
+
+def validate_registered_catalog(data):
+    catalog=ROOT/'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset'
+    require(catalog.is_dir(),'Registered production Della catalog is missing')
+    require({path.name for path in catalog.iterdir()}=={'della-body-gesture-master-v1.png','Contents.json'},
+            'Registered production Della catalog file set drift')
+    contents=catalog/'Contents.json';image=catalog/'della-body-gesture-master-v1.png'
+    require(contents.is_file() and 0<contents.stat().st_size<=64*1024,
+            'Registered production Della catalog metadata missing or oversized')
+    require(json.loads(contents.read_text())=={'images':[{'filename':image.name,'idiom':'universal'}],
+                                              'info':{'author':'xcode','version':1}},
+            'Registered production Della catalog metadata drift')
+    require(image.is_file() and image.stat().st_size==len(data) and image.read_bytes()==data
+            and hashlib.sha256(data).hexdigest()==MASTER_SHA,'Registered production Della master byte drift')
+    return True
 
 
 def case_device(phase):
@@ -1491,7 +1506,7 @@ def main():
     elif args.action=='ui-tests': result=ui_tests(args.expected_sha)
     elif args.action=='clean-review':
         subprocess.check_call([sys.executable,str(ROOT/'dev/prepare-della-articulated-review.py'),'--clean'],
-                              timeout=operation_remaining(15));result={'optionalStudyCatalogCleaned':True}
+                              timeout=operation_remaining(15));result={'registeredProductionCatalogVerified':True}
     else: emit(args.expected_sha); result=None
     if result is not None: print(json.dumps(result,indent=2))
 
