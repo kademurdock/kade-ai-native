@@ -40,6 +40,11 @@ struct CallView: View {
     @EnvironmentObject private var agentsService: AgentsService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var scrollBounds: CGRect?
+    @State private var primaryControlBounds: CGRect?
+    #if DEBUG && targetEnvironment(simulator)
+    @AppStorage("kade.della.articulatedReview") private var dellaHostReview = false
+    #endif
 
     @State private var startError: String?
     @State private var didAnnounceConnected = false
@@ -87,67 +92,78 @@ struct CallView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
-                ScrollView {
-                    VStack(spacing: 20) {
-                        statusHeader
-                        captionArea
-                        if callService.liveOn || callService.videoOn {
-                            cameraPreview
+                ScrollViewReader { scroll in
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            statusHeader
+                            captionArea
+                            if callService.liveOn || callService.videoOn {
+                                cameraPreview
+                                    .dellaHostProbe("camera")
+                            }
+                            // Session 27 (visual delight, VO-invisible): the call's
+                            // state as a breathing orb -- teal listening, amber
+                            // thinking (twin of the typing sound), green + ripples
+                            // speaking. See KadeCallStateOrb for the motion gates.
+                            if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
+                                callPortrait(geometry)
+                                    .dellaHostProbe("stage")
+                            } else {
+                                KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
+                            }
+                            if wrappingUp {
+                                wrapUpPanel
+                            }
+                            // Aug 9 2026 (her call): the audio-check readout only
+                            // appears when something is actually wrong — see
+                            // audioTrouble's doc comment in the service.
+                            if callService.audioTrouble {
+                                audioCheck
+                            }
+                            // The plain camera-describe lane belongs to the CURRENT
+                            // conversation agent. Once Spotter/Live is on, the Spotter
+                            // is who's actually holding the call and already owns the
+                            // camera (liveOn auto-starts capture) -- so a second button
+                            // reading "Let <original agent> see your camera" is both
+                            // redundant AND misattributed to whoever you WERE talking to
+                            // before the handoff, which is exactly the wrong-agent
+                            // camera control Kade reported after a transfer. Hide it
+                            // while Spotter is live; the Spotter's own camera controls
+                            // (the preview + flashlight, both agent-agnostic) stay, and
+                            // spotterButton is how you hand the call back.
+                            VStack(spacing: 20) {
+                                if !callService.liveOn {
+                                    cameraButton
+                                }
+                                spotterButton
+                                deepThinkButton
+                                stopTalkingButton.id("della-host-secondary")
+                            }
+                            .dellaHostProbe("secondaryControls")
                         }
-                        // Session 27 (visual delight, VO-invisible): the call's
-                        // state as a breathing orb -- teal listening, amber
-                        // thinking (twin of the typing sound), green + ripples
-                        // speaking. See KadeCallStateOrb for the motion gates.
-                        if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
-                            CharacterPortraitView(agentID: agentId, name: agentName,
-                                playing: callService.status == .speaking,
-                                level: { callService.characterLevel }, listening: true,
-                                presentation: { callService.characterPresentation },
-                                stage: true, side: CharacterStageLayout.callSide(
-                                    width: Double(geometry.size.width), height: Double(geometry.size.height),
-                                    accessibilityText: dynamicTypeSize.isAccessibilitySize),
-                                viewport: geometry.frame(in: .global))
-                        } else {
-                            KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
-                        }
-                        if wrappingUp {
-                            wrapUpPanel
-                        }
-                        // Aug 9 2026 (her call): the audio-check readout only
-                        // appears when something is actually wrong — see
-                        // audioTrouble's doc comment in the service.
-                        if callService.audioTrouble {
-                            audioCheck
-                        }
-                        // The plain camera-describe lane belongs to the CURRENT
-                        // conversation agent. Once Spotter/Live is on, the Spotter
-                        // is who's actually holding the call and already owns the
-                        // camera (liveOn auto-starts capture) -- so a second button
-                        // reading "Let <original agent> see your camera" is both
-                        // redundant AND misattributed to whoever you WERE talking to
-                        // before the handoff, which is exactly the wrong-agent
-                        // camera control Kade reported after a transfer. Hide it
-                        // while Spotter is live; the Spotter's own camera controls
-                        // (the preview + flashlight, both agent-agnostic) stay, and
-                        // spotterButton is how you hand the call back.
-                        if !callService.liveOn {
-                            cameraButton
-                        }
-                        spotterButton
-                        deepThinkButton
-                        stopTalkingButton
+                        .padding()
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                }
-                // Captions, the camera and secondary actions can grow freely.
-                // Mute and Hang Up keep one identity outside the scrolling content.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        Divider()
-                        controls.padding(.horizontal).padding(.top, 12)
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { scrollBounds = $0 }
+                    // Captions, the camera and secondary actions can grow freely.
+                    // Mute and Hang Up keep one identity outside the scrolling content.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        VStack(spacing: 0) {
+                            Divider()
+                            controls.padding(.horizontal).padding(.top, 12)
+                        }
+                        .background(Color(.systemBackground))
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { primaryControlBounds = $0 }
+                        .dellaHostProbe("primaryControls")
                     }
-                    .background(Color(.systemBackground))
+                    .task {
+                        #if DEBUG && targetEnvironment(simulator)
+                        if CharacterDellaHostAudit.scenario?.scrolled == true {
+                            try? await Task.sleep(nanoseconds: 800_000_000)
+                            if !Task.isCancelled { scroll.scrollTo("della-host-secondary", anchor: .bottom) }
+                        }
+                        #endif
+                    }
                 }
             }
             .navigationTitle(currentSpeakerName)
@@ -163,6 +179,10 @@ struct CallView: View {
         .onAppear { LibraryNowPlaying.shared.pauseForOtherAudio("a call") }
         .task {
             #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                await prepareDellaHostAudit()
+                return
+            }
             if ProcessInfo.processInfo.environment["KADE_CALL_LAYOUT_AUDIT"] == "1" {
                 prepareLayoutAudit()
                 return
@@ -188,6 +208,9 @@ struct CallView: View {
             camera.stop()
         }
         .onChange(of: callService.liveOn) { _, on in
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             // Aug 4 2026: Spotter/Live runs the faster frame cadence
             // (~1.4/s); handing back drops to the plain lane's 2s pace.
             camera.setLiveCadence(on)
@@ -206,6 +229,9 @@ struct CallView: View {
             }
         }
         .onChange(of: callService.videoOn) { _, on in
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             if on {
                 Task { await camera.start(facing: .back) }
                 UIAccessibility.post(
@@ -302,6 +328,49 @@ struct CallView: View {
     }
 
     // MARK: - Pieces
+
+    /// Resolve the host and portrait from the same stable window inputs. The
+    /// observed scroll region excludes the pinned call controls, so decoration
+    /// stops when long captions or a scroll move the body out of view.
+    private func callPortrait(_ geometry: GeometryProxy) -> some View {
+        let preferredSide = CharacterStageLayout.callSide(
+            width: Double(geometry.size.width), height: Double(geometry.size.height),
+            accessibilityText: dynamicTypeSize.isAccessibilitySize)
+        let avatarPath = agentsService.agents.first { $0.id == agentId }?.avatar?.filepath
+        #if DEBUG && targetEnvironment(simulator)
+        let candidateEligible = CharacterDellaHostReview.available(enabled: dellaHostReview,
+            agentID: agentId, avatarPath: avatarPath)
+        #else
+        let candidateEligible = false
+        #endif
+        let layout = CharacterDellaHostLayout.call(preferredSide: preferredSide,
+            availableHeight: Double(geometry.size.height),
+            camera: callService.videoOn || callService.liveOn,
+            accessibilityText: dynamicTypeSize.isAccessibilitySize,
+            candidateEligible: candidateEligible)
+        let viewport = portraitViewport(in: geometry.frame(in: .global))
+        var portrait = CharacterPortraitView(agentID: agentId, name: agentName,
+            playing: callService.status == .speaking,
+            level: { callService.characterLevel }, listening: true,
+            presentation: { callService.characterPresentation },
+            stage: true, side: layout.side, viewport: viewport)
+        #if DEBUG && targetEnvironment(simulator)
+        portrait.dellaArticulatedReview = layout.articulated
+        if CharacterDellaHostAudit.isEnabled {
+            CharacterDellaHostAuditRecorder.stage = layout
+            CharacterDellaHostAuditRecorder.record("viewport", frame: viewport)
+        }
+        #endif
+        return portrait
+    }
+
+    private func portraitViewport(in hostBounds: CGRect) -> CGRect {
+        let visible = (scrollBounds ?? hostBounds).intersection(hostBounds)
+        guard !visible.isNull else { return .zero }
+        let bottom = min(visible.maxY, primaryControlBounds?.minY ?? visible.maxY)
+        return CGRect(x: visible.minX, y: visible.minY, width: visible.width,
+            height: max(0, bottom - visible.minY))
+    }
 
     private var statusHeader: some View {
         VStack(spacing: 6) {
@@ -466,12 +535,14 @@ struct CallView: View {
                 callService.videoOn ? "\(agentName) can see your camera" : "Let \(agentName) see your camera",
                 systemImage: "camera"
             )
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.bordered)
         // Session 26, the Amber rule: no children:.ignore on a Button
         // (see AgentPickerView's row). Label/value/hint stay.
         .accessibilityLabel("Camera")
         .accessibilityValue(callService.videoOn ? "On" : "Off")
+        .dellaHostProbe("cameraButton", identifier: "della-host.call.camera")
         .accessibilityHint(
             callService.videoOn
                 ? "Double-tap to stop sharing your camera. \(agentName) keeps talking either way."
@@ -488,11 +559,13 @@ struct CallView: View {
             }
         } label: {
             Label(callService.liveOn ? "Spotter is on the line" : "Bring in your Spotter", systemImage: "eye")
+                .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.bordered)
         // Session 26, the Amber rule — same as the camera button above.
         .accessibilityLabel("Spotter")
         .accessibilityValue(callService.liveOn ? "On" : "Off")
+        .dellaHostProbe("spotterButton", identifier: "della-host.call.spotter")
         .accessibilityHint(
             callService.liveOn
                 ? "Double-tap to hand the call back to \(agentName)."
@@ -541,7 +614,7 @@ struct CallView: View {
                 // label and the accessibility value all carry the state.
                 systemImage: "brain.head.profile"
             )
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.bordered)
         .tint(callService.deepThinkArmed ? .accentColor : nil)
@@ -552,6 +625,7 @@ struct CallView: View {
         // contains the state stutters.
         .accessibilityLabel("Deep think")
         .accessibilityValue(callService.deepThinkArmed ? "On for your next question" : "Off")
+        .dellaHostProbe("deepThinkButton", identifier: "della-host.call.deep-think")
         .accessibilityHint(
             callService.deepThinkArmed
                 ? "Double-tap to go back to quick answers."
@@ -582,11 +656,12 @@ struct CallView: View {
             callService.barge()
         } label: {
             Label("Stop Talking", systemImage: "hand.raised.fill")
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.bordered)
         .disabled(callService.status == .reconnecting)
         .accessibilityLabel("Stop talking")
+        .dellaHostProbe("stopTalkingButton", identifier: "della-host.call.stop-talking")
         .accessibilityHint("Interrupts what \(currentSpeakerName) is saying. Works even while your microphone is muted.")
     }
 
@@ -621,6 +696,7 @@ struct CallView: View {
             // Session 26, the Amber rule — same as the camera/Spotter buttons.
             .accessibilityLabel("Mute microphone")
             .accessibilityValue(callService.micMuted ? "Muted" : "On")
+            .dellaHostProbe("muteButton", identifier: "della-host.call.mute")
             .accessibilityHint(
                 callService.micMuted
                     ? "Double-tap so \(currentSpeakerName) can hear you again."
@@ -635,11 +711,35 @@ struct CallView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
+            .dellaHostProbe("hangUpButton", identifier: "della-host.call.hang-up")
         }
         .padding(.bottom, 8)
     }
 
     #if DEBUG && targetEnvironment(simulator)
+    private func prepareDellaHostAudit() async {
+        guard let scenario = CharacterDellaHostAudit.scenario, !scenario.chat else { return }
+        CharacterDellaHostAudit.configure(scenario)
+        agentsService.seedCharacterAudit()
+        callService.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
+        let paragraph = "The lake is quiet this afternoon. We can sit on the porch, listen to the birds, and take our time deciding what to do next."
+        let reply = scenario.longCaptions
+            ? Array(repeating: paragraph, count: 12).joined(separator: " ")
+            : "We can sit by the lake and listen to the birds."
+        for (role, text) in [
+            ("user", "Tell me about the lake."),
+            ("assistant", reply)
+        ] {
+            if let data = try? JSONSerialization.data(withJSONObject: ["type": "caption", "role": role, "text": text]),
+               let json = String(data: data, encoding: .utf8) { callService.auditControl(json) }
+        }
+        // Exercise the real camera layout without beginning capture or wiring
+        // frame delivery. The host-audit guards above suppress the on-change
+        // camera start; the fixture does not call beginCall or auditStart.
+        if scenario.camera { callService.auditControl("{\"type\":\"video-state\",\"on\":true}") }
+        await CharacterDellaHostAuditRecorder.ready()
+    }
+
     /// Photograph the production screen with invented text. No call is started.
     private func prepareLayoutAudit() {
         agentsService.seedCharacterAudit()

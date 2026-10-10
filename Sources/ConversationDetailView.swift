@@ -610,6 +610,9 @@ struct ConversationDetailView: View {
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
     @AppStorage("kadeVoicePortraits") private var voicePortraitsOn = true
     @State private var keyboardUp = false
+    #if DEBUG && targetEnvironment(simulator)
+    @AppStorage("kade.della.articulatedReview") private var dellaHostReview = false
+    #endif
     /* ⭐ BUILD 218 bisect, default OFF. ON = the composer is a plain
      * SINGLE-LINE field: no vertical growth, no line-limit range, nothing for
      * the layout to negotiate. Freeze stops when she flips this and the
@@ -662,6 +665,7 @@ struct ConversationDetailView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            .dellaHostProbe("transcript")
         }
         /* ⭐⭐ BUILD 219 -- AIMED AT THE RECURSION ITSELF, NOT AT WHAT IT WAS
          * MEASURING.
@@ -720,10 +724,11 @@ struct ConversationDetailView: View {
                         )
                         .padding(.horizontal)
                         .padding(.top, 8)
+                        .dellaHostProbe("invite")
                     }
                     contextMeter
-                    chatControlRow
-                    composer
+                    chatControlRow.dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+                    composer.dellaHostProbe("composer")
                 }
                 /* ⭐ BUILD 220: 219's `.fixedSize(horizontal: false,
                  * vertical: true)` is GONE from here. It did help -- the
@@ -769,8 +774,23 @@ struct ConversationDetailView: View {
                 cancelAttachment(announce: false)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            keyboardUp = true
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                CharacterDellaHostAuditRecorder.keyboardVisible = true
+                if let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                    CharacterDellaHostAuditRecorder.record("keyboard", frame: frame)
+                }
+            }
+            #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardUp = false
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { CharacterDellaHostAuditRecorder.keyboardVisible = false }
+            #endif
+        }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
         .navigationBarTitleDisplayMode(.inline)
         // Sep 23 2026 redesign (A1): the app root is a TabView now. Inside a
@@ -864,6 +884,12 @@ struct ConversationDetailView: View {
             )
         }
         .task {
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled {
+                await prepareDellaHostAudit()
+                return
+            }
+            #endif
             // Session 17 (Kade: "a native way to access settings like
             // speech and whatnot"): seed this view's own "Hear replies"
             // toggle (called "Voice messages" until the Sep 23 2026
@@ -2741,12 +2767,77 @@ struct ConversationDetailView: View {
         return false
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// Populate the real transcript and composer locally before any ordinary
+    /// history, roster, shared-file or read-aloud work is dispatched.
+    private func prepareDellaHostAudit() async {
+        guard let scenario = CharacterDellaHostAudit.scenario, scenario.chat else { return }
+        CharacterDellaHostAudit.configure(scenario)
+        agentsService.seedCharacterAudit()
+        selectedAgentId = CharacterMotion.dellaID
+        conversationId = nil
+        generatedTitle = "Offline Della layout check"
+        readAloudEnabled = false
+        thinkMode = .auto
+        sendState = .idle
+        let rows: [(Bool, String)] = [
+            (true, "Can we talk about a quiet afternoon by the lake?"),
+            (false, "Of course. We can sit on the porch, listen to the birds, and take our time."),
+            (true, "I have a few notes to share before we decide what to do next."),
+            (false, "I’m listening. You can keep writing while the conversation stays here.")
+        ]
+        messages = rows.enumerated().map { index, row in
+            var message = KadeMessage(messageId: "offline-della-\(index)",
+                conversationId: "offline-della-host", createdAt: "2026-10-10T00:00:00Z",
+                isCreatedByUser: row.0, sender: row.0 ? "You" : "Della", text: row.1,
+                content: nil, parentMessageId: index == 0 ? KadeMessage.noParent : "offline-della-\(index - 1)",
+                agentId: row.0 ? nil : CharacterMotion.dellaID)
+            message.tokenCount = 720
+            return message
+        }
+        draftText = scenario.packed
+            ? "First line\nSecond line\nThird line\nFourth line\nFifth line"
+            : "A quiet afternoon\nSome notes to share"
+        if scenario.packed {
+            pendingAttachment = ChatAttachment(id: "offline-notes", filepath: "/offline/fixture-notes.txt",
+                type: "text/plain", width: nil, height: nil, displayName: "fixture-notes.txt")
+            pushCard = .announced
+        }
+        isLoading = false
+        if scenario.keyboard {
+            // Focus only after the real multiline field has entered the tree.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+        }
+        composerEditing = scenario.keyboard
+        CharacterDellaHostAuditRecorder.composerEditing = scenario.keyboard
+        await CharacterDellaHostAuditRecorder.ready()
+    }
+    #endif
+
     private var faceStage: some View {
         let talking = voiceService.isClipPlaying
         let tall = UIScreen.main.bounds.height
         let side = CharacterStageLayout.chatSide(height: Double(tall), keyboard: keyboardUp,
             compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
+        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId
+        var hostLayout: CharacterDellaHostStage? = nil
+        #if DEBUG && targetEnvironment(simulator)
+        let avatar = agentsService.agents.first { $0.id == portraitAgentID }?.avatar?.filepath
+        let eligible = CharacterDellaHostReview.available(enabled: dellaHostReview,
+            agentID: portraitAgentID, avatarPath: avatar)
+        hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
+            keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
+            accessibilityText: dynamicTypeSize.isAccessibilitySize,
+            competingControls: pendingAttachment != nil || attachmentIsBusy || pushCardOnScreen
+                || isSending || voiceInputError != nil,
+            candidateEligible: eligible)
+        if CharacterDellaHostAudit.isEnabled {
+            CharacterDellaHostAuditRecorder.stage = hostLayout
+            CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+        }
+        #endif
         let thinking = isSending
         /* C5 (Sep 23 2026 redesign) — THE MOOD LIGHT reads the same
          * presentation the portrait performs (the voice's direction while a
@@ -2756,13 +2847,13 @@ struct ConversationDetailView: View {
          * on VoiceService (isClipPlaying, nowPlayingKey), which re-runs this
          * body. The stage's own TimelineView stays the only per-frame clock. */
         return CharacterConversationStage(
-                agentID: talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId,
+                agentID: portraitAgentID,
                 name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
                     if voiceService.isClipPlaying { return voiceService.characterPresentation() }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
-                })
+                }, hostLayout: hostLayout)
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
          * character picker, for sighted people; it is the same sheet as the
          * "Talking to" row and is off while a send is out, like that row.
@@ -2783,11 +2874,13 @@ struct ConversationDetailView: View {
     private var attachButton: some View {
         Button { showingAttachMenu = true } label: {
             Image(systemName: "paperclip").font(.title3)
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .disabled(isSending || attachmentIsBusy || pendingAttachment != nil)
         .accessibilityLabel(pendingAttachment == nil ? "Attach a photo or file" : "Attachment added")
         .accessibilityHint("Take a photo, choose a photo or file, or paste one. Review the attachment before sending your message.")
         .accessibilityFocused($a11yFocus, equals: .attachButton)
+        .dellaHostProbe("attach", identifier: "della-host.chat.attach")
         .confirmationDialog("Attach to your next message", isPresented: $showingAttachMenu) {
             Button("Take a photo") { takeAttachmentPhoto() }
             Button("Choose a photo") { showingAttachPhotos = true }
@@ -2993,7 +3086,7 @@ struct ConversationDetailView: View {
                     .accessibilityFocused($a11yFocus, equals: .voiceError)
             }
             if attachmentIsBusy || pendingAttachment != nil {
-                attachmentChipRow
+                attachmentChipRow.dellaHostProbe("attachment")
             }
             HStack(alignment: .bottom, spacing: 8) {
                 attachButton
@@ -3054,6 +3147,7 @@ struct ConversationDetailView: View {
                         .focused($composerEditing)
                         .accessibilityLabel("Message")
                         .accessibilityFocused($a11yFocus, equals: .composerField)
+                        .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
                 } else {
                     TextField("Message", text: $draftText, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -3068,6 +3162,7 @@ struct ConversationDetailView: View {
                         .focused($composerEditing)
                         .accessibilityLabel("Message")
                         .accessibilityFocused($a11yFocus, equals: .composerField)
+                        .dellaHostProbe("composerField", identifier: "della-host.chat.composer-field")
                 }
                 micButton
                 // Session 17: one button, two jobs, matching how `isSending`
@@ -3094,6 +3189,7 @@ struct ConversationDetailView: View {
                     Image(systemName: isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.title)
                         .foregroundStyle(isSending || sendUnavailableReason == nil ? Color.accentColor : Color.secondary)
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }
                 // Keep the same accessible button through draft clearing,
                 // generation and arrival, as the recording button already
@@ -3105,6 +3201,7 @@ struct ConversationDetailView: View {
                 // Build 254: the send moment's focus anchor -- see `case
                 // sendButton`. Focus lands here instead of on her own message.
                 .accessibilityFocused($a11yFocus, equals: .sendButton)
+                .dellaHostProbe("send", identifier: "della-host.chat.send")
             }
         }
         .padding()
@@ -3192,6 +3289,7 @@ struct ConversationDetailView: View {
                 : voiceService.isRecording ? "stop.circle.fill" : "mic.circle.fill")
             .font(.title)
             .foregroundStyle(voiceService.isRecording ? .red : .accentColor)
+            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .accessibilityFocused($a11yFocus, equals: .micButton)
         .accessibilityLabel(micAccessibilityLabel)

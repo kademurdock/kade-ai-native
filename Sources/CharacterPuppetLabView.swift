@@ -12,7 +12,7 @@ struct CharacterPuppetLabView: View {
     @State private var still = false
     @State private var side = 208.0
     @State private var ready = false
-    @State private var articulatedDella = false
+    @AppStorage("kade.della.articulatedReview") private var articulatedDella = false
 
     private enum Mode: String, CaseIterable {
         case idle = "Resting", listening = "Listening", thinking = "Thinking", speaking = "Speaking"
@@ -61,7 +61,7 @@ struct CharacterPuppetLabView: View {
                 if character == .della {
                     Toggle("Preview Della’s articulated body study", isOn: $articulatedDella)
                     if articulatedDella {
-                        Text("Optional taller art study: the original face keeps its size above two attached sleeves and hands. It requires the review asset to be staged; compact sizes retain the accepted portrait. Production layout and phone review are pending.")
+                        Text("Optional simulator body preview for this lab and call/chat screens. The original face keeps its size above two attached sleeves and hands. The review asset must be staged; editing, crowded controls and compact screens use the shorter portrait. Phone review is pending.")
                             .font(.footnote)
                     }
                 }

@@ -1,0 +1,33 @@
+# Della call/chat host review
+
+This optional DEBUG simulator preview carries the accepted articulated Della
+art into the actual `CallView` and `ConversationDetailView`. It preserves the
+original portrait compositor, authored contours, face scale and four source
+images from `3b0bf16dcaee5330167e0031c67461b3d2eae9d9`.
+
+The lab's explicit review toggle enables the host preview only when Della's
+exact identity/avatar and all review assets are present. One resolved layout
+supplies the portrait side and reserved host height. Roomy screens can show the
+taller body; editing, crowded controls, camera and accessibility text retain
+square framing. This decision never depends on speech energy or a frame timer.
+The call portrait's visibility region excludes pinned Mute/Hang Up controls.
+
+The separate bounded native review uses the real hosts with invented local
+messages, drafts, attachments, captions and notification-card state. Buffered,
+upload and byte-stream API requests are rejected before network dispatch.
+Camera-state fixtures mount an inactive preview without starting capture.
+Every fixture pauses motion. Fifteen portrait cases on two actual simulator
+device types are accompanied by eleven focused native control-tree tests.
+Receipts require the exact source revision, immutable art, settled appearance,
+measured stage/control/keyboard geometry and successful native tests.
+
+This lane compiles unsigned on the standard public Mac runner, keeps finite
+boot/install/capture/job bounds, and emits bounded PNG/JSON evidence through
+logs. It does not sign, upload release builds, use paid runners or store cloud
+artifacts/caches. The frozen signed Angel release remains unchanged. Physical
+phone battery, frame timing, live voice and VoiceOver acceptance remain pending.
+
+Native results apply only to their exact commit. No native fit or control-tree
+success is claimed before the new host receipt passes. Review data is stored on
+the F: workspace; recovery retains verified PNG/JSON and compact hash receipts
+without another local copy of the raw job log or archive.

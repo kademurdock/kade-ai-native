@@ -1,0 +1,123 @@
+name: Della full host layout unsigned review
+
+'on':
+  push:
+    branches: [codex/puppet-body-host-layout-20261010]
+    paths:
+      - '.github/workflows/della-host-layout-review.yml'
+      - 'dev/della-host-layout-audit.py'
+      - 'dev/prepare-puppet-review.py'
+      - 'dev/prepare-della-articulated-review.py'
+      - 'dev/della-articulated-review/**'
+      - 'dev/validate-angel-vector.py'
+      - 'Sources/**'
+      - 'CharacterMotionTests/**'
+      - 'FreshAgentChatTests/**'
+      - 'UITests/**'
+      - 'run-character-tests.sh'
+      - 'run-fresh-agent-chat-tests.sh'
+      - 'project.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: della-host-layout-review-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unsigned-review:
+    # Evaluate before allocating the fixed standard public-repository runner.
+    # The JSON comparison rejects null/missing private metadata.
+    if: >-
+      github.event_name == 'push' &&
+      github.event.repository.private == false &&
+      toJSON(github.event.repository.private) == 'false' &&
+      github.repository == 'kademurdock/kade-ai-native' &&
+      github.ref == 'refs/heads/codex/puppet-body-host-layout-20261010' &&
+      toJSON(github.event.deleted) == 'false'
+    runs-on: macos-26
+    # Two real phone devices, fourteen host cases plus one captions scroll case,
+    # and targeted UI-tree tests share one compiled app and a finite job budget.
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      KADE_EXPECTED_COMMIT: ${{ github.sha }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - name: Check out the exact public host candidate source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # official v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source, unchanged approved puppet and public scope
+        run: |
+          set -euo pipefail
+          python3 dev/della-host-layout-audit.py source --expected-sha "$KADE_EXPECTED_COMMIT"
+          python3 dev/prepare-puppet-review.py --check
+          python3 dev/prepare-della-articulated-review.py
+          python3 dev/validate-angel-vector.py
+          xcodebuild -version
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.4.1'
+
+      - name: Run character, motion, host layout and routing model checks
+        run: bash run-character-tests.sh
+
+      - name: Require both real phone device types on installed iOS26.4
+        run: python3 dev/della-host-layout-audit.py preflight --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Stage unchanged optional review art and generate simulator project
+        run: |
+          set -euo pipefail
+          python3 dev/prepare-della-articulated-review.py --prepare
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+
+      - name: Compile unsigned native app and targeted test runner once
+        run: |
+          set -euo pipefail
+          mkdir -p build/della-host-layout-audit
+          host_device_id=$(python3 dev/della-host-layout-audit.py device --expected-sha "$KADE_EXPECTED_COMMIT")
+          xcodebuild -jobs 2 -project KadeAI.xcodeproj -scheme KadeAIA11yAudit -configuration Debug \
+            -sdk iphonesimulator -destination "platform=iOS Simulator,id=$host_device_id" \
+            -derivedDataPath build/della-host-layout-simulator \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            build-for-testing > build/della-host-layout-audit/compile.log 2>&1 || { tail -n 80 build/della-host-layout-audit/compile.log; exit 1; }
+
+      - name: Capture fifteen silent actual call and chat host cases
+        run: python3 dev/della-host-layout-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Test eleven native host control cases without rebuilding
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          host_device_id=$(python3 dev/della-host-layout-audit.py device --expected-sha "$KADE_EXPECTED_COMMIT")
+          set +e
+          xcodebuild -jobs 2 -project KadeAI.xcodeproj -scheme KadeAIA11yAudit -configuration Debug \
+            -sdk iphonesimulator -destination "platform=iOS Simulator,id=$host_device_id" \
+            -derivedDataPath build/della-host-layout-simulator \
+            -resultBundlePath build/della-host-layout-audit/ui-tests.xcresult \
+            -only-testing:KadeAIUITests/DellaHostControlsUITests \
+            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            test-without-building > build/della-host-layout-audit/ui-tests.log 2>&1
+          host_test_exit=$?
+          set -e
+          printf '%s\n' "$host_test_exit" > build/della-host-layout-audit/ui-test-exit-code.txt
+          tail -n 80 build/della-host-layout-audit/ui-tests.log
+          test "$host_test_exit" -eq 0
+
+      - name: Require eleven pass markers and successful native xcresult
+        if: ${{ always() }}
+        run: python3 dev/della-host-layout-audit.py ui-tests --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Always remove optional study catalog
+        if: ${{ always() }}
+        run: python3 dev/prepare-della-articulated-review.py --clean
+
+      - name: Emit bounded host PNG and receipt evidence through free logs
+        if: ${{ always() }}
+        run: python3 dev/della-host-layout-audit.py emit --expected-sha "$KADE_EXPECTED_COMMIT"
+        # No artifact storage, cache, signing, app archive, deployment or release.
