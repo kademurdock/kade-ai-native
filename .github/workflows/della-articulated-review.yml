@@ -35,7 +35,9 @@ jobs:
       github.repository == 'kademurdock/kade-ai-native' &&
       github.ref == 'refs/heads/codex/puppet-articulated-bodies-20261009' &&
       toJSON(github.event.deleted) == 'false'
-    runs-on: macos-26
+    # Standard public-repository Intel runner: 4 CPUs and 14 GB RAM.
+    # Keep Xcode/runtime fixed while avoiding the smaller M1 review host.
+    runs-on: macos-26-intel
     timeout-minutes: 25
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer

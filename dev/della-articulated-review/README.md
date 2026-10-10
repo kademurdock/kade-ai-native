@@ -63,9 +63,13 @@ poses. Bounded PNG and receipt evidence is returned through job logs; it uses
 neither artifact uploads nor caches. No paid or signed build is needed for this
 review. Native compilation and model checks passed at the earlier candidate;
 its partial capture exposed a screenshot acknowledgement timing mismatch.
-The runner now records per-phase timings, bounds each screenshot to 30 seconds,
-and allows 480 seconds for the whole capture. The fixture allows 60 seconds for
-each validated screenshot acknowledgement. The job remains capped at 25 minutes.
+The runner records per-phase timings and allows 480 seconds for the whole
+capture. A later capture compiled and returned eleven valid PNGs before a
+30-second simulator screenshot timeout. The audit now uses the standard free
+Intel Mac runner with 14 GB RAM, retaining Xcode 26.4.1 and iOS 26.4. Each
+screenshot is bounded to 75 seconds and the fixture allows 90 seconds for its
+validated acknowledgement. This is a bounded host/capture adjustment, not a
+diagnosis of the simulator stall. The job remains capped at 25 minutes.
 Its own exact-source receipt determines complete verification status.
 
 Before production registration, review shoulder seams throughout the motion

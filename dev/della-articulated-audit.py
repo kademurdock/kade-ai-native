@@ -38,6 +38,7 @@ MAX_RAW = 50 * 1024 * 1024
 MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_ENCODED = 44 * 1024 * 1024
 CAPTURE_SECONDS = 480
+SCREENSHOT_SECONDS = 75
 BOOT_SECONDS = 420
 MAX_FILES = 32
 NATIVE_CHECKS = {
@@ -187,7 +188,7 @@ def capture(expected):
     require(device is not None,'Documented standard iPhone17ProMax simulator missing')
     identifier=sim('create','Della exact-source unsigned art review',device,runtime)
     receipt={'source':old,'simulator':{'device':device,'runtime':runtime},'captures':{},'captureTimings':{},
-             'captureTimeoutSeconds':CAPTURE_SECONDS,
+             'captureTimeoutSeconds':CAPTURE_SECONDS,'screenshotTimeoutSeconds':SCREENSHOT_SECONDS,
              'nativeRenderingVerified':False,'physicalPhoneVerified':False,'audioStarted':False,
              'microphoneStarted':False,'startedAtUtc':now(),'passed':False}
     capture_started=None
@@ -233,7 +234,7 @@ def capture(expected):
                     try:
                         remaining=deadline-phase_started
                         require(remaining>0,f'Focused native capture exceeded{CAPTURE_SECONDS}-second watchdog')
-                        sim('io',identifier,'screenshot',str(path),timeout=min(30,remaining))
+                        sim('io',identifier,'screenshot',str(path),timeout=min(SCREENSHOT_SECONDS,remaining))
                         timing['screenshotSeconds']=round(time.monotonic()-phase_started,3)
                         validation_started=time.monotonic()
                         receipt['captures'][label]=png(path)

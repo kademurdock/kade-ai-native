@@ -45,9 +45,9 @@ struct CharacterDellaArticulatedAuditView: View {
         phase = label
         try await Task.sleep(nanoseconds: 600_000_000)
         try label.write(to: output.appendingPathComponent("della-articulated-phase.txt"), atomically: true, encoding: .utf8)
-        // The runner allows a screenshot up to 30 seconds, then validates it
+        // The runner allows a screenshot up to 75 seconds, then validates it
         // before acknowledging. Leave bounded room for that whole operation.
-        for _ in 0..<300 {
+        for _ in 0..<450 {
             if (try? String(contentsOf: output.appendingPathComponent("della-articulated-captured.txt"), encoding: .utf8)) == label {
                 captures.append(label)
                 return
