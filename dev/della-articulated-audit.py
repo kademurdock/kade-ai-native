@@ -38,6 +38,7 @@ MAX_RAW = 50 * 1024 * 1024
 MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_ENCODED = 44 * 1024 * 1024
 CAPTURE_SECONDS = 240
+BOOT_SECONDS = 420
 MAX_FILES = 32
 NATIVE_CHECKS = {
     'Optional gesture master and accepted Della torso/matte are bundled',
@@ -129,15 +130,18 @@ def sim(*args, timeout=45, env=None):
         return subprocess.check_output(['xcrun','simctl',*args],text=True,stderr=subprocess.PIPE,
                                        timeout=timeout,env=env).strip()
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
-        diagnostic=error.stderr or ''
-        if isinstance(diagnostic,bytes):
-            diagnostic=diagnostic.decode('utf-8',errors='replace')
-        diagnostic=re.sub(r'https?://\S+','[URL omitted]',diagnostic)
-        diagnostic=re.sub(r'(?i)(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+',
-                          r'\1=[redacted]',diagnostic)
         print(f'simctl {args[0] if args else "operation"} failed ({type(error).__name__}, timeout bound{timeout}s).',file=sys.stderr)
-        if diagnostic:
-            print(diagnostic[-4000:],file=sys.stderr)
+        # bootstatus reports startup progress on stdout, including when the
+        # cold simulator exceeds its readiness bound. Preserve that evidence.
+        for stream_name,stream in [('stdout',error.output),('stderr',error.stderr)]:
+            diagnostic=stream or ''
+            if isinstance(diagnostic,bytes):
+                diagnostic=diagnostic.decode('utf-8',errors='replace')
+            diagnostic=re.sub(r'https?://\S+','[URL omitted]',diagnostic)
+            diagnostic=re.sub(r'(?i)(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+',
+                              r'\1=[redacted]',diagnostic)
+            if diagnostic:
+                print(stream_name+':\n'+diagnostic[-4000:],file=sys.stderr)
         raise
 
 
@@ -186,8 +190,6 @@ def capture(expected):
              'nativeRenderingVerified':False,'physicalPhoneVerified':False,'audioStarted':False,
              'microphoneStarted':False,'startedAtUtc':now(),'passed':False}
     try:
-        sim('boot',identifier)
-        sim('bootstatus',identifier,'-b',timeout=120)
         app=ROOT/'build/della-articulated-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
         require(app.is_dir(),'Unsigned Debug simulator app missing')
         info=plistlib.loads((app/'Info.plist').read_bytes())
@@ -199,6 +201,12 @@ def capture(expected):
         receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.11','buildVersion':'100',
                              'platform':'iphonesimulator','infoPlistSha256':sha(app/'Info.plist'),
                              'developerSigningIdentityUsed':False}
+        receipt['simulator']['bootTimeoutSeconds']=BOOT_SECONDS
+        sim('boot',identifier)
+        boot_started=time.monotonic()
+        sim('bootstatus',identifier,'-b',timeout=BOOT_SECONDS)
+        receipt['simulator']['bootReady']=True
+        receipt['simulator']['bootSeconds']=round(time.monotonic()-boot_started,3)
         sim('install',identifier,str(app),timeout=60)
         documents=Path(sim('get_app_container',identifier,BUNDLE_ID,'data'))/'Documents'
         documents.mkdir(exist_ok=True)
@@ -250,6 +258,12 @@ def capture(expected):
     except Exception as error:
         receipt['errorType']=type(error).__name__
         receipt['error']=str(error) if isinstance(error,RuntimeError) else 'Simulator operation failed; inspect normal step logs'
+        if isinstance(error,(subprocess.TimeoutExpired,subprocess.CalledProcessError)):
+            command=error.cmd
+            if isinstance(command,(list,tuple)) and len(command)>2:
+                receipt['failedOperation']=str(command[2])
+            if isinstance(error,subprocess.TimeoutExpired):
+                receipt['timeoutSeconds']=error.timeout
         raise
     finally:
         receipt['finishedAtUtc']=now()
