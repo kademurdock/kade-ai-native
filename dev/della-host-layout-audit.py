@@ -6,7 +6,7 @@ No server, signing, app package, account transcript, artifact storage or release
 """
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from io import BytesIO
 import json
@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import selectors
+import signal
 import struct
 import subprocess
 import sys
@@ -142,6 +144,35 @@ SCREENSHOT_SECONDS=75
 READY_SECONDS=30
 BOOT_SECONDS=420
 INSTALL_SECONDS=180
+UI_SECONDS={'large':600,'small':480}
+UI_LOG_BYTES=8*1024*1024
+UI_STOP_SECONDS=10
+EXPECTED_MODEL_CHECKS=27192
+JOB_SECONDS=55*60
+OPERATION_SECONDS=52*60
+FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS
+_OPERATION_DEADLINE=None
+_DEADLINE_ROLE='sharedOperationDeadline'
+
+
+def operation_remaining(bound):
+    if _OPERATION_DEADLINE is None: return bound
+    remaining=_OPERATION_DEADLINE-time.time()
+    require(remaining>0,'Shared host operation deadline expired; final receipts are reserved')
+    return min(bound,remaining)
+
+
+def validate_operation_source(initial):
+    started=datetime.fromisoformat(initial['operationStartedAtUtc'])
+    deadline=datetime.fromisoformat(initial['operationDeadlineUtc'])
+    checked=datetime.fromisoformat(initial['checkedAtUtc'])
+    require(all(value.tzinfo is not None for value in (started,deadline,checked))
+            and abs((deadline-started).total_seconds()-OPERATION_SECONDS)<2
+            and started<=checked and initial.get('operationTimeoutSeconds')==OPERATION_SECONDS
+            and initial.get('jobTimeoutSeconds')==JOB_SECONDS
+            and initial.get('finalReceiptReserveSeconds')==FINAL_RESERVE_SECONDS,
+            'Original before-checkout shared deadline/reserve source record mismatch')
+    return initial
 
 def require(ok, message):
     if not ok:
@@ -163,10 +194,12 @@ def save(name, data):
 
 
 def git(*args):
-    return subprocess.check_output(['git', '-C', str(ROOT), *args], text=True, stderr=subprocess.PIPE).strip()
+    return subprocess.check_output(['git', '-C', str(ROOT), *args], text=True, stderr=subprocess.PIPE,
+                                   timeout=operation_remaining(30)).strip()
 
 
 def sim(*args, timeout=45, env=None):
+    timeout=operation_remaining(timeout)
     try:
         return subprocess.check_output(['xcrun','simctl',*args],text=True,stderr=subprocess.PIPE,
                                        timeout=timeout,env=env).strip()
@@ -352,6 +385,357 @@ def simulator_record(expected):
         require(len(matches)==1 and matches[0].get('isAvailable') is True
                 and matches[0].get('deviceTypeIdentifier')==device['type'],'Requested real simulator no longer available')
     return record
+
+
+def compiled_tests(expected):
+    """Bind test-without-building to the unchanged products of the one build."""
+    initial=initial_source(expected)
+    products=ROOT/'build/della-host-layout-simulator/Build/Products'
+    candidates=list(products.glob('KadeAIA11yAudit_*.xctestrun'))
+    require(len(candidates)==1,'Exactly one compiled audit xctestrun is required')
+    run=candidates[0]
+    require(run.stat().st_size<=1024*1024,'Oversized compiled xctestrun')
+    data=plistlib.loads(run.read_bytes())
+    version=data.get('__xctestrun_metadata__',{}).get('FormatVersion')
+    if version==1:
+        targets=[dict(value,BlueprintName=value.get('BlueprintName',key))
+                 for key,value in data.items() if key!='__xctestrun_metadata__' and isinstance(value,dict)]
+    elif version==2:
+        configurations=data.get('TestConfigurations',[])
+        require(isinstance(configurations,list) and len(configurations)==1,
+                'Unexpected multiple compiled test configurations')
+        require(configurations[0].get('IsEnabled',True) is True,'Compiled test configuration is disabled')
+        targets=configurations[0].get('TestTargets',[])
+    else: raise RuntimeError('Unsupported compiled xctestrun format')
+    require(isinstance(targets,list) and len(targets)==1,'Unexpected compiled test target set')
+    target=targets[0]
+    require(target.get('BlueprintName')=='KadeAIUITests' and target.get('IsUITestBundle') is True
+            and target.get('UseDestinationArtifacts',False) is False,
+            'Compiled runner must be the original local UI test target')
+    def resolve(value,host=None):
+        require(isinstance(value,str) and 0<len(value)<=2048,'Invalid compiled artifact path')
+        value=value.replace('__TESTROOT__',str(run.parent))
+        if host is not None: value=value.replace('__TESTHOST__',str(host))
+        require('__' not in value,'Unsupported artifact path placeholder')
+        path=Path(value).resolve()
+        require(path.is_relative_to(products.resolve()),'Compiled artifact escaped the exact build products')
+        return path
+    host=resolve(target.get('TestHostPath'))
+    bundle=resolve(target.get('TestBundlePath'),host)
+    app=resolve(target.get('UITargetAppPath'),host)
+    require(host==(products/'Debug-iphonesimulator/KadeAIUITests-Runner.app').resolve()
+            and bundle==(host/'PlugIns/KadeAIUITests.xctest').resolve()
+            and app==APP.resolve(),'Compiled app/runner/test bundle paths drift')
+    artifacts={}
+    identities={'app':BUNDLE_ID,'runner':'com.kademurdock.kadeai.uitests.xctrunner',
+                'testBundle':'com.kademurdock.kadeai.uitests'}
+    for role,path in (('app',app),('runner',host),('testBundle',bundle)):
+        require(path.is_dir() and not (path/'_CodeSignature').exists(),'Unsigned compiled '+role+' missing or signed')
+        info=plistlib.loads((path/'Info.plist').read_bytes())
+        require(info.get('CFBundleIdentifier')==identities[role]
+                and (info.get('DTPlatformName')=='iphonesimulator'
+                     or 'iPhoneSimulator' in info.get('CFBundleSupportedPlatforms',[])),
+                'Compiled '+role+' simulator identity mismatch')
+        executable=info.get('CFBundleExecutable')
+        require(isinstance(executable,str) and Path(executable).name==executable
+                and (path/executable).is_file() and (path/executable).stat().st_size<=512*1024*1024,
+                'Compiled '+role+' executable missing or unbounded')
+        if role=='app':
+            require(info.get('CFBundleShortVersionString')=='2.2.11' and str(info.get('CFBundleVersion'))=='100'
+                    and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
+                    'Compiled app version/orientation drift')
+        artifacts[role]={'path':str(path.relative_to(ROOT)),'bundleId':identities[role],
+                         'infoPlistSha256':sha(path/'Info.plist'),'executableSha256':sha(path/executable)}
+    result={'schema':'kade.della-host-compiled-tests.v1','source':initial,'formatVersion':version,
+            'xctestrun':str(run.relative_to(ROOT)),'xctestrunSha256':sha(run),'artifacts':artifacts,
+            'unsignedSimulatorOnly':True,'testTarget':'KadeAIUITests'}
+    return validate_compiled_record(result,initial)
+
+
+def validate_compiled_record(data,initial):
+    require(isinstance(data,dict) and data.get('schema')=='kade.della-host-compiled-tests.v1'
+            and data.get('source')==initial and type(data.get('formatVersion')) is int
+            and data['formatVersion'] in (1,2) and data.get('unsignedSimulatorOnly') is True
+            and data.get('testTarget')=='KadeAIUITests','Compiled test record/source mismatch')
+    require(isinstance(data.get('xctestrun'),str) and re.fullmatch(
+        r'build/della-host-layout-simulator/Build/Products/KadeAIA11yAudit_[A-Za-z0-9_.-]+\.xctestrun',data['xctestrun'])
+        and re.fullmatch(r'[a-f0-9]{64}',data.get('xctestrunSha256','')),'Invalid exact compiled xctestrun record')
+    expected={'app':('Debug-iphonesimulator/KadeAI.app',BUNDLE_ID),
+              'runner':('Debug-iphonesimulator/KadeAIUITests-Runner.app','com.kademurdock.kadeai.uitests.xctrunner'),
+              'testBundle':('Debug-iphonesimulator/KadeAIUITests-Runner.app/PlugIns/KadeAIUITests.xctest','com.kademurdock.kadeai.uitests')}
+    require(isinstance(data.get('artifacts'),dict) and set(data['artifacts'])==set(expected),'Compiled artifact roles drift')
+    for role,(path,identifier) in expected.items():
+        item=data['artifacts'][role]
+        require(isinstance(item,dict) and set(item)=={'path','bundleId','infoPlistSha256','executableSha256'}
+                and item['path']=='build/della-host-layout-simulator/Build/Products/'+path and item['bundleId']==identifier
+                and all(re.fullmatch(r'[a-f0-9]{64}',item.get(key,'')) for key in ('infoPlistSha256','executableSha256')),
+                'Compiled artifact identity/hash record drift: '+role)
+    return data
+
+
+def validate_ui_boot(report,key,initial):
+    require(isinstance(report,dict) and report.get('source')==initial and report.get('device')==key
+            and type(report.get('passed')) is bool and report.get('timeoutSeconds')==BOOT_SECONDS,
+            'Explicit UI boot diagnostic/source mismatch')
+    if 'identifier' in report:
+        require(isinstance(report['identifier'],str) and re.fullmatch(
+            r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',report['identifier']), 'Invalid explicit UI device UUID')
+    if 'alreadyBooted' in report:require(type(report['alreadyBooted']) is bool,'Invalid UI boot-state observation')
+    require(number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=BOOT_SECONDS+5,
+            'Unbounded explicit UI boot elapsed time')
+    if report['passed']:
+        require('identifier' in report and 'alreadyBooted' in report and 'errorType' not in report
+                and report['elapsedSeconds']<=BOOT_SECONDS+1,'Failed explicit UI boot retained success')
+    return report
+
+
+def boot_ui(expected,key):
+    initial=initial_source(expected)
+    report={'source':initial,'device':key,'passed':False,'timeoutSeconds':BOOT_SECONDS,'startedAtUtc':now()}
+    started=time.monotonic()
+    try:
+        require(sys.platform=='darwin','Explicit UI simulator boot requires standard macOS')
+        records=simulator_record(expected)['devices']
+        identifier=records[key]['identifier'];report['identifier']=identifier
+        deadline=started+operation_remaining(BOOT_SECONDS)
+        def remaining(bound):
+            seconds=deadline-time.monotonic()
+            require(seconds>0,'Explicit UI simulator boot watchdog expired')
+            return min(bound,seconds)
+        installed=json.loads(sim('list','devices','--json',timeout=remaining(45)))['devices']
+        states={item['udid']:item.get('state') for items in installed.values() for item in items}
+        other=records['small' if key=='large' else 'large']['identifier']
+        if states.get(other)=='Booted': sim('shutdown',other,timeout=remaining(30))
+        report['alreadyBooted']=states.get(identifier)=='Booted'
+        if not report['alreadyBooted']: sim('boot',identifier,timeout=remaining(45))
+        sim('bootstatus',identifier,'-b',timeout=remaining(BOOT_SECONDS))
+        report['passed']=True
+    except Exception as error:
+        report.update(passed=False,errorType=type(error).__name__,
+                      error=str(error) if isinstance(error,RuntimeError) else 'Explicit UI simulator boot failed')
+        raise
+    finally:
+        report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
+        save('ui-boot-'+key+'.json',report)
+    return report
+
+
+def sanitize_ui_line(line):
+    line=re.sub(r'https?://\S+','[URL omitted]',line)
+    line=re.sub(r'(?:github_pat_|ghp_)[A-Za-z0-9_]+','[credential omitted]',line)
+    line=re.sub(r'(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+',
+                r'\1=[redacted]',line,flags=re.I)
+    return ''.join(character for character in line if character=='\t' or ord(character)>=32)[:320]
+
+
+def observe_ui_line(report,line,key):
+    methods=ui_methods(key)
+    if re.search(r'Command line invocation:|xcodebuild |Build settings from command line:|Testing started|Test Suite .* started|Selected tests|Preparing|Writing result bundle|[Ss]imulator|destination',line):
+        report['startupMessages']=(report['startupMessages']+[sanitize_ui_line(line)])[-6:]
+    if re.search(r'\bt\s*=\s*[0-9.]+s?\s+(Launch|Wait for|Find|Get number|Checking|Query|Tap|Scroll|Swipe)\b',line):
+        report['activityMessages']=(report['activityMessages']+[sanitize_ui_line(line)])[-12:]
+    if 'Testing started' in line or re.search(r'Test Suite .* started',line): report['startupStage']='testingStarted'
+    match=re.search(r'Test Case [^\r\n]{0,180}DellaHostControlsUITests[ .]+(test[A-Za-z]+)'
+                    r'[^\r\n]{0,8} (started|passed|failed)(?: \(([0-9.]+) seconds\))?',line)
+    if match and match[1] in methods:
+        method,state,duration=match.groups();entry=report['testMethods'].setdefault(method,{'phase':methods[method]})
+        entry['status']=state;report['startupStage']='testCaseStarted'
+        if state=='started': report['lastStartedMethod']=method
+        if duration is not None and number(float(duration)) and 0<=float(duration)<=3600:
+            entry['durationSeconds']=float(duration)
+        print('KADE_DELLA_HOST_UI_TEST '+json.dumps({'device':key,'method':method,**entry},separators=(',',':')),flush=True)
+    if re.search(r'\berror:|XCTAssert|failed -|Error Domain|Failed to|Unable to|Testing failed|\*\* TEST FAILED \*\*|KADE_DELLA_HOST_CONTROLS_FAILED',line):
+        bounded=sanitize_ui_line(line)
+        report['failureLines']=(report['failureLines']+[bounded])[-12:]
+
+
+def stop_ui_process(process):
+    if process.poll() is not None: return
+    try: os.killpg(process.pid,signal.SIGTERM)
+    except ProcessLookupError: pass
+    try: process.wait(timeout=UI_STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError: pass
+        process.wait(timeout=UI_STOP_SECONDS)
+
+
+def build_tests(expected):
+    initial=initial_source(expected)
+    require(sys.platform=='darwin','Unsigned native build requires standard macOS')
+    identifier=simulator_record(expected)['devices']['large']['identifier']
+    command=['xcodebuild','-jobs','2','-project','KadeAI.xcodeproj','-scheme','KadeAIA11yAudit',
+             '-configuration','Debug','-sdk','iphonesimulator','-destination','platform=iOS Simulator,id='+identifier,
+             '-derivedDataPath','build/della-host-layout-simulator','CODE_SIGNING_ALLOWED=NO',
+             'CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=','build-for-testing']
+    report={'source':initial,'passed':False,'timedOut':False,'logLimitExceeded':False,'failureLines':[],
+            'startedAtUtc':now(),'timeoutSeconds':900,'exitCode':None}
+    process=None;started=time.monotonic()
+    try:
+        effective=operation_remaining(900)
+        process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True,bufsize=0,cwd=ROOT)
+        deadline=time.monotonic()+effective;written=0;pending=b'';drain_deadline=None
+        with (OUT/'compile.log').open('wb') as log, selectors.DefaultSelector() as selector:
+            selector.register(process.stdout,selectors.EVENT_READ)
+            while selector.get_map():
+                if time.monotonic()>=deadline and process.poll() is None:
+                    report['timedOut']=True;stop_ui_process(process)
+                if process.poll() is not None:
+                    if drain_deadline is None:drain_deadline=time.monotonic()+UI_STOP_SECONDS
+                    if time.monotonic()>=drain_deadline:break
+                for selected,_ in selector.select(.25):
+                    chunk=os.read(selected.fileobj.fileno(),65536)
+                    if not chunk:selector.unregister(selected.fileobj);continue
+                    log.write(chunk[:max(0,UI_LOG_BYTES-written)]);written+=len(chunk);pending+=chunk
+                    if written>UI_LOG_BYTES:report['logLimitExceeded']=True;stop_ui_process(process)
+                    while b'\n' in pending:
+                        line,pending=pending.split(b'\n',1);line=line[:4096].decode('utf-8','replace')
+                        if re.search(r'\berror:|\*\* BUILD FAILED \*\*',line):
+                            report['failureLines']=(report['failureLines']+[sanitize_ui_line(line)])[-12:]
+                    if len(pending)>4096:pending=pending[-4096:]
+        report['exitCode']=process.wait(timeout=UI_STOP_SECONDS)
+        require(report['exitCode']==0 and not report['timedOut'] and not report['logLimitExceeded'],
+                'The single bounded unsigned build-for-testing failed')
+        result=compiled_tests(expected);save('compiled-tests.json',result);report['passed']=True
+    finally:
+        if process is not None:
+            try:stop_ui_process(process)
+            except Exception as error:report.update(passed=False,cleanupErrorType=type(error).__name__)
+            report['exitCode']=process.poll()
+        report['elapsedSeconds']=round(time.monotonic()-started,3);save('build-tests.json',report)
+        for line in report['failureLines']:print('KADE_DELLA_HOST_BUILD_FAILURE '+line,flush=True)
+        print('KADE_DELLA_HOST_BUILD '+json.dumps({name:report[name] for name in
+              ('passed','timedOut','logLimitExceeded','exitCode','elapsedSeconds')},separators=(',',':')),flush=True)
+    return result
+
+
+def ui_launch_record(initial,key):
+    return {'schema':'kade.della-host-ui-launch.v1','source':initial,'device':key,'passed':False,
+            'timeoutSeconds':UI_SECONDS[key],'timedOut':False,'logLimitExceeded':False,
+            'startupStage':'notStarted','testMethods':{},'lastStartedMethod':None,'failureLines':[],
+            'startupMessages':[],'activityMessages':[],
+            'exitCode':None,'startedAtUtc':now(),'status':'startupFailed'}
+
+
+def run_ui(expected,key):
+    initial=initial_source(expected)
+    report=ui_launch_record(initial,key)
+    started=time.monotonic();process=None
+    try:
+        require(sys.platform=='darwin','Bounded native UI launch requires standard macOS')
+        boot=json.loads((OUT/('ui-boot-'+key+'.json')).read_text())
+        require(boot.get('source')==initial and boot.get('device')==key and boot.get('passed') is True,
+                'UI launch requires the exact successful explicit device boot')
+        report['boot']=boot
+        compiled=compiled_tests(expected);report['compiledRunner']=compiled
+        identifier=simulator_record(expected)['devices'][key]['identifier']
+        require(identifier==boot['identifier'],'UI launch device differs from explicit boot')
+        bundle=OUT/('ui-tests-'+key+'.xcresult')
+        require(not bundle.exists(),'Refusing to overwrite a native UI result bundle')
+        command=['xcodebuild','-jobs','2','test-without-building','-xctestrun',str(ROOT/compiled['xctestrun']),
+                 '-destination','platform=iOS Simulator,id='+identifier,'-resultBundlePath',str(bundle),
+                 '-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1',
+                 *['-only-testing:KadeAIUITests/DellaHostControlsUITests/'+method for method in ui_methods(key)],
+                 'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=']
+        effective=operation_remaining(UI_SECONDS[key]);report['effectiveTimeoutSeconds']=effective
+        process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                                 start_new_session=True,bufsize=0,cwd=ROOT)
+        report['startupStage']='processStarted';report['status']='running';launched=time.monotonic()
+        deadline=launched+effective;raw_bytes=0;pending=b'';drain_deadline=None
+        with (OUT/('ui-tests-'+key+'.log')).open('wb') as log, selectors.DefaultSelector() as selector:
+            selector.register(process.stdout,selectors.EVENT_READ)
+            while selector.get_map():
+                if time.monotonic()>=deadline and process.poll() is None:
+                    report['timedOut']=True;report['status']='timeout';stop_ui_process(process)
+                    report['timeoutCause']='testDeadline' if effective==UI_SECONDS[key] else _DEADLINE_ROLE
+                if process.poll() is not None:
+                    if drain_deadline is None: drain_deadline=time.monotonic()+UI_STOP_SECONDS
+                    if time.monotonic()>=drain_deadline:
+                        for selected in list(selector.get_map().values()): selector.unregister(selected.fileobj)
+                        break
+                for selected,_ in selector.select(.25):
+                    chunk=os.read(selected.fileobj.fileno(),65536)
+                    if not chunk: selector.unregister(selected.fileobj);continue
+                    keep=max(0,UI_LOG_BYTES-raw_bytes);log.write(chunk[:keep]);raw_bytes+=len(chunk)
+                    if raw_bytes>UI_LOG_BYTES:
+                        report['logLimitExceeded']=True;report['status']='logLimit';stop_ui_process(process)
+                    pending+=chunk
+                    while b'\n' in pending:
+                        line,pending=pending.split(b'\n',1);observe_ui_line(report,line[:4096].decode('utf-8','replace'),key)
+                    if len(pending)>4096: pending=pending[-4096:]
+                if process.poll() is not None and not selector.get_map(): break
+            if pending: observe_ui_line(report,pending.decode('utf-8','replace'),key)
+        report['testElapsedSeconds']=round(time.monotonic()-launched,3)
+        report['exitCode']=process.wait(timeout=UI_STOP_SECONDS)
+        if not report['timedOut'] and not report['logLimitExceeded']:
+            report['status']='completed' if report['exitCode']==0 else 'processFailed'
+        report['passed']=report['status']=='completed'
+        require(compiled_tests(expected)==compiled,'Compiled test runner changed during UI launch')
+        require(report['passed'],'Bounded native UI launch did not complete successfully: '+key)
+    except Exception as error:
+        report.update(passed=False,errorType=type(error).__name__,
+                      error=str(error) if isinstance(error,RuntimeError) else 'Bounded UI launcher failed')
+        raise
+    finally:
+        if process is not None:
+            try: stop_ui_process(process)
+            except Exception as error:
+                report.update(passed=False,cleanupErrorType=type(error).__name__)
+            report['exitCode']=process.poll()
+        report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
+        save('ui-run-'+key+'.json',report)
+        for line in report['failureLines']: print('KADE_DELLA_HOST_UI_FAILURE '+line,flush=True)
+        print('KADE_DELLA_HOST_UI_LAUNCH '+json.dumps({name:report[name] for name in
+              ('device','status','startupStage','timedOut','logLimitExceeded','lastStartedMethod','exitCode')},separators=(',',':')),flush=True)
+    return report
+
+
+def validate_ui_launch(report,key,initial):
+    require(isinstance(report,dict) and report.get('schema')=='kade.della-host-ui-launch.v1'
+            and report.get('source')==initial and report.get('device')==key
+            and report.get('timeoutSeconds')==UI_SECONDS[key], 'Native UI launcher/source/device contract mismatch')
+    require(type(report.get('passed')) is bool and type(report.get('timedOut')) is bool
+            and type(report.get('logLimitExceeded')) is bool
+            and report.get('status') in ('startupFailed','running','completed','processFailed','timeout','logLimit','interrupted')
+            and report.get('startupStage') in ('notStarted','processStarted','testingStarted','testCaseStarted'),
+            'Invalid native UI launcher status')
+    require(report.get('exitCode') is None or type(report.get('exitCode')) is int,
+            'Invalid native UI exit status')
+    methods=report.get('testMethods',{})
+    known=ui_methods(key)
+    require(isinstance(methods,dict) and set(methods)<=set(known)
+            and report.get('lastStartedMethod') in {None,*known},'Unknown native UI test method diagnostic')
+    require(report.get('lastStartedMethod') is None or report['lastStartedMethod'] in methods,
+            'Last native method has no observed test-start record')
+    for method,entry in methods.items():
+        require(isinstance(entry,dict) and set(entry)<={'phase','status','durationSeconds'}
+                and entry.get('phase')==known[method] and entry.get('status') in ('started','passed','failed'),
+                'Invalid native UI method diagnostic')
+        if 'durationSeconds' in entry:
+            require(number(entry['durationSeconds']) and 0<=entry['durationSeconds']<=3600,
+                    'Unbounded native UI test duration')
+    for name,bound in (('failureLines',12),('startupMessages',6),('activityMessages',12)):
+        lines=report.get(name)
+        require(isinstance(lines,list) and len(lines)<=bound
+                and all(isinstance(line,str) and len(line)<=320 and sanitize_ui_line(line)==line for line in lines),
+                'Unsafe/unbounded native UI diagnostic text')
+    for name,maximum in (('elapsedSeconds',720 if key=='large' else 600),
+                         ('testElapsedSeconds',UI_SECONDS[key]+2*UI_STOP_SECONDS),
+                         ('effectiveTimeoutSeconds',UI_SECONDS[key])):
+        if name in report:require(number(report[name]) and 0<=report[name]<=maximum+5,
+                                  'Unbounded native UI timing diagnostic: '+name)
+    if 'timeoutCause' in report:
+        require(report['timedOut'] is True and report['timeoutCause'] in
+                ('testDeadline','sharedOperationDeadline','actionGuardDeadline'),'Invalid native UI timeout diagnostic')
+    if report['passed']:
+        require(report['status']=='completed' and report['exitCode']==0 and report['timedOut'] is False
+                and report['logLimitExceeded'] is False and 'errorType' not in report
+                and report.get('boot',{}).get('passed') is True,
+                'Failed/partial native UI launch retained a success flag')
+    if 'boot' in report:validate_ui_boot(report['boot'],key,initial)
+    if 'compiledRunner' in report:validate_compiled_record(report['compiledRunner'],initial)
+    if report['passed']:require('compiledRunner' in report,'Successful UI launch lacks exact compiled runner proof')
+    return report
 
 
 def number(value):
@@ -591,6 +975,10 @@ def validate_ready(data,phase,device):
 
 def capture(expected):
     initial=initial_source(expected)
+    ui=json.loads((OUT/'ui-tests.json').read_text())
+    require(ui.get('source')==initial and ui.get('passed') is True and ui.get('nativeUITreeVerified') is True
+            and set(ui.get('phaseChecks',{}))==UI_PHASES,
+            'Actual host capture requires both successful native UI device groups first')
     require(source(expected,require_staged=True)['inputs']==initial['inputs'],'Staged source changed')
     require(sys.platform=='darwin','Native host capture requires standard macOS')
     records=simulator_record(expected)['devices']
@@ -630,7 +1018,9 @@ def capture(expected):
             device['bootReady']=False
             boot_started=time.monotonic()
             try:
-                sim('boot',identifier,timeout=global_remaining(45))
+                installed=json.loads(sim('list','devices','--json',timeout=global_remaining(45)))['devices']
+                states={item['udid']:item.get('state') for items in installed.values() for item in items}
+                if states.get(identifier)!='Booted': sim('boot',identifier,timeout=global_remaining(45))
                 sim('bootstatus',identifier,'-b',timeout=global_remaining(BOOT_SECONDS))
                 device['bootReady']=True
             finally:
@@ -647,7 +1037,8 @@ def capture(expected):
             if aggregate_started is None:
                 aggregate_started=time.monotonic()
                 receipt['captureStartedAtUtc']=now()
-            aggregate_deadline=aggregate_started+AGGREGATE_CAPTURE_SECONDS
+            aggregate_deadline=min(aggregate_started+AGGREGATE_CAPTURE_SECONDS,
+                                   time.monotonic()+operation_remaining(AGGREGATE_CAPTURE_SECONDS))
             device_started=time.monotonic()
             deadline=min(device_started+CAPTURE_SECONDS,aggregate_deadline)
             device_phases=[phase for phase in PHASES if case_device(phase)==key]
@@ -753,10 +1144,25 @@ def ui_tests(expected):
             result={'passed':False,'phaseChecks':{},'expectedTestCount':count}
             report['deviceResults'][device]=result
             try:
+                boot_path=OUT/('ui-boot-'+device+'.json')
+                if boot_path.exists():
+                    boot=json.loads(boot_path.read_text())
+                    result['boot']=validate_ui_boot(boot,device,initial)
+                launch_path=OUT/('ui-run-'+device+'.json')
+                launch=None
+                if launch_path.exists():
+                    launch=json.loads(launch_path.read_text())
+                    result['launch']=validate_ui_launch(launch,device,initial)
                 phases=set(ui_methods(device).values())
                 log_path=OUT/('ui-tests-'+device+'.log')
                 require(log_path.stat().st_size<=8*1024*1024,'Oversized synthetic UI test log for '+device)
                 log=log_path.read_text(encoding='utf-8',errors='replace')
+                if launch is None:
+                    launch=ui_launch_record(initial,device)
+                    launch.update(status='interrupted',startupStage='processStarted',
+                                  errorType='MissingLauncherReceipt',outerTimeoutPossible=True)
+                    for line in log.splitlines():observe_ui_line(launch,line[:4096],device)
+                result['launch']=validate_ui_launch(launch,device,initial)
                 result['logSha256']=sha(log_path)
                 matches=re.findall(r'KADE_DELLA_HOST_CONTROLS_PASSED (\d+) ([a-z0-9-]+)',log)
                 require(len(matches)<=count and len({phase for _,phase in matches})==len(matches)
@@ -764,7 +1170,7 @@ def ui_tests(expected):
                         'Invalid/duplicate cross-device UI controls markers for '+device)
                 result['phaseChecks']={phase:int(checks) for checks,phase in matches}
                 report['phaseChecks'].update(result['phaseChecks'])
-                require((OUT/('ui-test-'+device+'-exit-code.txt')).read_text().strip()=='0',
+                require(launch.get('passed') is True and launch.get('exitCode')==0,
                         'Targeted native UI test process did not succeed for '+device)
                 require('KADE_DELLA_HOST_CONTROLS_FAILED' not in log,
                         'Native UI controls failure marker present for '+device)
@@ -773,7 +1179,7 @@ def ui_tests(expected):
                 bundle=OUT/('ui-tests-'+device+'.xcresult')
                 require(bundle.is_dir(),'Native UI result bundle missing for '+device)
                 raw=subprocess.check_output(['xcrun','xcresulttool','get','test-results','summary','--path',str(bundle)],
-                                            text=True,stderr=subprocess.PIPE,timeout=60)
+                                            text=True,stderr=subprocess.PIPE,timeout=operation_remaining(30))
                 require(len(raw)<=1024*1024,'Oversized UI test summary for '+device)
                 summary=json.loads(raw)
                 counts={key:summary.get(key) for key in ('totalTestCount','passedTests','failedTests','skippedTests')}
@@ -790,6 +1196,17 @@ def ui_tests(expected):
                 result.update(passed=False,errorType=type(error).__name__,
                               error=str(error) if isinstance(error,RuntimeError) else 'UI result operation failed for '+device)
                 failures.append(device)
+            finally:
+                if 'boot' in result:
+                    print('KADE_DELLA_HOST_UI_BOOT_DIAGNOSTIC '+json.dumps({
+                        'device':device,**{name:result['boot'].get(name) for name in
+                        ('passed','identifier','alreadyBooted','elapsedSeconds','errorType','error')}},separators=(',',':')),flush=True)
+                if 'launch' in result:
+                    print('KADE_DELLA_HOST_UI_DIAGNOSTIC '+json.dumps({
+                        'device':device,**{name:result['launch'].get(name) for name in
+                        ('status','startupStage','timedOut','logLimitExceeded','lastStartedMethod',
+                         'exitCode','elapsedSeconds','testElapsedSeconds','testMethods','failureLines','startupMessages','activityMessages')}},
+                        separators=(',',':')),flush=True)
         report['checks']=sum(report['phaseChecks'].values())
         require(not failures,'Native UI device groups incomplete or failed: '+','.join(failures))
         require(set(report['phaseChecks'])==UI_PHASES,'Twenty-four targeted native UI phases incomplete')
@@ -848,19 +1265,48 @@ def emit(expected):
             'encoding':'base64','artifactStorageUsed':False}
     print('KADE_DELLA_HOST_QA_BEGIN '+json.dumps(header,separators=(',',':')),flush=True)
     for index,chunk in enumerate(chunks,1):
+        operation_remaining(1)
         print(f'KADE_DELLA_HOST_QA_CHUNK {index:06d} '+chunk,flush=True)
     print('KADE_DELLA_HOST_QA_END '+digest,flush=True)
 
 
 def main():
+    global _OPERATION_DEADLINE, _DEADLINE_ROLE
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('source','preflight','device','shutdown','selectors','capture','ui-tests','emit'))
+    parser.add_argument('action',choices=('source','preflight','device','shutdown','selectors','build-tests','compiled-tests','boot-ui','run-ui','capture','ui-tests','clean-review','emit'))
     parser.add_argument('--expected-sha',required=True)
     parser.add_argument('--device',choices=('large','small'),default='large')
     args=parser.parse_args()
+    if args.action not in ('source','ui-tests','clean-review','emit','shutdown'):
+        recorded=json.loads((OUT/'source.json').read_text())
+        _OPERATION_DEADLINE=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
+        if args.action in ('run-ui','build-tests'):
+            guard=(720 if args.device=='large' else 600) if args.action=='run-ui' else 960
+            action_deadline=time.time()+guard-30
+            if action_deadline<_OPERATION_DEADLINE:
+                _OPERATION_DEADLINE=action_deadline;_DEADLINE_ROLE='actionGuardDeadline'
+    elif args.action in ('ui-tests','clean-review','emit'):
+        recorded=json.loads((OUT/'source.json').read_text())
+        started=datetime.fromisoformat(recorded['operationStartedAtUtc']).timestamp()
+        budget,reserve={'ui-tests':(90,90),'clean-review':(15,75),'emit':(60,15)}[args.action]
+        _OPERATION_DEADLINE=min(time.time()+budget,started+JOB_SECONDS-reserve)
     if args.action=='source':
-        result=source(args.expected_sha,clean=True); save('source.json',result)
+        result=source(args.expected_sha,clean=True)
+        started=os.environ.get('KADE_HOST_OPERATION_STARTED_UTC',now())
+        deadline=os.environ.get('KADE_HOST_OPERATION_DEADLINE_UTC',
+                                (datetime.now(timezone.utc)+timedelta(seconds=OPERATION_SECONDS)).isoformat())
+        require(abs((datetime.fromisoformat(deadline)-datetime.fromisoformat(started)).total_seconds()-OPERATION_SECONDS)<2,
+                'Shared operation deadline must be initialized once before checkout')
+        result.update(operationStartedAtUtc=started,operationDeadlineUtc=deadline,
+                      operationTimeoutSeconds=OPERATION_SECONDS,jobTimeoutSeconds=JOB_SECONDS,
+                      finalReceiptReserveSeconds=FINAL_RESERVE_SECONDS)
+        validate_operation_source(result)
+        save('source.json',result)
     elif args.action=='preflight': result=simulator_preflight(args.expected_sha)
+    elif args.action=='build-tests': result=build_tests(args.expected_sha)
+    elif args.action=='compiled-tests': result=compiled_tests(args.expected_sha);save('compiled-tests.json',result)
+    elif args.action=='boot-ui': result=boot_ui(args.expected_sha,args.device)
+    elif args.action=='run-ui': result=run_ui(args.expected_sha,args.device)
     elif args.action=='device':
         print(simulator_record(args.expected_sha)['devices'][args.device]['identifier']); result=None
     elif args.action=='selectors':
@@ -877,6 +1323,9 @@ def main():
         result={'shutdownRequested':True,'device':args.device,'ready':stopped}
     elif args.action=='capture': result=capture(args.expected_sha)
     elif args.action=='ui-tests': result=ui_tests(args.expected_sha)
+    elif args.action=='clean-review':
+        subprocess.check_call([sys.executable,str(ROOT/'dev/prepare-della-articulated-review.py'),'--clean'],
+                              timeout=operation_remaining(15));result={'optionalStudyCatalogCleaned':True}
     else: emit(args.expected_sha); result=None
     if result is not None: print(json.dumps(result,indent=2))
 

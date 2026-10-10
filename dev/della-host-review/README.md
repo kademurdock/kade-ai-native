@@ -33,7 +33,7 @@ The separate bounded native review uses the real hosts with invented local
 messages, drafts, attachments, captions and notification-card state. Buffered,
 upload and byte-stream API requests are rejected before network dispatch.
 Camera-state fixtures mount an inactive preview without starting capture.
-Every fixture pauses motion. Twenty-eight portrait cases on two actual simulator
+Every fixture pauses motion. Twenty-eight host cases on two actual simulator
 device types are accompanied by twenty-four focused native control-tree tests:
 sixteen on the roomy phone and eight on the actual smaller device. Empty-chat
 welcome screens use the same constrained-space policy for optional controls.
@@ -66,12 +66,34 @@ and all native success flags stay false. No arbitrary text or account data is
 stored in this diagnostic.
 
 This lane compiles unsigned once on the standard `macos-26` runner with Xcode
-26.4.1, then runs sixteen Pro Max and eight SE tests without rebuilding. The
-job is limited to 45 minutes; capture is limited to 480 seconds per device and
-960 seconds total, with 30-second readiness and 75-second screenshot limits.
+26.4.1. It validates the generated format-1/format-2 `.xctestrun` and confines
+its original runner, test bundle and app to those exact build products. Each
+recorded phone UUID explicitly boots and reaches `bootstatus` within 420 seconds.
+Sixteen Pro Max and eight SE tests run with that unchanged compiled test file,
+without project planning or another build. Their test caps remain 600 and 480
+seconds. The always collector requires both complete zero-failure result
+bundles and all 24 source-bound markers before the 28 expensive captures run.
+
+The outer job is limited to 55 minutes. A shared 52-minute operation deadline
+starts before checkout and cannot reset between setup, compilation, tests and
+capture. Each operation uses the remaining shared time; its individual maximum
+is not a promise that every maximum will fit together. The final three minutes
+reserve 90 seconds for UI collection, 15 for the optional study cleanup, 60 for
+evidence emission and 15 for teardown. Launcher action guards also reserve
+cleanup time before their workflow step ends. Capture retains its 480-second
+per-device and 960-second aggregate limits, 30-second readiness and 75-second
+screenshot limits.
+
+Native process output is limited to 8 MiB per log. A timeout saves false launch
+status, the last actual test-start method, method durations and bounded sanitized
+startup, XCTest activity and failure lines. An interrupted outer launcher can
+recover those observations from its bounded runner-local log; partial markers
+never establish UI success. Recovery saves only verified PNG/JSON and compact
+receipts, with separate job directories for reruns.
+
 It emits bounded PNG/JSON evidence through logs. It does not sign, upload
-release builds, use paid runners or store cloud
-artifacts/caches. The frozen signed Angel release remains unchanged. Physical
+release builds, use paid runners or store cloud artifacts/caches. The frozen
+signed Angel release remains unchanged. Physical
 phone battery, frame timing, live voice and VoiceOver acceptance remain pending.
 
 Native results apply only to their exact commit. No native fit or control-tree
