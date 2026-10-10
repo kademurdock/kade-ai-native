@@ -6,6 +6,11 @@ import UIKit
 enum CharacterDellaHostReview {
     static let defaultsKey = "kade.della.articulatedReview"
 
+    /// The registered app bundle is immutable. Resolve its presence once, only
+    /// after a caller passes the exact Della identity and framing gates.
+    private static let registeredAssetsPresent: Bool =
+        CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil }
+
     static var enabledForHost: Bool {
         #if DEBUG && targetEnvironment(simulator)
         if let scenario = CharacterDellaHostAudit.scenario { return scenario.candidate }
@@ -13,10 +18,12 @@ enum CharacterDellaHostReview {
         return true
     }
 
-    static func available(enabled: Bool, agentID: String?, avatarPath: String?) -> Bool {
-        return CharacterDellaArticulatedGeometry.eligible(enabled: enabled, stage: true,
-            side: 208, agentID: agentID, avatarPath: avatarPath,
-            resourcesPresent: CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil })
+    static func available(enabled: Bool, stage: Bool = true, side: Double = 208,
+                          agentID: String?, avatarPath: String?) -> Bool {
+        guard CharacterDellaArticulatedGeometry.eligible(enabled: enabled, stage: stage,
+            side: side, agentID: agentID, avatarPath: avatarPath,
+            resourcesPresent: true) else { return false }
+        return registeredAssetsPresent
     }
 }
 

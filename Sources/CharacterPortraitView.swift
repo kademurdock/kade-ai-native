@@ -64,9 +64,8 @@ struct CharacterPortraitView: View {
     private var articulatedDellaAvailable: Bool {
         guard dellaArticulatedReview, stage, side.isFinite, side >= 160,
               agentID == CharacterMotion.dellaID, prepared else { return false }
-        return CharacterDellaArticulatedGeometry.eligible(enabled: dellaArticulatedReview,
-            stage: stage, side: side, agentID: agentID, avatarPath: path,
-            resourcesPresent: CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil })
+        return CharacterDellaHostReview.available(enabled: dellaArticulatedReview,
+            stage: stage, side: side, agentID: agentID, avatarPath: path)
     }
     private var renderedPortraitHeight: Double {
         if articulatedDellaAvailable { return CharacterDellaArticulatedGeometry.stageHeight(side: side) }
