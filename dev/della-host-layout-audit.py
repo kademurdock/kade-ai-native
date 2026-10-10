@@ -466,7 +466,7 @@ def compiled_tests(expected,emit_inventory=True):
                 and (path/executable).is_file() and (path/executable).stat().st_size<=512*1024*1024,
                 'Compiled '+role+' executable missing or unbounded')
         if role=='app':
-            require(info.get('CFBundleShortVersionString')=='2.2.11' and str(info.get('CFBundleVersion'))=='100'
+            require(info.get('CFBundleShortVersionString')=='2.2.12' and str(info.get('CFBundleVersion'))=='100'
                     and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                     'Compiled app version/orientation drift')
         artifacts[role]={'path':str(path.relative_to(ROOT)),'bundleId':identities[role],
@@ -1177,14 +1177,14 @@ def capture(expected):
     try:
         require(APP.is_dir(),'Unsigned Debug host app missing')
         info=plistlib.loads((APP/'Info.plist').read_bytes())
-        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.11'
+        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.12'
                 and str(info.get('CFBundleVersion'))=='100','Built app identity/version drift')
         require(info.get('DTPlatformName')=='iphonesimulator'
                 or 'iPhoneSimulator' in info.get('CFBundleSupportedPlatforms',[]),'App is not the simulator target')
         require(info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                 'Host review must retain the actual phone portrait-only app declaration')
         require(not (APP/'_CodeSignature').exists(),'Signed app appeared in unsigned host review')
-        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.11','buildVersion':'100',
+        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.12','buildVersion':'100',
                              'platform':'iphonesimulator','infoPlistSha256':sha(APP/'Info.plist'),
                              'developerSigningIdentityUsed':False}
         for key,device in records.items():
