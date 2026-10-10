@@ -135,7 +135,7 @@ final class DellaHostControlsUITests: XCTestCase {
 
         if attachment {
             // The fixture uses the real pending-attachment row. Do not remove it.
-            _ = try button(app, label: "Remove attachment", minimumTarget: false)
+            _ = try button(app, label: "Remove attachment")
             try require(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: ")).count == 1,
                         "attachment status remains a separate readable element")
         }

@@ -2949,7 +2949,12 @@ struct ConversationDetailView: View {
                     pendingAttachment = nil
                     a11yFocus = .attachButton
                     UIAccessibility.post(notification: .announcement, argument: "Attachment removed.")
-                } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
                 .accessibilityLabel("Remove attachment")
                 .accessibilityHint("Removes the attachment from your next message. The uploaded file isn't deleted.")
             }

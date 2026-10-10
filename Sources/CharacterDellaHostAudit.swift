@@ -63,7 +63,6 @@ struct CharacterDellaHostAuditView: View {
         }
         .preferredColorScheme(scenario?.dark == true ? .dark : .light)
         .environment(\.dynamicTypeSize, scenario?.accessibility == true ? .accessibility5 : .large)
-        .environment(\.accessibilityReduceMotion, true)
     }
 }
 

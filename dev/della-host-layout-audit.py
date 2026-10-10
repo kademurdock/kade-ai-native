@@ -75,6 +75,12 @@ UI_PHASES={
     'call-roomy-light','call-captions-dark','call-captions-scrolled-dark',
     'call-camera-light','call-camera-scrolled-dark','call-a11y-dark','call-a11y-scrolled-dark',
 }
+GEOMETRY_KEYS={
+    'window','stage','transcript','composer','chatControls','attachment','invite',
+    'viewport','callViewport','primaryControls','camera','secondaryControls','keyboard',
+    'cameraButton','spotterButton','deepThinkButton','stopTalkingButton','muteButton','hangUpButton',
+    'attach','composerField','send',
+}
 AGENT_ID='agent_BSOLa3eNEZyjs-7abCjMt'
 AVATAR_PATH='/images/agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png'
 NATIVE_CHECKS={
@@ -291,6 +297,48 @@ def intersection(first,second):
     return [x,y,width,height]
 
 
+def failed_native_geometry(data,phase):
+    """Finite numeric observations only, explicitly excluded from native proof."""
+    require(phase in required_phases(),'Unknown failed native diagnostic phase')
+    diagnostic={'phase':phase}
+    if not isinstance(data,dict): return diagnostic
+    points=data.get('windowPoints')
+    if isinstance(points,list) and len(points)==2 and all(number(item) and abs(item)<=10000 for item in points):
+        diagnostic['windowPoints']=points
+    stage=data.get('stage')
+    if isinstance(stage,dict):
+        bounded={key:value for key,value in stage.items() if key in ('side','portraitHeight','frameHeight')
+                 and number(value) and abs(value)<=10000}
+        if type(stage.get('articulated')) is bool: bounded['articulated']=stage['articulated']
+        if bounded: diagnostic['stage']=bounded
+    geometry=data.get('geometry')
+    if isinstance(geometry,dict):
+        bounded={key:value for key,value in geometry.items() if key in GEOMETRY_KEYS and rectangle(value)}
+        if bounded: diagnostic['geometry']=bounded
+    validate_failed_native_geometry(diagnostic)
+    return diagnostic
+
+
+def validate_failed_native_geometry(diagnostic):
+    require(isinstance(diagnostic,dict) and set(diagnostic)<={'phase','windowPoints','stage','geometry'}
+            and diagnostic.get('phase') in required_phases(),'Invalid failed native geometry diagnostic schema')
+    if 'windowPoints' in diagnostic:
+        points=diagnostic['windowPoints']
+        require(isinstance(points,list) and len(points)==2
+                and all(number(item) and abs(item)<=10000 for item in points),
+                'Unbounded failed native window diagnostic')
+    if 'stage' in diagnostic:
+        stage=diagnostic['stage']
+        require(isinstance(stage,dict) and set(stage)<={'side','portraitHeight','frameHeight','articulated'}
+                and all(type(value) is bool if key=='articulated' else number(value) and abs(value)<=10000
+                        for key,value in stage.items()),'Unbounded failed native stage diagnostic')
+    if 'geometry' in diagnostic:
+        geometry=diagnostic['geometry']
+        require(isinstance(geometry,dict) and set(geometry)<=GEOMETRY_KEYS
+                and all(rectangle(value) for value in geometry.values()),'Unbounded failed native CGRect diagnostic')
+    return diagnostic
+
+
 def validate_ready(data,phase,device):
     fields={'schema','phase','host','windowPoints','orientation','appearance','stage','geometry','viewportIntersectsStage',
             'actualHost','hostFrameMatchesPortrait','motionPausedForLayoutAudit',
@@ -347,11 +395,7 @@ def validate_ready(data,phase,device):
     require(any(abs(stage['side']-side)<=1 for side in sides) and stage['articulated'] is tall,
             'Requested host stage policy mismatch')
     geometry=data['geometry']
-    allowed={'window','stage','transcript','composer','chatControls','attachment','invite',
-             'viewport','callViewport','primaryControls','camera','secondaryControls','keyboard',
-             'cameraButton','spotterButton','deepThinkButton','stopTalkingButton','muteButton','hangUpButton',
-             'attach','composerField','send'}
-    require(isinstance(geometry,dict) and set(geometry)<=allowed
+    require(isinstance(geometry,dict) and set(geometry)<=GEOMETRY_KEYS
             and all(rectangle(value) for value in geometry.values()),'Invalid/unbounded native CGRect observations')
     required={'window','stage','transcript','composer','chatControls'} if host=='chat' \
         else {'window','stage','primaryControls','secondaryControls'}
@@ -485,7 +529,12 @@ def capture(expected):
                     require(ready.exists() and time.monotonic()<=ready_deadline,
                             'Native host readiness timed out for '+phase)
                     require(ready.stat().st_size<=64*1024,'Oversized native host readiness')
-                    data=validate_ready(json.loads(ready.read_text()),phase,device)
+                    raw_ready=json.loads(ready.read_text())
+                    try:
+                        data=validate_ready(raw_ready,phase,device)
+                    except Exception:
+                        receipt['failedNativeGeometry']=failed_native_geometry(raw_ready,phase)
+                        raise
                     receipt['nativeReady'][phase]=data
                     timing['readySeconds']=round(time.monotonic()-ready_started,3)
                     timing['readyValidatedAtUtc']=now()
