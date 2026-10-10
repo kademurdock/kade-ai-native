@@ -356,6 +356,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
