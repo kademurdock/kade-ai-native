@@ -37,7 +37,7 @@ jobs:
       github.ref == 'refs/heads/codex/puppet-body-host-layout-20261010' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
-    # Two real phone devices, fourteen host cases plus one captions scroll case,
+    # Two real phone devices and seventeen actual host cases,
     # and targeted UI-tree tests share one compiled app and a finite job budget.
     timeout-minutes: 40
     env:
@@ -86,10 +86,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             build-for-testing > build/della-host-layout-audit/compile.log 2>&1 || { tail -n 80 build/della-host-layout-audit/compile.log; exit 1; }
 
-      - name: Capture fifteen silent actual call and chat host cases
+      - name: Capture seventeen silent actual call and chat host cases
         run: python3 dev/della-host-layout-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
-      - name: Test eleven native host control cases without rebuilding
+      - name: Test thirteen native host control cases without rebuilding
         timeout-minutes: 10
         run: |
           set -euo pipefail
@@ -109,7 +109,7 @@ jobs:
           tail -n 80 build/della-host-layout-audit/ui-tests.log
           test "$host_test_exit" -eq 0
 
-      - name: Require eleven pass markers and successful native xcresult
+      - name: Require thirteen pass markers and successful native xcresult
         if: ${{ always() }}
         run: python3 dev/della-host-layout-audit.py ui-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 

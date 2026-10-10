@@ -5,7 +5,8 @@ import UIKit
 enum CharacterDellaHostAudit {
     enum Scenario: String, CaseIterable {
         case chatRoomy = "chat-roomy-light", chatPacked = "chat-packed-dark"
-        case chatKeyboard = "chat-keyboard-dark", chatAccessibility = "chat-a11y-dark"
+        case chatKeyboard = "chat-keyboard-dark", chatKeyboardScrolled = "chat-keyboard-scrolled-dark"
+        case chatAccessibility = "chat-a11y-dark", chatAccessibilityScrolled = "chat-a11y-scrolled-dark"
         case chatOff = "chat-off-dark", chatSmall = "chat-small-light"
         case callRoomy = "call-roomy-light", callCaptions = "call-captions-dark"
         case callCaptionsScrolled = "call-captions-scrolled-dark"
@@ -19,8 +20,9 @@ enum CharacterDellaHostAudit {
         var scrolled: Bool { rawValue.contains("scrolled") }
         var camera: Bool { rawValue.contains("camera") }
         var candidate: Bool { !rawValue.contains("-off-") }
-        var keyboard: Bool { self == .chatKeyboard }
-        var packed: Bool { [.chatPacked, .chatKeyboard, .chatAccessibility, .chatOff].contains(self) }
+        var keyboard: Bool { [.chatKeyboard, .chatKeyboardScrolled].contains(self) }
+        var packed: Bool { [.chatPacked, .chatKeyboard, .chatKeyboardScrolled,
+                            .chatAccessibility, .chatAccessibilityScrolled, .chatOff].contains(self) }
         var longCaptions: Bool { [.callCaptions, .callCaptionsScrolled, .callAccessibility, .callAccessibilityScrolled].contains(self) }
     }
 
@@ -72,6 +74,7 @@ enum CharacterDellaHostAuditRecorder {
     static var stage: CharacterDellaHostStage?
     static var keyboardVisible = false
     static var composerEditing = false
+    static var invitationPlacement = "none"
 
     static func record(_ key: String, frame: CGRect) {
         guard CharacterDellaHostAudit.isEnabled, frame.origin.x.isFinite,
@@ -104,7 +107,8 @@ enum CharacterDellaHostAuditRecorder {
             "stage": stageData,
             "hostFrameMatchesPortrait": validFrame, "geometry": rects,
             "viewportIntersectsStage": visible, "keyboardVisible": keyboardVisible,
-            "composerEditing": composerEditing, "candidateEnabled": scenario.candidate,
+            "composerEditing": composerEditing, "invitationPlacement": invitationPlacement,
+            "candidateEnabled": scenario.candidate,
             "dynamicTypeAccessibility": scenario.accessibility, "scrolled": scenario.scrolled,
             "agentID": CharacterMotion.dellaID, "sourceAvatarPath": "/images/" + CharacterMotion.dellaFile,
             "resourceComplete": CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil },

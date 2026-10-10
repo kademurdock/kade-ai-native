@@ -712,19 +712,15 @@ struct ConversationDetailView: View {
                 /* Sep 23 2026 redesign (B5): the agent row and the read-aloud
                  * row are ONE line now (`chatControlRow`), so the stack is
                  * one sibling shorter. The meter keeps its rules and sits
-                 * just above that line; the composer is untouched. B13's
-                 * notification card, when it is up, is the top row. Still
-                 * no fixedSize here (build 220's note below stands). */
+                 * just above that line. The optional notification card joins
+                 * the transcript while editing or using accessibility text.
+                 * Still no fixedSize here (build 220's note below stands). */
                 VStack(spacing: 0) {
-                    if pushCardOnScreen {
-                        PushInviteCard(
-                            name: agentsService.name(for: selectedAgentId) ?? "your character",
-                            onTurnOn: { turnOnNotificationsFromCard() },
-                            onNotNow: { notNowFromCard() }
-                        )
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                        .dellaHostProbe("invite")
+                    if pushCardOnScreen && !invitationInTranscript {
+                        pushInvitation
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                            .dellaHostProbe("invite")
                     }
                     contextMeter
                     chatControlRow.dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
@@ -1087,7 +1083,7 @@ struct ConversationDetailView: View {
                 // Build 218: the trail now says which composer was on screen,
                 // so a freeze report is self-describing without asking her.
                 KadeBreadcrumbs.drop(
-                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(5)")"
+                    "layout: safeAreaInset(220, no fixedSize), composer: \(simpleComposer ? "single-line (bisect ON)" : "multiline lineLimit(\(composerNeedsCompactLayout ? 2 : 5))")"
                     + ", transcript: \(simpleTranscript ? "simple (bisect ON)" : "full")"
                 )
                 Task { @MainActor in KadeBreadcrumbs.drop("send feedback done") }
@@ -1667,9 +1663,27 @@ struct ConversationDetailView: View {
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
                     }
+                    // Optional permission controls can scroll when the keyboard
+                    // or large text needs the pinned message bar's space.
+                    if invitationInTranscript {
+                        pushInvitation
+                            .id(Self.pushInviteTranscriptId)
+                            .dellaHostProbe("invite")
+                    }
                 }
                 .padding()
             }
+            #if DEBUG && targetEnvironment(simulator)
+            .task {
+                guard let scenario = CharacterDellaHostAudit.scenario,
+                      scenario.chat, scenario.scrolled else { return }
+                // The real field focuses after insertion; let that keyboard
+                // transition settle before positioning the real card buttons.
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(Self.pushInviteTranscriptId, anchor: .bottom)
+            }
+            #endif
             .onAppear {
                 scrollToBottom(proxy)
                 rebuildRotorItems()
@@ -2322,6 +2336,26 @@ struct ConversationDetailView: View {
         pushCard == .shown || pushCard == .announced
     }
 
+    private static let pushInviteTranscriptId = "kade-push-invitation"
+
+    /// Stable screen state chooses a finite line count without measuring the
+    /// composer's ideal size or feeding its geometry back into layout.
+    private var composerNeedsCompactLayout: Bool {
+        composerEditing || keyboardUp || dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var invitationInTranscript: Bool {
+        pushCardOnScreen && !messages.isEmpty && composerNeedsCompactLayout
+    }
+
+    private var pushInvitation: some View {
+        PushInviteCard(
+            name: agentsService.name(for: selectedAgentId) ?? "your character",
+            onTurnOn: { turnOnNotificationsFromCard() },
+            onNotNow: { notNowFromCard() }
+        )
+    }
+
     /// True while something covers this chat: another screen pushed over it
     /// (or this one gone), a sheet, a call, or the reading view.
     private var pushCardHeldBack: Bool {
@@ -2836,6 +2870,8 @@ struct ConversationDetailView: View {
         if CharacterDellaHostAudit.isEnabled {
             CharacterDellaHostAuditRecorder.stage = hostLayout
             CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+            CharacterDellaHostAuditRecorder.invitationPlacement = pushCardOnScreen
+                ? (invitationInTranscript ? "transcript" : "footer") : "none"
         }
         #endif
         let thinking = isSending
@@ -3156,7 +3192,7 @@ struct ConversationDetailView: View {
                 } else {
                     TextField("Message", text: $draftText, axis: .vertical)
                         .textFieldStyle(.plain)
-                        .lineLimit(5)
+                        .lineLimit(composerNeedsCompactLayout ? 2 : 5)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(
@@ -5188,9 +5224,10 @@ private struct ChatControlRowBackground: View {
 }
 
 /// B13 (Sep 23 2026 redesign, "first-run manners"): the notification ask,
-/// with its reason, as a small non-modal card at the top of the chat's bottom
-/// bar. Never inside the transcript or the composer's own layout, and never
-/// given VoiceOver focus: the chat posts one announcement when it appears.
+/// with its reason, as a small non-modal card above the message bar. While
+/// editing or using accessibility text it joins the scrolling transcript so
+/// the pinned message controls keep their room. It never receives VoiceOver
+/// focus: the chat posts one announcement when it appears.
 /// A heading, the reason, then two sibling buttons that each own their label
 /// (the Amber rule), side by side and stacked at accessibility text sizes.
 /// Solid fills and a real border, thicker in high contrast.
@@ -5217,6 +5254,7 @@ private struct PushInviteCard: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(KadeCardButtonStyle())
+                .dellaHostProbe("inviteTurnOn", identifier: "della-host.chat.invite-turn-on")
                 Button {
                     onNotNow()
                 } label: {
@@ -5225,6 +5263,7 @@ private struct PushInviteCard: View {
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(KadeCardButtonStyle())
+                .dellaHostProbe("inviteNotNow", identifier: "della-host.chat.invite-not-now")
             }
         }
         .padding(12)

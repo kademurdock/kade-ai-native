@@ -27,11 +27,21 @@ final class DellaHostControlsUITests: XCTestCase {
     }
 
     func testChatKeyboardDark() throws {
-        try checkChat("chat-keyboard-dark", attachment: true, invitation: true, keyboard: true)
+        try checkChat("chat-keyboard-dark", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false)
+    }
+
+    func testChatKeyboardScrolledDark() throws {
+        try checkChat("chat-keyboard-scrolled-dark", attachment: true, invitation: true, keyboard: true)
     }
 
     func testChatAccessibilityDark() throws {
-        try checkChat("chat-a11y-dark", attachment: true, invitation: true, keyboard: false)
+        try checkChat("chat-a11y-dark", attachment: true, invitation: true,
+                      keyboard: false, invitationVisible: false)
+    }
+
+    func testChatAccessibilityScrolledDark() throws {
+        try checkChat("chat-a11y-scrolled-dark", attachment: true, invitation: true, keyboard: false)
     }
 
     func testCallRoomyLight() throws {
@@ -85,7 +95,9 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(app.descendants(matching: .any).matching(identifier: firstID)
             .firstMatch.waitForExistence(timeout: 20), "actual host exposed " + firstID)
         if requestedPhase.contains("scrolled") {
-            let target = app.buttons.matching(identifier: "della-host.call.deep-think").firstMatch
+            let targetID = requestedPhase.hasPrefix("chat-")
+                ? "della-host.chat.invite-not-now" : "della-host.call.deep-think"
+            let target = app.buttons.matching(identifier: targetID).firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
                 (object as? XCUIElement)?.isHittable == true
             }, object: target)
@@ -96,7 +108,7 @@ final class DellaHostControlsUITests: XCTestCase {
     }
 
     private func checkChat(_ requestedPhase: String, attachment: Bool,
-                           invitation: Bool, keyboard: Bool) throws {
+                           invitation: Bool, keyboard: Bool, invitationVisible: Bool = true) throws {
         let app = try launch(requestedPhase)
         defer { app.terminate() }
         if keyboard {
@@ -128,21 +140,45 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(nonemptyValue(thinking.element), "Thinking exposes its separate state value")
         try require(nonemptyValue(hearReplies.element), "Hear replies exposes its separate state value")
         try require(nonemptyValue(speed.element), "Voice speed exposes its separate rate value")
-        try disjoint([send, attach, mic, thinking, agent, voice, hearReplies, speed])
+        var pinnedControls = [send, attach, mic, thinking, agent, voice, hearReplies, speed]
         for control in [send, attach, mic, thinking] {
             try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name)
         }
 
         if attachment {
             // The fixture uses the real pending-attachment row. Do not remove it.
-            _ = try button(app, label: "Remove attachment")
+            pinnedControls.append(try button(app, label: "Remove attachment"))
             try require(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: ")).count == 1,
                         "attachment status remains a separate readable element")
         }
+        try disjoint(pinnedControls)
+        if keyboard {
+            let keyboardFrame = app.keyboards.firstMatch.frame
+            try require(valid(keyboardFrame), "software keyboard has a nonempty native frame")
+            try require(fieldFrame.maxY <= keyboardFrame.minY + 0.5,
+                        "composer stays above the keyboard")
+            for control in pinnedControls {
+                try require(control.frame.maxY <= keyboardFrame.minY + 0.5,
+                            control.name + " stays above the keyboard")
+            }
+        }
         if invitation {
-            let turnOn = try button(app, label: "Turn on notifications")
-            let notNow = try button(app, label: "Not now")
-            try disjoint([turnOn, notNow, send, mic])
+            // Initial constrained cases prove the pinned controls independently
+            // of the scroll position. Separate scrolled cases must make both
+            // real invitation buttons visible and reachable without tapping.
+            let turnOn = try button(app, identifier: "della-host.chat.invite-turn-on",
+                                    label: "Turn on notifications", reachable: invitationVisible)
+            let notNow = try button(app, identifier: "della-host.chat.invite-not-now",
+                                    label: "Not now", reachable: invitationVisible)
+            if invitationVisible {
+                try disjoint([turnOn, notNow] + pinnedControls)
+                if keyboard {
+                    let keyboardTop = app.keyboards.firstMatch.frame.minY
+                    try require(turnOn.frame.maxY <= keyboardTop + 0.5
+                                && notNow.frame.maxY <= keyboardTop + 0.5,
+                                "visible invitation buttons stay above the keyboard")
+                }
+            }
         }
         passed()
     }

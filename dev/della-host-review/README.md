@@ -16,10 +16,25 @@ The separate bounded native review uses the real hosts with invented local
 messages, drafts, attachments, captions and notification-card state. Buffered,
 upload and byte-stream API requests are rejected before network dispatch.
 Camera-state fixtures mount an inactive preview without starting capture.
-Every fixture pauses motion. Fifteen portrait cases on two actual simulator
-device types are accompanied by eleven focused native control-tree tests.
+Every fixture pauses motion. Seventeen portrait cases on two actual simulator
+device types are accompanied by thirteen focused native control-tree tests.
 Receipts require the exact source revision, immutable art, settled appearance,
 measured stage/control/keyboard geometry and successful native tests.
+
+Keyboard and accessibility fixtures place the real notification invitation in
+the transcript rather than the pinned footer. The transcript must retain at
+least 44 points of visible height. Separate scrolled cases require both real
+invitation buttons to fit entirely inside that viewport without overlap or
+keyboard occlusion. Ordinary packed/off cases retain the footer invitation;
+empty-card cases must report no invitation geometry. Pinned composer, controls,
+attachment and native button observations remain within the real screen and
+above the software keyboard.
+
+When a strict readiness check fails, a failed receipt can retain only bounded,
+finite stage/window/whitelisted CGRect observations in `failedNativeGeometry`.
+That rejected phase never becomes a capture or validated readiness record,
+and all native success flags stay false. No arbitrary text or account data is
+stored in this diagnostic.
 
 This lane compiles unsigned on the standard public Mac runner, keeps finite
 boot/install/capture/job bounds, and emits bounded PNG/JSON evidence through
