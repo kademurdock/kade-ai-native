@@ -49,6 +49,7 @@ workflows:
           bash ./run-starter-tests.sh
           bash ./run-memory-receipt-tests.sh
           bash ./run-reply-focus-tests.sh
+          python3 dev/run-message-attachment-tests.py
           bash ./run-library-browse-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh

@@ -1340,6 +1340,8 @@ struct ConversationDetailView: View {
                 }
             case .share(let item):
                 ShareSheet(item: item)
+            case .images(let message):
+                MessageImagesView(files: message.imageFiles, apiClient: apiClient)
             case .voicePicker:
                 // Build 261: the way back to the creator's voice is the first row.
                 VoicePickerView(apiClient: apiClient, selection: $voiceOverride, defaultLabel: "Use \(agentDisplayLabel)'s own voice", deliveryAgentId: selectedAgentId)
@@ -1608,6 +1610,7 @@ struct ConversationDetailView: View {
                             onRegenerate: { sendTask = Task { await regenerate(message) } },
                             onSaveVoiceMessage: { Task { await saveVoiceMessage(message) } },
                             onShare: { activeSheet = .share(ShareItem(text: message.readableText)) },
+                            onOpenImages: { activeSheet = .images(message) },
                             onDelete: canDelete(message) ? { deletingMessage = message } : nil,
                             isPreparingVoiceMessage: preparingVoiceMessageId == message.id
                         )
@@ -4315,6 +4318,7 @@ private struct MessageRow: View {
     /// message. Everything user-visible in this file follows that.
     let onSaveVoiceMessage: () -> Void
     let onShare: () -> Void
+    let onOpenImages: () -> Void
     let onDelete: (() -> Void)?
     let isPreparingVoiceMessage: Bool
 
@@ -4464,10 +4468,16 @@ private struct MessageRow: View {
      * read-aloud, copy) is still reachable from the message Actions menu and
      * the composer -- this strips the ROW, not the app. */
     private var simpleRow: some View {
-        Text("\(message.speakerLabel): \(bodyText)")
-            .font(appearance.messageFont())
-            .lineSpacing(appearance.lineSpacing.extraPoints)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(message.speakerLabel): \(bodyText)")
+                .font(appearance.messageFont())
+                .lineSpacing(appearance.lineSpacing.extraPoints)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !message.imageFiles.isEmpty {
+                Button("Open images (\(message.imageFiles.count))", action: onOpenImages)
+                    .buttonStyle(.bordered)
+            }
+        }
     }
 
     private var fullRow: some View {
@@ -4523,9 +4533,15 @@ private struct MessageRow: View {
                 // accessibility element that ignores children, and
                 // `accessibleLabel` appends the spoken "sent with ..."
                 // sentence instead, so by ear this stays ONE swipe stop.
-                if let files = message.files, !files.isEmpty {
+                if !message.displayFiles.isEmpty {
+                    let files = message.displayFiles
                     ForEach(files) { file in
-                        MessageAttachmentView(file: file)
+                        if file.isImage {
+                            Button(action: onOpenImages) { MessageAttachmentView(file: file) }
+                                .buttonStyle(.plain)
+                        } else {
+                            MessageAttachmentView(file: file)
+                        }
                     }
                 }
                 if !timeLabel.isEmpty {
@@ -4557,6 +4573,9 @@ private struct MessageRow: View {
             // VoiceOver must never announce an action this message can't
             // actually perform.
             .accessibilityActions {
+                if !message.imageFiles.isEmpty {
+                    Button("Open images", action: onOpenImages)
+                }
                 Button("Copy text") {
                     UIPasteboard.general.string = message.readableText
                     UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
@@ -4652,11 +4671,13 @@ private struct MessageRow: View {
         // Session 34: attachments are spoken HERE, as part of the row's one
         // element, rather than adding a second swipe stop -- "You said:
         // look at this, 3:12 PM. Sent with a photo, porch.jpeg, attached."
-        if let files = message.files, !files.isEmpty {
+        if !message.displayFiles.isEmpty {
+            let files = message.displayFiles
             let names = files.map(\.spokenLabel).joined(separator: "; ")
             label += message.isCreatedByUser
                 ? " Sent with \(names) attached."
                 : " Comes with \(names) attached."
+            if !message.imageFiles.isEmpty { label += " Open images is available in Actions." }
         }
         return label
     }
@@ -4665,6 +4686,9 @@ private struct MessageRow: View {
 
     private var actionsButton: some View {
         Menu {
+            if !message.imageFiles.isEmpty {
+                Button(action: onOpenImages) { Label("Open Images", systemImage: "photo") }
+            }
             Button {
                 UIPasteboard.general.string = message.readableText
                 UIAccessibility.post(notification: .announcement, argument: "Copied to clipboard.")
@@ -4766,6 +4790,7 @@ private struct MessageRow: View {
     /// `ConversationDetailView`'s "Message actions" doc comment).
     private var actionsHint: String {
         var options = ["copy the text", "play it as a voice message", "save the voice message", "share the text"]
+        if !message.imageFiles.isEmpty { options.append("open images") }
         if canEdit { options.append("edit and resend it") }
         if canRegenerate { options.append("regenerate this reply") }
         if onDelete != nil { options.append("delete it") }
@@ -4851,12 +4876,14 @@ struct ChatTranscriptHandoff: Identifiable, Hashable {
 enum DetailSheet: Identifiable {
     case agentPicker
     case share(ShareItem)
+    case images(KadeMessage)
     case transcript(ChatTranscriptHandoff)
     case voicePicker
 
     var id: String {
         switch self {
         case .agentPicker: return "agent-picker"
+        case .images(let message): return "images-\(message.id)"
         case .share(let item): return "share-\(item.id.uuidString)"
         case .transcript(let handoff): return "transcript-\(handoff.id)"
         case .voicePicker: return "voice-picker"
