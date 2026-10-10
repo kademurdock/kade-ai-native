@@ -1,0 +1,19 @@
+{
+  "verifiedAtUTC": "2026-10-09T23:02:18Z",
+  "id": "agent_NkG_Fb8_xLz8HFJyx4gNv",
+  "ordinaryAccountRole": "USER",
+  "isPublic": true,
+  "ordinaryRosterCount": 224,
+  "matchingRows": 1,
+  "avatar": {
+    "filename": "agent-agent_NkG_Fb8_xLz8HFJyx4gNv-avatar-1791586815115.png",
+    "source": "s3"
+  },
+  "tts": {
+    "voiceId": "thin high kid, cartoon · sunfish",
+    "speakingRate": 1,
+    "deliveryMode": "BALANCED"
+  },
+  "expandedEditAccess": false,
+  "expandedHTTPStatus": 403
+}

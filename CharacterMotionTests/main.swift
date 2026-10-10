@@ -566,3 +566,45 @@ check(CharacterStageLayout.chatSide(height: 932, keyboard: true,
 check(CharacterStageLayout.chatSide(height: 430, keyboard: false,
     compactHeight: true, accessibilityText: false) == 84, "landscape chat prioritizes message space")
 print("Character stage layout: \(count - layoutBefore) checks passed")
+
+let angelBefore = count
+runAngelVectorMotionChecks(check)
+let angelDataPath = ProcessInfo.processInfo.environment["CHARACTER_ANGEL_ART"]
+    ?? "Sources/Assets.xcassets/CharacterAngelVectorArt.dataset/angel-vector.json"
+let angelData = try Data(contentsOf: URL(fileURLWithPath: angelDataPath))
+let angelArt = try JSONDecoder().decode(CharacterAngelVectorArt.self, from: angelData)
+check(angelArt.isValid, "Angel's own vector manifest is complete and valid")
+runAngelVectorArtBoundsChecks(angelArt, check)
+check(CharacterMotion.prepared(id: CharacterMotion.angelID, path: "/images/" + CharacterMotion.angelFile),
+    "Angel's exact server ID and original avatar file prepare her own vector rig")
+check(CharacterMotion.animatedIDs.contains(CharacterMotion.angelID), "Angel joins the main animated shelf")
+for path in [nil, "", "/images/changed.png", "/images/" + CharacterMotion.lillyFile] {
+    check(!CharacterMotion.prepared(id: CharacterMotion.angelID, path: path), "Angel requires her own exact avatar")
+    check(CharacterAppearance.description(agentID: CharacterMotion.angelID, avatarPath: path) == nil,
+        "Changed Angel art cannot retain a stale description")
+}
+check(!CharacterMotion.prepared(id: CharacterMotion.lillyID, path: "/images/" + CharacterMotion.angelFile),
+    "Angel's original art cannot become Lilly's prepared face")
+check(CharacterAppearance.description(agentID: CharacterMotion.angelID,
+    avatarPath: "/images/" + CharacterMotion.angelFile)?.contains("girl") == true,
+    "Angel's on-demand description preserves her female child identity")
+check(CharacterPuppetRegistration.approved(stage: true, side: 208, agentID: CharacterMotion.angelID,
+    avatarPath: "/images/" + CharacterMotion.angelFile), "Angel's full vector puppet is registered for ordinary native stages")
+for side in [Double.nan, Double.infinity, -1, 84, 104, 132] {
+    check(!CharacterPuppetRegistration.approved(stage: true, side: side,
+        agentID: CharacterMotion.angelID, avatarPath: "/images/" + CharacterMotion.angelFile),
+        "Invalid and compact Angel stages do not claim the full puppet contract")
+}
+var brokenAngel = try JSONSerialization.jsonObject(with: angelData) as! [String: Any]
+brokenAngel["pivots"] = ["head": [512, 610]]
+let incompleteAngel = try JSONDecoder().decode(CharacterAngelVectorArt.self,
+    from: JSONSerialization.data(withJSONObject: brokenAngel))
+check(!incompleteAngel.isValid, "Incomplete Angel joints fail the art contract")
+brokenAngel = try JSONSerialization.jsonObject(with: angelData) as! [String: Any]
+var unsafeShapes = brokenAngel["shapes"] as! [[String: Any]]
+unsafeShapes[0]["path"] = [["op": "RUN", "v": [0, 0]]]
+brokenAngel["shapes"] = unsafeShapes
+let unsafeAngel = try JSONDecoder().decode(CharacterAngelVectorArt.self,
+    from: JSONSerialization.data(withJSONObject: brokenAngel))
+check(!unsafeAngel.isValid, "Angel's geometry accepts only bounded drawing commands")
+print("Angel vector geometry and motion: \(count - angelBefore) checks passed")

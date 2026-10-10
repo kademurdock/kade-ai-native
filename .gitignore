@@ -4,3 +4,4 @@ build/
 .DS_Store
 # Registered character resources are committed for simulator and device builds.
 dev/__pycache__/
+dev/angel-puppet/__pycache__/

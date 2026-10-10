@@ -47,7 +47,12 @@ struct KadeCharacterFace: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let drawn {
+        if let art = CharacterAngelArtwork.approved(agentID: agentID, avatarPath: avatarPath) {
+            CharacterAngelVectorView(art: art,
+                facial: AngelVectorMotion.facial(face, blink: 0, active: true),
+                mouth: AngelVectorMotion.mouth(role: 0, strength: 0, face: face, active: true),
+                ornaments: .still)
+        } else if let drawn {
             drawn.panel(face, side: size)
         } else if let avatarURL {
             AsyncImage(url: avatarURL) { phase in

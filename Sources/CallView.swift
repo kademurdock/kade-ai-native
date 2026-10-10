@@ -656,8 +656,8 @@ struct CallView: View {
                let json = String(data: data, encoding: .utf8) { callService.auditControl(json) }
         }
         let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let registered = CharacterBustArtwork.approved(stage: true, side: 208,
-            agentID: agentId, avatarPath: "/images/" + person.avatarFile) != nil
+        let registered = CharacterPuppetRegistration.approved(stage: true, side: 208,
+            agentID: agentId, avatarPath: "/images/" + person.avatarFile)
         let receipt: [String: Any] = [
             "character": person.rawValue, "agentID": agentId ?? "",
             "expectedAgentID": person.agentID, "avatarFile": person.avatarFile,

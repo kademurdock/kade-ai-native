@@ -56,12 +56,36 @@ struct Announcement: Decodable, Identifiable {
     let ts: String?
     let title: String?
     let body: String?
+    /// Optional explicit chat target. Old announcements remain plain text.
+    let kadeRoute: String?
+    let kadeAgentId: String?
+    let agentName: String?
+    private enum CodingKeys: String, CodingKey {
+        case id, ts, title, body, kadeRoute, kadeAgentId, agentName
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try? values.decode(String.self, forKey: .id)
+        ts = try? values.decode(String.self, forKey: .ts)
+        title = try? values.decode(String.self, forKey: .title)
+        body = try? values.decode(String.self, forKey: .body)
+        kadeRoute = try? values.decode(String.self, forKey: .kadeRoute)
+        kadeAgentId = try? values.decode(String.self, forKey: .kadeAgentId)
+        agentName = try? values.decode(String.self, forKey: .agentName)
+    }
     /// Identifiable fallback only — a row with no id can't be allowed to crash.
     var stableId: String { id ?? (ts ?? "") + (title ?? "") }
 }
 
 extension Announcement {
     var listId: String { stableId }
+    var chatActionTitle: String? {
+        guard let route = kadeRoute,
+              KadeFreshAgentChatParser.targetID(routeName: route, agentValue: kadeAgentId) != nil else { return nil }
+        if kadeAgentId == CharacterMotion.angelID { return "Chat with Angel" }
+        let name = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "Open new chat" : "Chat with " + String(name.prefix(80))
+    }
 }
 
 /// The announcements list. Layout follows AlertsView's proven
@@ -112,16 +136,30 @@ struct AnnouncementsView: View {
                 } else {
                     ForEach(announcements, id: \.listId) { item in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title ?? "Kade-AI")
-                                .font(.headline)
-                            Text(item.body ?? "")
-                                .font(.body)
-                            Text(when(item))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title ?? "Kade-AI")
+                                    .font(.headline)
+                                Text(item.body ?? "")
+                                    .font(.body)
+                                Text(when(item))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("\(item.title ?? "Kade-AI"). \(item.body ?? ""). \(when(item))")
+                            if let title = item.chatActionTitle {
+                                Button(title) {
+                                    // Parse on activation: each tap receives its
+                                    // own fresh identity, never a cached row nonce.
+                                    guard let route = item.kadeRoute,
+                                          let request = KadeFreshAgentChatParser.push(routeName: route,
+                                            agentValue: item.kadeAgentId) else { return }
+                                    IntentRouter.shared.requestFreshAgentChat(request)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityHint("Starts a new conversation with this character.")
+                            }
                         }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(item.title ?? "Kade-AI"). \(item.body ?? ""). \(when(item))")
                     }
                 }
             } header: {

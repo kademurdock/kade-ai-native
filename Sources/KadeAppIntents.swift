@@ -81,6 +81,8 @@ final class IntentRouter: ObservableObject {
         // A String-raw enum can't carry the payload (who/why/planId), so
         // it parks in `pendingAgentCall` below and this case says go look.
         case agentCall
+        /// A notification/link tap starts an empty chat with an exact agent.
+        case agentChat
         // Part 112: the What's New announcements screen — the broadcast
         // push's landing place (route "announcements", build 258+).
         case announcements
@@ -110,11 +112,29 @@ final class IntentRouter: ObservableObject {
     /// contract as `pending` itself.
     @Published var pendingAgentCall: AgentCallPayload?
     @Published var pendingHarnessRunId: String?
+    @Published private(set) var pendingFreshAgentChat: KadeFreshAgentChatRequest?
+    private var freshAgentChatInbox = KadeFreshAgentChatInbox()
 
     private init() {}
 
     func request(_ destination: Destination) {
+        if destination != .agentChat {
+            freshAgentChatInbox.cancel()
+            pendingFreshAgentChat = nil
+        }
         pending = destination
+    }
+
+    func requestFreshAgentChat(_ request: KadeFreshAgentChatRequest) {
+        freshAgentChatInbox.park(request)
+        pendingFreshAgentChat = request
+        pending = .agentChat
+    }
+
+    func consumeFreshAgentChat(authReady: Bool) -> KadeFreshAgentChatRequest? {
+        let request = freshAgentChatInbox.consume(authReady: authReady)
+        if authReady { pendingFreshAgentChat = nil }
+        return request
     }
 
     func consume() -> Destination? {

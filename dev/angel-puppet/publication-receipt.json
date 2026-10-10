@@ -1,0 +1,41 @@
+{
+  "platformRecord": {
+    "id": "agent_NkG_Fb8_xLz8HFJyx4gNv",
+    "avatar_filename": "agent-agent_NkG_Fb8_xLz8HFJyx4gNv-avatar-1791586815115.png",
+    "avatar_source": "s3",
+    "agent_version": 2,
+    "public": true,
+    "visibility_verified_utc": "2026-10-09T23:02:18Z",
+    "instructions_sha256": "545b49a5fb29a630a5194dfae0df654a040a1081d3ff876cc75bfa6bfcd0947d",
+    "input_avatar_sha256": "02cc36f3c61b0301d9d1b4ddf336eb2929e42aa9a4bef72cbba797df6db20895",
+    "served_avatar_sha256": "45737123ede7fe820e1199e99ab9f9b36eb560314a5f2d4feb82eedf468846df"
+  },
+  "tts": {
+    "voiceId": "thin high kid, cartoon · sunfish",
+    "speakingRate": 1,
+    "deliveryMode": "BALANCED"
+  },
+  "provider": "OpenRouter",
+  "model": "openai/gpt-6.1-sol",
+  "tools": [
+    "kade_notify"
+  ],
+  "instructionsExact": true,
+  "configurationExact": true,
+  "ordinaryPublicRosterVerified": true,
+  "ordinaryAccountRole": "USER",
+  "ordinaryViewerExpandedEditDenied": true,
+  "otherAgentsWritten": false,
+  "chatProbesSent": false,
+  "synthesisRequested": false,
+  "notificationsSent": false,
+  "receiptHashes": {
+    "creation-preflight.json": "efc14ef60ac5f92c640a53b3b6d247f0a5eb0ece5e9f131a83c69037b4eba22f",
+    "creation-intent.json": "1c8d11a679aa17f5e5bf8d505e119dc0337fb7541d68649bdba00910ebd11a51",
+    "creation-receipt.json": "99cede762c7a251c3c476c74713a6a2e005c04b8a14d35bd9634e63c84eff273",
+    "avatar-intent.json": "7c32812c0c46d0253dbdbd3485392bb2976a10cd521b6b5bf1f750077f6eb234",
+    "avatar-verification-receipt.json": "4fa8cb1e0f2a1a8b45c3ceb1d29ca64187974f9c1141e86c1a12453a743d2d89",
+    "publish-intent.json": "f2908a77cb08f79280c30e03e5097174f96363980a9ecea18807479bd45cecc8",
+    "public-visibility-receipt.json": "0ac6f5911c90ede9953d1837d69d03ccf5f1f2ed7d3e30000900d6e19f039512"
+  }
+}

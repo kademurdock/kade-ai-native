@@ -16,6 +16,7 @@ enum CharacterAuditCheckpoint {
 enum CharacterAuditPerson: String, CaseIterable {
     case harley, kiana, lilly, della, witherspoon
     case privateLilly = "lilly-private"
+    case angel
 
     static var appearanceCases: [Self] { allCases.filter { $0 != .privateLilly } }
     var name: String {
@@ -25,6 +26,7 @@ enum CharacterAuditPerson: String, CaseIterable {
         case .lilly, .privateLilly: return "Lilly"
         case .della: return "Della"
         case .witherspoon: return "Witherspoon"
+        case .angel: return "Angel"
         }
     }
     var auditName: String { self == .privateLilly ? "Private Lilly" : name }
@@ -35,6 +37,7 @@ enum CharacterAuditPerson: String, CaseIterable {
         case .lilly: return CharacterMotion.lillyID
         case .della: return CharacterMotion.dellaID
         case .witherspoon: return CharacterMotion.witherspoonID
+        case .angel: return CharacterMotion.angelID
         case .privateLilly: return CharacterMotion.skyleeLillyID
         }
     }
@@ -45,10 +48,12 @@ enum CharacterAuditPerson: String, CaseIterable {
         case .lilly: return CharacterMotion.lillyFile
         case .della: return CharacterMotion.dellaFile
         case .witherspoon: return CharacterMotion.witherspoonFile
+        case .angel: return CharacterMotion.angelFile
         case .privateLilly: return CharacterMotion.skyleeLillyFile
         }
     }
     var atlasAssets: [String] {
+        if self == .angel { return [] }
         let prefix = "Character" + name
         let base = [prefix + "Faces", prefix + "Mouths"]
         // Witherspoon deliberately uses basic expression panels only.
@@ -89,6 +94,11 @@ struct CharacterPortraitAuditView: View {
     @State private var handVariant = CharacterHarleyHandPrototypeVariant.smallRight
     @State private var facialStudy = false
     @State private var blinkSample: Double? = nil
+    @State private var angelFaceSample: CharacterFace? = nil
+    @State private var angelMouthSample: Int? = nil
+    @State private var angelGallery = false
+    @State private var angelMotionSample: CharacterBustPose? = nil
+    @State private var angelOrnamentsSample: AngelVectorOrnamentPose? = nil
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -96,7 +106,21 @@ struct CharacterPortraitAuditView: View {
             Text("Character playback acceptance").font(.headline)
             Text(phase).accessibilityIdentifier("character-audit-phase")
             if !ready { ProgressView() }
-            else if gallery {
+            else if angelGallery, let art = CharacterAngelArtwork.loaded {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 6) {
+                    ForEach(CharacterFace.allCases, id: \.rawValue) { face in
+                        VStack(spacing: 2) {
+                            CharacterAngelVectorView(art: art,
+                                facial: AngelVectorMotion.facial(face, blink: 0, active: true),
+                                mouth: AngelVectorMotion.mouth(role: 0, strength: 0, face: face, active: true),
+                                ornaments: .still)
+                                .frame(width: 84, height: 84)
+                            Text("Face \(face.rawValue)").font(.caption2)
+                        }
+                    }
+                }
+                Text("Angel's seventeen original geometric expressions. Static offline gallery.").font(.caption)
+            } else if gallery {
                 ForEach(expressions, id: \.rawValue) { expression in
                     HStack {
                         galleryPortrait(CharacterMotion.kianaID, "Kiana", expression)
@@ -105,10 +129,12 @@ struct CharacterPortraitAuditView: View {
                 }
             } else if puppetPoses {
                 CharacterPortraitView(agentID: reviewAgentID, name: reviewName,
-                    playing: false, level: { 0 },
+                    playing: angelMouthSample != nil, level: { 0 },
                     presentation: { reviewPerformance }, stage: true, side: reviewSide,
                     motionPaused: reviewStill, handPrototypeElapsed: handSample,
-                    handPrototypeVariant: handVariant, blinkAuditAmount: blinkSample)
+                    handPrototypeVariant: handVariant, blinkAuditAmount: blinkSample,
+                    angelFaceAudit: angelFaceSample, angelMouthAudit: angelMouthSample,
+                    angelMotionAudit: angelMotionSample, angelOrnamentsAudit: angelOrnamentsSample)
                 Text(reviewName + (facialStudy ? " · controlled face preview"
                     : (handSample == nil ? " · production puppet" : " · hand study")))
                 if facialStudy {
@@ -116,9 +142,11 @@ struct CharacterPortraitAuditView: View {
                 } else if handSample != nil {
                     Text("Unregistered hand prototype. Controlled motion sample; not enabled in the app.")
                 } else {
-                    Text(CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
+                    Text(reviewAgentID == CharacterMotion.angelID
+                        ? "Angel's own vector face, robe, white feather wings and pearl-gold halo. Controlled geometry, no audio."
+                        : (CharacterMotion.rigID(reviewAgentID) == CharacterMotion.lillyID
                         ? "Head and hoodie. Original cats remain still; arms do not move independently. Compact stages retain the portrait."
-                        : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait.")
+                        : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait."))
                 }
             } else {
                 CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
@@ -190,13 +218,21 @@ struct CharacterPortraitAuditView: View {
             try await capturePose("expression-gallery")
             gallery = false
             let roster = CharacterAuditPerson.allCases
-            let resolved = roster.compactMap { person in
-                CharacterBustArtwork.approved(stage: true, side: 208,
+            let resolved = roster.filter { person in
+                CharacterPuppetRegistration.approved(stage: true, side: 208,
                     agentID: person.agentID, avatarPath: "/images/" + person.avatarFile)
             }
-            try check(resolved.count == 6 && Set(roster.map { $0.agentID }).count == 6,
+            try check(resolved.filter { $0 != .angel }.count == 6 && Set(roster.filter { $0 != .angel }.map { $0.agentID }).count == 6,
                 "all six exact production puppet registrations resolve")
+            try check(resolved.count == 7 && Set(roster.map { $0.agentID }).count == 7,
+                "Angel joins seven exact production puppet registrations")
             for person in roster {
+                if person == .angel {
+                    try check(CharacterAngelArtwork.approved(agentID: person.agentID,
+                        avatarPath: "/images/" + person.avatarFile) != nil,
+                        "Angel original vector resources are bundled")
+                    continue
+                }
                 let artwork = CharacterBustArtwork.approved(stage: true, side: 208,
                     agentID: person.agentID, avatarPath: "/images/" + person.avatarFile)
                 let resourcesAvailable = artwork.map { pack in
@@ -301,6 +337,47 @@ struct CharacterPortraitAuditView: View {
                 }
             }
             blinkSample = nil
+            reviewAgentID = CharacterMotion.angelID
+            reviewName = "Angel"
+            reviewPerformance = .idle
+            blinkSample = 0
+            angelFaceSample = .neutral
+            angelGallery = true
+            try await capturePose("angel-face-gallery")
+            angelGallery = false
+            for face in CharacterFace.allCases {
+                angelFaceSample = face
+                try await capturePose("angel-expression-\(face.rawValue)-light")
+            }
+            angelFaceSample = .neutral
+            for role in 0...8 {
+                angelMouthSample = role
+                try await capturePose("angel-mouth-\(role)-light")
+            }
+            angelMouthSample = nil
+            for (amount, label) in [(0.0, "open"), (0.5, "half"), (1.0, "closed")] {
+                blinkSample = amount
+                try await capturePose("angel-blink-\(label)-light")
+            }
+            // Continuous geometric eyelids, not crossfaded authored rasters.
+            for tick in 0...48 {
+                blinkSample = (1 - cos(Double(tick) / 48 * 2 * .pi)) / 2
+                await wait(1.0 / 24)
+            }
+            blinkSample = 0
+            for (direction, label) in [(-1.0, "left"), (1.0, "right")] {
+                angelMotionSample = CharacterBustPose(headAngle: direction * 1.8,
+                    bodyAngle: direction * 0.4, headOffsetY: direction * 2,
+                    bodyOffsetY: direction * 1.5)
+                angelOrnamentsSample = AngelVectorOrnamentPose(leftWingDegrees: direction * 1.8,
+                    rightWingDegrees: -direction * 1.8, haloOffsetY: direction * 0.003,
+                    haloDegrees: direction * 0.35, sparkle: direction < 0 ? 0.21 : 0.51)
+                try await capturePose("angel-motion-extreme-\(label)-light")
+            }
+            angelMotionSample = nil
+            angelOrnamentsSample = nil
+            blinkSample = nil
+            angelFaceSample = nil
             facialStudy = false
             reviewPerformance = .idle
             reviewDark = false

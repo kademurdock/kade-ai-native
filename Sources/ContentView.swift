@@ -161,6 +161,7 @@ struct ContentView: View {
             handlePendingIntent()
         }
         .onChange(of: router.pending) { _, _ in handlePendingIntent() }
+        .onChange(of: router.pendingFreshAgentChat) { _, _ in handlePendingIntent() }
         .onAppear { handlePendingIntent() }
     }
 
@@ -440,7 +441,7 @@ struct ContentView: View {
         default: break
         }
         switch destination {
-        case .mainChat, .savedChat, .chatWith, .transcribe, .describe, .quickDictate, .kadeKeysDictate:
+        case .mainChat, .savedChat, .chatWith, .freshAgentChat, .transcribe, .describe, .quickDictate, .kadeKeysDictate:
             tab = .talk
             talkPath = [destination]
         case .conversations:
@@ -487,6 +488,17 @@ struct ContentView: View {
             )
         case .chatWith(let agentId):
             ConversationDetailView(conversation: nil, initialAgentId: agentId)
+        case .freshAgentChat(let request):
+            ConversationDetailView(conversation: nil, initialAgentId: request.agentID)
+                .id(request.id)
+                .task(id: request.id) {
+                    // A newly introduced public character may not be in this
+                    // app session's cached roster yet. Keep the exact target
+                    // while refreshing her name and bundled-art eligibility.
+                    if !agentsService.agents.contains(where: { $0.id == request.agentID }) {
+                        await agentsService.refresh()
+                    }
+                }
         case .transcribe:
             TranscribeView(apiClient: apiClient)
         case .help:
@@ -877,10 +889,23 @@ struct ContentView: View {
     ///   kadeai://library         kadeai://library/continue
     ///   kadeai://search
     ///   kadeai://jobs            (a job card: just open the app where it was)
-    /// Signed out, she just lands on sign-in; nothing to route.
+    /// An exact-agent Talk link waits through sign-in/session restoration.
     private func handleOpenURL(_ url: URL) {
-        guard url.scheme == "kadeai", isSignedIn else { return }
+        guard url.scheme == "kadeai" else { return }
         let host = url.host ?? ""
+        if host == "talk" {
+            switch KadeFreshAgentChatParser.talkLink(url) {
+            case .agent(let request):
+                router.requestFreshAgentChat(request)
+                handlePendingIntent()
+            case .main:
+                if isSignedIn { startChat(nil) }
+            case .invalid:
+                break // An explicit invalid agent must never select the default.
+            }
+            return
+        }
+        guard isSignedIn else { return }
         // KADE KEYS dictate (July 31 2026): keyboards can't touch the mic (OS
         // law, the Wispr dance), so the app records and hands the text back
         // through the App Group container.
@@ -897,10 +922,6 @@ struct ContentView: View {
         case "spotter":
             KadeHaptics.press()
             callingSpotter = true
-        case "talk":
-            let agent = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "agent" })?.value
-            startChat(agent?.isEmpty == false ? agent : nil)
         case "library":
             if url.path.contains("continue") {
                 openLibraryPlayer()
@@ -1047,6 +1068,10 @@ struct ContentView: View {
             if let call = router.pendingAgentCall {
                 router.pendingAgentCall = nil
                 agentCallPayload = call
+            }
+        case .agentChat:
+            if let request = router.consumeFreshAgentChat(authReady: isSignedIn) {
+                go(.freshAgentChat(request))
             }
         case .feedbackReports:
             go(.feedbackReports)
@@ -1322,6 +1347,9 @@ enum HomeRoute: Identifiable, Hashable {
     /// Sep 23 2026 redesign: a fresh chat with one particular character
     /// (search results, the home screen widget).
     case chatWith(String)
+    /// Each external tap owns a fresh view identity, including repeated taps
+    /// while a chat with this same agent is already open.
+    case freshAgentChat(KadeFreshAgentChatRequest)
     case transcribe
     case help
     case conversations
@@ -1373,6 +1401,7 @@ enum HomeRoute: Identifiable, Hashable {
         switch self {
         case .mainChat: return "mainChat"
         case .chatWith(let agentId): return "chatWith-\(agentId)"
+        case .freshAgentChat(let request): return "freshAgentChat-\(request.id.uuidString)"
         case .transcribe: return "transcribe"
         case .help: return "help"
         case .conversations: return "conversations"
