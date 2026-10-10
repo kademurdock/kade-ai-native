@@ -37,7 +37,7 @@ MAX_SCREENSHOT = 4 * 1024 * 1024
 MAX_RAW = 50 * 1024 * 1024
 MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_ENCODED = 44 * 1024 * 1024
-CAPTURE_SECONDS = 240
+CAPTURE_SECONDS = 480
 BOOT_SECONDS = 420
 MAX_FILES = 32
 NATIVE_CHECKS = {
@@ -186,9 +186,11 @@ def capture(expected):
     device=next((d['identifier'] for d in devices if d['name']=='iPhone 17 Pro Max'),None)
     require(device is not None,'Documented standard iPhone17ProMax simulator missing')
     identifier=sim('create','Della exact-source unsigned art review',device,runtime)
-    receipt={'source':old,'simulator':{'device':device,'runtime':runtime},'captures':{},
+    receipt={'source':old,'simulator':{'device':device,'runtime':runtime},'captures':{},'captureTimings':{},
+             'captureTimeoutSeconds':CAPTURE_SECONDS,
              'nativeRenderingVerified':False,'physicalPhoneVerified':False,'audioStarted':False,
              'microphoneStarted':False,'startedAtUtc':now(),'passed':False}
+    capture_started=None
     try:
         app=ROOT/'build/della-articulated-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
         require(app.is_dir(),'Unsigned Debug simulator app missing')
@@ -214,7 +216,9 @@ def capture(expected):
                  SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='1',SIMCTL_CHILD_KADE_A11Y_AUDIT='1')
         sim('launch','--stdout='+str(OUT/'app.stdout'),'--stderr='+str(OUT/'app.stderr'),
             identifier,BUNDLE_ID,env=env)
-        deadline=time.monotonic()+CAPTURE_SECONDS
+        capture_started=time.monotonic()
+        receipt['captureStartedAtUtc']=now()
+        deadline=capture_started+CAPTURE_SECONDS
         phases=required_phases()
         while time.monotonic()<deadline:
             phase=documents/'della-articulated-phase.txt'
@@ -223,18 +227,42 @@ def capture(expected):
                 require(label in phases,'Unexpected focused native capture phase')
                 if label not in receipt['captures']:
                     path=OUT/(label+'.png')
-                    sim('io',identifier,'screenshot',str(path),timeout=30)
-                    receipt['captures'][label]=png(path)
-                    acknowledgement=documents/'della-articulated-captured.txt'
-                    temporary=documents/'della-articulated-captured.tmp'
-                    temporary.write_text(label)
-                    os.replace(temporary,acknowledgement)
+                    phase_started=time.monotonic()
+                    timing={'observedAtUtc':now()}
+                    receipt['captureTimings'][label]=timing
+                    try:
+                        remaining=deadline-phase_started
+                        require(remaining>0,f'Focused native capture exceeded{CAPTURE_SECONDS}-second watchdog')
+                        sim('io',identifier,'screenshot',str(path),timeout=min(30,remaining))
+                        timing['screenshotSeconds']=round(time.monotonic()-phase_started,3)
+                        validation_started=time.monotonic()
+                        receipt['captures'][label]=png(path)
+                        timing['validationSeconds']=round(time.monotonic()-validation_started,3)
+                        require(time.monotonic()<deadline,
+                                f'Focused native capture exceeded{CAPTURE_SECONDS}-second watchdog before acknowledgement')
+                        acknowledgement=documents/'della-articulated-captured.txt'
+                        temporary=documents/'della-articulated-captured.tmp'
+                        temporary.write_text(label)
+                        os.replace(temporary,acknowledgement)
+                        timing['ackWrittenAtUtc']=now()
+                    finally:
+                        timing['elapsedSeconds']=round(time.monotonic()-phase_started,3)
+                        timing['captureElapsedSeconds']=round(time.monotonic()-capture_started,3)
             report=documents/'della-articulated-audit.json'
             if report.exists():
                 require(report.stat().st_size<=64*1024,'Oversized synthetic native receipt')
                 native=json.loads(report.read_text())
                 receipt['nativeAudit']=native
-                require(native.get('passed') is True,'Native Della fixture failed')
+                failure='Native Della fixture failed'
+                native_error=native.get('error')
+                missing_prefix='Missing required screenshot: '
+                if isinstance(native_error,str) and native_error.startswith(missing_prefix):
+                    missing=native_error[len(missing_prefix):]
+                    if missing in phases:
+                        receipt['failedPhase']=missing
+                        ack=receipt['captureTimings'].get(missing,{}).get('ackWrittenAtUtc','not written')
+                        failure+=f': {missing}; PNG captured={missing in receipt["captures"]}; acknowledgement={ack}'
+                require(native.get('passed') is True,failure)
                 require(isinstance(native.get('checks'),list) and NATIVE_CHECKS<=set(native['checks']),
                         'Required native resource/identity/path/capture assertions are missing')
                 require(native.get('silent') is True and native.get('physicalDeviceVerified') is False
@@ -250,12 +278,15 @@ def capture(expected):
                         and len(native.get('captures',[]))==28 and set(native['captures'])==phases,
                         'Silent native fixture/art/policy metadata drift')
                 require(set(receipt['captures'])==phases,'Focused native screenshot set is incomplete')
+                require(time.monotonic()<deadline,
+                        f'Focused native capture exceeded{CAPTURE_SECONDS}-second watchdog before native completion')
                 receipt.update(passed=True,nativeRenderingVerified=True)
                 break
             time.sleep(.15)
-        require(receipt['passed'],'Focused native capture exceeded240-second watchdog')
+        require(receipt['passed'],f'Focused native capture exceeded{CAPTURE_SECONDS}-second watchdog')
         require(source(expected,require_staged=True)['inputs']==old['inputs'],'Source changed during simulator capture')
     except Exception as error:
+        receipt.update(passed=False,nativeRenderingVerified=False)
         receipt['errorType']=type(error).__name__
         receipt['error']=str(error) if isinstance(error,RuntimeError) else 'Simulator operation failed; inspect normal step logs'
         if isinstance(error,(subprocess.TimeoutExpired,subprocess.CalledProcessError)):
@@ -266,6 +297,8 @@ def capture(expected):
                 receipt['timeoutSeconds']=error.timeout
         raise
     finally:
+        if capture_started is not None:
+            receipt['captureElapsedSeconds']=round(time.monotonic()-capture_started,3)
         receipt['finishedAtUtc']=now()
         save('receipt.json',receipt)
         try:

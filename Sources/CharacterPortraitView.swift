@@ -363,6 +363,7 @@ struct CharacterPortraitView: View {
             y: CGFloat(artwork.neckY / artwork.cropSide))
         return ZStack(alignment: .topLeading) {
             ZStack(alignment: .topLeading) {
+                articulatedDellaLayer(geometry.masterAsset, cut: geometry.cachedLowerCardiganPath, height: height)
                 articulatedDellaLayer(geometry.torsoAsset, cut: geometry.cachedTorsoPath, height: height)
                 articulatedDellaLayer(geometry.masterAsset, cut: geometry.cachedViewerLeftArmPath, height: height)
                     .rotationEffect(.degrees(-arms.viewerLeftDegrees),

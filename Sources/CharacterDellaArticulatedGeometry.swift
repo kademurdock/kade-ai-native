@@ -43,8 +43,31 @@ extension CharacterDellaArticulatedGeometry {
     // Keep editable authored paths below for source-coordinate QA, but compile
     // each only once for the native timeline's repeated clipping operations.
     static let cachedTorsoPath = torsoPath
+    static let cachedLowerCardiganPath = lowerCardiganPath
     static let cachedViewerLeftArmPath = viewerLeftArmPath
     static let cachedViewerRightArmPath = viewerRightArmPath
+
+    /// Lower cardigan only from the untouched gesture master. The accepted
+    /// short-sleeve plate has transparent clefts beneath its old cuffs; these
+    /// two static underpaint patches restore real cloth below the moving arms.
+    /// Their upper edges follow below the cuffs and palms, excluding anatomy,
+    /// the original central blouse, and every collar/neck pixel.
+    static var lowerCardiganPath: Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 355, y: 985))
+        path.addQuadCurve(to: CGPoint(x: 260, y: 1035), control: CGPoint(x: 310, y: 1015))
+        path.addLine(to: CGPoint(x: 175, y: 1254))
+        path.addLine(to: CGPoint(x: 420, y: 1254))
+        path.addLine(to: CGPoint(x: 420, y: 985))
+        path.closeSubpath()
+        path.move(to: CGPoint(x: 815, y: 1090))
+        path.addLine(to: CGPoint(x: 965, y: 1090))
+        path.addQuadCurve(to: CGPoint(x: 1040, y: 1100), control: CGPoint(x: 1015, y: 1102))
+        path.addLine(to: CGPoint(x: 1100, y: 1254))
+        path.addLine(to: CGPoint(x: 815, y: 1254))
+        path.closeSubpath()
+        return path
+    }
 
     /// Original torso pixels only. The narrow central plate omits its fused
     /// short sleeves; moving sleeve caps overlap this underpaint at shoulders.
@@ -58,8 +81,11 @@ extension CharacterDellaArticulatedGeometry {
         // soon as the elbow rotates away from its neutral shoulder.
         path.addLine(to: CGPoint(x: 260, y: 690))
         path.addQuadCurve(to: CGPoint(x: 245, y: 935), control: CGPoint(x: 235, y: 790))
-        path.addLine(to: CGPoint(x: 300, y: 1254))
-        path.addLine(to: CGPoint(x: 958, y: 1254))
+        // The original lower cardigan widens below its old cuffs. Preserve
+        // that opaque silhouette rather than trimming a straight waist notch.
+        // Its under-cuff alpha clefts remain source transparency, not a cut.
+        path.addLine(to: CGPoint(x: 180, y: 1254))
+        path.addLine(to: CGPoint(x: 1090, y: 1254))
         path.addLine(to: CGPoint(x: 1010, y: 935))
         path.addQuadCurve(to: CGPoint(x: 995, y: 690), control: CGPoint(x: 1020, y: 790))
         path.addLine(to: CGPoint(x: 930, y: 450))

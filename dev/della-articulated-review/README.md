@@ -11,8 +11,12 @@ The image remains unchanged: 1254 × 1254 RGBA, SHA-256
 The prompt set is saved in `prompts.json`. Independent arm extractions were
 rejected because they moved and resized the anatomy. Authored clipping paths
 select each complete sleeve and connected hand from the aligned master.
-The central torso uses the existing approved body plate, and the head consumes
-the existing extraction's alpha with original atlas RGB.
+The central torso uses the existing approved body plate. Small static lower
+cardigan patches from the same untouched gesture master sit beneath it to
+support the old plate's transparent under-cuff clefts; their authored paths
+exclude skin, hands, collar and neck. The original plate's full lower garment
+shape is retained. Natural outer space below a bent sleeve remains. The head
+consumes the existing extraction's alpha with original atlas RGB.
 
 The preview uses a 414 × 620 world viewport. The original 414-square face panel
 keeps its placement and scale, so showing hands does not make her face smaller.
@@ -57,7 +61,12 @@ when this exact source branch belongs to the public repository. It verifies
 models, compiles an unsigned Debug simulator app, and captures 28 controlled
 poses. Bounded PNG and receipt evidence is returned through job logs; it uses
 neither artifact uploads nor caches. No paid or signed build is needed for this
-review. Its own exact-source receipt determines verification status.
+review. Native compilation and model checks passed at the earlier candidate;
+its partial capture exposed a screenshot acknowledgement timing mismatch.
+The runner now records per-phase timings, bounds each screenshot to 30 seconds,
+and allows 480 seconds for the whole capture. The fixture allows 60 seconds for
+each validated screenshot acknowledgement. The job remains capped at 25 minutes.
+Its own exact-source receipt determines complete verification status.
 
 Before production registration, review shoulder seams throughout the motion
 range, fit at 160/208 points, the original face and atlas patch alignment, and

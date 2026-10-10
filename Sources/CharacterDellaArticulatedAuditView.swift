@@ -45,7 +45,9 @@ struct CharacterDellaArticulatedAuditView: View {
         phase = label
         try await Task.sleep(nanoseconds: 600_000_000)
         try label.write(to: output.appendingPathComponent("della-articulated-phase.txt"), atomically: true, encoding: .utf8)
-        for _ in 0..<75 {
+        // The runner allows a screenshot up to 30 seconds, then validates it
+        // before acknowledging. Leave bounded room for that whole operation.
+        for _ in 0..<300 {
             if (try? String(contentsOf: output.appendingPathComponent("della-articulated-captured.txt"), encoding: .utf8)) == label {
                 captures.append(label)
                 return
@@ -87,6 +89,7 @@ struct CharacterDellaArticulatedAuditView: View {
                 path: agents.agents.first { $0.id == CharacterMotion.dellaID }?.avatar?.filepath),
                 "The offline fixture uses Della's exact existing avatar registration")
             try require(geometry.cachedTorsoPath == geometry.torsoPath
+                && geometry.cachedLowerCardiganPath == geometry.lowerCardiganPath
                 && geometry.cachedViewerLeftArmPath == geometry.viewerLeftArmPath
                 && geometry.cachedViewerRightArmPath == geometry.viewerRightArmPath,
                 "Cached clipping paths preserve the editable authored source geometry")
