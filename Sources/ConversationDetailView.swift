@@ -638,25 +638,7 @@ struct ConversationDetailView: View {
                     errorState(loadError)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if messages.isEmpty {
-                    // Sep 23 2026 redesign (B4): a brand-new chat used to say
-                    // "Pick an agent below…" although the character was
-                    // usually already picked. It now welcomes you instead.
-                    if conversationId == nil {
-                        // A plain (not lazy) ScrollView: at the largest text
-                        // sizes the welcome is taller than the space above
-                        // the composer, and "Pick up where you left off" was
-                        // pushed out of reach (seen on the Sep 23 tour).
-                        ScrollView {
-                            firstChatWelcome
-                                .frame(maxWidth: .infinity)
-                        }
-                        .scrollBounceBehavior(.basedOnSize)
-                    } else {
-                        Text("No messages in this conversation.")
-                            .foregroundStyle(.secondary)
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                    emptyChatTranscript
                 } else {
                     if messageSearchActive {
                         messageSearchBar
@@ -665,7 +647,7 @@ struct ConversationDetailView: View {
                 }
             }
             .frame(maxHeight: .infinity)
-            .dellaHostProbe("transcript")
+            .dellaHostTranscriptRegionProbe()
         }
         /* ⭐⭐ BUILD 219 -- AIMED AT THE RECURSION ITSELF, NOT AT WHAT IT WAS
          * MEASURING.
@@ -723,7 +705,9 @@ struct ConversationDetailView: View {
                             .dellaHostProbe("invite")
                     }
                     contextMeter
-                    chatControlRow.dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+                    if !chatControlsInTranscript {
+                        chatControlRow.dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+                    }
                     composer.dellaHostProbe("composer")
                 }
                 /* ⭐ BUILD 220: 219's `.fixedSize(horizontal: false,
@@ -752,8 +736,17 @@ struct ConversationDetailView: View {
          * so the stage stays hidden. A soft mood light behind it follows the
          * face (C5) -- see `faceStage`. */
         .safeAreaInset(edge: .top, spacing: 0) {
-            if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil {
+            if voicePortraitsOn && !isLoading && loadError == nil && selectedAgentId != nil
+                && chatChrome.portraitVisible {
                 faceStage
+                    .onDisappear {
+                        #if DEBUG && targetEnvironment(simulator)
+                        if CharacterDellaHostAudit.isEnabled {
+                            CharacterDellaHostAuditRecorder.stage = nil
+                            CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "stage")
+                        }
+                        #endif
+                    }
             }
         }
         .onAppear {
@@ -777,6 +770,9 @@ struct ConversationDetailView: View {
                 CharacterDellaHostAuditRecorder.keyboardVisible = true
                 if let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                     CharacterDellaHostAuditRecorder.record("keyboard", frame: frame)
+                    if frame.width > 0 && frame.height > 0 {
+                        CharacterDellaHostAuditRecorder.keyboardPresentedInitially = true
+                    }
                 }
             }
             #endif
@@ -784,7 +780,10 @@ struct ConversationDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardUp = false
             #if DEBUG && targetEnvironment(simulator)
-            if CharacterDellaHostAudit.isEnabled { CharacterDellaHostAuditRecorder.keyboardVisible = false }
+            if CharacterDellaHostAudit.isEnabled {
+                CharacterDellaHostAuditRecorder.keyboardVisible = false
+                CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "keyboard")
+            }
             #endif
         }
         .navigationTitle(conversation?.displayTitle ?? generatedTitle ?? "New conversation")
@@ -1562,6 +1561,53 @@ struct ConversationDetailView: View {
         messageSearchFocused = false
     }
 
+    /// Both empty-chat branches keep their existing content in an eager scroll
+    /// so optional controls have the same reachable home as a real transcript.
+    private var emptyChatTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if conversationId == nil {
+                        firstChatWelcome.frame(maxWidth: .infinity)
+                    } else {
+                        Text("No messages in this conversation.")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                    }
+                    transcriptChatOptions.padding(.horizontal)
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(shortScreenAccessibility ? .immediately : .automatic)
+            .dellaHostProbe("transcriptScroll", identifier: "della-host.chat.transcript-scroll")
+            .onAppear { registerDellaHostScrollProxy(proxy) }
+            .onDisappear { registerDellaHostScrollProxy(nil) }
+        }
+    }
+
+    @ViewBuilder
+    private var transcriptChatOptions: some View {
+        if chatControlsInTranscript {
+            chatControlRow
+                .id(Self.chatControlsTranscriptId)
+                .dellaHostProbe("chatControls", identifier: "della-host.chat.controls")
+        }
+        if invitationInTranscript {
+            pushInvitation
+                .id(Self.pushInviteTranscriptId)
+                .dellaHostProbe("invite")
+        }
+    }
+
+    private func registerDellaHostScrollProxy(_ proxy: ScrollViewProxy?) {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            CharacterDellaHostAuditRecorder.chatScrollProxy = proxy
+        }
+        #endif
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -1663,28 +1709,17 @@ struct ConversationDetailView: View {
                     if case .sending = sendState {
                         replyingRow.id(Self.replyingRowId)
                     }
-                    // Optional permission controls can scroll when the keyboard
-                    // or large text needs the pinned message bar's space.
-                    if invitationInTranscript {
-                        pushInvitation
-                            .id(Self.pushInviteTranscriptId)
-                            .dellaHostProbe("invite")
-                    }
+                    transcriptChatOptions
                 }
                 .padding()
             }
-            #if DEBUG && targetEnvironment(simulator)
-            .task {
-                guard let scenario = CharacterDellaHostAudit.scenario,
-                      scenario.chat, scenario.scrolled else { return }
-                // The real field focuses after insertion; let that keyboard
-                // transition settle before positioning the real card buttons.
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                guard !Task.isCancelled else { return }
-                proxy.scrollTo(Self.pushInviteTranscriptId, anchor: .bottom)
+            .scrollDismissesKeyboard(shortScreenAccessibility ? .immediately : .automatic)
+            .dellaHostProbe("transcriptScroll", identifier: "della-host.chat.transcript-scroll")
+            .onDisappear {
+                registerDellaHostScrollProxy(nil)
             }
-            #endif
             .onAppear {
+                registerDellaHostScrollProxy(proxy)
                 scrollToBottom(proxy)
                 rebuildRotorItems()
             }
@@ -2337,6 +2372,39 @@ struct ConversationDetailView: View {
     }
 
     private static let pushInviteTranscriptId = "kade-push-invitation"
+    private static let chatControlsTranscriptId = "kade-chat-voice-controls"
+
+    private var shortScreenAccessibility: Bool {
+        dynamicTypeSize.isAccessibilitySize && UIScreen.main.bounds.height < 700
+    }
+
+    private var chatChrome: CharacterDellaChatChrome {
+        let layout = CharacterDellaHostLayout.chatChrome(
+            availableHeight: Double(UIScreen.main.bounds.height),
+            accessibilityText: dynamicTypeSize.isAccessibilitySize,
+            editing: composerEditing, keyboardVisible: keyboardUp)
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            let visible = layout.portraitVisible && voicePortraitsOn
+                && !isLoading && loadError == nil && selectedAgentId != nil
+            CharacterDellaHostAuditRecorder.portraitVisible = visible
+            CharacterDellaHostAuditRecorder.chatControlsPlacement = layout.controlsInTranscript
+                ? "transcript" : "footer"
+            CharacterDellaHostAuditRecorder.composerEditing = composerEditing
+            CharacterDellaHostAuditRecorder.invitationPlacement = pushCardOnScreen
+                ? (invitationInTranscript ? "transcript" : "footer") : "none"
+            if !visible {
+                CharacterDellaHostAuditRecorder.stage = nil
+                CharacterDellaHostAuditRecorder.geometry.removeValue(forKey: "stage")
+            }
+        }
+        #endif
+        return layout
+    }
+
+    private var chatControlsInTranscript: Bool {
+        chatChrome.controlsInTranscript
+    }
 
     /// Stable screen state chooses a finite line count without measuring the
     /// composer's ideal size or feeding its geometry back into layout.
@@ -2350,7 +2418,7 @@ struct ConversationDetailView: View {
     }
 
     private var invitationInTranscript: Bool {
-        pushCardOnScreen && !messages.isEmpty && composerNeedsCompactLayout
+        pushCardOnScreen && composerNeedsCompactLayout
     }
 
     private var pushInvitation: some View {
@@ -2476,7 +2544,7 @@ struct ConversationDetailView: View {
             readAloudToggle
                 .layoutPriority(1)
         }
-        .padding(.horizontal)
+        .padding(.horizontal, chatControlsInTranscript ? 0 : nil)
         .background(ChatControlRowBackground())
     }
 
@@ -2504,6 +2572,7 @@ struct ConversationDetailView: View {
             .accessibilityLabel("Talking to \(agentDisplayLabel)")
             .accessibilityHint("Opens the list of characters to switch who answers your next message.")
             .accessibilityFocused($a11yFocus, equals: .agentButton)
+            .dellaHostProbe("agentButton", identifier: "della-host.chat.agent")
 
             // Session 25: moved here from the toolbar (see the toolbar
             // comment). Session 21g's original design note still applies:
@@ -2526,6 +2595,7 @@ struct ConversationDetailView: View {
             .disabled(selectedAgentId == nil)
             .accessibilityLabel("Voice")
             .accessibilityHint("Change the voice \(agentDisplayLabel) speaks in.")
+            .dellaHostProbe("voiceButton", identifier: "della-host.chat.voice")
         }
     }
 
@@ -2757,6 +2827,7 @@ struct ConversationDetailView: View {
             .sensoryFeedback(trigger: readAloudEnabled) { _, _ in
                 FeedbackPrefs.gate(.selection)
             }
+            .dellaHostProbe("hearRepliesButton", identifier: "della-host.chat.hear-replies")
 
             speedButton
         }
@@ -2796,6 +2867,7 @@ struct ConversationDetailView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Voice speed")
         .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
+        .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
         .accessibilityHint("Double-tap to change how fast voice messages play.")
     }
 
@@ -2825,7 +2897,7 @@ struct ConversationDetailView: View {
             (true, "I have a few notes to share before we decide what to do next."),
             (false, "I’m listening. You can keep writing while the conversation stays here.")
         ]
-        messages = rows.enumerated().map { index, row in
+        messages = scenario.empty ? [] : rows.enumerated().map { index, row in
             var message = KadeMessage(messageId: "offline-della-\(index)",
                 conversationId: "offline-della-host", createdAt: "2026-10-10T00:00:00Z",
                 isCreatedByUser: row.0, sender: row.0 ? "You" : "Della", text: row.1,
@@ -2843,14 +2915,58 @@ struct ConversationDetailView: View {
             pushCard = .announced
         }
         isLoading = false
-        if scenario.keyboard {
-            // Focus only after the real multiline field has entered the tree.
-            try? await Task.sleep(nanoseconds: 200_000_000)
+        // One parent task owns insertion, focus, keyboard transitions, scrolling
+        // and the final receipt. It does not depend on a scroll subtree task
+        // staying alive while its content and safe-area reservations change.
+        guard await waitForDellaHostAudit({ CharacterDellaHostAuditRecorder.chatScrollProxy != nil }) else { return }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        guard !Task.isCancelled else { return }
+        composerEditing = scenario.keyboardInitially
+        if scenario.keyboardInitially {
+            guard await waitForDellaHostAudit({
+                CharacterDellaHostAuditRecorder.keyboardPresentedInitially
+                    && CharacterDellaHostAuditRecorder.keyboardVisible
+                    && CharacterDellaHostAuditRecorder.geometry["keyboard"] != nil
+            }) else { return }
+        }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard !Task.isCancelled else { return }
+        let uiDrag = scenario.requiresKeyboardDismissal
+            && ProcessInfo.processInfo.environment["KADE_DELLA_HOST_UI_DRAG"] == "1"
+        // Gesture tests own the real drag and produce XCTest proof. They must
+        // never receive a scripted dismissal/scroll or a canonical ready file
+        // claiming a transition that has not happened yet.
+        if uiDrag { return }
+        if scenario.requiresKeyboardDismissal {
+            composerEditing = false
+            guard await waitForDellaHostAudit({
+                !CharacterDellaHostAuditRecorder.keyboardVisible
+                    && CharacterDellaHostAuditRecorder.geometry["keyboard"] == nil
+            }) else { return }
+            try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
         }
-        composerEditing = scenario.keyboard
-        CharacterDellaHostAuditRecorder.composerEditing = scenario.keyboard
+        guard let proxy = CharacterDellaHostAuditRecorder.chatScrollProxy else { return }
+        switch scenario.scrollTarget {
+        case .none: break
+        case .invitation: proxy.scrollTo(Self.pushInviteTranscriptId, anchor: .bottom)
+        case .chatControls: proxy.scrollTo(Self.chatControlsTranscriptId, anchor: .bottom)
+        case .callControls: return
+        }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard !Task.isCancelled else { return }
+        _ = chatChrome
+        CharacterDellaHostAuditRecorder.composerEditing = composerEditing
         await CharacterDellaHostAuditRecorder.ready()
+    }
+
+    private func waitForDellaHostAudit(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<60 {
+            guard !Task.isCancelled else { return false }
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
     }
     #endif
 
@@ -3304,8 +3420,10 @@ struct ConversationDetailView: View {
             UIAccessibility.post(notification: .announcement, argument: next.spoken)
         } label: {
             VStack(spacing: 1) {
-                Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
-                    .font(.title3)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: thinkMode == .instant ? "hare" : "brain.head.profile")
+                        .font(.title3)
+                }
                 Text(thinkMode.caption)
                     .font(.caption2)
                     .accessibilityHidden(true)
@@ -3331,6 +3449,7 @@ struct ConversationDetailView: View {
         .sensoryFeedback(trigger: thinkMode) { _, _ in
             FeedbackPrefs.gate(.selection)
         }
+        .dellaHostProbe("thinkingButton", identifier: "della-host.chat.thinking")
     }
 
     /// Phase 5: tap to start recording, tap again to stop -- deliberately
@@ -3367,6 +3486,7 @@ struct ConversationDetailView: View {
             .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .accessibilityFocused($a11yFocus, equals: .micButton)
+        .dellaHostProbe("micButton", identifier: "della-host.chat.mic")
         .accessibilityLabel(micAccessibilityLabel)
         .accessibilityHint(
             voiceService.isRecording
@@ -5254,6 +5374,25 @@ private struct ChatControlRowBackground: View {
         } else {
             Rectangle().fill(.bar)
         }
+    }
+}
+
+private extension View {
+    /// Geometry only: an identifier on the transparent outer Group could
+    /// override its native ScrollView's independent accessibility identifier.
+    @ViewBuilder @MainActor
+    func dellaHostTranscriptRegionProbe() -> some View {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            self.onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                CharacterDellaHostAuditRecorder.record("transcript", frame: frame)
+            }
+        } else { self }
+        #else
+        self
+        #endif
     }
 }
 

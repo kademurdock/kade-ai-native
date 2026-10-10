@@ -65,4 +65,28 @@ func runCharacterDellaHostLayoutChecks(_ check: (Bool, String) -> Void) {
     let overflowing = call(side: Double.greatestFiniteMagnitude, height: 932)
     check(!overflowing.articulated && overflowing.portraitHeight.isFinite && overflowing.frameHeight.isFinite,
         "An overflowing tall aspect calculation falls back to a finite square")
+
+    func chrome(_ height: Double, accessibility: Bool = true, editing: Bool = false,
+                keyboard: Bool = false) -> CharacterDellaChatChrome {
+        layout.chatChrome(availableHeight: height, accessibilityText: accessibility,
+                          editing: editing, keyboardVisible: keyboard)
+    }
+    let pinned = CharacterDellaChatChrome(portraitVisible: true, controlsInTranscript: false)
+    let transcript = CharacterDellaChatChrome(portraitVisible: false, controlsInTranscript: true)
+    check(chrome(700) == pinned, "Large text retains decoration at the exact roomy boundary")
+    check(chrome(699.999) == transcript, "A short large-text window reserves room for the editor")
+    check(chrome(956, editing: true) == transcript, "Large-text focus yields room before keyboard presentation")
+    check(chrome(956, keyboard: true) == transcript, "The observed large-text keyboard keeps optional controls scrollable")
+    check(chrome(667) == chrome(667, editing: true, keyboard: true),
+        "A short large-text window keeps the same layout after keyboard dismissal")
+    check(chrome(956) == pinned, "Dismissing the keyboard restores roomy large-text decoration")
+    for height in [430.0, 667, 956] {
+        check(chrome(height, accessibility: false, editing: true, keyboard: true) == pinned,
+            "Ordinary text keeps its established pinned voice controls during editing")
+    }
+    for height in [Double.nan, .infinity, -.infinity, 0, -1] {
+        check(chrome(height) == pinned, "An unknown window height does not hide optional chat decoration")
+        check(chrome(height, editing: true) == transcript,
+            "Large-text focus still reserves editor room when window height is unavailable")
+    }
 }

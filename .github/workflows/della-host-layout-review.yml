@@ -37,9 +37,9 @@ jobs:
       github.ref == 'refs/heads/codex/puppet-body-host-layout-20261010' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
-    # Two real phone devices and seventeen actual host cases,
+    # Two real phone devices and twenty-eight actual host cases,
     # and targeted UI-tree tests share one compiled app and a finite job budget.
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       KADE_EXPECTED_COMMIT: ${{ github.sha }}
@@ -86,30 +86,61 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             build-for-testing > build/della-host-layout-audit/compile.log 2>&1 || { tail -n 80 build/della-host-layout-audit/compile.log; exit 1; }
 
-      - name: Capture seventeen silent actual call and chat host cases
+      - name: Capture twenty-eight silent actual call and chat host cases
+        id: host-capture
         run: python3 dev/della-host-layout-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
-      - name: Test thirteen native host control cases without rebuilding
+      - name: Test sixteen Pro Max native host control cases without rebuilding
         timeout-minutes: 10
         run: |
           set -euo pipefail
           host_device_id=$(python3 dev/della-host-layout-audit.py device --expected-sha "$KADE_EXPECTED_COMMIT")
+          host_selector_text=$(python3 dev/della-host-layout-audit.py selectors --expected-sha "$KADE_EXPECTED_COMMIT" --device large)
+          host_test_options=()
+          while IFS= read -r host_selector; do host_test_options+=("$host_selector"); done <<< "$host_selector_text"
+          test "${#host_test_options[@]}" -eq 16
           set +e
           xcodebuild -jobs 2 -project KadeAI.xcodeproj -scheme KadeAIA11yAudit -configuration Debug \
             -sdk iphonesimulator -destination "platform=iOS Simulator,id=$host_device_id" \
             -derivedDataPath build/della-host-layout-simulator \
-            -resultBundlePath build/della-host-layout-audit/ui-tests.xcresult \
-            -only-testing:KadeAIUITests/DellaHostControlsUITests \
+            -resultBundlePath build/della-host-layout-audit/ui-tests-large.xcresult \
+            "${host_test_options[@]}" \
             -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
-            test-without-building > build/della-host-layout-audit/ui-tests.log 2>&1
+            test-without-building > build/della-host-layout-audit/ui-tests-large.log 2>&1
           host_test_exit=$?
           set -e
-          printf '%s\n' "$host_test_exit" > build/della-host-layout-audit/ui-test-exit-code.txt
-          tail -n 80 build/della-host-layout-audit/ui-tests.log
+          printf '%s\n' "$host_test_exit" > build/della-host-layout-audit/ui-test-large-exit-code.txt
+          tail -n 80 build/della-host-layout-audit/ui-tests-large.log
           test "$host_test_exit" -eq 0
 
-      - name: Require thirteen pass markers and successful native xcresult
+      - name: Test eight SE native host control cases without rebuilding
+        if: ${{ always() && !cancelled() && steps.host-capture.outcome == 'success' }}
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          python3 dev/della-host-layout-audit.py shutdown --expected-sha "$KADE_EXPECTED_COMMIT" --device large
+          host_device_id=$(python3 dev/della-host-layout-audit.py device --expected-sha "$KADE_EXPECTED_COMMIT" --device small)
+          host_selector_text=$(python3 dev/della-host-layout-audit.py selectors --expected-sha "$KADE_EXPECTED_COMMIT" --device small)
+          host_test_options=()
+          while IFS= read -r host_selector; do host_test_options+=("$host_selector"); done <<< "$host_selector_text"
+          test "${#host_test_options[@]}" -eq 8
+          set +e
+          xcodebuild -jobs 2 -project KadeAI.xcodeproj -scheme KadeAIA11yAudit -configuration Debug \
+            -sdk iphonesimulator -destination "platform=iOS Simulator,id=$host_device_id" \
+            -derivedDataPath build/della-host-layout-simulator \
+            -resultBundlePath build/della-host-layout-audit/ui-tests-small.xcresult \
+            "${host_test_options[@]}" \
+            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            test-without-building > build/della-host-layout-audit/ui-tests-small.log 2>&1
+          host_test_exit=$?
+          set -e
+          printf '%s\n' "$host_test_exit" > build/della-host-layout-audit/ui-test-small-exit-code.txt
+          tail -n 80 build/della-host-layout-audit/ui-tests-small.log
+          test "$host_test_exit" -eq 0
+
+      - name: Require twenty-four pass markers and both successful native xcresults
         if: ${{ always() }}
         run: python3 dev/della-host-layout-audit.py ui-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 

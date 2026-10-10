@@ -15,6 +15,11 @@ final class DellaHostControlsUITests: XCTestCase {
         let message: String
     }
 
+    private struct ChatCore {
+        let fieldFrame: CGRect
+        let controls: [Control]
+    }
+
     private var phase = ""
     private var checks = 0
 
@@ -42,6 +47,61 @@ final class DellaHostControlsUITests: XCTestCase {
 
     func testChatAccessibilityScrolledDark() throws {
         try checkChat("chat-a11y-scrolled-dark", attachment: true, invitation: true, keyboard: false)
+    }
+
+    func testChatAccessibilityKeyboardDark() throws {
+        try checkChat("chat-a11y-keyboard-dark", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityKeyboardCardScrolledDark() throws {
+        try checkChat("chat-a11y-keyboard-card-scrolled-dark", attachment: true, invitation: true,
+                      keyboard: true, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityKeyboardControlsScrolledDark() throws {
+        try checkChat("chat-a11y-keyboard-controls-scrolled-dark", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false)
+    }
+
+    func testChatAccessibilitySmallLight() throws {
+        try checkChat("chat-a11y-small-light", attachment: true, invitation: true,
+                      keyboard: false, invitationVisible: false, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityCardScrolledSmallLight() throws {
+        try checkChat("chat-a11y-card-scrolled-small-light", attachment: true, invitation: true,
+                      keyboard: false, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityControlsScrolledSmallLight() throws {
+        try checkChat("chat-a11y-controls-scrolled-small-light", attachment: true, invitation: true,
+                      keyboard: false, invitationVisible: false)
+    }
+
+    func testChatAccessibilityKeyboardSmallLight() throws {
+        try checkChat("chat-a11y-keyboard-small-light", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityKeyboardCardScrolledSmallLight() throws {
+        try checkChat("chat-a11y-keyboard-card-scrolled-small-light", attachment: true, invitation: true,
+                      keyboard: true, optionalControlsVisible: false, dismissKeyboardByDragging: true)
+    }
+
+    func testChatAccessibilityKeyboardControlsScrolledSmallLight() throws {
+        try checkChat("chat-a11y-keyboard-controls-scrolled-small-light", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false, dismissKeyboardByDragging: true)
+    }
+
+    func testChatAccessibilityEmptyKeyboardSmallLight() throws {
+        try checkChat("chat-a11y-empty-keyboard-small-light", attachment: true, invitation: true,
+                      keyboard: true, invitationVisible: false, optionalControlsVisible: false)
+    }
+
+    func testChatAccessibilityEmptyControlsScrolledSmallLight() throws {
+        try checkChat("chat-a11y-empty-controls-scrolled-small-light", attachment: true, invitation: true,
+                      keyboard: false, invitationVisible: false)
     }
 
     func testCallRoomyLight() throws {
@@ -72,7 +132,7 @@ final class DellaHostControlsUITests: XCTestCase {
         try checkCall("call-a11y-scrolled-dark", secondaryControlsVisible: true)
     }
 
-    private func launch(_ requestedPhase: String) throws -> XCUIApplication {
+    private func launch(_ requestedPhase: String, uiDrag: Bool = false) throws -> XCUIApplication {
         phase = requestedPhase
         checks = 0
         let app = XCUIApplication()
@@ -81,6 +141,7 @@ final class DellaHostControlsUITests: XCTestCase {
             "KADE_A11Y_AUDIT": "1",
             "KADE_DELLA_HOST_AUDIT": "1",
             "KADE_DELLA_HOST_CASE": requestedPhase,
+            "KADE_DELLA_HOST_UI_DRAG": uiDrag ? "1" : "0",
             // Reject inherited selectors for the separate art/lab fixtures.
             "KADE_PUPPET_LAB": "0",
             "KADE_DELLA_ARTICULATED_AUDIT": "0",
@@ -94,9 +155,11 @@ final class DellaHostControlsUITests: XCTestCase {
             ? "della-host.chat.composer-field" : "della-host.call.hang-up"
         try require(app.descendants(matching: .any).matching(identifier: firstID)
             .firstMatch.waitForExistence(timeout: 20), "actual host exposed " + firstID)
-        if requestedPhase.contains("scrolled") {
-            let targetID = requestedPhase.hasPrefix("chat-")
-                ? "della-host.chat.invite-not-now" : "della-host.call.deep-think"
+        if requestedPhase.contains("scrolled") && !uiDrag {
+            let targetID: String
+            if requestedPhase.hasPrefix("call-") { targetID = "della-host.call.deep-think" }
+            else if requestedPhase.contains("controls-scrolled") { targetID = "della-host.chat.speed" }
+            else { targetID = "della-host.chat.invite-not-now" }
             let target = app.buttons.matching(identifier: targetID).firstMatch
             let ready = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
                 (object as? XCUIElement)?.isHittable == true
@@ -108,15 +171,88 @@ final class DellaHostControlsUITests: XCTestCase {
     }
 
     private func checkChat(_ requestedPhase: String, attachment: Bool,
-                           invitation: Bool, keyboard: Bool, invitationVisible: Bool = true) throws {
-        let app = try launch(requestedPhase)
+                           invitation: Bool, keyboard: Bool, invitationVisible: Bool = true,
+                           optionalControlsVisible: Bool = true,
+                           dismissKeyboardByDragging: Bool = false) throws {
+        let app = try launch(requestedPhase, uiDrag: dismissKeyboardByDragging)
         defer { app.terminate() }
+        let expected = requestedPhase.contains("-small-")
+            ? CGSize(width: 375, height: 667) : CGSize(width: 440, height: 956)
+        try require(abs(app.frame.width - expected.width) <= 1
+                    && abs(app.frame.height - expected.height) <= 1,
+                    "test uses the requested real phone window")
+        var core = try checkChatCore(app, attachment: attachment, keyboard: keyboard)
+        if dismissKeyboardByDragging {
+            // The fixture deliberately leaves the real keyboard and scroll
+            // position alone. Only this native viewport drag may dismiss it.
+            try dragTranscript(app)
+            let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
+                (object as? XCUIApplication)?.keyboards.count == 0
+            }, object: app)
+            try require(XCTWaiter.wait(for: [hidden], timeout: 10) == .completed,
+                        "real transcript drag dismisses the software keyboard")
+            try scrollTranscriptToTarget(app)
+            core = try checkChatCore(app, attachment: attachment, keyboard: false)
+        }
+
+        let agent = try button(app, identifier: "della-host.chat.agent", label: "Talking to Della",
+                               reachable: optionalControlsVisible)
+        let voice = try button(app, identifier: "della-host.chat.voice", label: "Voice",
+                               reachable: optionalControlsVisible)
+        let hearReplies = try button(app, identifier: "della-host.chat.hear-replies", label: "Hear replies",
+                                     reachable: optionalControlsVisible)
+        let speed = try button(app, identifier: "della-host.chat.speed", label: "Voice speed",
+                               reachable: optionalControlsVisible)
+        let optionalControls = [agent, voice, hearReplies, speed]
+        try require(nonemptyValue(hearReplies.element), "Hear replies exposes its separate state value")
+        try require(nonemptyValue(speed.element), "Voice speed exposes its separate rate value")
+        if optionalControlsVisible {
+            try disjoint(optionalControls + core.controls)
+            for control in optionalControls {
+                try require(!overlaps(core.fieldFrame, control.frame),
+                            "composer does not cover " + control.name)
+            }
+            if requestedPhase.contains("controls-scrolled") {
+                try controlsInsideTranscript(optionalControls, in: app)
+            }
+            if keyboard && !dismissKeyboardByDragging {
+                let top = app.keyboards.firstMatch.frame.minY
+                for control in optionalControls {
+                    try require(control.frame.maxY <= top + 0.5,
+                                control.name + " stays above the keyboard")
+                }
+            }
+        }
+        if invitation {
+            let turnOn = try button(app, identifier: "della-host.chat.invite-turn-on",
+                                    label: "Turn on notifications", reachable: invitationVisible)
+            let notNow = try button(app, identifier: "della-host.chat.invite-not-now",
+                                    label: "Not now", reachable: invitationVisible)
+            if invitationVisible {
+                let visibleControls = core.controls + (optionalControlsVisible ? optionalControls : [])
+                try disjoint([turnOn, notNow] + visibleControls)
+                try require(!overlaps(core.fieldFrame, turnOn.frame)
+                            && !overlaps(core.fieldFrame, notNow.frame),
+                            "invitation does not cover the composer")
+                if requestedPhase.contains("scrolled") {
+                    try controlsInsideTranscript([turnOn, notNow], in: app)
+                }
+                if keyboard && !dismissKeyboardByDragging {
+                    let top = app.keyboards.firstMatch.frame.minY
+                    try require(turnOn.frame.maxY <= top + 0.5 && notNow.frame.maxY <= top + 0.5,
+                                "visible invitation buttons stay above the keyboard")
+                }
+            }
+        }
+        passed()
+    }
+
+    private func checkChatCore(_ app: XCUIApplication, attachment: Bool, keyboard: Bool) throws -> ChatCore {
         if keyboard {
             try require(app.keyboards.firstMatch.waitForExistence(timeout: 10), "software keyboard is present")
         } else {
             try require(app.keyboards.count == 0, "software keyboard is absent")
         }
-
         let fieldMatches = app.descendants(matching: .any)
             .matching(identifier: "della-host.chat.composer-field")
         try require(fieldMatches.count == 1, "one native composer field")
@@ -126,65 +262,82 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(field.label == "Message", "composer label is Message")
         try require(field.isEnabled && field.isHittable, "composer is enabled and reachable")
         let fieldFrame = try visibleFrame(field, in: app, name: "composer")
-        if requestedPhase.contains("-a11y-") {
+        if phase.contains("-a11y-") {
             try require(fieldFrame.width >= app.frame.width - 64,
                         "accessibility composer uses the full-width editor row")
         }
-
         let send = try button(app, identifier: "della-host.chat.send", label: "Send message")
         let attach = try button(app, identifier: "della-host.chat.attach",
                                 label: attachment ? "Attachment added" : "Attach a photo or file",
                                 enabled: !attachment, reachable: !attachment)
-        let mic = try button(app, label: "Record a voice message")
-        let thinking = try button(app, label: "Thinking")
-        let agent = try button(app, label: "Talking to Della")
-        let voice = try button(app, label: "Voice")
-        let hearReplies = try button(app, label: "Hear replies")
-        let speed = try button(app, label: "Voice speed")
+        _ = try visibleFrame(attach.element, in: app, name: "Attach")
+        let mic = try button(app, identifier: "della-host.chat.mic", label: "Record a voice message")
+        let thinking = try button(app, identifier: "della-host.chat.thinking", label: "Thinking")
         try require(nonemptyValue(thinking.element), "Thinking exposes its separate state value")
-        try require(nonemptyValue(hearReplies.element), "Hear replies exposes its separate state value")
-        try require(nonemptyValue(speed.element), "Voice speed exposes its separate rate value")
-        var pinnedControls = [send, attach, mic, thinking, agent, voice, hearReplies, speed]
-        for control in [send, attach, mic, thinking] {
+        var controls = [send, attach, mic, thinking]
+        for control in controls {
             try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name)
         }
-
         if attachment {
-            // The fixture uses the real pending-attachment row. Do not remove it.
-            pinnedControls.append(try button(app, label: "Remove attachment"))
+            controls.append(try button(app, label: "Remove attachment"))
             try require(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: ")).count == 1,
                         "attachment status remains a separate readable element")
         }
-        try disjoint(pinnedControls)
+        try disjoint(controls)
+        let viewport = try transcriptFrame(app)
+        try require(viewport.height >= 44, "real transcript retains at least 44pt of scrolling room")
         if keyboard {
             let keyboardFrame = app.keyboards.firstMatch.frame
             try require(valid(keyboardFrame), "software keyboard has a nonempty native frame")
             try require(fieldFrame.maxY <= keyboardFrame.minY + 0.5,
                         "composer stays above the keyboard")
-            for control in pinnedControls {
+            try require(viewport.maxY <= keyboardFrame.minY + 0.5,
+                        "transcript stays above the keyboard")
+            for control in controls {
                 try require(control.frame.maxY <= keyboardFrame.minY + 0.5,
                             control.name + " stays above the keyboard")
             }
         }
-        if invitation {
-            // Initial constrained cases prove the pinned controls independently
-            // of the scroll position. Separate scrolled cases must make both
-            // real invitation buttons visible and reachable without tapping.
-            let turnOn = try button(app, identifier: "della-host.chat.invite-turn-on",
-                                    label: "Turn on notifications", reachable: invitationVisible)
-            let notNow = try button(app, identifier: "della-host.chat.invite-not-now",
-                                    label: "Not now", reachable: invitationVisible)
-            if invitationVisible {
-                try disjoint([turnOn, notNow] + pinnedControls)
-                if keyboard {
-                    let keyboardTop = app.keyboards.firstMatch.frame.minY
-                    try require(turnOn.frame.maxY <= keyboardTop + 0.5
-                                && notNow.frame.maxY <= keyboardTop + 0.5,
-                                "visible invitation buttons stay above the keyboard")
-                }
-            }
+        return ChatCore(fieldFrame: fieldFrame, controls: controls)
+    }
+
+    private func transcriptFrame(_ app: XCUIApplication) throws -> CGRect {
+        let matches = app.scrollViews.matching(identifier: "della-host.chat.transcript-scroll")
+        try require(matches.count == 1, "one real native transcript ScrollView")
+        return try visibleFrame(matches.element(boundBy: 0), in: app, name: "transcript viewport")
+    }
+
+    private func controlsInsideTranscript(_ controls: [Control], in app: XCUIApplication) throws {
+        let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
+        for control in controls {
+            try require(viewport.contains(control.frame), control.name + " fits inside the actual transcript viewport")
         }
-        passed()
+    }
+
+    private func dragTranscript(_ app: XCUIApplication) throws {
+        let viewport = try transcriptFrame(app)
+        try require(viewport.height >= 44, "viewport has enough room for a native drag")
+        let scroll = app.scrollViews.matching(identifier: "della-host.chat.transcript-scroll").firstMatch
+        let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+        let finish = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+        start.press(forDuration: 0.05, thenDragTo: finish)
+    }
+
+    private func scrollTranscriptToTarget(_ app: XCUIApplication) throws {
+        let identifiers = phase.contains("controls-scrolled")
+            ? ["della-host.chat.agent", "della-host.chat.voice", "della-host.chat.hear-replies", "della-host.chat.speed"]
+            : ["della-host.chat.invite-turn-on", "della-host.chat.invite-not-now"]
+        let targets = identifiers.map { app.buttons.matching(identifier: $0).firstMatch }
+        for _ in 0..<8 {
+            let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
+            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && viewport.contains($0.frame) }) {
+                return
+            }
+            try dragTranscript(app)
+        }
+        let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
+        try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && viewport.contains($0.frame) },
+                    "bounded real viewport drags make every requested target reachable")
     }
 
     private func checkCall(_ requestedPhase: String, secondaryControlsVisible: Bool) throws {
@@ -203,11 +356,15 @@ final class DellaHostControlsUITests: XCTestCase {
                                  reachable: secondaryControlsVisible)
         let deepThink = try button(app, identifier: "della-host.call.deep-think", label: "Deep think",
                                    reachable: secondaryControlsVisible)
+        let stopTalking = try button(app, identifier: "della-host.call.stop-talking", label: "Stop talking",
+                                     reachable: requestedPhase.contains("scrolled"))
         for control in [camera, spotter, deepThink] {
             try require(nonemptyValue(control.element), control.name + " exposes its separate state value")
         }
         if secondaryControlsVisible {
-            try disjoint([mute, hangUp, camera, spotter, deepThink])
+            let visible = [mute, hangUp, camera, spotter, deepThink]
+                + (requestedPhase.contains("scrolled") ? [stopTalking] : [])
+            try disjoint(visible)
         }
         try require(app.descendants(matching: .any)
             .matching(NSPredicate(format: "label BEGINSWITH %@", "You said: ")).count == 1,

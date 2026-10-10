@@ -62,6 +62,12 @@ PHASES=(
     'chat-off-dark','chat-small-light','call-roomy-light','call-captions-dark',
     'call-captions-scrolled-dark','call-camera-light','call-camera-scrolled-dark',
     'call-a11y-dark','call-a11y-scrolled-dark','call-off-camera-dark','call-small-light',
+    'chat-a11y-keyboard-dark','chat-a11y-keyboard-card-scrolled-dark',
+    'chat-a11y-keyboard-controls-scrolled-dark','chat-a11y-small-light',
+    'chat-a11y-card-scrolled-small-light','chat-a11y-controls-scrolled-small-light',
+    'chat-a11y-keyboard-small-light','chat-a11y-keyboard-card-scrolled-small-light',
+    'chat-a11y-keyboard-controls-scrolled-small-light',
+    'chat-a11y-empty-keyboard-small-light','chat-a11y-empty-controls-scrolled-small-light',
 )
 DEVICES={
     'large':{'name':'iPhone 17 Pro Max',
@@ -76,12 +82,44 @@ UI_PHASES={
     'chat-a11y-dark','chat-a11y-scrolled-dark',
     'call-roomy-light','call-captions-dark','call-captions-scrolled-dark',
     'call-camera-light','call-camera-scrolled-dark','call-a11y-dark','call-a11y-scrolled-dark',
+    'chat-a11y-keyboard-dark','chat-a11y-keyboard-card-scrolled-dark',
+    'chat-a11y-keyboard-controls-scrolled-dark','chat-a11y-small-light',
+    'chat-a11y-card-scrolled-small-light','chat-a11y-controls-scrolled-small-light',
+    'chat-a11y-keyboard-small-light','chat-a11y-keyboard-card-scrolled-small-light',
+    'chat-a11y-keyboard-controls-scrolled-small-light',
+    'chat-a11y-empty-keyboard-small-light','chat-a11y-empty-controls-scrolled-small-light',
 }
+UI_METHODS={
+    'testChatRoomyLight':'chat-roomy-light','testChatPackedDark':'chat-packed-dark',
+    'testChatKeyboardDark':'chat-keyboard-dark','testChatKeyboardScrolledDark':'chat-keyboard-scrolled-dark',
+    'testChatAccessibilityDark':'chat-a11y-dark','testChatAccessibilityScrolledDark':'chat-a11y-scrolled-dark',
+    'testCallRoomyLight':'call-roomy-light','testCallCaptionsDark':'call-captions-dark',
+    'testCallCaptionsScrolledDark':'call-captions-scrolled-dark','testCallCameraLight':'call-camera-light',
+    'testCallCameraScrolledDark':'call-camera-scrolled-dark','testCallAccessibilityDark':'call-a11y-dark',
+    'testCallAccessibilityScrolledDark':'call-a11y-scrolled-dark',
+    'testChatAccessibilityKeyboardDark':'chat-a11y-keyboard-dark',
+    'testChatAccessibilityKeyboardCardScrolledDark':'chat-a11y-keyboard-card-scrolled-dark',
+    'testChatAccessibilityKeyboardControlsScrolledDark':'chat-a11y-keyboard-controls-scrolled-dark',
+    'testChatAccessibilitySmallLight':'chat-a11y-small-light',
+    'testChatAccessibilityCardScrolledSmallLight':'chat-a11y-card-scrolled-small-light',
+    'testChatAccessibilityControlsScrolledSmallLight':'chat-a11y-controls-scrolled-small-light',
+    'testChatAccessibilityKeyboardSmallLight':'chat-a11y-keyboard-small-light',
+    'testChatAccessibilityKeyboardCardScrolledSmallLight':'chat-a11y-keyboard-card-scrolled-small-light',
+    'testChatAccessibilityKeyboardControlsScrolledSmallLight':'chat-a11y-keyboard-controls-scrolled-small-light',
+    'testChatAccessibilityEmptyKeyboardSmallLight':'chat-a11y-empty-keyboard-small-light',
+    'testChatAccessibilityEmptyControlsScrolledSmallLight':'chat-a11y-empty-controls-scrolled-small-light',
+}
+UI_COUNTS={'large':16,'small':8}
+CORE_BUTTONS=('attach','thinkingButton','micButton','send')
+VOICE_BUTTONS=('agentButton','voiceButton','hearRepliesButton','speedButton')
+CALL_PRIMARY=('muteButton','hangUpButton')
+CALL_SECONDARY=('cameraButton','spotterButton','deepThinkButton','stopTalkingButton')
 GEOMETRY_KEYS={
     'window','stage','transcript','composer','chatControls','attachment','invite',
     'viewport','callViewport','primaryControls','camera','secondaryControls','keyboard',
     'cameraButton','spotterButton','deepThinkButton','stopTalkingButton','muteButton','hangUpButton',
-    'attach','composerField','send','inviteTurnOn','inviteNotNow',
+    'attach','composerField','send','inviteTurnOn','inviteNotNow','thinkingButton','micButton',
+    'agentButton','voiceButton','hearRepliesButton','speedButton','transcriptScroll',
 }
 AGENT_ID='agent_BSOLa3eNEZyjs-7abCjMt'
 AVATAR_PATH='/images/agent-agent_BSOLa3eNEZyjs-7abCjMt-avatar-1788941611099.png'
@@ -91,7 +129,7 @@ NATIVE_CHECKS={
     'Camera, audio, microphone and network fixtures stayed silent',
     'Candidate, keyboard, accessibility and scroll policies match the case',
     'Measured stage paint respects the viewport and fixed call controls',
-    'The transcript stays usable while its real invitation remains reachable',
+    'The transcript stays usable while its invitation and voice controls remain reachable',
 }
 MAX_SCREENSHOT=4*1024*1024
 MAX_RAW=50*1024*1024
@@ -176,8 +214,10 @@ def png(path):
 
 
 def required_phases():
-    require(len(PHASES)==len(set(PHASES))==17 and bool(HOST_MODEL_INPUTS) and bool(NATIVE_CHECKS),
+    require(len(PHASES)==len(set(PHASES))==28 and bool(HOST_MODEL_INPUTS) and bool(NATIVE_CHECKS),
             'Host fixture phase/source/readiness contract drift')
+    require(len(UI_METHODS)==len(UI_PHASES)==24 and set(UI_METHODS.values())==UI_PHASES,
+            'Targeted two-device UI method/phase contract drift')
     require(all(re.fullmatch(r'(chat|call)-[a-z0-9-]+',phase) for phase in PHASES),
             'Invalid frozen host case label')
     return set(PHASES)
@@ -221,6 +261,9 @@ def source(expected,clean=False,require_staged=False):
                 and (catalog/master.name).read_bytes()==data,'Staged master byte drift')
     for name in SOURCE_INPUTS+HOST_MODEL_INPUTS:
         inputs[name]=sha(ROOT/name)
+    declared=set(re.findall(r'\bfunc (test[A-Za-z]+)\(',
+                            (ROOT/'UITests/DellaHostControlsUITests.swift').read_text(encoding='utf-8')))
+    require(declared==set(UI_METHODS),'Exact native UI method/device selector source drift')
     return {'schema':'kade.della-host-native-source.v1','sha':expected,'repository':REPOSITORY,
             'branch':BRANCH,'inputs':inputs,'checkedAtUtc':now(),'unsignedSimulatorOnly':True,
             'releasePublished':False,'physicalPhoneVerified':False,'batteryPerformanceVerified':False,
@@ -231,6 +274,33 @@ def source(expected,clean=False,require_staged=False):
 def case_device(phase):
     require(phase in required_phases(),'Unknown host case')
     return 'small' if phase.endswith('-small-light') else 'large'
+
+
+def case_policy(phase):
+    require(phase in required_phases(),'Unknown host policy case')
+    chat=phase.startswith('chat-')
+    device=case_device(phase)
+    accessibility='-a11y-' in phase
+    scrolled='-scrolled-' in phase
+    keyboard_initial=chat and 'keyboard' in phase
+    keyboard=keyboard_initial and not (device=='small' and scrolled)
+    hidden=chat and accessibility and (keyboard or DEVICES[device]['points'][1]<700)
+    target='none'
+    if scrolled:
+        target='callControls' if not chat else 'chatControls' if '-controls-scrolled-' in phase else 'invitation'
+    invitation='none' if not chat else 'transcript' if keyboard_initial or accessibility \
+        else 'footer' if phase in ('chat-packed-dark','chat-off-dark') else 'none'
+    return {'chat':chat,'keyboardVisible':keyboard,'keyboardPresentedInitially':keyboard_initial,
+            'composerEditing':keyboard,'portraitVisible':not hidden,
+            'chatControlsPlacement':'none' if not chat else 'transcript' if hidden else 'footer',
+            'scrollTarget':target,'invitationPlacement':invitation}
+
+
+def ui_methods(device):
+    require(device in UI_COUNTS,'Unknown UI simulator group')
+    methods={method:phase for method,phase in UI_METHODS.items() if case_device(phase)==device}
+    require(len(methods)==UI_COUNTS[device],'Exact native UI device/method group drift')
+    return methods
 
 
 def initial_source(expected):
@@ -309,7 +379,9 @@ def failed_native_geometry(data,phase):
     if isinstance(points,list) and len(points)==2 and all(number(item) and abs(item)<=10000 for item in points):
         diagnostic['windowPoints']=points
     stage=data.get('stage')
-    if isinstance(stage,dict):
+    if stage is None and 'stage' in data:
+        diagnostic['stage']=None
+    elif isinstance(stage,dict):
         bounded={key:value for key,value in stage.items() if key in ('side','portraitHeight','frameHeight')
                  and number(value) and abs(value)<=10000}
         if type(stage.get('articulated')) is bool: bounded['articulated']=stage['articulated']
@@ -332,7 +404,7 @@ def validate_failed_native_geometry(diagnostic):
                 'Unbounded failed native window diagnostic')
     if 'stage' in diagnostic:
         stage=diagnostic['stage']
-        require(isinstance(stage,dict) and set(stage)<={'side','portraitHeight','frameHeight','articulated'}
+        require(stage is None or isinstance(stage,dict) and set(stage)<={'side','portraitHeight','frameHeight','articulated'}
                 and all(type(value) is bool if key=='articulated' else number(value) and abs(value)<=10000
                         for key,value in stage.items()),'Unbounded failed native stage diagnostic')
     if 'geometry' in diagnostic:
@@ -342,23 +414,37 @@ def validate_failed_native_geometry(diagnostic):
     return diagnostic
 
 
+def contains(outer,inner,tolerance=1):
+    return inner[0]>=outer[0]-tolerance and inner[1]>=outer[1]-tolerance \
+        and inner[0]+inner[2]<=outer[0]+outer[2]+tolerance \
+        and inner[1]+inner[3]<=outer[1]+outer[3]+tolerance
+
+
+def disjoint(rectangles):
+    for first in range(len(rectangles)):
+        for second in range(first+1,len(rectangles)):
+            overlap=intersection(rectangles[first],rectangles[second])
+            if overlap[2]>1 and overlap[3]>1: return False
+    return True
+
+
 def validate_ready(data,phase,device):
     fields={'schema','phase','host','windowPoints','orientation','appearance','stage','geometry','viewportIntersectsStage',
             'actualHost','hostFrameMatchesPortrait','motionPausedForLayoutAudit',
             'keyboardVisible','composerEditing','candidateEnabled','dynamicTypeAccessibility','scrolled',
-            'invitationPlacement',
+            'invitationPlacement','portraitVisible','chatControlsPlacement','scrollTarget','keyboardPresentedInitially',
             'sourceAvatarPath','agentID','resourceComplete','audioStarted','microphoneStarted','cameraStarted',
             'networkStarted','networkRequestsBlocked','blockedRequestCount',
             'physicalPhoneVerified','voiceOverVerified','batteryMeasured'}
     require(isinstance(data,dict) and set(data)==fields,'Native host readiness schema fields drift')
     host=phase.split('-',1)[0]
-    require(data['schema']=='kade.della-host-ready.v1' and data['phase']==phase and data['host']==host
+    policy=case_policy(phase)
+    require(data['schema']=='kade.della-host-ready.v2' and data['phase']==phase and data['host']==host
             and data['actualHost']==('ConversationDetailView' if host=='chat' else 'CallView')
             and data['orientation']=='portrait'
             and data['appearance']==('dark' if phase.endswith('-dark') else 'light'),
             'Native requested actual host/case/orientation/appearance mismatch')
-    require(data['hostFrameMatchesPortrait'] is True and data['motionPausedForLayoutAudit'] is True,
-            'Native parent/child frame or paused fixture mismatch')
+    require(data['motionPausedForLayoutAudit'] is True,'Native paused fixture mismatch')
     require(data['agentID']==AGENT_ID and data['sourceAvatarPath']==AVATAR_PATH
             and data['resourceComplete'] is True,'Original Della ownership/resources mismatch')
     for flag in ('audioStarted','microphoneStarted','cameraStarted','networkStarted',
@@ -373,111 +459,133 @@ def validate_ready(data,phase,device):
     require(data['candidateEnabled'] is ('-off-' not in phase)
             and data['dynamicTypeAccessibility'] is ('-a11y-' in phase)
             and data['scrolled'] is ('-scrolled-' in phase),'Candidate/accessibility/scroll case mismatch')
-    keyboard=phase.startswith('chat-keyboard-')
-    require(data['keyboardVisible'] is keyboard and data['composerEditing'] is keyboard,
-            'Requested actual keyboard/composer state mismatch')
-    stage=data['stage']
-    require(isinstance(stage,dict) and set(stage)=={'side','portraitHeight','frameHeight','articulated'}
-            and all(number(stage[key]) and 0<stage[key]<1000 for key in ('side','portraitHeight','frameHeight'))
-            and type(stage['articulated']) is bool,'Settled stage schema invalid')
-    portrait=stage['side']*620/414 if stage['articulated'] else stage['side']
-    require(abs(stage['portraitHeight']-portrait)<=1
-            and abs(stage['frameHeight']-(stage['portraitHeight']+40))<=1,'Natural parent/child stage height drift')
-    if phase=='chat-roomy-light':
-        sides={208}; tall=True
-    elif keyboard:
-        sides={84}; tall=False
-    elif phase.endswith('-small-light'):
-        sides={132}; tall=False
-    elif phase in ('chat-packed-dark','chat-a11y-dark') or '-camera-' in phase and '-off-' not in phase \
-            or '-a11y-' in phase:
-        sides={104}; tall=False
-    elif '-off-' in phase:
-        sides={208} if host=='chat' else {160,208}; tall=False
-    else:
-        sides={160,208}; tall=True
-    require(any(abs(stage['side']-side)<=1 for side in sides) and stage['articulated'] is tall,
-            'Requested host stage policy mismatch')
+    for key in ('keyboardVisible','keyboardPresentedInitially','composerEditing','portraitVisible'):
+        require(data[key] is policy[key],'Requested actual host policy mismatch: '+key)
+    for key in ('invitationPlacement','chatControlsPlacement','scrollTarget'):
+        require(data[key]==policy[key],'Requested actual host policy mismatch: '+key)
     geometry=data['geometry']
     require(isinstance(geometry,dict) and set(geometry)<=GEOMETRY_KEYS
             and all(rectangle(value) for value in geometry.values()),'Invalid/unbounded native CGRect observations')
-    required={'window','stage','transcript','composer','chatControls','attach','composerField','send'} if host=='chat' \
-        else {'window','stage','primaryControls','secondaryControls'}
-    if host=='chat' and phase not in ('chat-roomy-light','chat-small-light'):
-        required.add('attachment')
+    required={'window','transcript','transcriptScroll','composer','chatControls','composerField',*CORE_BUTTONS,*VOICE_BUTTONS} \
+        if host=='chat' else {'window','primaryControls','secondaryControls',*CALL_PRIMARY,*CALL_SECONDARY}
+    if host=='chat' and phase not in ('chat-roomy-light','chat-small-light'): required.add('attachment')
+    if policy['portraitVisible']: required.add('stage')
     require(required<=set(geometry),'Required actual host geometry missing')
     require(all(geometry[key][2]>0 and geometry[key][3]>0 for key in required),
             'Required actual host geometry has an empty frame')
     require(all(abs(actual-wanted)<=1 for actual,wanted in zip(geometry['window'],[0,0,*points])),
             'Measured native window and real phone dimensions disagree')
-    require(abs(geometry['stage'][3]-stage['frameHeight'])<=1,'Measured stage and resolved child frame differ')
-    viewport=geometry['window'] if host=='chat' else geometry.get('viewport',geometry.get('callViewport'))
-    require(rectangle(viewport),'Actual call viewport geometry missing')
-    require(viewport[2]>0 and viewport[3]>0,'Actual host viewport is empty')
-    visible=intersection(geometry['stage'],viewport)
-    require(data['viewportIntersectsStage'] is (visible[2]>0 and visible[3]>0),
-            'Observed viewport/stage intersection mismatch')
+    stage=data['stage']
+    if policy['portraitVisible']:
+        require(data['hostFrameMatchesPortrait'] is True,'Native parent/child frame mismatch')
+        require(isinstance(stage,dict) and set(stage)=={'side','portraitHeight','frameHeight','articulated'}
+                and all(number(stage[key]) and 0<stage[key]<1000 for key in ('side','portraitHeight','frameHeight'))
+                and type(stage['articulated']) is bool,'Settled stage schema invalid')
+        portrait=stage['side']*620/414 if stage['articulated'] else stage['side']
+        require(abs(stage['portraitHeight']-portrait)<=1
+                and abs(stage['frameHeight']-(stage['portraitHeight']+40))<=1,'Natural parent/child stage height drift')
+        if phase=='chat-roomy-light': sides={208};tall=True
+        elif 'keyboard' in phase: sides={84};tall=False
+        elif phase.endswith('-small-light'): sides={132};tall=False
+        elif phase=='chat-packed-dark' or '-a11y-' in phase or ('-camera-' in phase and '-off-' not in phase):
+            sides={104};tall=False
+        elif '-off-' in phase: sides={208} if host=='chat' else {160,208};tall=False
+        else: sides={160,208};tall=True
+        require(any(abs(stage['side']-side)<=1 for side in sides) and stage['articulated'] is tall,
+                'Requested host stage policy mismatch')
+        require(abs(geometry['stage'][3]-stage['frameHeight'])<=1,'Measured stage and resolved child frame differ')
+        viewport=geometry['window'] if host=='chat' else geometry.get('viewport',geometry.get('callViewport'))
+        require(rectangle(viewport) and viewport[2]>0 and viewport[3]>0,'Actual host viewport geometry missing/empty')
+        visible=intersection(geometry['stage'],viewport)
+        require(data['viewportIntersectsStage'] is (visible[2]>0 and visible[3]>0),
+                'Observed viewport/stage intersection mismatch')
+    else:
+        require(stage is None and data['hostFrameMatchesPortrait'] is None
+                and data['viewportIntersectsStage'] is False and 'stage' not in geometry,
+                'Hidden decoration must have null stage/frame match and no fake/stale CGRect')
+        visible=[0,0,0,0]
     if host=='call':
-        require(data['invitationPlacement']=='none'
-                and not {'invite','inviteTurnOn','inviteNotNow'}&set(geometry),
-                'Call host unexpectedly contains a chat invitation')
+        require(not {'invite','inviteTurnOn','inviteNotNow',*VOICE_BUTTONS}&set(geometry),
+                'Call host unexpectedly contains chat controls/invitation')
         overlap=intersection(visible,geometry['primaryControls'])
         require(overlap[2]<=1 or overlap[3]<=1,'Visible portrait paints into fixed call controls')
-        if '-camera-' in phase:
-            require('camera' in geometry,'Requested synthetic camera geometry missing')
+        if '-camera-' in phase: require('camera' in geometry,'Requested synthetic camera geometry missing')
+        require('keyboard' not in geometry,'Call fixture retained an unexpected keyboard frame')
+        for key in (*CALL_PRIMARY,*CALL_SECONDARY):
+            rect=geometry[key]
+            require(rect[2]>=44 and rect[3]>=44,'Actual call button lacks a44pttarget: '+key)
+        require(disjoint([geometry[key] for key in CALL_PRIMARY]),'Pinned primary call controls overlap')
+        for key in CALL_PRIMARY:
+            require(contains(geometry['window'],geometry[key]),'Pinned call button is outside the real screen: '+key)
+        require(disjoint([geometry[key] for key in CALL_SECONDARY]),'Separate secondary call controls overlap')
+        if policy['scrollTarget']=='callControls':
+            viewport=geometry.get('viewport',geometry.get('callViewport'))
+            for key in CALL_SECONDARY:
+                require(contains(viewport,geometry[key]),'Scrolled call button is outside the actual viewport: '+key)
+                require(contains(geometry['window'],geometry[key]),'Scrolled call button is outside the real screen: '+key)
+            require(disjoint([geometry[key] for key in (*CALL_PRIMARY,*CALL_SECONDARY)]),
+                    'Scrolled secondary call controls overlap pinned primary controls')
+        return data
+    transcript=geometry['transcript']
+    native_scroll=geometry['transcriptScroll']
+    require(transcript[3]>=44,'Actual transcript is smaller than one usable44ptrow')
+    require(native_scroll[3]>=44,'Actual native transcript ScrollView is smaller than one usable44ptrow')
+    require(contains(geometry['window'],transcript),'Actual transcript viewport is outside the real screen')
+    require(contains(geometry['window'],native_scroll),
+            'Actual native transcript ScrollView is outside the real screen')
+    if '-a11y-' in phase:
+        require(geometry['composerField'][2]>=points[0]-64,
+                'Accessibility composer field does not retain nearly full real window width')
+    footer_top=geometry['composer'][1]
+    if policy['chatControlsPlacement']=='footer': footer_top=min(footer_top,geometry['chatControls'][1])
+    if policy['invitationPlacement']=='footer': footer_top=min(footer_top,geometry.get('invite',[0,0,0,0])[1])
+    require(transcript[1]+transcript[3]<=footer_top+1,'Actual transcript viewport overlaps the pinned chat footer')
+    require(native_scroll[1]+native_scroll[3]<=footer_top+1,
+            'Actual native transcript ScrollView overlaps the pinned chat footer')
+    keyboard=policy['keyboardVisible']
+    if keyboard:
+        require('keyboard' in geometry and geometry['keyboard'][2]>0 and geometry['keyboard'][3]>0,
+                'Requested software keyboard has no measured system frame')
+        require(abs(geometry['keyboard'][0])<=1 and abs(geometry['keyboard'][2]-points[0])<=1,
+                'Requested portrait keyboard does not span the native window')
+        require(transcript[1]+transcript[3]<=geometry['keyboard'][1]+1,
+                'Actual transcript viewport is covered by the software keyboard')
+        require(native_scroll[1]+native_scroll[3]<=geometry['keyboard'][1]+1,
+                'Actual native transcript ScrollView is covered by the software keyboard')
+    else: require('keyboard' not in geometry,'Dismissed/absent keyboard retained a stale CGRect')
+    pinned={'composer','composerField',*CORE_BUTTONS}
+    if 'attachment' in required: pinned.add('attachment')
+    if policy['chatControlsPlacement']=='footer': pinned.update({'chatControls',*VOICE_BUTTONS})
+    invite_keys={'invite','inviteTurnOn','inviteNotNow'}
+    if policy['invitationPlacement']=='none':
+        require(not invite_keys&set(geometry),'Unexpected invitation geometry in empty-card case')
     else:
-        expected_placement='transcript' if keyboard or '-a11y-' in phase \
-            else 'footer' if phase in ('chat-packed-dark','chat-off-dark') else 'none'
-        require(data['invitationPlacement']==expected_placement,'Requested real invitation placement mismatch')
-        invite_keys={'invite','inviteTurnOn','inviteNotNow'}
-        if expected_placement=='none':
-            require(not invite_keys&set(geometry),'Unexpected invitation geometry in empty-card case')
-        else:
-            require(invite_keys<=set(geometry),'Requested real invitation/button observations missing')
-        require(geometry['transcript'][3]>=44,'Actual transcript is smaller than one usable44ptrow')
-        if '-a11y-' in phase:
-            require(geometry['composerField'][2]>=points[0]-64,
-                    'Accessibility composer field does not retain nearly full real window width')
-        transcript=geometry['transcript']
-        require(transcript[0]>=-1 and transcript[1]>=-1 and transcript[0]+transcript[2]<=points[0]+1
-                and transcript[1]+transcript[3]<=points[1]+1,'Actual transcript viewport is outside the real screen')
-        footer_top=min(geometry['composer'][1],geometry['chatControls'][1],
-                       geometry['invite'][1] if expected_placement=='footer' else points[1])
-        require(transcript[1]+transcript[3]<=footer_top+1,
-                'Actual transcript viewport overlaps the pinned chat footer')
-        if keyboard:
-            require('keyboard' in geometry and geometry['keyboard'][2]>0 and geometry['keyboard'][3]>0,
-                    'Requested software keyboard has no measured system frame')
-            require(abs(geometry['keyboard'][0])<=1 and abs(geometry['keyboard'][2]-points[0])<=1,
-                    'Requested portrait keyboard does not span the native window')
-            require(transcript[1]+transcript[3]<=geometry['keyboard'][1]+1,
-                    'Actual transcript viewport is covered by the software keyboard')
-        pinned=('composer','chatControls','attachment','attach','composerField','send')
-        if expected_placement=='footer': pinned+=('invite','inviteTurnOn','inviteNotNow')
-        for key in pinned:
-            if key in geometry:
-                rect=geometry[key]
-                require(rect[0]>=-1 and rect[1]>=-1 and rect[0]+rect[2]<=points[0]+1
-                        and rect[1]+rect[3]<=points[1]+1,'Required chat control outside real screen: '+key)
-                if keyboard:
-                    require(rect[1]+rect[3]<=geometry['keyboard'][1]+1,
-                            'Required chat control is covered by the actual keyboard: '+key)
-        if host=='chat' and '-scrolled-' in phase:
-            viewport=geometry['transcript']
-            buttons=[geometry['inviteTurnOn'],geometry['inviteNotNow']]
-            for rect in buttons:
-                require(rect[2]>=44 and rect[3]>=44,'Scrolled invitation button lacks a44pttarget')
-                require(rect[0]>=viewport[0]-1 and rect[1]>=viewport[1]-1
-                        and rect[0]+rect[2]<=viewport[0]+viewport[2]+1
-                        and rect[1]+rect[3]<=viewport[1]+viewport[3]+1,
-                        'Scrolled invitation button is outside the actual transcript viewport')
-                require(rect[0]>=-1 and rect[1]>=-1 and rect[0]+rect[2]<=points[0]+1
-                        and rect[1]+rect[3]<=points[1]+1,'Scrolled invitation button is outside the real screen')
-                if keyboard:
-                    require(rect[1]+rect[3]<=geometry['keyboard'][1]+1,
-                            'Scrolled invitation button is covered by the actual keyboard')
-            overlap=intersection(*buttons)
-            require(overlap[2]<=1 or overlap[3]<=1,'Scrolled invitation buttons overlap')
+        require(invite_keys<=set(geometry),'Requested real invitation/button observations missing')
+        if policy['invitationPlacement']=='footer': pinned.update(invite_keys)
+    for key in pinned:
+        rect=geometry[key]
+        require(contains(geometry['window'],rect),'Required pinned chat control outside real screen: '+key)
+        if keyboard: require(rect[1]+rect[3]<=geometry['keyboard'][1]+1,
+                             'Required pinned chat control is covered by the actual keyboard: '+key)
+    for key in (*CORE_BUTTONS,*VOICE_BUTTONS):
+        rect=geometry[key]
+        require(rect[2]>=44 and rect[3]>=44,'Actual chat button lacks a44pttarget: '+key)
+    core=[geometry[key] for key in CORE_BUTTONS]
+    require(disjoint(core) and disjoint(core+[geometry['composerField']]),
+            'Pinned core chat actions overlap each other or the native editor')
+    require(disjoint([geometry[key] for key in VOICE_BUTTONS]),'Separate voice/agent controls overlap')
+    if policy['scrollTarget']=='invitation': targets=['inviteTurnOn','inviteNotNow']
+    elif policy['scrollTarget']=='chatControls': targets=list(VOICE_BUTTONS)
+    else: targets=[]
+    for key in targets:
+        rect=geometry[key]
+        require(rect[2]>=44 and rect[3]>=44,'Scrolled chat button lacks a44pttarget: '+key)
+        require(contains(transcript,rect),'Scrolled chat button is outside the actual transcript viewport: '+key)
+        require(contains(native_scroll,rect),'Scrolled chat button is outside the actual native ScrollView: '+key)
+        require(contains(geometry['window'],rect),'Scrolled chat button is outside the real screen: '+key)
+        if keyboard: require(rect[1]+rect[3]<=geometry['keyboard'][1]+1,
+                             'Scrolled chat button is covered by the actual keyboard: '+key)
+    require(disjoint([geometry[key] for key in targets]),'Scrolled independent chat buttons overlap')
     return data
 
 
@@ -563,6 +671,7 @@ def capture(expected):
                         timeout=remaining(30))
                     env=dict(os.environ,SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1',SIMCTL_CHILD_KADE_A11Y_AUDIT='1',
                              SIMCTL_CHILD_KADE_DELLA_HOST_AUDIT='1',SIMCTL_CHILD_KADE_DELLA_HOST_CASE=phase,
+                             SIMCTL_CHILD_KADE_DELLA_HOST_UI_DRAG='0',
                              SIMCTL_CHILD_KADE_PUPPET_LAB='0',SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',
                              SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',
                              SIMCTL_CHILD_KADE_TOUR='0')
@@ -605,7 +714,7 @@ def capture(expected):
                 sim('shutdown',identifier,timeout=global_remaining(30))
         aggregate_finished=time.monotonic()
         require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,'Aggregate capture exceeded960-second cap')
-        require(set(receipt['captures'])==set(receipt['nativeReady'])==required_phases(),'Seventeen actual host cases incomplete')
+        require(set(receipt['captures'])==set(receipt['nativeReady'])==required_phases(),'Twenty-eight actual host cases incomplete')
         require(source(expected,require_staged=True)['inputs']==initial['inputs'],'Source changed during host capture')
         receipt.update(passed=True,nativeRenderingVerified=True,nativeHostLayoutVerified=True)
     except Exception as error:
@@ -637,34 +746,59 @@ def capture(expected):
 def ui_tests(expected):
     initial=initial_source(expected)
     report={'source':initial,'passed':False,'nativeUITreeVerified':False,'voiceOverVerified':False,
-            'physicalPhoneVerified':False,'startedAtUtc':now()}
+            'physicalPhoneVerified':False,'startedAtUtc':now(),'phaseChecks':{},'deviceResults':{},'checks':0}
+    failures=[]
     try:
-        require((OUT/'ui-test-exit-code.txt').read_text().strip()=='0','Targeted native UI test process did not succeed')
-        log_path=OUT/'ui-tests.log'
-        require(log_path.stat().st_size<=8*1024*1024,'Oversized synthetic UI test log')
-        log=log_path.read_text(errors='replace')
-        require('KADE_DELLA_HOST_CONTROLS_FAILED' not in log,'Native UI controls failure marker present')
-        matches=re.findall(r'KADE_DELLA_HOST_CONTROLS_PASSED (\d+) ([a-z0-9-]+)',log)
-        require(len(matches)==len(UI_PHASES)==13 and {phase for _,phase in matches}==UI_PHASES
-                and all(0<int(count)<=1000 for count,_ in matches),'Exact thirteen UI controls markers incomplete')
-        bundle=OUT/'ui-tests.xcresult'
-        require(bundle.is_dir(),'Native UI result bundle missing')
-        raw=subprocess.check_output(['xcrun','xcresulttool','get','test-results','summary','--path',str(bundle)],
-                                    text=True,stderr=subprocess.PIPE,timeout=60)
-        require(len(raw)<=1024*1024,'Oversized UI test summary')
-        summary=json.loads(raw)
-        counts={key:summary.get(key) for key in ('totalTestCount','passedTests','failedTests','skippedTests')}
-        require(all(type(value) is int for value in counts.values()) and counts=={
-            'totalTestCount':13,'passedTests':13,'failedTests':0,'skippedTests':0},
-            'Native xcresult did not prove thirteen successful UI tests')
-        if 'expectedFailures' in summary:
-            require(type(summary['expectedFailures']) is int and summary['expectedFailures']==0,
-                    'Expected native UI test failures appeared')
-            counts['expectedFailures']=0
+        for device,count in UI_COUNTS.items():
+            result={'passed':False,'phaseChecks':{},'expectedTestCount':count}
+            report['deviceResults'][device]=result
+            try:
+                phases=set(ui_methods(device).values())
+                log_path=OUT/('ui-tests-'+device+'.log')
+                require(log_path.stat().st_size<=8*1024*1024,'Oversized synthetic UI test log for '+device)
+                log=log_path.read_text(encoding='utf-8',errors='replace')
+                result['logSha256']=sha(log_path)
+                matches=re.findall(r'KADE_DELLA_HOST_CONTROLS_PASSED (\d+) ([a-z0-9-]+)',log)
+                require(len(matches)<=count and len({phase for _,phase in matches})==len(matches)
+                        and all(phase in phases and 0<int(checks)<=1000 for checks,phase in matches),
+                        'Invalid/duplicate cross-device UI controls markers for '+device)
+                result['phaseChecks']={phase:int(checks) for checks,phase in matches}
+                report['phaseChecks'].update(result['phaseChecks'])
+                require((OUT/('ui-test-'+device+'-exit-code.txt')).read_text().strip()=='0',
+                        'Targeted native UI test process did not succeed for '+device)
+                require('KADE_DELLA_HOST_CONTROLS_FAILED' not in log,
+                        'Native UI controls failure marker present for '+device)
+                require(len(matches)==count and set(result['phaseChecks'])==phases,
+                        'Exact targeted UI controls markers incomplete for '+device)
+                bundle=OUT/('ui-tests-'+device+'.xcresult')
+                require(bundle.is_dir(),'Native UI result bundle missing for '+device)
+                raw=subprocess.check_output(['xcrun','xcresulttool','get','test-results','summary','--path',str(bundle)],
+                                            text=True,stderr=subprocess.PIPE,timeout=60)
+                require(len(raw)<=1024*1024,'Oversized UI test summary for '+device)
+                summary=json.loads(raw)
+                counts={key:summary.get(key) for key in ('totalTestCount','passedTests','failedTests','skippedTests')}
+                result['xcresultCounts']=counts
+                require(all(type(value) is int for value in counts.values()) and counts=={
+                    'totalTestCount':count,'passedTests':count,'failedTests':0,'skippedTests':0},
+                    'Native xcresult did not prove the exact successful UI test group for '+device)
+                if 'expectedFailures' in summary:
+                    require(type(summary['expectedFailures']) is int and summary['expectedFailures']==0,
+                            'Expected native UI test failures appeared for '+device)
+                    counts['expectedFailures']=0
+                result['passed']=True
+            except Exception as error:
+                result.update(passed=False,errorType=type(error).__name__,
+                              error=str(error) if isinstance(error,RuntimeError) else 'UI result operation failed for '+device)
+                failures.append(device)
+        report['checks']=sum(report['phaseChecks'].values())
+        require(not failures,'Native UI device groups incomplete or failed: '+','.join(failures))
+        require(set(report['phaseChecks'])==UI_PHASES,'Twenty-four targeted native UI phases incomplete')
         require(source(expected)['inputs']==initial['inputs'],'Source changed during UI controls tests')
-        report.update(passed=True,nativeUITreeVerified=True,xcresultCounts=counts,
-                      phaseChecks={phase:int(count) for count,phase in matches},
-                      checks=sum(int(count) for count,_ in matches),logSha256=sha(log_path))
+        aggregate={key:sum(result['xcresultCounts'][key] for result in report['deviceResults'].values())
+                   for key in ('totalTestCount','passedTests','failedTests','skippedTests')}
+        require(aggregate=={'totalTestCount':24,'passedTests':24,'failedTests':0,'skippedTests':0},
+                'Native aggregate result did not prove twenty-four successful UI tests')
+        report.update(passed=True,nativeUITreeVerified=True,xcresultCounts=aggregate)
     except Exception as error:
         report.update(passed=False,nativeUITreeVerified=False,errorType=type(error).__name__,
                       error=str(error) if isinstance(error,RuntimeError) else 'UI result operation failed; inspect normal step logs')
@@ -672,7 +806,7 @@ def ui_tests(expected):
     finally:
         report['finishedAtUtc']=now()
         save('ui-tests.json',report)
-    return {key:report[key] for key in ('passed','nativeUITreeVerified','checks','phaseChecks','voiceOverVerified')}
+    return {key:report[key] for key in ('passed','nativeUITreeVerified','checks','phaseChecks','deviceResults','voiceOverVerified')}
 
 
 def emit(expected):
@@ -720,14 +854,27 @@ def emit(expected):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('source','preflight','device','capture','ui-tests','emit'))
+    parser.add_argument('action',choices=('source','preflight','device','shutdown','selectors','capture','ui-tests','emit'))
     parser.add_argument('--expected-sha',required=True)
+    parser.add_argument('--device',choices=('large','small'),default='large')
     args=parser.parse_args()
     if args.action=='source':
         result=source(args.expected_sha,clean=True); save('source.json',result)
     elif args.action=='preflight': result=simulator_preflight(args.expected_sha)
     elif args.action=='device':
-        print(simulator_record(args.expected_sha)['devices']['large']['identifier']); result=None
+        print(simulator_record(args.expected_sha)['devices'][args.device]['identifier']); result=None
+    elif args.action=='selectors':
+        initial_source(args.expected_sha)
+        for method in ui_methods(args.device):
+            print('-only-testing:KadeAIUITests/DellaHostControlsUITests/'+method)
+        result=None
+    elif args.action=='shutdown':
+        identifier=simulator_record(args.expected_sha)['devices'][args.device]['identifier']
+        try:
+            sim('shutdown',identifier,timeout=30)
+            stopped=True
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired): stopped=False
+        result={'shutdownRequested':True,'device':args.device,'ready':stopped}
     elif args.action=='capture': result=capture(args.expected_sha)
     elif args.action=='ui-tests': result=ui_tests(args.expected_sha)
     else: emit(args.expected_sha); result=None

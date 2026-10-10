@@ -11,9 +11,25 @@ struct CharacterDellaHostStage: Equatable {
     var frameHeight: Double { portraitHeight + 40 }
 }
 
+/// Optional decoration and voice settings yield to the native editor when
+/// accessibility text and limited vertical space coincide. This decision uses
+/// stable window/focus inputs, never measured composer geometry.
+struct CharacterDellaChatChrome: Equatable {
+    let portraitVisible: Bool
+    let controlsInTranscript: Bool
+}
+
 /// Stable host inputs only: no speech energy, elapsed time, interpolation or
 /// composer measurement can resize the transcript's reserved portrait space.
 enum CharacterDellaHostLayout {
+    static func chatChrome(availableHeight: Double, accessibilityText: Bool,
+                           editing: Bool, keyboardVisible: Bool) -> CharacterDellaChatChrome {
+        let shortWindow = valid(availableHeight) && availableHeight < 700
+        let constrained = accessibilityText && (shortWindow || editing || keyboardVisible)
+        return CharacterDellaChatChrome(portraitVisible: !constrained,
+                                        controlsInTranscript: constrained)
+    }
+
     static func chat(preferredSide: Double, availableHeight: Double,
                      keyboard: Bool, editing: Bool, compactHeight: Bool,
                      accessibilityText: Bool, competingControls: Bool,
