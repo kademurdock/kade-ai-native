@@ -76,6 +76,14 @@ are separate workflow steps so their progress is visible. These are bounded
 host/capture adjustments, not diagnoses of the simulator stalls.
 Its own exact-source receipt determines complete verification status.
 
+The complete 28-frame audit passed at
+`cd61435496af02c3c6230fd35af02003f93ab1bb`, including five native assertions and
+27,132 model checks. All still/Reduce Motion portrait crops matched rest. Its
+full visual review found a small moving plum crescent beside the right thumb
+at the inward extreme; the local authored contour is tightened along the real
+skin and thumbnail boundary. The source image is unchanged. That final contour
+requires its own exact-source native recheck.
+
 Before production registration, review shoulder seams throughout the motion
 range, fit at 160/208 points, the original face and atlas patch alignment, and
 call/chat control space on native iPhone. A taller production stage requires
