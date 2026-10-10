@@ -426,11 +426,20 @@ def compiled_tests(expected):
     require(host==(products/'Debug-iphonesimulator/KadeAIUITests-Runner.app').resolve()
             and bundle==(host/'PlugIns/KadeAIUITests.xctest').resolve()
             and app==APP.resolve(),'Compiled app/runner/test bundle paths drift')
+    roles=(('app',app,'KadeAI'),('runner',host,'KadeAIUITests-Runner'),('testBundle',bundle,'KadeAIUITests'))
+    inventory={role:{'path':str(path.relative_to(ROOT)),'directoryExists':path.is_dir(),
+                     'infoPlistExists':(path/'Info.plist').is_file(),
+                     'expectedExecutableExists':(path/executable).is_file(),
+                     'codeSignatureExists':(path/'_CodeSignature').exists()}
+               for role,path,executable in roles}
+    print('KADE_DELLA_HOST_COMPILED_ARTIFACTS '+json.dumps(inventory,separators=(',',':')),flush=True)
     artifacts={}
     identities={'app':BUNDLE_ID,'runner':'com.kademurdock.kadeai.uitests.xctrunner',
                 'testBundle':'com.kademurdock.kadeai.uitests'}
     for role,path in (('app',app),('runner',host),('testBundle',bundle)):
         require(path.is_dir() and not (path/'_CodeSignature').exists(),'Unsigned compiled '+role+' missing or signed')
+        require((path/'Info.plist').is_file() and 0<(path/'Info.plist').stat().st_size<=1024*1024,
+                'Compiled '+role+' Info.plist is missing or oversized')
         info=plistlib.loads((path/'Info.plist').read_bytes())
         require(info.get('CFBundleIdentifier')==identities[role]
                 and (info.get('DTPlatformName')=='iphonesimulator'
@@ -1292,9 +1301,9 @@ def main():
         _OPERATION_DEADLINE=min(time.time()+budget,started+JOB_SECONDS-reserve)
     if args.action=='source':
         result=source(args.expected_sha,clean=True)
-        started=os.environ.get('KADE_HOST_OPERATION_STARTED_UTC',now())
+        started=os.environ.get('KADE_HOST_OPERATION_STARTED_UTC',result['checkedAtUtc'])
         deadline=os.environ.get('KADE_HOST_OPERATION_DEADLINE_UTC',
-                                (datetime.now(timezone.utc)+timedelta(seconds=OPERATION_SECONDS)).isoformat())
+                                (datetime.fromisoformat(started)+timedelta(seconds=OPERATION_SECONDS)).isoformat())
         require(abs((datetime.fromisoformat(deadline)-datetime.fromisoformat(started)).total_seconds()-OPERATION_SECONDS)<2,
                 'Shared operation deadline must be initialized once before checkout')
         result.update(operationStartedAtUtc=started,operationDeadlineUtc=deadline,
