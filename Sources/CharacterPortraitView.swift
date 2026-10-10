@@ -21,6 +21,9 @@ struct CharacterPortraitView: View {
     /// Call stages can scroll outside their visible viewport without leaving
     /// the view tree. Stop their decorative clock there as well.
     var viewport: CGRect? = nil
+    /// The resolved host layout selects the registered tall Della body.
+    /// Compact hosts and ordinary portrait rows retain their square framing.
+    var dellaArticulatedReview = false
     #if DEBUG && targetEnvironment(simulator)
     /// Controlled audit samples only; never a production speech-turn trigger.
     var handPrototypeElapsed: Double? = nil
@@ -33,9 +36,6 @@ struct CharacterPortraitView: View {
     var angelMotionAudit: CharacterBustPose? = nil
     var angelOrnamentsAudit: AngelVectorOrnamentPose? = nil
     var angelArmAudit: AngelVectorArmPose? = nil
-    /// An explicit offline study only. Resource preparation and this flag are
-    /// both required; ordinary conversations retain their accepted square bust.
-    var dellaArticulatedReview = false
     var dellaArmAudit: CharacterDellaArmPose? = nil
     var dellaHeadAudit: CharacterBustPose? = nil
     #endif
@@ -62,20 +62,14 @@ struct CharacterPortraitView: View {
         return artwork
     }
     private var articulatedDellaAvailable: Bool {
-        #if DEBUG && targetEnvironment(simulator)
         guard dellaArticulatedReview, stage, side.isFinite, side >= 160,
               agentID == CharacterMotion.dellaID, prepared else { return false }
         return CharacterDellaArticulatedGeometry.eligible(enabled: dellaArticulatedReview,
             stage: stage, side: side, agentID: agentID, avatarPath: path,
             resourcesPresent: CharacterDellaArticulatedGeometry.requiredAssets.allSatisfy { UIImage(named: $0) != nil })
-        #else
-        return false
-        #endif
     }
     private var renderedPortraitHeight: Double {
-        #if DEBUG && targetEnvironment(simulator)
         if articulatedDellaAvailable { return CharacterDellaArticulatedGeometry.stageHeight(side: side) }
-        #endif
         return side
     }
     private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && onScreen && (playing || listening || stage) }
@@ -116,13 +110,11 @@ struct CharacterPortraitView: View {
                             .shadow(color: Color.accentColor.opacity(voice), radius: 4 + voice * 14)
                     }
                     if articulatedDellaAvailable {
-                        #if DEBUG && targetEnvironment(simulator)
                         articulatedDella(pose: pose, face: face,
                             motion: reviewedDellaMotion(CharacterBustMotion.pose(bodyPose,
                                 limits: CharacterDellaBustGeometry.artwork.motionLimits)),
                             arms: reviewedDellaArms(CharacterDellaArmMotion.pose(time: time, level: outputLevel,
                                 active: active, presentation: performance, performanceElapsed: performanceElapsed)))
-                        #endif
                     } else if let art = angelArtwork {
                         CharacterAngelVectorView(art: art,
                             facial: AngelVectorMotion.facial(face, blink: pose.blink, active: active),
@@ -228,10 +220,13 @@ struct CharacterPortraitView: View {
         #endif
         return pose
     }
-    #if DEBUG && targetEnvironment(simulator)
     private func reviewedDellaArms(_ pose: CharacterDellaArmPose) -> CharacterDellaArmPose {
         guard active else { return .still }
+        #if DEBUG && targetEnvironment(simulator)
         let selected = dellaArmAudit ?? pose
+        #else
+        let selected = pose
+        #endif
         func bounded(_ value: Double) -> Double {
             value.isFinite ? min(CharacterDellaArmPose.maximumDegrees,
                 max(-CharacterDellaArmPose.maximumDegrees, value)) : 0
@@ -240,6 +235,7 @@ struct CharacterPortraitView: View {
             viewerRightDegrees: bounded(selected.viewerRightDegrees))
     }
     private func reviewedDellaMotion(_ pose: CharacterBustPose) -> CharacterBustPose {
+        #if DEBUG && targetEnvironment(simulator)
         guard active, let sample = dellaHeadAudit else { return pose }
         let limits = CharacterDellaBustGeometry.artwork.motionLimits
         func bounded(_ value: Double, limit: Double) -> Double {
@@ -249,8 +245,10 @@ struct CharacterPortraitView: View {
             bodyAngle: bounded(sample.bodyAngle, limit: limits.bodyDegrees),
             headOffsetY: bounded(sample.headOffsetY, limit: limits.headOffsetPixels),
             bodyOffsetY: bounded(sample.bodyOffsetY, limit: limits.bodyOffsetPixels))
+        #else
+        return pose
+        #endif
     }
-    #endif
     /// Skylee's Lilly wears the public Lilly's sheets (CharacterMotion.rigID).
     private var rig: String? { CharacterMotion.rigID(agentID) }
     private var nuanceAsset: String {
@@ -346,9 +344,8 @@ struct CharacterPortraitView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22))
     }
 
-    #if DEBUG && targetEnvironment(simulator)
     /// Same native face/patch/matte compositor, with the accepted square's
-    /// width and face scale. Only this explicit study adds room below the bust.
+    /// width and face scale. The resolved host adds room below the bust.
     private func articulatedDella(pose: CharacterPose, face: CharacterFace,
                                   motion: CharacterBustPose, arms: CharacterDellaArmPose) -> some View {
         let geometry = CharacterDellaArticulatedGeometry.self
@@ -397,7 +394,6 @@ struct CharacterPortraitView: View {
             .offset(x: geometry.bodyX * unit, y: geometry.bodyY * unit)
             .frame(width: side, height: height, alignment: .topLeading)
     }
-    #endif
 
     private func scaledBustHead(_ artwork: CharacterBustArtwork, pose: CharacterPose,
                                 face: CharacterFace, unit: Double) -> some View {
@@ -557,7 +553,6 @@ struct CharacterPortraitView: View {
 
 /// Exact study outlines. Harley's path is already in world coordinates;
 /// Lilly's paths first map the unchanged 414-pixel panel into its destination.
-#if DEBUG && targetEnvironment(simulator)
 private struct CharacterDellaSourceCut: Shape {
     let source: Path
     func path(in rect: CGRect) -> Path {
@@ -566,7 +561,6 @@ private struct CharacterDellaSourceCut: Shape {
             tx: rect.minX, ty: rect.minY))
     }
 }
-#endif
 
 private struct CharacterBustCut: Shape {
     let artwork: CharacterBustArtwork

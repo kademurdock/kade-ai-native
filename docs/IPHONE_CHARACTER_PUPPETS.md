@@ -6,8 +6,10 @@ separate exact ID/avatar registrations while sharing their original artwork.
 This does not change agent discovery, account access, voices or conversation data.
 
 Heads use the existing expression, mouth and blink atlases. Bodies are supporting
-plates. Lilly's original cats remain static. Arms and hands are not separately
-articulated. Kiana's original locs and knit shoulders remain together with
+plates. Lilly's original cats remain static. Della's registered taller body
+adds two connected sleeves and hands on roomy call and chat stages; her original
+face keeps its accepted size. Other supporting plates remain unarticulated.
+Kiana's original locs and knit shoulders remain together with
 restrained head motion. Her close crop excludes the reused concept entirely;
 its mismatched chest, duplicate pendant and hard panel join are never visible.
 Kiana has no separate torso motion in this version.
@@ -27,10 +29,19 @@ avatar also falls back. Unknown characters never borrow another person's body.
 
 ## Assets and verification
 
-Seven RGBA asset sets are committed under Sources/Assets.xcassets. Source masters
-and provenance are in dev/puppet-review-assets. Run
+Eight RGBA asset sets are committed under Sources/Assets.xcassets. Source masters
+and provenance are in dev/puppet-review-assets and dev/della-articulated-review. Run
 `python3 dev/prepare-puppet-review.py --check` to verify their exact hashes and
 catalog entries without rewriting anything. Every release lane performs this gate.
+The Della master remains the exact accepted 1254-square image. The legacy
+`prepare-della-articulated-review.py --prepare` and `--clean` commands now verify
+its registered catalog without writing or deleting it.
+
+Della is enabled by default through the exact identity/avatar and resource
+registration, with the existing animated-character setting and motion policy.
+The host chooses one side and reserved height for both layout and rendering.
+Editing, camera previews, crowded controls and accessibility text keep compact
+framing. Audit overrides and synthetic poses remain DEBUG simulator only.
 
 `run-character-tests.sh` covers exact registrations, cross-avatar mismatches,
 bounded motion, compact sizes, the mandatory Kiana clip and the librarian's identity.
@@ -53,3 +64,6 @@ The signed artifact's source, four target versions, bundle identities, provision
 profiles and SHA-256 are checked before any distribution. TestFlight is separate
 from App Store release and physical-phone acceptance. Historical simulator-only
 notes remain in IPHONE_PUPPET_PREVIEW.md; they do not describe the current renderer.
+The new Della production registration requires its own exact-source native and
+Release verification before a new signed artifact or distribution. Existing
+frozen signed releases are not replaced by this source promotion.

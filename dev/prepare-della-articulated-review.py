@@ -1,14 +1,13 @@
-"""Stage the optional Della art study for an unsigned simulator review only.
+"""Verify Della's registered body master and committed asset catalog.
 
-The source PNG lives outside Sources, so a normal Release has no study asset.
-Run --prepare before xcodegen for a local Debug simulator review, then --clean
-before any Release archive. Neither operation triggers a build or upload.
+The original source PNG remains unchanged; Release and simulator builds bundle
+the same catalog. Legacy --prepare and --clean calls now verify only and never
+remove registered resources. No operation triggers a build or upload.
 """
 import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import struct
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,22 +21,22 @@ ENTRY = {"images": [{"filename": SOURCE.name, "idiom": "universal"}],
 def verify_source():
     data = SOURCE.read_bytes()
     if hashlib.sha256(data).hexdigest() != EXPECTED:
-        raise ValueError("Della study source changed")
+        raise ValueError("Della registered body source changed")
     if (data[:8] != b"\x89PNG\r\n\x1a\n" or
             struct.unpack(">II", data[16:24]) != (1254, 1254) or data[25] != 6):
-        raise ValueError("Della study must remain the original square RGBA PNG")
+        raise ValueError("Della body must remain the original square RGBA PNG")
     return data
 
 
-def verify_staged(data):
+def verify_registered(data):
     if not DESTINATION.exists():
-        return False
+        raise ValueError("Registered Della body catalog is missing")
     if (DESTINATION / SOURCE.name).read_bytes() != data:
-        raise ValueError("Staged Della study changed; refusing to replace or remove it")
+        raise ValueError("Registered Della body changed")
     if json.loads((DESTINATION / "Contents.json").read_text()) != ENTRY:
-        raise ValueError("Staged Della catalog entry changed")
+        raise ValueError("Registered Della catalog entry changed")
     if {p.name for p in DESTINATION.iterdir()} != {SOURCE.name, "Contents.json"}:
-        raise ValueError("Unexpected study files; refusing to remove them")
+        raise ValueError("Unexpected registered Della catalog files")
     return True
 
 
@@ -46,22 +45,11 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--prepare", action="store_true")
     group.add_argument("--clean", action="store_true")
-    args = parser.parse_args()
+    parser.parse_args()
     data = verify_source()
-    staged = verify_staged(data)
-    if args.prepare and not staged:
-        DESTINATION.mkdir()
-        shutil.copyfile(SOURCE, DESTINATION / SOURCE.name)
-        (DESTINATION / "Contents.json").write_text(json.dumps(ENTRY, indent=2) + "\n")
-        staged = verify_staged(data)
-    elif args.clean and staged:
-        # Fixed destination, verified byte contents, and no recursive deletion.
-        (DESTINATION / SOURCE.name).unlink()
-        (DESTINATION / "Contents.json").unlink()
-        DESTINATION.rmdir()
-        staged = False
+    verify_registered(data)
     print(json.dumps({"sourceSHA256": EXPECTED, "pixels": [1254, 1254],
-                      "stagedForReview": staged, "productionRegistered": False}, indent=2))
+                      "stagedForReview": False, "productionRegistered": True}, indent=2))
 
 
 if __name__ == "__main__":

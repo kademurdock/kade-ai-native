@@ -61,7 +61,7 @@ struct CharacterPuppetLabView: View {
                 if character == .della {
                     Toggle("Preview Della’s articulated body study", isOn: $articulatedDella)
                     if articulatedDella {
-                        Text("Optional simulator body preview for this lab and call/chat screens. The original face keeps its size above two attached sleeves and hands. The review asset must be staged; editing, crowded controls and compact screens use the shorter portrait. Phone review is pending.")
+                        Text("This local toggle controls the lab sample. Ordinary call and chat stages use the registered body when there is room. The original face keeps its size above two attached sleeves and hands; editing, crowded controls and compact screens keep the shorter portrait. Physical phone checks are pending.")
                             .font(.footnote)
                     }
                 }

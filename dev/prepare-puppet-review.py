@@ -19,16 +19,14 @@ ASSETS = (
     ("della-body-plate.png", "CharacterDellaBustBody", "e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e", (1254, 1254)),
     ("della-head-alpha.png", "CharacterDellaBustMask", "036d2ce6292fec1cb0226fe69f584789d46eadf4625e925e293ed717fecc1b1a", (1254, 1254)),
     ("witherspoon-body-support.png", "CharacterWitherspoonBustBody", "b8cab50d34fd94fef153b711f24ab4bf24a9cc42c535fa43816fd5113843d8df", (1024, 1536)),
+    ("della-body-gesture-master-v1.png", "CharacterDellaArticulatedReview", "285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2", (1254, 1254)),
 )
+SOURCE_ROOTS = {"CharacterDellaArticulatedReview": ROOT / "dev/della-articulated-review"}
 
 def prepare(check=False):
-    # This helper is a required preflight in the signed and ordinary audit
-    # lanes. An optional simulator study must not ride in a Release archive.
-    if check and (ROOT / "Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset").exists():
-        raise ValueError("Optional Della study is staged; run dev/prepare-della-articulated-review.py --clean before ordinary build preflight")
     results = []
     for filename, name, expected, size in ASSETS:
-        source = ROOT / "dev/puppet-review-assets" / filename
+        source = SOURCE_ROOTS.get(name, ROOT / "dev/puppet-review-assets") / filename
         data = source.read_bytes()
         if hashlib.sha256(data).hexdigest() != expected:
             raise ValueError(f"Review art changed: {filename}")

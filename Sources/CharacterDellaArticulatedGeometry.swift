@@ -1,6 +1,6 @@
 import Foundation
 
-/// Offline-only candidate framing. The approved 414-pixel head and its alpha
+/// Registered body framing. The approved 414-pixel head and its alpha
 /// registration stay unchanged; a taller viewport exposes the original palms
 /// in one headless master without shrinking Della's face on a phone.
 enum CharacterDellaArticulatedGeometry {
@@ -36,7 +36,7 @@ enum CharacterDellaArticulatedGeometry {
     }
 }
 
-#if DEBUG && targetEnvironment(simulator) && canImport(SwiftUI) && !CHARACTER_MODEL_TESTS
+#if canImport(SwiftUI) && !CHARACTER_MODEL_TESTS
 import SwiftUI
 
 extension CharacterDellaArticulatedGeometry {

@@ -15,9 +15,7 @@ struct CharacterConversationStage: View {
     private var portrait: CharacterPortraitView {
         var view = CharacterPortraitView(agentID: agentID, name: name, playing: playing,
             level: level, presentation: presentation, stage: true, side: hostLayout?.side ?? side)
-        #if DEBUG && targetEnvironment(simulator)
         view.dellaArticulatedReview = hostLayout?.articulated ?? false
-        #endif
         return view
     }
 

@@ -610,9 +610,6 @@ struct ConversationDetailView: View {
     @AppStorage("kade.chat.simpleTranscript") private var simpleTranscript = false
     @AppStorage("kadeVoicePortraits") private var voicePortraitsOn = true
     @State private var keyboardUp = false
-    #if DEBUG && targetEnvironment(simulator)
-    @AppStorage("kade.della.articulatedReview") private var dellaHostReview = false
-    #endif
     /* ⭐ BUILD 218 bisect, default OFF. ON = the composer is a plain
      * SINGLE-LINE field: no vertical growth, no line-limit range, nothing for
      * the layout to negotiate. Freeze stops when she flips this and the
@@ -2977,17 +2974,16 @@ struct ConversationDetailView: View {
             compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
         let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId
-        var hostLayout: CharacterDellaHostStage? = nil
-        #if DEBUG && targetEnvironment(simulator)
         let avatar = agentsService.agents.first { $0.id == portraitAgentID }?.avatar?.filepath
-        let eligible = CharacterDellaHostReview.available(enabled: dellaHostReview,
+        let eligible = CharacterDellaHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
             agentID: portraitAgentID, avatarPath: avatar)
-        hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
+        let hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
             keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize,
             competingControls: pendingAttachment != nil || attachmentIsBusy || pushCardOnScreen
                 || isSending || voiceInputError != nil,
             candidateEligible: eligible)
+        #if DEBUG && targetEnvironment(simulator)
         if CharacterDellaHostAudit.isEnabled {
             CharacterDellaHostAuditRecorder.stage = hostLayout
             CharacterDellaHostAuditRecorder.composerEditing = composerEditing
