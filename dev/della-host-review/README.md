@@ -69,6 +69,14 @@ This lane compiles unsigned once on the standard `macos-26` runner with Xcode
 26.4.1. It validates the generated format-1/format-2 `.xctestrun` and confines
 its original runner, test bundle and app to those exact build products. Each
 recorded phone UUID explicitly boots and reaches `bootstatus` within 420 seconds.
+Inside that same 420-second budget, the Pro Max then installs the exact compiled
+unsigned app and launches the paused offline `call-a11y-dark` fixture once.
+Fresh bounded readiness must pass the unchanged geometry/silence validator;
+the app must terminate, and the original app, runner, test bundle and test-file
+hashes must match before and after. The boot diagnostic retains this startup
+preflight and its operation timings. It leaves 30 seconds inside the boot cap
+for termination, adds no screenshot or test marker, and does not retry a test.
+The SE boot remains unchanged. A Pro Max UI launch requires successful preflight.
 Sixteen Pro Max and eight SE tests run with that unchanged compiled test file,
 without project planning or another build. Their test caps remain 600 and 480
 seconds. The always collector requires both complete zero-failure result

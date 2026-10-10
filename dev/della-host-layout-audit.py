@@ -387,7 +387,7 @@ def simulator_record(expected):
     return record
 
 
-def compiled_tests(expected):
+def compiled_tests(expected,emit_inventory=True):
     """Bind test-without-building to the unchanged products of the one build."""
     initial=initial_source(expected)
     products=ROOT/'build/della-host-layout-simulator/Build/Products'
@@ -432,7 +432,8 @@ def compiled_tests(expected):
                      'expectedExecutableExists':(path/executable).is_file(),
                      'codeSignatureExists':(path/'_CodeSignature').exists()}
                for role,path,executable in roles}
-    print('KADE_DELLA_HOST_COMPILED_ARTIFACTS '+json.dumps(inventory,separators=(',',':')),flush=True)
+    if emit_inventory:
+        print('KADE_DELLA_HOST_COMPILED_ARTIFACTS '+json.dumps(inventory,separators=(',',':')),flush=True)
     artifacts={}
     identities={'app':BUNDLE_ID,'runner':'com.kademurdock.kadeai.uitests.xctrunner',
                 'testBundle':'com.kademurdock.kadeai.uitests'}
@@ -490,18 +491,165 @@ def validate_ui_boot(report,key,initial):
         require(isinstance(report['identifier'],str) and re.fullmatch(
             r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',report['identifier']), 'Invalid explicit UI device UUID')
     if 'alreadyBooted' in report:require(type(report['alreadyBooted']) is bool,'Invalid UI boot-state observation')
+    if 'appPreflight' in report:
+        require(key=='large','Only the Pro Max performs the offline app preflight')
+        validate_app_preflight(report['appPreflight'],report.get('identifier'),initial)
+        require(report['appPreflight']['elapsedSeconds']<=report.get('elapsedSeconds',-1)+.01,
+                'Offline app preflight exceeds the shared UI boot envelope')
     require(number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=BOOT_SECONDS+5,
             'Unbounded explicit UI boot elapsed time')
     if report['passed']:
         require('identifier' in report and 'alreadyBooted' in report and 'errorType' not in report
                 and report['elapsedSeconds']<=BOOT_SECONDS+1,'Failed explicit UI boot retained success')
+        if key=='large':require(report.get('appPreflight',{}).get('passed') is True,
+                                'Successful Pro Max boot requires the actual offline app preflight')
     return report
 
 
+def validate_app_preflight(report,identifier,initial):
+    required={'schema','source','device','identifier','phase','timeoutSeconds','noScreenshot','passed',
+              'compiledBeforeVerified','compiledAfterVerified','freshReadiness','readyValidated','terminated',
+              'operationSeconds','status','startedAtUtc','finishedAtUtc','elapsedSeconds'}
+    optional={'compiledRunner','readySha256','errorType','error','cleanupErrorType','cleanupError'}
+    require(isinstance(report,dict) and report.get('schema')=='kade.della-host-app-preflight.v1'
+            and required<=set(report)<=required|optional
+            and report.get('source')==initial and report.get('device')=='large'
+            and isinstance(identifier,str) and re.fullmatch(
+                r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',identifier)
+            and report.get('identifier')==identifier and report.get('phase')=='call-a11y-dark'
+            and report.get('timeoutSeconds')==BOOT_SECONDS and report.get('noScreenshot') is True,
+            'Offline app preflight source/device/phase contract mismatch')
+    flags=('passed','compiledBeforeVerified','compiledAfterVerified','freshReadiness','readyValidated','terminated')
+    require(all(type(report.get(field)) is bool for field in flags),'Invalid offline app preflight status')
+    require(number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=BOOT_SECONDS+1,
+            'Unbounded offline app preflight elapsed time')
+    require(report.get('status') in ('preparing','installing','launching','waitingForReadiness','failed','completed')
+            and all(isinstance(report[field],str) and 0<len(report[field])<=320
+                    for field in ('errorType','error','cleanupErrorType','cleanupError') if field in report),
+            'Invalid offline app preflight bounded diagnostic')
+    started=datetime.fromisoformat(report['startedAtUtc']);finished=datetime.fromisoformat(report['finishedAtUtc'])
+    require(started.tzinfo is not None and finished.tzinfo is not None and started<=finished
+            and (finished-started).total_seconds()<=BOOT_SECONDS+1,'Invalid offline app preflight timestamp order')
+    durations=report.get('operationSeconds')
+    bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':45,
+            'launch':45,'readiness':READY_SECONDS,'terminate':30,'compiledAfter':BOOT_SECONDS}
+    require(isinstance(durations,dict) and set(durations)<=set(bounds)
+            and all(number(value) and 0<=value<=bounds[key]+1 for key,value in durations.items()),
+            'Unbounded offline app preflight operation timing')
+    require(sum(durations.values())<=report['elapsedSeconds']+1,
+            'Offline app preflight operations exceed its elapsed time')
+    if 'compiledRunner' in report:validate_compiled_record(report['compiledRunner'],initial)
+    if 'readySha256' in report:require(re.fullmatch(r'[a-f0-9]{64}',report['readySha256']),
+                                     'Invalid offline app preflight readiness hash')
+    if report['passed']:
+        require(all(report[field] for field in flags) and set(durations)==set(bounds)
+                and 'compiledRunner' in report and 'readySha256' in report
+                and report.get('status')=='completed' and 'errorType' not in report and 'cleanupErrorType' not in report,
+                'Incomplete offline app preflight retained success')
+    return report
+
+
+def app_preflight(expected,identifier,initial,device,deadline,report):
+    """Verify a cold offline app launch inside the existing UI boot envelope."""
+    started=time.monotonic()
+    report.update(schema='kade.della-host-app-preflight.v1',source=initial,device='large',identifier=identifier,
+                  phase='call-a11y-dark',timeoutSeconds=BOOT_SECONDS,noScreenshot=True,passed=False,
+                  compiledBeforeVerified=False,compiledAfterVerified=False,freshReadiness=False,
+                  readyValidated=False,terminated=False,operationSeconds={},status='preparing',startedAtUtc=now())
+    # Work leaves30 seconds of the same boot/shared/action deadline for termination.
+    work_deadline=deadline-30
+    attempted=False
+    def remaining(bound,cleanup=False):
+        seconds=(deadline if cleanup else work_deadline)-time.monotonic()
+        require(seconds>0,'Offline app preflight exhausted the existing UI boot deadline')
+        return min(bound,seconds)
+    def timed(name,action):
+        tick=time.monotonic()
+        try:return action()
+        finally:report['operationSeconds'][name]=round(time.monotonic()-tick,3)
+    def unchanged():
+        global _OPERATION_DEADLINE
+        allowance=remaining(BOOT_SECONDS)
+        path=OUT/'compiled-tests.json'
+        require(path.is_file() and 0<path.stat().st_size<=64*1024,'Saved exact compiled test record missing or oversized')
+        saved=validate_compiled_record(json.loads(path.read_text()),initial)
+        previous=_OPERATION_DEADLINE
+        _OPERATION_DEADLINE=min(previous or float('inf'),time.time()+allowance)
+        try:require(compiled_tests(expected,emit_inventory=False)==saved,
+                    'Compiled app/runner/test bundle changed before or after offline app preflight')
+        finally:_OPERATION_DEADLINE=previous
+        remaining(1)
+        return saved
+    try:
+        report['compiledRunner']=timed('compiledBefore',unchanged);report['compiledBeforeVerified']=True
+        report['status']='installing'
+        timed('install',lambda:sim('install',identifier,str(APP),timeout=remaining(INSTALL_SECONDS)))
+        timed('appearance',lambda:sim('ui',identifier,'appearance','dark',timeout=remaining(30)))
+        container=timed('container',lambda:sim('get_app_container',identifier,BUNDLE_ID,'data',timeout=remaining(45)))
+        require(isinstance(container,str) and 0<len(container)<=2048 and re.fullmatch(
+            r'/.+/CoreSimulator/Devices/'+re.escape(identifier)+
+            r'/data/Containers/Data/Application/[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',container),
+            'Offline app preflight container differs from the actual simulator UUID')
+        documents=Path(container)/'Documents';documents.mkdir(exist_ok=True)
+        ready=documents/'della-host-ready.json';ready.unlink(missing_ok=True)
+        require(not ready.exists(),'Offline app preflight retained a stale readiness file')
+        report['freshReadiness']=True;report['status']='launching'
+        env=dict(os.environ,SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1',SIMCTL_CHILD_KADE_A11Y_AUDIT='1',
+                 SIMCTL_CHILD_KADE_DELLA_HOST_AUDIT='1',SIMCTL_CHILD_KADE_DELLA_HOST_CASE='call-a11y-dark',
+                 SIMCTL_CHILD_KADE_DELLA_HOST_UI_DRAG='0',SIMCTL_CHILD_KADE_PUPPET_LAB='0',
+                 SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',
+                 SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_TOUR='0')
+        remaining(1);attempted=True
+        timed('launch',lambda:sim('launch',identifier,BUNDLE_ID,env=env,timeout=remaining(45)))
+        report['status']='waitingForReadiness'
+        def readiness():
+            ready_deadline=time.monotonic()+remaining(READY_SECONDS)
+            while not ready.exists() and time.monotonic()<ready_deadline:
+                time.sleep(min(.15,max(0,ready_deadline-time.monotonic())))
+            require(ready.is_file() and time.monotonic()<=ready_deadline,
+                    'Offline app preflight native readiness timed out')
+            require(0<ready.stat().st_size<=64*1024,'Offline app preflight readiness missing or oversized')
+            raw=ready.read_bytes();validate_ready(json.loads(raw),'call-a11y-dark',device)
+            report['readySha256']=hashlib.sha256(raw).hexdigest();report['readyValidated']=True
+        timed('readiness',readiness)
+    except Exception as error:
+        report.update(status='failed',errorType=type(error).__name__,error=sanitize_ui_line(str(error))
+                      if isinstance(error,RuntimeError) else 'Offline app preflight operation failed')
+        raise
+    finally:
+        try:
+            if attempted:
+                timed('terminate',lambda:sim('terminate',identifier,BUNDLE_ID,timeout=remaining(30,cleanup=True)))
+                report['terminated']=True
+            if report['compiledBeforeVerified']:
+                # Recheck after termination, quietly, even if native readiness failed.
+                remaining(1,cleanup=True)
+                tick=time.monotonic()
+                try:
+                    require(compiled_tests(expected,emit_inventory=False)==report['compiledRunner'],
+                            'Compiled app/runner/test bundle changed during offline app preflight')
+                    remaining(1,cleanup=True)
+                    report['compiledAfterVerified']=True
+                finally:report['operationSeconds']['compiledAfter']=round(time.monotonic()-tick,3)
+        except Exception as error:
+            diagnostic=sanitize_ui_line(str(error)) if isinstance(error,RuntimeError) else 'Offline app preflight cleanup failed'
+            if 'errorType' in report:
+                report.update(cleanupErrorType=type(error).__name__,cleanupError=diagnostic)
+            else:
+                report.update(status='failed',errorType=type(error).__name__,error=diagnostic)
+                raise
+        finally:
+            report['passed']=all(report[field] for field in ('compiledBeforeVerified','compiledAfterVerified',
+                                  'freshReadiness','readyValidated','terminated')) and 'errorType' not in report
+            if report['passed']:report['status']='completed'
+            report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
+    return validate_app_preflight(report,identifier,initial)
+
+
 def boot_ui(expected,key):
+    started=time.monotonic()
     initial=initial_source(expected)
     report={'source':initial,'device':key,'passed':False,'timeoutSeconds':BOOT_SECONDS,'startedAtUtc':now()}
-    started=time.monotonic()
     try:
         require(sys.platform=='darwin','Explicit UI simulator boot requires standard macOS')
         records=simulator_record(expected)['devices']
@@ -518,6 +666,9 @@ def boot_ui(expected,key):
         report['alreadyBooted']=states.get(identifier)=='Booted'
         if not report['alreadyBooted']: sim('boot',identifier,timeout=remaining(45))
         sim('bootstatus',identifier,'-b',timeout=remaining(BOOT_SECONDS))
+        if key=='large':
+            report['appPreflight']={}
+            app_preflight(expected,identifier,initial,records[key],deadline,report['appPreflight'])
         report['passed']=True
     except Exception as error:
         report.update(passed=False,errorType=type(error).__name__,
@@ -633,10 +784,13 @@ def run_ui(expected,key):
     try:
         require(sys.platform=='darwin','Bounded native UI launch requires standard macOS')
         boot=json.loads((OUT/('ui-boot-'+key+'.json')).read_text())
+        validate_ui_boot(boot,key,initial)
         require(boot.get('source')==initial and boot.get('device')==key and boot.get('passed') is True,
                 'UI launch requires the exact successful explicit device boot')
         report['boot']=boot
         compiled=compiled_tests(expected);report['compiledRunner']=compiled
+        if key=='large':require(compiled==boot['appPreflight']['compiledRunner'],
+                                'UI launch app/runner differs from the actual offline app preflight')
         identifier=simulator_record(expected)['devices'][key]['identifier']
         require(identifier==boot['identifier'],'UI launch device differs from explicit boot')
         bundle=OUT/('ui-tests-'+key+'.xcresult')
@@ -744,6 +898,9 @@ def validate_ui_launch(report,key,initial):
     if 'boot' in report:validate_ui_boot(report['boot'],key,initial)
     if 'compiledRunner' in report:validate_compiled_record(report['compiledRunner'],initial)
     if report['passed']:require('compiledRunner' in report,'Successful UI launch lacks exact compiled runner proof')
+    if report['passed'] and key=='large':
+        require(report['compiledRunner']==report['boot']['appPreflight']['compiledRunner'],
+                'Successful Pro Max UI launch differs from the actual offline app preflight')
     return report
 
 
@@ -1289,8 +1446,8 @@ def main():
     if args.action not in ('source','ui-tests','clean-review','emit','shutdown'):
         recorded=json.loads((OUT/'source.json').read_text())
         _OPERATION_DEADLINE=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
-        if args.action in ('run-ui','build-tests'):
-            guard=(720 if args.device=='large' else 600) if args.action=='run-ui' else 960
+        if args.action in ('run-ui','build-tests','boot-ui'):
+            guard=(720 if args.device=='large' else 600) if args.action=='run-ui' else BOOT_SECONDS+30 if args.action=='boot-ui' else 960
             action_deadline=time.time()+guard-30
             if action_deadline<_OPERATION_DEADLINE:
                 _OPERATION_DEADLINE=action_deadline;_DEADLINE_ROLE='actionGuardDeadline'
