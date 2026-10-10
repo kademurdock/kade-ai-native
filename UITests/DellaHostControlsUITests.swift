@@ -199,27 +199,27 @@ final class DellaHostControlsUITests: XCTestCase {
                                reachable: optionalControlsVisible)
         let voice = try button(app, identifier: "della-host.chat.voice", label: "Voice",
                                reachable: optionalControlsVisible)
-        let hearReplies = try button(app, identifier: "della-host.chat.hear-replies", label: "Hear replies",
-                                     reachable: optionalControlsVisible)
+        let hearReplies = try hearRepliesToggle(app, reachable: optionalControlsVisible)
         let speed = try button(app, identifier: "della-host.chat.speed", label: "Voice speed",
                                reachable: optionalControlsVisible)
         let optionalControls = [agent, voice, hearReplies, speed]
-        try require(nonemptyValue(hearReplies.element), "Hear replies exposes its separate state value")
         try require(nonemptyValue(speed.element), "Voice speed exposes its separate rate value")
         if optionalControlsVisible {
             try disjoint(optionalControls + core.controls)
             for control in optionalControls {
                 try require(!overlaps(core.fieldFrame, control.frame),
-                            "composer does not cover " + control.name)
+                            "composer does not cover " + control.name + " [editor=" + rectangle(core.fieldFrame)
+                                + " control=" + rectangle(control.frame) + "]")
             }
             if requestedPhase.contains("controls-scrolled") {
                 try controlsInsideTranscript(optionalControls, in: app)
             }
             if keyboard && !dismissKeyboardByDragging {
-                let top = app.keyboards.firstMatch.frame.minY
+                let keyboardFrame = app.keyboards.firstMatch.frame
                 for control in optionalControls {
-                    try require(control.frame.maxY <= top + 0.5,
-                                control.name + " stays above the keyboard")
+                    try require(control.frame.maxY <= keyboardFrame.minY + 0.5,
+                                control.name + " stays above the keyboard [control=" + rectangle(control.frame)
+                                    + " keyboard=" + rectangle(keyboardFrame) + "]")
                 }
             }
         }
@@ -255,16 +255,17 @@ final class DellaHostControlsUITests: XCTestCase {
         }
         let fieldMatches = app.descendants(matching: .any)
             .matching(identifier: "della-host.chat.composer-field")
-        try require(fieldMatches.count == 1, "one native composer field")
+        try require(fieldMatches.count == 1, "one native composer field [" + matchContext(fieldMatches) + "]")
         let field = fieldMatches.element(boundBy: 0)
         try require(field.elementType == .textField || field.elementType == .textView,
-                    "composer retains its native text control")
+                    "composer retains its native text control [type=" + nativeType(field) + "]")
         try require(field.label == "Message", "composer label is Message")
         try require(field.isEnabled && field.isHittable, "composer is enabled and reachable")
         let fieldFrame = try visibleFrame(field, in: app, name: "composer")
         if phase.contains("-a11y-") {
             try require(fieldFrame.width >= app.frame.width - 64,
-                        "accessibility composer uses the full-width editor row")
+                        "accessibility composer uses the full-width editor row [editor=" + rectangle(fieldFrame)
+                            + " window=" + rectangle(app.frame) + "]")
         }
         let send = try button(app, identifier: "della-host.chat.send", label: "Send message")
         let attach = try button(app, identifier: "della-host.chat.attach",
@@ -276,7 +277,8 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(nonemptyValue(thinking.element), "Thinking exposes its separate state value")
         var controls = [send, attach, mic, thinking]
         for control in controls {
-            try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name)
+            try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name
+                        + " [editor=" + rectangle(fieldFrame) + " control=" + rectangle(control.frame) + "]")
         }
         if attachment {
             controls.append(try button(app, label: "Remove attachment"))
@@ -285,17 +287,21 @@ final class DellaHostControlsUITests: XCTestCase {
         }
         try disjoint(controls)
         let viewport = try transcriptFrame(app)
-        try require(viewport.height >= 44, "real transcript retains at least 44pt of scrolling room")
+        try require(viewport.height >= 44, "real transcript retains at least 44pt of scrolling room [scroll="
+                    + rectangle(viewport) + "]")
         if keyboard {
             let keyboardFrame = app.keyboards.firstMatch.frame
             try require(valid(keyboardFrame), "software keyboard has a nonempty native frame")
             try require(fieldFrame.maxY <= keyboardFrame.minY + 0.5,
-                        "composer stays above the keyboard")
+                        "composer stays above the keyboard [editor=" + rectangle(fieldFrame)
+                            + " keyboard=" + rectangle(keyboardFrame) + "]")
             try require(viewport.maxY <= keyboardFrame.minY + 0.5,
-                        "transcript stays above the keyboard")
+                        "transcript stays above the keyboard [scroll=" + rectangle(viewport)
+                            + " keyboard=" + rectangle(keyboardFrame) + "]")
             for control in controls {
                 try require(control.frame.maxY <= keyboardFrame.minY + 0.5,
-                            control.name + " stays above the keyboard")
+                            control.name + " stays above the keyboard [control=" + rectangle(control.frame)
+                                + " keyboard=" + rectangle(keyboardFrame) + "]")
             }
         }
         return ChatCore(fieldFrame: fieldFrame, controls: controls)
@@ -303,14 +309,15 @@ final class DellaHostControlsUITests: XCTestCase {
 
     private func transcriptFrame(_ app: XCUIApplication) throws -> CGRect {
         let matches = app.scrollViews.matching(identifier: "della-host.chat.transcript-scroll")
-        try require(matches.count == 1, "one real native transcript ScrollView")
+        try require(matches.count == 1, "one real native transcript ScrollView [" + matchContext(matches) + "]")
         return try visibleFrame(matches.element(boundBy: 0), in: app, name: "transcript viewport")
     }
 
     private func controlsInsideTranscript(_ controls: [Control], in app: XCUIApplication) throws {
         let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
         for control in controls {
-            try require(viewport.contains(control.frame), control.name + " fits inside the actual transcript viewport")
+            try require(viewport.contains(control.frame), control.name + " fits inside the actual transcript viewport [control="
+                        + rectangle(control.frame) + " scroll=" + rectangle(viewport) + "]")
         }
     }
 
@@ -327,7 +334,10 @@ final class DellaHostControlsUITests: XCTestCase {
         let identifiers = phase.contains("controls-scrolled")
             ? ["della-host.chat.agent", "della-host.chat.voice", "della-host.chat.hear-replies", "della-host.chat.speed"]
             : ["della-host.chat.invite-turn-on", "della-host.chat.invite-not-now"]
-        let targets = identifiers.map { app.buttons.matching(identifier: $0).firstMatch }
+        let targets = try identifiers.map { identifier in
+            if identifier == "della-host.chat.hear-replies" { return try hearRepliesElement(app) }
+            return app.buttons.matching(identifier: identifier).firstMatch
+        }
         for _ in 0..<8 {
             let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
             if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && viewport.contains($0.frame) }) {
@@ -380,8 +390,34 @@ final class DellaHostControlsUITests: XCTestCase {
                         minimumTarget: Bool = true) throws -> Control {
         let matches = identifier.map { app.buttons.matching(identifier: $0) }
             ?? app.buttons.matching(NSPredicate(format: "label == %@", label))
-        try require(matches.count == 1, "one separate native button for " + label)
+        try require(matches.count == 1, "one separate native button for " + label + " [" + matchContext(matches) + "]")
         let element = matches.element(boundBy: 0)
+        return try checkedControl(element, in: app, label: label, enabled: enabled,
+                                  reachable: reachable, minimumTarget: minimumTarget)
+    }
+
+    private func hearRepliesElement(_ app: XCUIApplication) throws -> XCUIElement {
+        // .isToggle can expose this one product control as a native switch.
+        // Every other control keeps its strict app.buttons query.
+        let matches = app.descendants(matching: .any).matching(identifier: "della-host.chat.hear-replies")
+        try require(matches.count == 1, "one separate native Hear replies toggle [" + matchContext(matches) + "]")
+        let element = matches.element(boundBy: 0)
+        try require(element.elementType == .switch || element.elementType == .button,
+                    "Hear replies retains its native interactive toggle type [type=" + nativeType(element) + "]")
+        let value = element.value as? String
+        try require(value == "Off" || (element.elementType == .switch && value == "0"),
+                    "Hear replies exposes the exact Off state [type=" + nativeType(element)
+                        + " value=" + String((value ?? "nil").prefix(40)) + "]")
+        return element
+    }
+
+    private func hearRepliesToggle(_ app: XCUIApplication, reachable: Bool) throws -> Control {
+        try checkedControl(hearRepliesElement(app), in: app, label: "Hear replies", enabled: true,
+                           reachable: reachable, minimumTarget: true)
+    }
+
+    private func checkedControl(_ element: XCUIElement, in app: XCUIApplication, label: String,
+                                enabled: Bool, reachable: Bool, minimumTarget: Bool) throws -> Control {
         try require(element.label == label, "expected button label for " + label)
         try require(element.isEnabled == enabled, "expected enabled state for " + label)
         if reachable { try require(element.isHittable, label + " is reachable") }
@@ -389,7 +425,7 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(valid(frame), label + " has a finite, nonempty frame")
         if minimumTarget {
             try require(frame.width >= 44 && frame.height >= 44,
-                        label + " has a 44pt target (actual " + dimensions(frame) + ")")
+                        label + " has a 44pt target [type=" + nativeType(element) + " rect=" + rectangle(frame) + "]")
         }
         if reachable { _ = try visibleFrame(element, in: app, name: label) }
         return Control(element: element, name: label, frame: frame)
@@ -398,8 +434,10 @@ final class DellaHostControlsUITests: XCTestCase {
     private func visibleFrame(_ element: XCUIElement, in app: XCUIApplication, name: String) throws -> CGRect {
         let frame = element.frame
         let window = app.frame
-        try require(valid(frame) && valid(window), name + " has usable screen geometry")
-        try require(window.insetBy(dx: -0.5, dy: -0.5).contains(frame), name + " fits entirely on screen")
+        try require(valid(frame) && valid(window), name + " has usable screen geometry [type=" + nativeType(element)
+                    + " rect=" + rectangle(frame) + " window=" + rectangle(window) + "]")
+        try require(window.insetBy(dx: -0.5, dy: -0.5).contains(frame), name + " fits entirely on screen [rect="
+                    + rectangle(frame) + " window=" + rectangle(window) + "]")
         return frame
     }
 
@@ -417,7 +455,8 @@ final class DellaHostControlsUITests: XCTestCase {
         for first in controls.indices {
             for second in controls.indices where second > first {
                 try require(!overlaps(controls[first].frame, controls[second].frame),
-                            controls[first].name + " does not overlap " + controls[second].name)
+                            controls[first].name + " does not overlap " + controls[second].name
+                                + " [first=" + rectangle(controls[first].frame) + " second=" + rectangle(controls[second].frame) + "]")
             }
         }
     }
@@ -427,14 +466,27 @@ final class DellaHostControlsUITests: XCTestCase {
         return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func dimensions(_ frame: CGRect) -> String {
-        String(format: "%.2f x %.2f", Double(frame.width), Double(frame.height))
+    private func rectangle(_ frame: CGRect) -> String {
+        let description = String(format: "(%.6f,%.6f,%.6f,%.6f;maxY=%.6f)", Double(frame.minX), Double(frame.minY),
+                                 Double(frame.width), Double(frame.height), Double(frame.maxY))
+        return String(description.prefix(120))
     }
 
-    private func require(_ condition: @autoclosure () -> Bool, _ message: String,
+    private func nativeType(_ element: XCUIElement) -> String {
+        String(String(describing: element.elementType).prefix(40))
+    }
+
+    private func matchContext(_ matches: XCUIElementQuery) -> String {
+        let count = matches.count
+        let types = (0..<min(count, 3)).map { nativeType(matches.element(boundBy: $0)) }.joined(separator: ",")
+        return "count=\(count) types=[\(types)]"
+    }
+
+    private func require(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String,
                          file: StaticString = #filePath, line: UInt = #line) throws {
         checks += 1
         guard condition() else {
+            let message = message()
             print("KADE_DELLA_HOST_CONTROLS_FAILED " + phase + " " + message)
             XCTFail(phase + ": " + message, file: file, line: line)
             throw FailedCheck(message: message)
