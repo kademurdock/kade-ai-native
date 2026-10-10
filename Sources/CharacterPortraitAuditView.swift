@@ -99,6 +99,7 @@ struct CharacterPortraitAuditView: View {
     @State private var angelGallery = false
     @State private var angelMotionSample: CharacterBustPose? = nil
     @State private var angelOrnamentsSample: AngelVectorOrnamentPose? = nil
+    @State private var angelArmSample: AngelVectorArmPose? = nil
     private let expressions: [CharacterExpression] = [.amused, .serious, .concerned, .skeptical, .surprised, .warm]
 
     var body: some View {
@@ -134,7 +135,8 @@ struct CharacterPortraitAuditView: View {
                     motionPaused: reviewStill, handPrototypeElapsed: handSample,
                     handPrototypeVariant: handVariant, blinkAuditAmount: blinkSample,
                     angelFaceAudit: angelFaceSample, angelMouthAudit: angelMouthSample,
-                    angelMotionAudit: angelMotionSample, angelOrnamentsAudit: angelOrnamentsSample)
+                    angelMotionAudit: angelMotionSample, angelOrnamentsAudit: angelOrnamentsSample,
+                    angelArmAudit: angelArmSample)
                 Text(reviewName + (facialStudy ? " · controlled face preview"
                     : (handSample == nil ? " · production puppet" : " · hand study")))
                 if facialStudy {
@@ -149,7 +151,8 @@ struct CharacterPortraitAuditView: View {
                         : "Head and shoulders. Arms do not move independently. Compact stages retain the portrait."))
                 }
             } else {
-                CharacterPortraitView(agentID: agentID, name: name, playing: callMode || (voice.isClipPlaying && !voice.isPaused),
+                CharacterPortraitView(agentID: agentID, name: name,
+                    playing: callMode ? call.status == .speaking : (voice.isClipPlaying && !voice.isPaused),
                     level: { callMode ? call.characterLevel : voice.characterLevel() }, listening: callMode,
                     presentation: { callMode ? call.characterPresentation : voice.characterPresentation() },
                     stage: true, side: 208)
@@ -193,7 +196,11 @@ struct CharacterPortraitAuditView: View {
         phase = label
         await wait(0.12)
         step(label)
-        for _ in 0..<25 {
+        // simctl can finish writing a valid image after five seconds on a cold
+        // worker. Await its matching acknowledgement with a monotonic bound;
+        // the runner's separate full-audit watchdog still limits the session.
+        let deadline = ProcessInfo.processInfo.systemUptime + 15
+        while ProcessInfo.processInfo.systemUptime < deadline {
             if (try? String(contentsOf: output.appendingPathComponent("character-captured.txt"), encoding: .utf8)) == label { return }
             await wait(0.2)
         }
@@ -226,6 +233,16 @@ struct CharacterPortraitAuditView: View {
                 "all six exact production puppet registrations resolve")
             try check(resolved.count == 7 && Set(roster.map { $0.agentID }).count == 7,
                 "Angel joins seven exact production puppet registrations")
+            guard let angelArt = CharacterAngelArtwork.loaded,
+                  let angelCache = CharacterAngelArtwork.cacheAudit else {
+                throw NSError(domain: "CharacterAudit", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Angel's verified vector drawing is not cached"])
+            }
+            try check(angelCache.shapeCount == angelArt.shapes.count && angelCache.shapeCount == 149
+                && angelCache.groupCount == CharacterAngelVectorArt.groups.count,
+                "Angel caches every verified ornamental path in all five authored groups")
+            try check(angelCache.retainsSourceOrder && angelCache.finiteGeometry && angelCache.paintContractsMatch,
+                "cached Angel paths preserve source order, finite geometry, paints and opacity")
             for person in roster {
                 if person == .angel {
                     try check(CharacterAngelArtwork.approved(agentID: person.agentID,
@@ -350,11 +367,13 @@ struct CharacterPortraitAuditView: View {
                 try await capturePose("angel-expression-\(face.rawValue)-light")
             }
             angelFaceSample = .neutral
+            reviewPerformance = CharacterPresentation(activity: .speaking)
             for role in 0...8 {
                 angelMouthSample = role
                 try await capturePose("angel-mouth-\(role)-light")
             }
             angelMouthSample = nil
+            reviewPerformance = .idle
             for (amount, label) in [(0.0, "open"), (0.5, "half"), (1.0, "closed")] {
                 blinkSample = amount
                 try await capturePose("angel-blink-\(label)-light")
@@ -376,6 +395,26 @@ struct CharacterPortraitAuditView: View {
             }
             angelMotionSample = nil
             angelOrnamentsSample = nil
+            // The exact original sleeve/hand paths move together. Capture both
+            // limits, both backgrounds and a policy stop before normal playback.
+            for dark in [false, true] {
+                reviewDark = dark
+                let theme = dark ? "dark" : "light"
+                angelArmSample = .still
+                try await capturePose("angel-clasp-rest-\(theme)")
+                for (direction, label) in [(-1.0, "left"), (1.0, "right")] {
+                    angelArmSample = AngelVectorArmPose(
+                        degrees: direction * AngelVectorArmPose.maximumDegrees,
+                        offsetX: direction * AngelVectorArmPose.maximumOffsetX,
+                        offsetY: -AngelVectorArmPose.maximumOffsetY)
+                    try await capturePose("angel-clasp-\(label)-\(theme)")
+                }
+            }
+            reviewDark = false
+            UserDefaults.standard.set(true, forKey: "kade.feedback.reduceMotion")
+            try await capturePose("angel-clasp-reduce-motion-light")
+            UserDefaults.standard.set(false, forKey: "kade.feedback.reduceMotion")
+            angelArmSample = nil
             blinkSample = nil
             angelFaceSample = nil
             facialStudy = false
@@ -397,6 +436,7 @@ struct CharacterPortraitAuditView: View {
                 call.auditReceive(metadata: packet(agentID, expression: "surprised"), wav: wav)
                 call.auditControl("{\"type\":\"state\",\"state\":\"listening\"}")
                 try await advance(0.5)
+                try check(call.status == .listening, label + " caller state is listening while rendered speech remains authoritative")
                 try check(call.characterPresentation.activity == .speaking && call.characterLevel > 0.01, label + " rendered call output outlives early server listening")
                 try check(call.characterPresentation.expression == .surprised, label + " reaction belongs to the rendered clip")
                 try await capturePose(person.rawValue + "-call-speaking"); try await advance(0.8)

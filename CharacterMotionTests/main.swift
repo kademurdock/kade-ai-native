@@ -569,12 +569,15 @@ print("Character stage layout: \(count - layoutBefore) checks passed")
 
 let angelBefore = count
 runAngelVectorMotionChecks(check)
+runCharacterAnimationBudgetTests(check)
+runCharacterBodyPerformanceChecks(check)
 let angelDataPath = ProcessInfo.processInfo.environment["CHARACTER_ANGEL_ART"]
     ?? "Sources/Assets.xcassets/CharacterAngelVectorArt.dataset/angel-vector.json"
 let angelData = try Data(contentsOf: URL(fileURLWithPath: angelDataPath))
 let angelArt = try JSONDecoder().decode(CharacterAngelVectorArt.self, from: angelData)
 check(angelArt.isValid, "Angel's own vector manifest is complete and valid")
 runAngelVectorArtBoundsChecks(angelArt, check)
+runAngelClaspGeometryChecks(angelArt, check)
 check(CharacterMotion.prepared(id: CharacterMotion.angelID, path: "/images/" + CharacterMotion.angelFile),
     "Angel's exact server ID and original avatar file prepare her own vector rig")
 check(CharacterMotion.animatedIDs.contains(CharacterMotion.angelID), "Angel joins the main animated shelf")

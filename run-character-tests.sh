@@ -5,6 +5,8 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 "${SWIFTC:-swiftc}" -D CHARACTER_MODEL_TESTS "$ROOT/Sources/CharacterMotion.swift" "$ROOT/Sources/CharacterAppearance.swift" "$ROOT/Sources/CharacterPerformance.swift" \
   "$ROOT/Sources/CharacterFacialPolicy.swift" \
+  "$ROOT/Sources/CharacterAnimationBudget.swift" "$ROOT/CharacterMotionTests/CharacterAnimationBudgetTests.swift" \
+  "$ROOT/CharacterMotionTests/CharacterBodyPerformanceTests.swift" \
   "$ROOT/Sources/CharacterAngelVectorMotion.swift" "$ROOT/Sources/CharacterAngelVectorArt.swift" \
   "$ROOT/Sources/CharacterHarleyHandPrototype.swift" \
   "$ROOT/Sources/CharacterFigureMotion.swift" "$ROOT/Sources/CharacterBustArtwork.swift" \
