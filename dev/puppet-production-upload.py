@@ -415,8 +415,8 @@ def sign(source, receipt):
     command = [cli("xcode-project"), "use-profiles", "--project", "KadeAI.xcodeproj", "--archive-method", "app-store",
                "--export-options-plist", str(export), "--custom-export-options",
                json.dumps({"manageAppVersionAndBuildNumber": False, "uploadSymbols": False, "destination": "export"})]
-    for identifier in BUNDLES.values():
-        command += ["--profile", str(selected[identifier][0])]
+    # The CLI's nargs='+' replaces earlier occurrences; supply all four paths together.
+    command += ["--profile", *(str(selected[identifier][0]) for identifier in BUNDLES.values())]
     runner.run("apply-existing-profiles", command)
     export_info = plistlib.loads(export.read_bytes())
     require(export_info.get("teamID") == TEAM and export_info.get("method") in {"app-store", "app-store-connect"}
