@@ -6,9 +6,12 @@ name: Della full host layout unsigned review
     paths:
       - '.github/workflows/della-host-layout-review.yml'
       - 'dev/della-host-layout-audit.py'
+      - 'dev/puppet-completion-audit.py'
+      - 'dev/puppet-completion/**'
       - 'dev/prepare-puppet-review.py'
       - 'dev/prepare-della-articulated-review.py'
       - 'dev/della-articulated-review/**'
+      - 'dev/puppet-review-assets/**'
       - 'dev/validate-angel-vector.py'
       - 'Sources/**'
       - 'CharacterMotionTests/**'
