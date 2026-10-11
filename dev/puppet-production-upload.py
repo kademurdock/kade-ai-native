@@ -367,7 +367,9 @@ def sign(source, receipt):
     for index, certificate in enumerate(sorted(certificates.glob("*.p12"))):
         require(index < 8, "Existing certificate inventory exceeded bound")
         pem, der = folder / "public-cert.pem", folder / "public-cert.der"
-        runner.run("certificate-public-" + str(index), ["openssl", "pkcs12", "-in", str(certificate), "-passin", "pass:", "-clcerts", "-nokeys", "-out", str(pem)])
+        # CLI 0.70 exports PEM certificate/key bags for its empty-password default,
+        # retaining the .p12 suffix. Extract only the public certificate as PEM.
+        runner.run("certificate-public-" + str(index), ["openssl", "x509", "-inform", "PEM", "-in", str(certificate), "-outform", "PEM", "-out", str(pem)])
         runner.run("certificate-der-" + str(index), ["openssl", "x509", "-in", str(pem), "-outform", "DER", "-out", str(der)])
         if sha(der) == prior["familyCertificateSha256"]:
             runner.run("certificate-validity-" + str(index), ["openssl", "x509", "-in", str(pem), "-checkend", "0", "-noout"])
