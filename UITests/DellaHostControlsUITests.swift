@@ -20,6 +20,11 @@ final class DellaHostControlsUITests: XCTestCase {
         let controls: [Control]
     }
 
+    private struct TranscriptDragState {
+        var used = 0
+        var lastContext = "no gesture issued"
+    }
+
     private var phase = ""
     private var checks = 0
 
@@ -184,14 +189,11 @@ final class DellaHostControlsUITests: XCTestCase {
         var core = try checkChatCore(app, attachment: attachment, keyboard: keyboard)
         if dismissKeyboardByDragging {
             // The fixture deliberately leaves the real keyboard and scroll
-            // position alone. Only this native viewport drag may dismiss it.
-            try dragTranscript(app)
-            let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
-                (object as? XCUIApplication)?.keyboards.count == 0
-            }, object: app)
-            try require(XCTWaiter.wait(for: [hidden], timeout: 10) == .completed,
-                        "real transcript drag dismisses the software keyboard")
-            try scrollTranscriptToTarget(app)
+            // position alone. Only real native transcript gestures may dismiss it.
+            var drags = TranscriptDragState()
+            try dismissKeyboardWithTranscriptDrags(app, state: &drags)
+            core = try checkChatCore(app, attachment: attachment, keyboard: false)
+            try scrollTranscriptToTarget(app, state: &drags)
             core = try checkChatCore(app, attachment: attachment, keyboard: false)
         }
 
@@ -391,21 +393,60 @@ final class DellaHostControlsUITests: XCTestCase {
         }
     }
 
-    private func dragTranscript(_ app: XCUIApplication) throws {
-        let region = try transcriptInteractionRegion(app)
+    private func dragTranscript(_ app: XCUIApplication, region: CGRect,
+                                keyboardWaitSeconds: TimeInterval,
+                                state: inout TranscriptDragState) throws {
+        try require(state.used < 8, "native transcript gestures share one eight-drag budget")
         try require(region.height >= 44, "transcript interaction region has enough room for a native drag")
         // Use actual screen points inside the region. Normalizing the raw AX
         // container would start at y=533.6, inside the SE keyboard at y=451.
+        // Start near the lower interior edge of the observed gap. This remains
+        // an interaction bound; the separate capture gate measures the viewport.
         let window = app.frame
+        let interior = min(24, region.height * 0.2)
+        let startPoint = CGPoint(x: region.midX, y: region.maxY - interior)
+        let finishPoint = CGPoint(x: region.midX, y: region.minY + interior)
+        let keyboardBefore = app.keyboards.count
+        try require(state.used > 0 || keyboardBefore == 1,
+                    "keyboard is present before the first real transcript gesture")
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let start = origin.withOffset(CGVector(dx: region.midX - window.minX,
-                                              dy: region.minY + region.height * 0.8 - window.minY))
-        let finish = origin.withOffset(CGVector(dx: region.midX - window.minX,
-                                               dy: region.minY + region.height * 0.2 - window.minY))
+        let start = origin.withOffset(CGVector(dx: startPoint.x - window.minX,
+                                              dy: startPoint.y - window.minY))
+        let finish = origin.withOffset(CGVector(dx: finishPoint.x - window.minX,
+                                               dy: finishPoint.y - window.minY))
+        state.used += 1
         start.press(forDuration: 0.05, thenDragTo: finish)
+        if keyboardWaitSeconds > 0 {
+            let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
+                (object as? XCUIApplication)?.keyboards.count == 0
+            }, object: app)
+            _ = XCTWaiter.wait(for: [hidden], timeout: keyboardWaitSeconds)
+        }
+        let keyboardAfter = app.keyboards.count
+        let geometry = String(format: "r=(%.6f,%.6f,%.6f,%.6f) s=(%.6f,%.6f) e=(%.6f,%.6f)",
+                              Double(region.minX), Double(region.minY), Double(region.width), Double(region.height),
+                              Double(startPoint.x), Double(startPoint.y), Double(finishPoint.x), Double(finishPoint.y))
+        let context = "n=\(state.used)/8 " + geometry + " k=\(keyboardBefore)>\(keyboardAfter)"
+        state.lastContext = String(context.prefix(180))
     }
 
-    private func scrollTranscriptToTarget(_ app: XCUIApplication) throws {
+    private func dismissKeyboardWithTranscriptDrags(_ app: XCUIApplication,
+                                                    state: inout TranscriptDragState) throws {
+        try require(app.keyboards.count == 1, "software keyboard precedes the real dismissal gestures")
+        var allocatedWait: TimeInterval = 0
+        while app.keyboards.count > 0 && state.used < 8 {
+            let region = try transcriptInteractionRegion(app)
+            let wait = min(2, max(0, 10 - allocatedWait))
+            allocatedWait += wait
+            try dragTranscript(app, region: region, keyboardWaitSeconds: wait, state: &state)
+        }
+        try require(state.used > 0, "at least one real transcript gesture was issued")
+        try require(app.keyboards.count == 0,
+                    "real transcript drags dismiss the software keyboard [" + state.lastContext + "]")
+    }
+
+    private func scrollTranscriptToTarget(_ app: XCUIApplication,
+                                          state: inout TranscriptDragState) throws {
         let identifiers = phase.contains("controls-scrolled")
             ? ["della-host.chat.agent", "della-host.chat.voice", "della-host.chat.hear-replies", "della-host.chat.speed"]
             : ["della-host.chat.invite-turn-on", "della-host.chat.invite-not-now"]
@@ -413,16 +454,21 @@ final class DellaHostControlsUITests: XCTestCase {
             if identifier == "della-host.chat.hear-replies" { return try hearRepliesElement(app) }
             return app.buttons.matching(identifier: identifier).firstMatch
         }
-        for _ in 0..<8 {
-            let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
-            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) }) {
+        while state.used < 8 {
+            let region = try transcriptInteractionRegion(app)
+            let targetBounds = region.insetBy(dx: -0.5, dy: -0.5)
+            try require(app.keyboards.count == 0,
+                        "software keyboard stays absent during target search [" + state.lastContext + "]")
+            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && targetBounds.contains($0.frame) }) {
                 return
             }
-            try dragTranscript(app)
+            try dragTranscript(app, region: region, keyboardWaitSeconds: 0, state: &state)
         }
         let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
+        try require(app.keyboards.count == 0,
+                    "software keyboard stays absent after target search [" + state.lastContext + "]")
         try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) },
-                    "bounded real transcript drags make every requested target reachable")
+                    "bounded real drags make every target reachable [" + state.lastContext + "]")
     }
 
     private func checkCall(_ requestedPhase: String, secondaryControlsVisible: Bool) throws {
