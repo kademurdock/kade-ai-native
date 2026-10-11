@@ -22,6 +22,7 @@ final class DellaHostControlsUITests: XCTestCase {
 
     private struct TranscriptDragState {
         var used = 0
+        var keyboardDismissalDrags = 0
         var lastContext = "no gesture issued"
     }
 
@@ -192,6 +193,7 @@ final class DellaHostControlsUITests: XCTestCase {
             // position alone. Only real native transcript gestures may dismiss it.
             var drags = TranscriptDragState()
             try dismissKeyboardWithTranscriptDrags(app, state: &drags)
+            drags.keyboardDismissalDrags = drags.used
             core = try checkChatCore(app, attachment: attachment, keyboard: false)
             try scrollTranscriptToTarget(app, state: &drags)
             core = try checkChatCore(app, attachment: attachment, keyboard: false)
@@ -467,8 +469,34 @@ final class DellaHostControlsUITests: XCTestCase {
         let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
         try require(app.keyboards.count == 0,
                     "software keyboard stays absent after target search [" + state.lastContext + "]")
-        try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) },
+        let reachable = targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) }
+        if !reachable {
+            // These are fresh observations after the failed predicate. They
+            // explain its native boundaries without changing any gesture or
+            // accepting a target from a later diagnostic observation.
+            printTargetFailure("drags=\(state.used)/8 dismissal=\(state.keyboardDismissalDrags)"
+                + " search=\(state.used - state.keyboardDismissalDrags) keyboard=\(app.keyboards.count)"
+                + " region=" + rectangle(region))
+            for (identifier, target) in zip(identifiers, targets) {
+                let exists = target.exists
+                if exists {
+                    let hittable = target.isHittable
+                    let frame = target.frame
+                    printTargetFailure("id=" + identifier + " exists=\(exists) hittable=\(hittable)"
+                        + " valid=\(valid(frame)) inside=\(region.contains(frame)) frame=" + rectangle(frame))
+                } else {
+                    printTargetFailure("id=" + identifier
+                        + " exists=false hittable=unqueried valid=unqueried inside=unqueried frame=unavailable")
+                }
+            }
+        }
+        try require(reachable,
                     "bounded real drags make every target reachable [" + state.lastContext + "]")
+    }
+
+    private func printTargetFailure(_ detail: String) {
+        let line = "KADE_DELLA_HOST_CONTROLS_FAILED " + phase + " target-diagnostic " + detail
+        print(String(line.prefix(300)))
     }
 
     private func checkCall(_ requestedPhase: String, secondaryControlsVisible: Bool) throws {
