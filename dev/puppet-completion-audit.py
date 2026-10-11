@@ -62,10 +62,10 @@ JOINTS = {'leftShoulderX','leftShoulderY','leftElbowX','leftElbowY','leftWristX'
  'leftShoulderDegrees','leftElbowDegrees','leftWristDegrees','rightShoulderDegrees','rightElbowDegrees','rightWristDegrees',
  'leftHandDegrees','rightHandDegrees','leftOpenness','rightOpenness','bodyDegrees','bodyLift','headDegrees','headLift'}
 REGISTRATION = {
- 'kiana':((.13,.94),(.13,1.14),(.27,1.30),(.87,.94),(.87,1.14),(.73,1.30)),
- 'harley':((.18,.88),(.14,1.11),(.28,1.29),(.82,.88),(.86,1.11),(.72,1.29)),
- 'lilly':((.20,.92),(.17,1.13),(.30,1.30),(.80,.92),(.83,1.13),(.70,1.30)),
- 'witherspoon':((.19,.85),(.16,1.10),(.30,1.29),(.81,.85),(.84,1.10),(.70,1.29)),
+ 'kiana':((.12,.84),(.13,1.09),(.29,1.26),(.88,.90),(.87,1.12),(.71,1.26)),
+ 'harley':((.20,.86),(.17,1.09),(.30,1.25),(.80,.86),(.83,1.09),(.70,1.25)),
+ 'lilly':((.23,.87),(.19,1.09),(.31,1.26),(.77,.87),(.81,1.09),(.69,1.26)),
+ 'witherspoon':((.22,.85),(.18,1.09),(.31,1.25),(.78,.85),(.82,1.09),(.69,1.25)),
 }
 READY_FIELDS = {'schema','source','phase','character','avatarPath','appearance','windowPoints','geometry','render',
  'samples','policy','captureFrozen','completedInputs','jointCoordinateSpace','syntheticOutput','networkRequestsBlocked',

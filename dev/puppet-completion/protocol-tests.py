@@ -16,6 +16,7 @@ from io import BytesIO
 import json
 import math
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
@@ -58,14 +59,50 @@ for entry in ("save", "ui", "capture", "emit", "main"):
 # Explicit rest registration, independent of the validator's inventory. The
 # fixture arm uses complex-plane rigid rotations to retain both bone lengths.
 REST = {
-    "harley": ((.18, .88), (.14, 1.11), (.28, 1.29), (.82, .88), (.86, 1.11), (.72, 1.29)),
-    "kiana": ((.13, .94), (.13, 1.14), (.27, 1.30), (.87, .94), (.87, 1.14), (.73, 1.30)),
-    "lilly": ((.20, .92), (.17, 1.13), (.30, 1.30), (.80, .92), (.83, 1.13), (.70, 1.30)),
-    "witherspoon": ((.19, .85), (.16, 1.10), (.30, 1.29), (.81, .85), (.84, 1.10), (.70, 1.29)),
+    "harley": ((.20, .86), (.17, 1.09), (.30, 1.25), (.80, .86), (.83, 1.09), (.70, 1.25)),
+    "kiana": ((.12, .84), (.13, 1.09), (.29, 1.26), (.88, .90), (.87, 1.12), (.71, 1.26)),
+    "lilly": ((.23, .87), (.19, 1.09), (.31, 1.26), (.77, .87), (.81, 1.09), (.69, 1.26)),
+    "witherspoon": ((.22, .85), (.18, 1.09), (.31, 1.25), (.78, .85), (.82, 1.09), (.69, 1.25)),
 }
 CROP = {"harley": 540, "kiana": 620, "lilly": 700, "witherspoon": 620}
 PEOPLE = ("harley", "kiana", "lilly", "della", "witherspoon", "lilly-private", "angel")
 POSES = ("neutral", "gesturePeak", "settled")
+
+
+def swift_registrations(source):
+    """Read the actual six named renderer vectors, never a copied test table."""
+    marker = "static func registration(_ kind: CharacterConversationBodyArtwork.Kind) -> Registration {"
+    if len(source.encode()) > 64 * 1024 or source.count(marker) != 1:
+        raise ValueError("Missing, duplicate or oversized Swift registration source")
+    start = source.index(marker)
+    end = source.find("    static func arm(", start)
+    if end < 0:
+        raise ValueError("Missing Swift registration boundary")
+    section = source[start:end]
+    cases = list(re.finditer(r"^\s*case \.([a-z]+):", section, re.M))
+    kinds = {"kiana", "harley", "lilly", "witherspoon"}
+    if len(cases) != 4 or {match[1] for match in cases} != kinds:
+        raise ValueError("Missing or duplicate Swift registration kind")
+    names = ("leftShoulder", "leftElbow", "leftWrist", "rightShoulder", "rightElbow", "rightWrist")
+    scalar = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))"
+    vector = re.compile(r"\b(" + "|".join(names) + r")\s*:\s*\.init\(\s*x:\s*" + scalar
+                        + r"\s*,\s*y:\s*" + scalar + r"\s*\)")
+    result = {}
+    for index, case in enumerate(cases):
+        block = section[case.end():cases[index + 1].start() if index + 1 < len(cases) else len(section)]
+        points = list(vector.finditer(block))
+        if len(points) != 6 or {point[1] for point in points} != set(names):
+            raise ValueError("Missing or duplicate Swift joint vector")
+        values = {point[1]: (float(point[2]), float(point[3])) for point in points}
+        if not all(math.isfinite(value) for pair in values.values() for value in pair):
+            raise ValueError("Nonfinite Swift joint vector")
+        result[case[1]] = tuple(values[name] for name in names)
+    return result
+
+
+def registration_coherent(source, registration):
+    if swift_registrations(source) != registration:
+        raise ValueError("Native capture validator differs from the actual Swift rig")
 
 
 def set_arm(values, person, side, shoulder_degrees, elbow_degrees, wrist_degrees):
@@ -482,6 +519,33 @@ class ProtocolChecks(unittest.TestCase):
                     self.accepted(fixture(person, pose))
         self.assertEqual(len(audit.COMMON | audit.JOINTS), 32)
         self.assertEqual(REST, audit.REGISTRATION)
+
+    def test_actual_swift_registration_matches_native_validator(self):
+        global CHECKS
+        path = ROOT / "Sources/CharacterConversationBodyGeometry.swift"
+        self.assertLessEqual(path.stat().st_size, 64 * 1024)
+        source = path.read_text(encoding="utf-8")
+        CHECKS += 1
+        registration_coherent(source, audit.REGISTRATION)
+        self.assertEqual(swift_registrations(source), REST)
+        # A matching but stale validator/fixture pair must still fail against
+        # the real renderer, including the historical Kiana shoulder mistake.
+        stale = copy.deepcopy(audit.REGISTRATION)
+        stale["kiana"] = ((.13, .94), (.13, 1.14), (.27, 1.30), (.87, .94), (.87, 1.14), (.73, 1.30))
+        CHECKS += 1
+        with self.assertRaises(ValueError):
+            registration_coherent(source, stale)
+        for bad in (
+            source.replace("case .lilly:", "case .unknown:", 1),
+            source.replace("case .kiana:", "case .kiana:\n        case .kiana:", 1),
+            source.replace("leftShoulder: .init(x: 0.12, y: 0.84)", "unknownShoulder: .init(x: 0.12, y: 0.84)", 1),
+            source.replace("leftShoulder: .init(x: 0.12, y: 0.84)",
+                           "leftShoulder: .init(x: 0.12, y: 0.84), leftShoulder: .init(x: 0.12, y: 0.84)", 1),
+            source.replace("leftShoulder: .init(x: 0.12, y: 0.84)", "leftShoulder: .init(x: .nan, y: 0.84)", 1),
+        ):
+            CHECKS += 1
+            with self.assertRaises(ValueError):
+                registration_coherent(bad, audit.REGISTRATION)
 
     def test_source_identity_art_and_phase_binding(self):
         for person in PEOPLE:
