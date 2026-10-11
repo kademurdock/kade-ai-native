@@ -72,26 +72,28 @@ enum CharacterConversationBodyGeometry {
     static func registration(_ kind: CharacterConversationBodyArtwork.Kind) -> Registration {
         switch kind {
         case .kiana:
-            return Registration(leftShoulder: .init(x: 0.13, y: 0.94), rightShoulder: .init(x: 0.87, y: 0.94),
-                leftElbow: .init(x: 0.13, y: 1.14), rightElbow: .init(x: 0.87, y: 1.14),
-                leftWrist: .init(x: 0.27, y: 1.30), rightWrist: .init(x: 0.73, y: 1.30),
-                upperRadius: 0.078, lowerRadius: 0.050, handScale: 0.115, bodyLimit: 0.55)
+            // The original off-shoulder knit starts higher on the viewer's left.
+            // These sockets sit under that cloth, not below the atlas square.
+            return Registration(leftShoulder: .init(x: 0.12, y: 0.84), rightShoulder: .init(x: 0.88, y: 0.90),
+                leftElbow: .init(x: 0.13, y: 1.09), rightElbow: .init(x: 0.87, y: 1.12),
+                leftWrist: .init(x: 0.29, y: 1.26), rightWrist: .init(x: 0.71, y: 1.26),
+                upperRadius: 0.066, lowerRadius: 0.036, handScale: 0.142, bodyLimit: 0.55)
         case .harley:
-            return Registration(leftShoulder: .init(x: 0.18, y: 0.88), rightShoulder: .init(x: 0.82, y: 0.88),
-                leftElbow: .init(x: 0.14, y: 1.11), rightElbow: .init(x: 0.86, y: 1.11),
-                leftWrist: .init(x: 0.28, y: 1.29), rightWrist: .init(x: 0.72, y: 1.29),
-                upperRadius: 0.081, lowerRadius: 0.055, handScale: 0.122, bodyLimit: 0.75)
+            return Registration(leftShoulder: .init(x: 0.20, y: 0.86), rightShoulder: .init(x: 0.80, y: 0.86),
+                leftElbow: .init(x: 0.17, y: 1.09), rightElbow: .init(x: 0.83, y: 1.09),
+                leftWrist: .init(x: 0.30, y: 1.25), rightWrist: .init(x: 0.70, y: 1.25),
+                upperRadius: 0.066, lowerRadius: 0.040, handScale: 0.148, bodyLimit: 0.75)
         case .lilly:
             // Original cats occupy the sides of the square, above these hands.
-            return Registration(leftShoulder: .init(x: 0.20, y: 0.92), rightShoulder: .init(x: 0.80, y: 0.92),
-                leftElbow: .init(x: 0.17, y: 1.13), rightElbow: .init(x: 0.83, y: 1.13),
-                leftWrist: .init(x: 0.30, y: 1.30), rightWrist: .init(x: 0.70, y: 1.30),
-                upperRadius: 0.072, lowerRadius: 0.050, handScale: 0.102, bodyLimit: 0.65)
+            return Registration(leftShoulder: .init(x: 0.23, y: 0.87), rightShoulder: .init(x: 0.77, y: 0.87),
+                leftElbow: .init(x: 0.19, y: 1.09), rightElbow: .init(x: 0.81, y: 1.09),
+                leftWrist: .init(x: 0.31, y: 1.26), rightWrist: .init(x: 0.69, y: 1.26),
+                upperRadius: 0.061, lowerRadius: 0.036, handScale: 0.136, bodyLimit: 0.65)
         case .witherspoon:
-            return Registration(leftShoulder: .init(x: 0.19, y: 0.85), rightShoulder: .init(x: 0.81, y: 0.85),
-                leftElbow: .init(x: 0.16, y: 1.10), rightElbow: .init(x: 0.84, y: 1.10),
-                leftWrist: .init(x: 0.30, y: 1.29), rightWrist: .init(x: 0.70, y: 1.29),
-                upperRadius: 0.076, lowerRadius: 0.051, handScale: 0.112, bodyLimit: 0.42)
+            return Registration(leftShoulder: .init(x: 0.22, y: 0.85), rightShoulder: .init(x: 0.78, y: 0.85),
+                leftElbow: .init(x: 0.18, y: 1.09), rightElbow: .init(x: 0.82, y: 1.09),
+                leftWrist: .init(x: 0.31, y: 1.25), rightWrist: .init(x: 0.69, y: 1.25),
+                upperRadius: 0.063, lowerRadius: 0.036, handScale: 0.142, bodyLimit: 0.42)
         }
     }
 

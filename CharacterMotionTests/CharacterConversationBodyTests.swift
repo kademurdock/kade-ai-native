@@ -15,6 +15,11 @@ func runCharacterConversationBodyChecks(_ check: (Bool, String) -> Void) {
         }
         check(artwork.kind == kind && artwork.agentID == id,
               "Conversation body preserves exact owner separately from shared drawn identity")
+        check(artwork.fabric.isValid && artwork.skin.isValid
+                && artwork.requiredAssets.contains(artwork.fabric.asset) && artwork.requiredAssets.contains(artwork.skin.asset),
+              "Conversation material samples remain inside already-required original assets")
+        check(artwork.shirtFabric.map { $0.isValid && artwork.requiredAssets.contains($0.asset) } ?? true,
+              "An inner shirt continuation cannot sample outside registered original cloth")
         check(close(artwork.stageHeight(side: 208), CharacterDellaArticulatedGeometry.stageHeight(side: 208)),
               "Conversation body and existing Della reserve identical tall stage height")
         check(CharacterConversationBodyArtwork.approved(stage: false, side: 208,

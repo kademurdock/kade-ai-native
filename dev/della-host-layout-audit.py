@@ -40,7 +40,7 @@ PINS={
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'178fb8de50c540033cdcbd3c935129750adaeedd213307f9dfdab6e73c711aa8',
+    'Sources/CharacterPortraitView.swift':'ec73a0cc03a2ae6034dacae43c348228fb9ff6bf891efcd85301b229cd1aaaaa',
     'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(
@@ -170,7 +170,7 @@ PREFLIGHT_OUTPUT_BYTES=64*1024
 UI_SECONDS={'large':600,'small':480}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
-EXPECTED_MODEL_CHECKS=169750
+EXPECTED_MODEL_CHECKS=169760
 JOB_SECONDS=55*60
 OPERATION_SECONDS=52*60
 FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS

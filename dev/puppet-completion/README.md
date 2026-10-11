@@ -4,7 +4,7 @@ The next candidate adds attached upper-body, elbow, wrist and hand movement to t
 
 The validated 2.2.12 source `8fb15082fa494549dfa52206c4136fa55c7323e4`, its 24 native UI tests, 28 paused host PNGs, unsigned device proof and acknowledged signed build332 remain historical evidence. They do not prove this candidate. The queued 2.2.11/build331 is preserved.
 
-The two dedicated public proof refs are `codex/puppet-completion-host-20261011` and `codex/puppet-completion-device-20261011`. They must contain the same final source SHA. The preliminary model ref is `codex/puppet-completion-model-20261011`. Its genuine source0afdad93ab4c4e2340a5821e8937f12a806df984 run38111462036 passed169,750 character/routing checks across11 groups and175 separate speech checks. Strict native model totals are rebound to169,750; final code pins follow the reviewed source freeze.
+The two dedicated public proof refs are `codex/puppet-completion-host-20261011` and `codex/puppet-completion-device-20261011`. They must contain the same final source SHA. The preliminary model ref is `codex/puppet-completion-model-20261011`. Its genuine source0afdad93ab4c4e2340a5821e8937f12a806df984 run38111462036 passed169,750 character/routing checks across11 groups and175 separate speech checks. Strict native model totals are rebound to169,760; final code pins follow the reviewed source freeze.
 
 ## Native proof
 

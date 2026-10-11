@@ -510,8 +510,13 @@ struct CharacterPortraitView: View {
             CharacterConversationBodyView(artwork: artwork, side: side, active: active,
                 presentation: presentation, figurePose: body, elapsed: elapsed,
                 outputLevel: outputLevel, performance: performance) {
-                    maskedBustHead(bust, pose: pose, face: face, unit: unit)
-                        .clipShape(CharacterBustCut(artwork: bust, outline: bust.headOutline))
+                    if artwork.kind == .lilly {
+                        maskedBustHead(bust, pose: pose, face: face, unit: unit)
+                            .clipShape(CharacterConversationLillyHeadCut(artwork: bust))
+                    } else {
+                        maskedBustHead(bust, pose: pose, face: face, unit: unit)
+                            .clipShape(CharacterBustCut(artwork: bust, outline: bust.headOutline))
+                    }
                 }
             if let sheet {
                 ForEach(bust.accessoryOutlines, id: \.self) { outline in

@@ -32,29 +32,24 @@ struct CharacterConversationBodyView<Head: View>: View {
         let neck = UnitPoint(x: (bust.neckX - bust.cropX) / bust.cropSide,
                              y: (bust.neckY - bust.cropY) / bust.cropSide)
         ZStack(alignment: .topLeading) {
-            CharacterConversationStaticTorso(kind: artwork.kind, side: side, height: height)
-                .equatable()
-            if let bodyAsset = artwork.bodyAsset {
-                // A precise central clothing cut excludes every fused original
-                // sleeve/forearm/hand and the plate's diffuse alpha halo.
-                Image(bodyAsset).resizable().interpolation(.high)
-                    .frame(width: bust.bodyWidth * side / bust.cropSide,
-                           height: bust.bodyHeight * side / bust.cropSide)
-                    .offset(x: (bust.bodyX - bust.cropX) * side / bust.cropSide,
-                            y: (bust.bodyY - bust.cropY) * side / bust.cropSide)
-                    .frame(width: side, height: height, alignment: .topLeading)
-                    .clipShape(CharacterConversationTorsoCut(kind: artwork.kind))
+            CharacterConversationClothing(artwork: artwork, side: side, height: height).equatable()
+            CharacterConversationArms(artwork: artwork, pose: pose, side: side, height: height).equatable()
+            Group {
+                if artwork.kind == .kiana {
+                    // The compact Kiana head remains unchanged. Only this tall
+                    // body softens its lower square into the original knitting.
+                    head.mask(alignment: .topLeading) {
+                        CharacterConversationKianaLowerCut().fill(.white)
+                            .frame(width: side * 1.08, height: side * 1.08)
+                            .mask(LinearGradient(stops: [.init(color: .white, location: 0),
+                                .init(color: .white, location: 0.949), .init(color: .clear, location: 0.986),
+                                .init(color: .clear, location: 1)],
+                                startPoint: .top, endPoint: .bottom))
+                            .offset(x: -side * 0.04, y: -side * 0.04)
+                    }
+                } else { head }
             }
-            Canvas(opaque: false, rendersAsynchronously: false) { context, _ in
-                context.scaleBy(x: side, y: side)
-                let registration = CharacterConversationBodyGeometry.registration(artwork.kind)
-                CharacterConversationDrawing.arm(context: &context, pose: pose.viewerLeft,
-                    registration: registration, kind: artwork.kind, viewerLeft: true)
-                CharacterConversationDrawing.arm(context: &context, pose: pose.viewerRight,
-                    registration: registration, kind: artwork.kind, viewerLeft: false)
-            }
-            .frame(width: side, height: height)
-            head.frame(width: side, height: side)
+                .frame(width: side, height: side)
                 .rotationEffect(.degrees(pose.headDegrees), anchor: neck)
                 .offset(y: pose.headLift * side)
         }
@@ -71,16 +66,128 @@ struct CharacterConversationBodyView<Head: View>: View {
 
 /// Cloth detail is unchanged between joint samples. Equality keeps its Canvas
 /// drawing out of the speaking timeline while the parent transform still moves.
-private struct CharacterConversationStaticTorso: View, Equatable {
-    let kind: CharacterConversationBodyArtwork.Kind
+private struct CharacterConversationClothing: View, Equatable {
+    let artwork: CharacterConversationBodyArtwork
     let side: Double
     let height: Double
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.artwork.kind == rhs.artwork.kind && lhs.side == rhs.side && lhs.height == rhs.height
+    }
+    var body: some View {
+        let bust = artwork.existingBust
+        ZStack(alignment: .topLeading) {
+            Canvas(opaque: false, rendersAsynchronously: false) { context, _ in
+                context.scaleBy(x: side, y: side)
+                CharacterConversationDrawing.torso(context: &context, artwork: artwork)
+            }.frame(width: side, height: height)
+            if let bodyAsset = artwork.bodyAsset {
+                Image(bodyAsset).resizable().interpolation(.high)
+                    .frame(width: bust.bodyWidth * side / bust.cropSide,
+                           height: bust.bodyHeight * side / bust.cropSide)
+                    .offset(x: (bust.bodyX - bust.cropX) * side / bust.cropSide,
+                            y: (bust.bodyY - bust.cropY) * side / bust.cropSide)
+                    .frame(width: side, height: height, alignment: .topLeading)
+                    .mask(alignment: .topLeading) {
+                        CharacterConversationTorsoCut(kind: artwork.kind).fill(.white)
+                            .frame(width: side, height: height)
+                            .mask(alignment: .topLeading) {
+                                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                    .init(color: .white, location: 0.075), .init(color: .white, location: 0.925),
+                                    .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: side * 0.46, height: height).offset(x: side * 0.27)
+                            }
+                            .mask(LinearGradient(stops: [.init(color: .white, location: 0),
+                                .init(color: .white, location: artwork.kind == .lilly ? 0.71 : 0.78),
+                                .init(color: artwork.kind == .harley ? .white : .clear,
+                                      location: artwork.kind == .lilly ? 0.78 : 0.84),
+                                .init(color: artwork.kind == .harley ? .white : .clear, location: 1)],
+                                startPoint: .top, endPoint: .bottom))
+                    }
+            }
+        }
+        .frame(width: side, height: height)
+    }
+}
+
+private struct CharacterConversationArms: View, Equatable {
+    let artwork: CharacterConversationBodyArtwork
+    let pose: CharacterConversationBodyPose
+    let side: Double
+    let height: Double
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.artwork.kind == rhs.artwork.kind && lhs.side == rhs.side && lhs.height == rhs.height
+            && lhs.pose.viewerLeft == rhs.pose.viewerLeft && lhs.pose.viewerRight == rhs.pose.viewerRight
+    }
     var body: some View {
         Canvas(opaque: false, rendersAsynchronously: false) { context, _ in
             context.scaleBy(x: side, y: side)
-            CharacterConversationDrawing.torso(context: &context, kind: kind)
-        }
-        .frame(width: side, height: height)
+            let registration = CharacterConversationBodyGeometry.registration(artwork.kind)
+            CharacterConversationDrawing.arm(context: &context, pose: pose.viewerLeft,
+                registration: registration, artwork: artwork, viewerLeft: true)
+            CharacterConversationDrawing.arm(context: &context, pose: pose.viewerRight,
+                registration: registration, artwork: artwork, viewerLeft: false)
+        }.frame(width: side, height: height)
+    }
+}
+
+private struct CharacterConversationKianaLowerCut: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        // Keep the compact head's original overdraw around the cropped crown;
+        // only its bottom edge changes, before the common head transform.
+        path.move(to: CGPoint(x: -0.04, y: -0.04))
+        path.addLine(to: CGPoint(x: 1.04, y: -0.04))
+        path.addLine(to: CGPoint(x: 1, y: 0.945))
+        path.addCurve(to: CGPoint(x: 0.79, y: 0.995),
+            control1: CGPoint(x: 0.95, y: 0.95), control2: CGPoint(x: 0.87, y: 0.98))
+        path.addCurve(to: CGPoint(x: 0.44, y: 1.02),
+            control1: CGPoint(x: 0.68, y: 1.025), control2: CGPoint(x: 0.53, y: 1.025))
+        path.addCurve(to: CGPoint(x: 0.13, y: 0.935),
+            control1: CGPoint(x: 0.31, y: 1.02), control2: CGPoint(x: 0.24, y: 0.98))
+        path.addQuadCurve(to: CGPoint(x: 0, y: 0.865), control: CGPoint(x: 0.04, y: 0.90))
+        path.closeSubpath()
+        let unit = rect.width / 1.08
+        return path.applying(CGAffineTransform(a: unit, b: 0, c: 0, d: unit,
+            tx: unit * 0.04, ty: unit * 0.04))
+    }
+}
+
+/// Only the conversation head uses this extended original neck/hood contour.
+/// Compact Lilly and the separate original cat cuts retain their existing paths.
+struct CharacterConversationLillyHeadCut: Shape {
+    let artwork: CharacterBustArtwork
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: 222, y: 22))
+        p.addCurve(to: CGPoint(x: 124, y: 108), control1: CGPoint(x: 177, y: 21), control2: CGPoint(x: 137, y: 53))
+        p.addLine(to: CGPoint(x: 121, y: 120)); p.addLine(to: CGPoint(x: 125, y: 128))
+        p.addLine(to: CGPoint(x: 119, y: 137))
+        p.addCurve(to: CGPoint(x: 94, y: 181), control1: CGPoint(x: 100, y: 145), control2: CGPoint(x: 91, y: 161))
+        p.addLine(to: CGPoint(x: 98, y: 197))
+        p.addCurve(to: CGPoint(x: 58, y: 223), control1: CGPoint(x: 80, y: 205), control2: CGPoint(x: 66, y: 212))
+        p.addCurve(to: CGPoint(x: 78, y: 250), control1: CGPoint(x: 56, y: 236), control2: CGPoint(x: 66, y: 246))
+        p.addLine(to: CGPoint(x: 103, y: 253)); p.addLine(to: CGPoint(x: 126, y: 260))
+        // Keep the actual original neckline and hood below the compact head cut.
+        // Stay inside the two cat silhouettes; their exact static foreground
+        // pixels are supplied once by the parent, never by this moving hood.
+        p.addLine(to: CGPoint(x: 143, y: 280))
+        p.addCurve(to: CGPoint(x: 155, y: 330), control1: CGPoint(x: 163, y: 291), control2: CGPoint(x: 149, y: 314))
+        p.addCurve(to: CGPoint(x: 198, y: 382), control1: CGPoint(x: 158, y: 355), control2: CGPoint(x: 178, y: 369))
+        p.addQuadCurve(to: CGPoint(x: 252, y: 378), control: CGPoint(x: 228, y: 397))
+        p.addCurve(to: CGPoint(x: 294, y: 321), control1: CGPoint(x: 272, y: 361), control2: CGPoint(x: 284, y: 336))
+        p.addLine(to: CGPoint(x: 305, y: 300)); p.addLine(to: CGPoint(x: 319, y: 278))
+        p.addLine(to: CGPoint(x: 331, y: 257)); p.addLine(to: CGPoint(x: 351, y: 244))
+        p.addCurve(to: CGPoint(x: 375, y: 203), control1: CGPoint(x: 369, y: 234), control2: CGPoint(x: 378, y: 221))
+        p.addCurve(to: CGPoint(x: 353, y: 151), control1: CGPoint(x: 374, y: 186), control2: CGPoint(x: 357, y: 172))
+        p.addCurve(to: CGPoint(x: 340, y: 83), control1: CGPoint(x: 355, y: 129), control2: CGPoint(x: 347, y: 107))
+        p.addCurve(to: CGPoint(x: 296, y: 35), control1: CGPoint(x: 334, y: 59), control2: CGPoint(x: 315, y: 42))
+        p.addLine(to: CGPoint(x: 279, y: 38))
+        p.addCurve(to: CGPoint(x: 222, y: 22), control1: CGPoint(x: 261, y: 29), control2: CGPoint(x: 241, y: 23))
+        p.closeSubpath()
+        let unit = rect.width / CGFloat(artwork.cropSide)
+        let scale = unit * CGFloat(artwork.panelSide) / 414
+        return p.applying(CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+            tx: CGFloat(artwork.panelX - artwork.cropX) * unit, ty: CGFloat(artwork.panelY - artwork.cropY) * unit))
     }
 }
 
@@ -114,8 +221,8 @@ private enum CharacterConversationDrawing {
     static func palette(_ kind: Kind) -> Palette {
         switch kind {
         case .kiana:
-            return Palette(cloth: color(0xD3C5B5), clothLight: color(0xE8DFD0), clothDark: color(0xA99381),
-                skin: color(0xA26D50), skinLight: color(0xBF8966), skinDark: color(0x71472F))
+            return Palette(cloth: color(0xD8D0C9), clothLight: color(0xF0E8E1), clothDark: color(0xB3A399),
+                skin: color(0xBA8062), skinLight: color(0xD59B7C), skinDark: color(0x925D43))
         case .harley:
             return Palette(cloth: color(0x5B7689), clothLight: color(0x8299A7), clothDark: color(0x344C60),
                 skin: color(0xD7A17F), skinLight: color(0xECC1A0), skinDark: color(0xA36D50))
@@ -140,13 +247,65 @@ private enum CharacterConversationDrawing {
         a + times(b - a, fraction)
     }
 
+    /// Reuse a cloth-only rectangle as an image drawing, never as a new bitmap.
+    /// Original source pixels outside this rectangle are clipped before drawing.
+    static func material(context: inout GraphicsContext, path: Path,
+                         patch: CharacterConversationBodyArtwork.MaterialPatch,
+                         tiled: Bool, mirrored: Bool = false, tileWidth: Double = 0.16, opacity: Double = 1) {
+        let bounds = path.boundingRect
+        guard patch.isValid, !bounds.isEmpty else { return }
+        var cloth = context
+        cloth.clip(to: path)
+        cloth.opacity *= opacity
+        if tiled && !mirrored {
+            // One native tiled fill for moving cloth. The ROI is unit-space;
+            // scale keeps the original weave at its registered portrait size.
+            cloth.fill(path, with: .tiledImage(Image(patch.asset),
+                origin: CGPoint(x: bounds.minX, y: bounds.minY),
+                sourceRect: CGRect(x: patch.x / patch.imageWidth, y: patch.y / patch.imageHeight,
+                    width: patch.width / patch.imageWidth, height: patch.height / patch.imageHeight),
+                scale: CGFloat(tileWidth / patch.width)))
+            return
+        }
+        let image = cloth.resolve(Image(patch.asset))
+        func draw(_ target: CGRect, in context: GraphicsContext, mirrorX: Bool = false, mirrorY: Bool = false) {
+            var sample = context
+            sample.clip(to: Path(target))
+            if mirrorX || mirrorY {
+                // Adjacent reflected windows share the identical edge pixels.
+                // This avoids a checkerboard lighting seam without a new texture.
+                sample.translateBy(x: target.midX, y: target.midY)
+                sample.scaleBy(x: mirrorX ? -1 : 1, y: mirrorY ? -1 : 1)
+                sample.translateBy(x: -target.midX, y: -target.midY)
+            }
+            let sx = target.width / patch.width, sy = target.height / patch.height
+            sample.draw(image, in: CGRect(x: target.minX - patch.x * sx,
+                y: target.minY - patch.y * sy, width: patch.imageWidth * sx, height: patch.imageHeight * sy))
+        }
+        if tiled {
+            // The static cloth layer is equatable. Keep original weave scale,
+            // with a fixed finite tile count rather than a per-frame texture build.
+            let width = CGFloat(tileWidth), height = width * patch.height / patch.width
+            let rows = min(16, Int(ceil(bounds.height / height)))
+            let columns = min(16, Int(ceil(bounds.width / width)))
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    draw(CGRect(x: bounds.minX + CGFloat(column) * width,
+                                y: bounds.minY + CGFloat(row) * height, width: width, height: height),
+                         in: cloth, mirrorX: column % 2 == 1, mirrorY: row % 2 == 1)
+                }
+            }
+        } else { draw(bounds, in: cloth) }
+    }
+
     /// The lower torso continues the original crop to the common tall edge.
     /// Broad shoulder underpaint hides seams beneath the head's original hair
     /// and neckline. The Kiana continuation contains no supporting bitmap.
     static func torsoPath(_ kind: Kind) -> Path {
         var p = Path()
         let kiana = kind == .kiana
-        p.move(to: CGPoint(x: 0.43, y: 0.76))
+        let neckY = kind == .lilly ? 0.64 : 0.76
+        p.move(to: CGPoint(x: 0.43, y: neckY))
         p.addCurve(to: CGPoint(x: kiana ? 0.10 : 0.20, y: 0.93),
             control1: CGPoint(x: 0.31, y: 0.79), control2: CGPoint(x: 0.18, y: 0.83))
         p.addCurve(to: CGPoint(x: kiana ? 0.002 : 0.17, y: 1.04),
@@ -160,7 +319,7 @@ private enum CharacterConversationDrawing {
         p.addCurve(to: CGPoint(x: kiana ? 0.90 : 0.80, y: 0.93),
             control1: CGPoint(x: kiana ? 0.998 : 0.84, y: 1.02),
             control2: CGPoint(x: kiana ? 0.96 : 0.85, y: 0.99))
-        p.addCurve(to: CGPoint(x: 0.57, y: 0.76),
+        p.addCurve(to: CGPoint(x: 0.57, y: neckY),
             control1: CGPoint(x: 0.82, y: 0.83), control2: CGPoint(x: 0.69, y: 0.79))
         p.closeSubpath()
         return p
@@ -172,29 +331,21 @@ private enum CharacterConversationDrawing {
     static func sourceTorso(_ kind: Kind) -> Path {
         // Harley's source hands begin much farther down; the other plates have
         // closer fused anatomy. End those cuts before any such pixels enter.
-        let end: Double = kind == .lilly ? 1.18 : (kind == .witherspoon ? 1.26 : 1.4976)
+        let end: Double = kind == .lilly ? 1.17 : (kind == .witherspoon ? 1.26 : 1.4976)
         var p = Path()
-        p.move(to: CGPoint(x: 0.43, y: 0.72))
+        let start: Double = kind == .lilly ? 0.61 : 0.72
+        p.move(to: CGPoint(x: 0.43, y: start))
         p.addQuadCurve(to: CGPoint(x: 0.27, y: 0.91), control: CGPoint(x: 0.30, y: 0.76))
-        p.addLine(to: CGPoint(x: 0.27, y: end))
-        p.addLine(to: CGPoint(x: 0.73, y: end))
+        p.addLine(to: CGPoint(x: 0.27, y: end - 0.025))
+        p.addQuadCurve(to: CGPoint(x: 0.73, y: end - 0.025), control: CGPoint(x: 0.50, y: end + 0.025))
         p.addLine(to: CGPoint(x: 0.73, y: 0.91))
-        p.addQuadCurve(to: CGPoint(x: 0.57, y: 0.72), control: CGPoint(x: 0.70, y: 0.76))
+        p.addQuadCurve(to: CGPoint(x: 0.57, y: start), control: CGPoint(x: 0.70, y: 0.76))
         p.closeSubpath()
         return p
     }
 
     static let sourceTorsoPaths: [Kind: Path] = Dictionary(uniqueKeysWithValues:
         Kind.allCases.map { ($0, sourceTorso($0)) })
-
-    static let knitRibs: [Path] = (0..<18).map { index in
-        let x = 0.16 + Double(index) * 0.04
-        var rib = Path()
-        rib.move(to: CGPoint(x: x, y: 0.96))
-        rib.addCurve(to: CGPoint(x: x + 0.015, y: 1.50),
-            control1: CGPoint(x: x - 0.018, y: 1.14), control2: CGPoint(x: x + 0.012, y: 1.32))
-        return rib
-    }
 
     static let hoodiePouch: Path = {
         var p = Path()
@@ -213,26 +364,44 @@ private enum CharacterConversationDrawing {
         return p
     }()
 
-    static func torso(context: inout GraphicsContext, kind: Kind) {
+    static let blouse: Path = {
+        var p = Path()
+        p.move(to: CGPoint(x: 0.44, y: 0.83)); p.addLine(to: CGPoint(x: 0.57, y: 0.83))
+        p.addCurve(to: CGPoint(x: 0.65, y: 1.50),
+            control1: CGPoint(x: 0.63, y: 1.05), control2: CGPoint(x: 0.64, y: 1.27))
+        p.addLine(to: CGPoint(x: 0.345, y: 1.50))
+        p.addCurve(to: CGPoint(x: 0.44, y: 0.83),
+            control1: CGPoint(x: 0.35, y: 1.27), control2: CGPoint(x: 0.38, y: 1.02))
+        p.closeSubpath(); return p
+    }()
+
+    static func torso(context: inout GraphicsContext, artwork: CharacterConversationBodyArtwork) {
+        let kind = artwork.kind
         let colors = palette(kind)
         guard let path = torsoPaths[kind] else { return }
         context.fill(path, with: .linearGradient(Gradient(colors:
             [colors.clothDark, colors.clothLight, colors.cloth, colors.clothDark]),
             startPoint: CGPoint(x: 0.12, y: 1), endPoint: CGPoint(x: 0.93, y: 1.4)))
+        material(context: &context, path: path, patch: artwork.fabric, tiled: true,
+                 mirrored: true, tileWidth: kind == .kiana ? 0.087 : (kind == .lilly ? 0.115 : 0.16))
+        context.fill(path, with: .linearGradient(Gradient(colors: [.black.opacity(0.19), .clear,
+            .clear, .black.opacity(0.22)]), startPoint: CGPoint(x: 0.15, y: 1.1),
+            endPoint: CGPoint(x: 0.87, y: 1.1)))
         var detail = context
         detail.clip(to: path)
-        if kind == .kiana || kind == .witherspoon {
-            // Ribbed knitting follows the garment vertically; a low contrast
-            // stroke survives phone scale without a noisy high-frequency mesh.
-            for rib in knitRibs {
-                detail.stroke(rib, with: .color(colors.clothDark.opacity(0.18)), lineWidth: 0.003)
-                detail.stroke(rib.offsetBy(dx: 0.004, dy: 0),
-                    with: .color(colors.clothLight.opacity(0.32)), lineWidth: 0.002)
+        if let shirt = artwork.shirtFabric {
+            material(context: &detail, path: blouse, patch: shirt, tiled: true, mirrored: true, tileWidth: 0.076)
+            // Continue the same original blouse beneath its safe central cut,
+            // avoiding both the plate's book/hands and a horizontal green seam.
+            for y in [1.29, 1.44] {
+                let button = Path(ellipseIn: CGRect(x: 0.49, y: y, width: 0.023, height: 0.023))
+                detail.fill(button, with: .color(color(0xDFCEB6)))
+                detail.stroke(button, with: .color(color(0xB9A48C).opacity(0.45)), lineWidth: 0.0015)
             }
         } else if kind == .lilly {
             detail.stroke(hoodiePouch, with: .color(colors.clothDark.opacity(0.42)),
                 style: StrokeStyle(lineWidth: 0.005, lineCap: .round))
-        } else {
+        } else if kind == .harley {
             detail.fill(tee, with: .linearGradient(Gradient(colors: [color(0xD9D8D1), color(0xF0F0E9)]),
                 startPoint: CGPoint(x: 0.43, y: 1), endPoint: CGPoint(x: 0.57, y: 1.5)))
         }
@@ -247,20 +416,24 @@ private enum CharacterConversationDrawing {
         let n1 = normal(upper), n2 = normal(lower)
         let normalSum = n1 + n2
         let ne = times(normalSum, 1 / max(0.000001, normalSum.length))
-        let elbowRadius = upperRadius * 0.83
+        let elbowRadius = upperRadius * 0.78
+        let tangentSum = times(upper, 1 / max(0.000001, upper.length))
+            + times(lower, 1 / max(0.000001, lower.length))
+        let tangent = times(tangentSum, 1 / max(0.000001, tangentSum.length))
+        let curve = times(tangent, min(upper.length, lower.length) * 0.27)
         let so = s + times(n1, upperRadius), si = s - times(n1, upperRadius)
         let eo = e + times(ne, elbowRadius), ei = e - times(ne, elbowRadius)
         let wo = w + times(n2, lowerRadius), wi = w - times(n2, lowerRadius)
         var p = Path()
         p.move(to: cg(so))
         p.addCurve(to: cg(eo), control1: cg(so + times(upper, 0.38)),
-            control2: cg(eo - times(upper, 0.28)))
-        p.addCurve(to: cg(wo), control1: cg(eo + times(lower, 0.32)),
+            control2: cg(eo - curve))
+        p.addCurve(to: cg(wo), control1: cg(eo + curve),
             control2: cg(wo - times(lower, 0.26)))
         p.addQuadCurve(to: cg(wi), control: cg(w + times(lower, 0.06)))
         p.addCurve(to: cg(ei), control1: cg(wi - times(lower, 0.26)),
-            control2: cg(ei + times(lower, 0.24)))
-        p.addCurve(to: cg(si), control1: cg(ei - times(upper, 0.25)),
+            control2: cg(ei + curve))
+        p.addCurve(to: cg(si), control1: cg(ei - curve),
             control2: cg(si + times(upper, 0.35)))
         p.addQuadCurve(to: cg(so), control: cg(s - times(upper, 0.25)))
         p.closeSubpath()
@@ -269,7 +442,8 @@ private enum CharacterConversationDrawing {
 
     static func arm(context: inout GraphicsContext, pose: CharacterConversationArm,
                     registration: CharacterConversationBodyGeometry.Registration,
-                    kind: Kind, viewerLeft: Bool) {
+                    artwork: CharacterConversationBodyArtwork, viewerLeft: Bool) {
+        let kind = artwork.kind
         let colors = palette(kind)
         let radius = registration.upperRadius
         let lower = pose.wrist - pose.elbow
@@ -278,15 +452,22 @@ private enum CharacterConversationDrawing {
             wrist: sleeveEnd, shoulderDegrees: pose.shoulderDegrees, elbowDegrees: pose.elbowDegrees,
             wristDegrees: pose.wristDegrees, handDegrees: pose.handDegrees, openness: pose.openness)
         if kind == .harley {
-            let bare = sleeve(pose, upperRadius: radius * 0.77, lowerRadius: 0.027)
+            let bare = sleeve(pose, upperRadius: radius * 0.77, lowerRadius: 0.031)
             context.fill(bare, with: .linearGradient(Gradient(colors:
                 [colors.skinDark, colors.skinLight, colors.skin]),
                 startPoint: cg(pose.elbow + Point(x: -0.06, y: 0)),
                 endPoint: cg(pose.wrist + Point(x: 0.05, y: 0))))
+            material(context: &context, path: bare, patch: artwork.skin, tiled: false, opacity: 0.55)
         }
         let cloth = sleeve(sleevePose, upperRadius: radius, lowerRadius: registration.lowerRadius)
         context.fill(cloth, with: .linearGradient(Gradient(colors:
             [colors.clothDark, colors.clothLight, colors.cloth, colors.clothDark]),
+            startPoint: cg(pose.shoulder + Point(x: -radius, y: 0)),
+            endPoint: cg(pose.wrist + Point(x: radius, y: 0))))
+        material(context: &context, path: cloth, patch: artwork.fabric,
+                 tiled: kind == .kiana, tileWidth: 0.087)
+        context.fill(cloth, with: .linearGradient(Gradient(colors:
+            [.black.opacity(0.26), .clear, .white.opacity(0.07), .black.opacity(0.20)]),
             startPoint: cg(pose.shoulder + Point(x: -radius, y: 0)),
             endPoint: cg(pose.wrist + Point(x: radius, y: 0))))
         var seam = Path()
@@ -294,8 +475,8 @@ private enum CharacterConversationDrawing {
         seam.move(to: cg(pose.shoulder + times(n, radius * 0.60)))
         seam.addQuadCurve(to: cg(pose.elbow + times(n, radius * 0.51)),
             control: cg(blend(pose.shoulder, pose.elbow, 0.55) + times(n, radius * 0.65)))
-        context.stroke(seam, with: .color(colors.clothLight.opacity(0.34)),
-            style: StrokeStyle(lineWidth: 0.003, lineCap: .round))
+        context.stroke(seam, with: .color(colors.clothDark.opacity(0.18)),
+            style: StrokeStyle(lineWidth: 0.002, lineCap: .round))
         let cuffVector = times(lower, 0.13)
         let cuffNormal = times(normal(lower), registration.lowerRadius * 1.06)
         var cuff = Path()
@@ -306,9 +487,11 @@ private enum CharacterConversationDrawing {
         context.fill(cuff, with: .linearGradient(Gradient(colors:
             [colors.clothDark, colors.cloth, colors.clothLight]),
             startPoint: cg(sleeveEnd - cuffNormal), endPoint: cg(sleeveEnd + cuffNormal)))
-        context.stroke(cuff, with: .color(colors.clothDark.opacity(0.3)), lineWidth: 0.002)
+        material(context: &context, path: cuff, patch: artwork.fabric, tiled: false)
+        context.fill(cuff, with: .color(.white.opacity(kind == .harley ? 0.25 : 0.08)))
+        context.stroke(cuff, with: .color(colors.clothDark.opacity(0.18)), lineWidth: 0.0015)
         hand(context: &context, pose: pose, scale: registration.handScale,
-             colors: colors, viewerLeft: viewerLeft)
+             colors: colors, skin: artwork.skin, viewerLeft: viewerLeft)
     }
 
     /// One continuous wrist/palm/five-digit outline. Thumb handedness is
@@ -346,7 +529,8 @@ private enum CharacterConversationDrawing {
     }
 
     static func hand(context: inout GraphicsContext, pose: CharacterConversationArm,
-                     scale: Double, colors: Palette, viewerLeft: Bool) {
+                     scale: Double, colors: Palette,
+                     skin: CharacterConversationBodyArtwork.MaterialPatch, viewerLeft: Bool) {
         var local = context
         local.translateBy(x: pose.wrist.x, y: pose.wrist.y)
         local.rotate(by: .degrees(pose.handDegrees))
@@ -355,8 +539,9 @@ private enum CharacterConversationDrawing {
         local.fill(path, with: .linearGradient(Gradient(colors:
             [colors.skinDark, colors.skin, colors.skinLight, colors.skin]),
             startPoint: CGPoint(x: -0.55, y: 0.25), endPoint: CGPoint(x: 0.50, y: 0.80)))
-        local.stroke(path, with: .color(colors.skinDark.opacity(0.35)),
-            style: StrokeStyle(lineWidth: 0.015, lineJoin: .round))
+        material(context: &local, path: path, patch: skin, tiled: false, opacity: 0.60)
+        local.stroke(path, with: .color(colors.skinDark.opacity(0.22)),
+            style: StrokeStyle(lineWidth: 0.012, lineJoin: .round))
         var palm = Path()
         palm.move(to: CGPoint(x: -0.16, y: 0.34))
         palm.addQuadCurve(to: CGPoint(x: 0.24, y: 0.56), control: CGPoint(x: 0.10, y: 0.39))
@@ -364,7 +549,7 @@ private enum CharacterConversationDrawing {
         palm.addQuadCurve(to: CGPoint(x: 0.19, y: 0.68), control: CGPoint(x: 0.04, y: 0.57))
         palm.move(to: CGPoint(x: -0.27, y: 0.37))
         palm.addQuadCurve(to: CGPoint(x: -0.08, y: 0.68), control: CGPoint(x: -0.08, y: 0.39))
-        local.stroke(palm, with: .color(colors.skinDark.opacity(0.20)),
-            style: StrokeStyle(lineWidth: 0.018, lineCap: .round))
+        local.stroke(palm, with: .color(colors.skinDark.opacity(0.14)),
+            style: StrokeStyle(lineWidth: 0.014, lineCap: .round))
     }
 }
