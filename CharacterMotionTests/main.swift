@@ -571,6 +571,8 @@ let angelBefore = count
 runAngelVectorMotionChecks(check)
 runCharacterAnimationBudgetTests(check)
 runCharacterBodyPerformanceChecks(check)
+runCharacterDellaArmMotionChecks(check)
+runCharacterDellaArticulatedGeometryChecks(check)
 let angelDataPath = ProcessInfo.processInfo.environment["CHARACTER_ANGEL_ART"]
     ?? "Sources/Assets.xcassets/CharacterAngelVectorArt.dataset/angel-vector.json"
 let angelData = try Data(contentsOf: URL(fileURLWithPath: angelDataPath))

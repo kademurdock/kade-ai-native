@@ -22,6 +22,10 @@ ASSETS = (
 )
 
 def prepare(check=False):
+    # This helper is a required preflight in the signed and ordinary audit
+    # lanes. An optional simulator study must not ride in a Release archive.
+    if check and (ROOT / "Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset").exists():
+        raise ValueError("Optional Della study is staged; run dev/prepare-della-articulated-review.py --clean before ordinary build preflight")
     results = []
     for filename, name, expected, size in ASSETS:
         source = ROOT / "dev/puppet-review-assets" / filename
