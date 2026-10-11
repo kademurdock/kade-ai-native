@@ -27,8 +27,8 @@ struct CharacterDellaArticulatedAuditView: View {
             if ready {
                 CharacterPortraitView(agentID: CharacterMotion.dellaID, name: "Della",
                     playing: false, level: { 0 }, presentation: { .idle }, stage: true,
-                    side: side, motionPaused: still, blinkAuditAmount: 0,
-                    dellaArticulatedReview: true, dellaArmAudit: arms, dellaHeadAudit: head)
+                    side: side, motionPaused: still, dellaArticulatedReview: true,
+                    blinkAuditAmount: 0, dellaArmAudit: arms, dellaHeadAudit: head)
             }
             Text("Original face and collar. Silent, controlled sleeve and palm poses. Simulator art study.")
                 .font(.footnote).multilineTextAlignment(.center)

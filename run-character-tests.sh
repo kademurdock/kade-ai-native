@@ -9,6 +9,7 @@ trap 'rm -rf "$OUT"' EXIT
   "$ROOT/CharacterMotionTests/CharacterBodyPerformanceTests.swift" \
   "$ROOT/Sources/CharacterDellaArmMotion.swift" "$ROOT/CharacterMotionTests/CharacterDellaArmMotionTests.swift" \
   "$ROOT/Sources/CharacterDellaArticulatedGeometry.swift" "$ROOT/CharacterMotionTests/CharacterDellaArticulatedGeometryTests.swift" \
+  "$ROOT/Sources/CharacterDellaHostLayout.swift" "$ROOT/CharacterMotionTests/CharacterDellaHostLayoutTests.swift" \
   "$ROOT/Sources/CharacterAngelVectorMotion.swift" "$ROOT/Sources/CharacterAngelVectorArt.swift" \
   "$ROOT/Sources/CharacterHarleyHandPrototype.swift" \
   "$ROOT/Sources/CharacterFigureMotion.swift" "$ROOT/Sources/CharacterBustArtwork.swift" \

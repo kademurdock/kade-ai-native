@@ -18,6 +18,20 @@ final class KadeAPIClient: ObservableObject {
     private let session: URLSession
     private let minGap: TimeInterval = 1.5
     private var lastRequestAt: Date = .distantPast
+    #if DEBUG && targetEnvironment(simulator)
+    private(set) static var hostAuditBlockedRequestCount = 0
+    #endif
+
+    /// The full-screen local layout fixture never talks to a live account,
+    /// including incidental requests from ordinary screen observers.
+    private func rejectOfflineHostRequest() throws {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterDellaHostAudit.isEnabled {
+            Self.hostAuditBlockedRequestCount += 1
+            throw URLError(.cancelled)
+        }
+        #endif
+    }
 
     private static let browserUA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) " +
@@ -83,6 +97,7 @@ final class KadeAPIClient: ObservableObject {
     /// clock. See `streamBytes(_:)` for the long-lived-connection variant
     /// that shares this same gate and session.
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try rejectOfflineHostRequest()
         await waitForPacingGate()
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -95,6 +110,7 @@ final class KadeAPIClient: ObservableObject {
     /// account pacing, cookies and browser UA without shortening chat streams
     /// or the other tools' legitimate long-running requests.
     func sendUpload(_ request: URLRequest, resourceTimeout: TimeInterval) async throws -> (Data, HTTPURLResponse) {
+        try rejectOfflineHostRequest()
         try Task.checkCancellation()
         await waitForPacingGate()
         try Task.checkCancellation()
@@ -114,6 +130,7 @@ final class KadeAPIClient: ObservableObject {
     /// Phase 3 (chat send + stream); every other call still goes through
     /// `send(_:)`.
     func streamBytes(_ request: URLRequest) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        try rejectOfflineHostRequest()
         await waitForPacingGate()
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {

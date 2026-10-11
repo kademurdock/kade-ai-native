@@ -85,7 +85,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai
-        MARKETING_VERSION: "2.2.11"
+        MARKETING_VERSION: "2.2.12"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -227,7 +227,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.keyboard
-        MARKETING_VERSION: "2.2.11"
+        MARKETING_VERSION: "2.2.12"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -278,7 +278,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.share
-        MARKETING_VERSION: "2.2.11"
+        MARKETING_VERSION: "2.2.12"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -327,7 +327,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.widgets
-        MARKETING_VERSION: "2.2.11"
+        MARKETING_VERSION: "2.2.12"
         CURRENT_PROJECT_VERSION: 100
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
@@ -356,6 +356,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kademurdock.kadeai.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
         DEVELOPMENT_TEAM: JQPWZ2RL9P
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"

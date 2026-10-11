@@ -65,7 +65,9 @@ struct KadeAIApp: App {
                 if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
                     CharacterPuppetLabView()
                 } else if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
-                    if ProcessInfo.processInfo.environment["KADE_DELLA_ARTICULATED_AUDIT"] == "1" {
+                    if ProcessInfo.processInfo.environment["KADE_DELLA_HOST_AUDIT"] == "1" {
+                        CharacterDellaHostAuditView()
+                    } else if ProcessInfo.processInfo.environment["KADE_DELLA_ARTICULATED_AUDIT"] == "1" {
                         CharacterDellaArticulatedAuditView()
                     } else if ProcessInfo.processInfo.environment["KADE_CHAT_LAYOUT_AUDIT"] == "1" {
                         CharacterChatStageAuditView()
