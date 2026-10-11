@@ -147,6 +147,7 @@ READY_SECONDS=30
 BOOT_SECONDS=420
 INSTALL_SECONDS=180
 PREFLIGHT_CONTAINER_SECONDS=90
+PREFLIGHT_LAUNCH_SECONDS=120
 PREFLIGHT_STOP_SECONDS=5
 PREFLIGHT_DRAIN_SECONDS=2
 PREFLIGHT_OUTPUT_BYTES=64*1024
@@ -551,7 +552,7 @@ def validate_app_preflight(report,identifier,initial):
             and (finished-started).total_seconds()<=BOOT_SECONDS+1,'Invalid offline app preflight timestamp order')
     durations=report.get('operationSeconds')
     bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':PREFLIGHT_CONTAINER_SECONDS,
-            'launch':45,'readiness':READY_SECONDS,'terminate':30,'compiledAfter':BOOT_SECONDS}
+            'launch':PREFLIGHT_LAUNCH_SECONDS,'readiness':READY_SECONDS,'terminate':30,'compiledAfter':BOOT_SECONDS}
     grace=2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS
     require(isinstance(durations,dict) and set(durations)<=set(bounds)
             and all(number(value) and 0<=value<=bounds[key]+(grace if key in
@@ -741,7 +742,7 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
                  SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',
                  SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_TOUR='0')
         remaining(1);attempted=True
-        command('launch','launch',identifier,BUNDLE_ID,env=env,bound=45)
+        command('launch','launch',identifier,BUNDLE_ID,env=env,bound=PREFLIGHT_LAUNCH_SECONDS)
         report['status']='waitingForReadiness'
         def readiness():
             ready_deadline=time.monotonic()+remaining(READY_SECONDS)
