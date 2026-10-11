@@ -422,7 +422,14 @@ final class DellaHostControlsUITests: XCTestCase {
         let finish = origin.withOffset(CGVector(dx: finishPoint.x - window.minX,
                                                dy: finishPoint.y - window.minY))
         state.used += 1
-        start.press(forDuration: 0.05, thenDragTo: finish)
+        if verticalDisplacement != nil {
+            // Target search uses a controlled release instead of the default
+            // drag velocity; the keyboard dismissal gesture remains unchanged.
+            start.press(forDuration: 0.05, thenDragTo: finish,
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+        } else {
+            start.press(forDuration: 0.05, thenDragTo: finish)
+        }
         if keyboardWaitSeconds > 0 {
             let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
                 (object as? XCUIApplication)?.keyboards.count == 0
