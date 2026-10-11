@@ -29,13 +29,22 @@ import zipfile
 
 TOOLS = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-PRODUCTION = "codex/puppet-production-20261010"
-HOST_BRANCH = "codex/puppet-body-host-layout-20261010"
+PRODUCTION = "codex/puppet-completion-device-20261011"
+HOST_BRANCH = "codex/puppet-completion-host-20261011"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 TEAM = "JQPWZ2RL9P"
-VERSION = "2.2.12"
+VERSION = "2.2.13"
 APPLE_APP_ID = "6791024001"
 CLI_VERSION = "0.70.0"
+CAST_IMAGES = {
+    'CharacterDellaArticulatedReview':(1254,1254),'CharacterDellaBustBody':(1254,1254),'CharacterDellaBustMask':(1254,1254),
+    'CharacterHarleyBustBody':(1024,1536),'CharacterHarleyBustMask':(1254,1254),
+    'CharacterHarleyFaces':(1254,1254),'CharacterHarleyMouths':(1254,1254),'CharacterHarleyNuance':(1254,1254),
+    'CharacterKianaFaces':(1254,1254),'CharacterKianaMouths':(1254,1254),'CharacterKianaNuance':(1254,1254),
+    'CharacterLillyBustBody':(1254,1254),'CharacterLillyFaces':(1254,1254),'CharacterLillyMouths':(1254,1254),'CharacterLillyNuance':(1254,1254),
+    'CharacterWitherspoonBustBody':(1024,1536),'CharacterWitherspoonFaces':(1254,1254),'CharacterWitherspoonMouths':(1254,1254),
+}
+CAST_DATA = 'CharacterAngelVectorArt'
 FAMILY_CERT_SHA256 = "204a2f30ebd65d84987704393bc972b750009d4690a10ff132f10fdf4886785d"
 FAMILY_SPKI_SHA256 = "fbaa89a5aae82c6ad496e471bfa1afb9db2f03850941cb322e741165840294c3"
 PROFILE_IDS = {"com.kademurdock.kadeai": "RG74TP8255", "com.kademurdock.kadeai.keyboard": "52LRHX7PMA",
@@ -265,10 +274,10 @@ def gate(source, receipt):
                              + str(run["run_attempt"]) + "/jobs?per_page=100")
         document = (source / ".github/workflows" / workflow).read_text(encoding="utf-8")
         steps = re.findall(r"^\s+- name: ([^\n]+)$", document, re.M)
-        require(len(steps) >= (14 if branch == HOST_BRANCH else 3)
+        require(len(steps) >= (17 if branch == HOST_BRANCH else 3)
                 and len(steps) == len(set(steps)), "Frozen proof step contract is missing")
         if branch == HOST_BRANCH:
-            require(all("id: " + value in document for value in ("ui-large", "ui-small", "native-ui-results", "host-capture")),
+            require(all("id: " + value in document for value in ("ui-large", "ui-small", "native-ui-results", "completion-ui", "completion-capture", "host-capture")),
                     "Complete native UI/capture gates must be present in proved source")
         records.append(proof(run, jobs, expected, branch, workflow, name, steps))
     count, source_digest = runner.inputs()
@@ -621,8 +630,19 @@ def sign(source, receipt):
         matches = [row for row in rows if row.get("Name") == "CharacterDellaArticulatedReview"]
         require(matches and all(row.get("AssetType") == "Image" and row.get("PixelWidth") == row.get("PixelHeight") == 1254
                                 for row in matches), "Actual signed Della catalog/name/dimensions changed")
+        images = {}
+        for name,pixels in CAST_IMAGES.items():
+            found = [row for row in rows if row.get('Name') == name]
+            require(found and all(row.get('AssetType') == 'Image'
+                    and type(row.get('PixelWidth')) is int and type(row.get('PixelHeight')) is int
+                    and (row['PixelWidth'],row['PixelHeight']) == pixels for row in found),
+                    'Actual signed all-cast image/name/dimensions changed: '+name)
+            images[name] = {'pixels':list(pixels),'matchingRenditions':len(found)}
+        data = [row for row in rows if row.get('Name') == CAST_DATA]
+        require(data and all(row.get('AssetType') == 'Data' for row in data),'Actual signed Angel vector data asset missing')
         catalogs[suffix] = {"sha256": sha(catalog), "bytes": catalog.stat().st_size, "matchingRenditions": len(matches),
-                            "name": "CharacterDellaArticulatedReview", "pixels": [1254, 1254], "nativeTool": tool}
+                            "name": "CharacterDellaArticulatedReview", "pixels": [1254, 1254], "nativeTool": tool,
+                            'requiredImages':images,'requiredDataAssets':[CAST_DATA]}
     for index, (name, identifier) in enumerate(BUNDLES.items()):
         for suffix, bundle in (("archive", archive_paths[0] / "Products/Applications" / name), ("ipa", payload / name)):
             metadata = signed_bundle(bundle, identifier, build, name.endswith(".appex"))
@@ -693,7 +713,7 @@ def main():
     parser.add_argument("phase", choices=("gate", "sign", "cleanup"))
     parser.add_argument("--app-source", type=Path)
     args = parser.parse_args()
-    receipt = {"schema": "kade.puppet-production-upload.v1", "phase": args.phase, "passed": False,
+    receipt = {"schema": "kade.puppet-production-upload.v2", "phase": args.phase, "passed": False,
                "uploadStatus": "not-started", "operations": [], "operationTimeoutSeconds": LIMIT,
                "reviewSubmissionRequested": False, "previousReviewCancelled": False,
                "betaGroupChangesRequested": False, "externalNotificationsRequested": False,

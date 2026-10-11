@@ -64,17 +64,21 @@ struct CharacterPuppetCompletionAuditView: View {
                 .task(id: phase) { await runPhase() }
             }
             Spacer(minLength: 0)
-            Text(status).accessibilityIdentifier("puppet-completion.status")
-            Text(renderer).accessibilityIdentifier("puppet-completion.renderer")
-            HStack {
-                Text(activeSamples).accessibilityIdentifier("puppet-completion.activeSamples")
-                Text(distinctVectors).accessibilityIdentifier("puppet-completion.distinctVectors")
-                Text(fps).accessibilityIdentifier("puppet-completion.fps")
-                Text(face).accessibilityIdentifier("puppet-completion.face")
-                Text(viseme).accessibilityIdentifier("puppet-completion.viseme")
-            }.font(.caption2)
+            VStack(spacing: 4) {
+                Text(status).accessibilityIdentifier("puppet-completion.status")
+                Text(renderer).font(.caption2).lineLimit(1).accessibilityIdentifier("puppet-completion.renderer")
+                HStack {
+                    Text(activeSamples).accessibilityIdentifier("puppet-completion.activeSamples")
+                    Text(distinctVectors).accessibilityIdentifier("puppet-completion.distinctVectors")
+                    Text(fps).accessibilityIdentifier("puppet-completion.fps")
+                    Text(face).accessibilityIdentifier("puppet-completion.face")
+                    Text(viseme).accessibilityIdentifier("puppet-completion.viseme")
+                }.font(.caption2)
+            }
+            // Metadata updates cannot move the measured stage after readiness.
+            .frame(height: 72)
             if CharacterPuppetCompletionAudit.uiDriven {
-                Button("Next sample") { if index + 1 < count { index += 1 } }
+                Button("Next sample") { if index + 1 < count { status = "pending"; index += 1 } }
                     .accessibilityIdentifier("puppet-completion.next")
                     .disabled(status != "ready" || index + 1 >= count)
             }
@@ -141,7 +145,7 @@ struct CharacterPuppetCompletionAuditView: View {
             for _ in 0..<600 {
                 guard !Task.isCancelled else { return }
                 if (try? String(contentsOf: acknowledgement, encoding: .utf8)) == phase {
-                    if index + 1 < count { index += 1 }
+                    if index + 1 < count { status = "pending"; index += 1 }
                     return
                 }
                 do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }

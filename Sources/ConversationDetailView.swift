@@ -1021,6 +1021,9 @@ struct ConversationDetailView: View {
          * revert is: delete this whole `.task(id:)` block. Nothing else depends
          * on it. */
         .task(id: sendState) {
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             guard voiceOverOn, case .sending = sendState else { return }
             guard !UIAccessibility.isReduceMotionEnabled,
                   UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
@@ -1061,6 +1064,9 @@ struct ConversationDetailView: View {
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draftInputSource = nil }
         }
         .onChange(of: sendState) { old, new in
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             if case .sending = new {
                 endSpeechWait()
                 let waitGeneration = speechWaitGeneration
@@ -2887,7 +2893,8 @@ struct ConversationDetailView: View {
         generatedTitle = "Offline Della layout check"
         readAloudEnabled = false
         thinkMode = .auto
-        sendState = .idle
+        sendState = scenario == .chatRoomy
+            && ProcessInfo.processInfo.environment["KADE_PUPPET_HOST_SENDING"] == "1" ? .sending : .idle
         let rows: [(Bool, String)] = [
             (true, "Can we talk about a quiet afternoon by the lake?"),
             (false, "Of course. We can sit on the porch, listen to the birds, and take our time."),
@@ -2984,7 +2991,7 @@ struct ConversationDetailView: View {
             keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize,
             competingControls: pendingAttachment != nil || attachmentIsBusy || pushCardOnScreen
-                || isSending || voiceInputError != nil,
+                || voiceInputError != nil,
             candidateEligible: eligible)
         #if DEBUG && targetEnvironment(simulator)
         if CharacterDellaHostAudit.isEnabled {

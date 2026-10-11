@@ -2,7 +2,7 @@ name: Della full host layout unsigned review
 
 'on':
   push:
-    branches: [codex/puppet-body-host-layout-20261010]
+    branches: [codex/puppet-completion-host-20261011]
     paths:
       - '.github/workflows/della-host-layout-review.yml'
       - 'dev/della-host-layout-audit.py'
@@ -34,10 +34,10 @@ jobs:
       github.event.repository.private == false &&
       toJSON(github.event.repository.private) == 'false' &&
       github.repository == 'kademurdock/kade-ai-native' &&
-      github.ref == 'refs/heads/codex/puppet-body-host-layout-20261010' &&
+      github.ref == 'refs/heads/codex/puppet-completion-host-20261011' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
-    # Two real phone devices and twenty-eight actual host cases,
+    # Two simulator phone device types and twenty-eight actual host cases,
     # and targeted UI-tree tests share one compiled app and a finite job budget.
     timeout-minutes: 55
     env:
@@ -80,7 +80,7 @@ jobs:
         timeout-minutes: 5
         run: bash run-character-tests.sh
 
-      - name: Require both real phone device types on installed iOS26.4
+      - name: Require both simulator phone device types on installed iOS26.4
         timeout-minutes: 5
         run: python3 dev/della-host-layout-audit.py preflight --expected-sha "$KADE_EXPECTED_COMMIT"
 
@@ -97,26 +97,26 @@ jobs:
         timeout-minutes: 16
         run: python3 dev/della-host-layout-audit.py build-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 
-      - name: Explicitly boot the actual Pro Max and require native readiness
+      - name: Explicitly boot the Pro Max simulator and require native readiness
         id: ui-boot-large
         if: ${{ always() && !cancelled() && steps.compiled-tests.outcome == 'success' }}
         timeout-minutes: 8
         run: python3 dev/della-host-layout-audit.py boot-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device large
 
-      - name: Test sixteen Pro Max cases with the exact compiled runner
+      - name: Test sixteen Pro Max simulator cases with the exact compiled runner
         id: ui-large
         if: ${{ always() && !cancelled() && steps.ui-boot-large.outcome == 'success' }}
         # Python retains the unchanged600-second test cap, then bounded cleanup.
         timeout-minutes: 12
         run: python3 dev/della-host-layout-audit.py run-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device large
 
-      - name: Explicitly boot the actual SE and require native readiness
+      - name: Explicitly boot the SE simulator and require native readiness
         id: ui-boot-small
         if: ${{ always() && !cancelled() && steps.compiled-tests.outcome == 'success' }}
         timeout-minutes: 8
         run: python3 dev/della-host-layout-audit.py boot-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device small
 
-      - name: Test eight SE cases with the exact compiled runner
+      - name: Test eight SE simulator cases with the exact compiled runner
         id: ui-small
         if: ${{ always() && !cancelled() && steps.ui-boot-small.outcome == 'success' }}
         # Python retains the unchanged480-second test cap, then bounded cleanup.
@@ -129,9 +129,21 @@ jobs:
         timeout-minutes: 2
         run: python3 dev/della-host-layout-audit.py ui-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 
+      - name: Require all-cast keyposes, motion stops and roomy sending with the exact compiled runner
+        id: completion-ui
+        if: ${{ always() && !cancelled() && steps.native-ui-results.outcome == 'success' }}
+        timeout-minutes: 12
+        run: python3 -B dev/puppet-completion-audit.py ui --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Capture twenty-one observed all-cast production keyposes
+        id: completion-capture
+        if: ${{ always() && !cancelled() && steps.completion-ui.outcome == 'success' }}
+        timeout-minutes: 6
+        run: python3 -B dev/puppet-completion-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
+
       - name: Capture twenty-eight silent hosts only after both UI groups pass
         id: host-capture
-        if: ${{ always() && !cancelled() && steps.native-ui-results.outcome == 'success' }}
+        if: ${{ always() && !cancelled() && steps.completion-capture.outcome == 'success' }}
         run: python3 dev/della-host-layout-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Always remove optional study catalog
@@ -142,5 +154,5 @@ jobs:
       - name: Emit bounded host PNG and receipt evidence through free logs
         timeout-minutes: 1
         if: ${{ always() }}
-        run: python3 dev/della-host-layout-audit.py emit --expected-sha "$KADE_EXPECTED_COMMIT"
+        run: python3 -B dev/puppet-completion-audit.py emit-all --expected-sha "$KADE_EXPECTED_COMMIT"
         # No artifact storage, cache, signing, app archive, deployment or release.

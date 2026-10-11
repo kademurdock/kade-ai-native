@@ -8,10 +8,10 @@ enum CharacterConversationHostReview {
     private enum Resources {
         // Static properties initialize independently, after the exact identity
         // gate. Opening Kiana never decodes the other characters' atlas packs.
-        static let kiana = present(CharacterMotion.kianaID, CharacterMotion.kianaFile)
-        static let harley = present(CharacterMotion.harleyID, CharacterMotion.harleyFile)
-        static let lilly = present(CharacterMotion.lillyID, CharacterMotion.lillyFile)
-        static let witherspoon = present(CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile)
+        static let kiana = CharacterConversationHostReview.present(CharacterMotion.kianaID, CharacterMotion.kianaFile)
+        static let harley = CharacterConversationHostReview.present(CharacterMotion.harleyID, CharacterMotion.harleyFile)
+        static let lilly = CharacterConversationHostReview.present(CharacterMotion.lillyID, CharacterMotion.lillyFile)
+        static let witherspoon = CharacterConversationHostReview.present(CharacterMotion.witherspoonID, CharacterMotion.witherspoonFile)
     }
     private static func present(_ id: String, _ file: String) -> Bool {
         guard let artwork = CharacterConversationBodyArtwork.approved(stage: true,

@@ -15,6 +15,52 @@ final class PuppetCompletionUITests: XCTestCase {
     ]
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testRoomySendingKeepsBodyAndComposer() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment = ["KADE_A11Y_AUDIT": "1", "KADE_CHARACTER_AUDIT": "1",
+            "KADE_DELLA_HOST_AUDIT": "1", "KADE_DELLA_HOST_CASE": "chat-roomy-light",
+            "KADE_PUPPET_HOST_SENDING": "1"]
+        app.launch()
+        let stop = app.buttons["della-host.chat.send"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        XCTAssertEqual(stop.label, "Stop")
+        XCTAssertTrue(stop.isEnabled && stop.isHittable)
+        XCTAssertGreaterThanOrEqual(stop.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(stop.frame.height, 44)
+        XCTAssertTrue(app.frame.insetBy(dx: -1, dy: -1).contains(stop.frame))
+        let matches = app.descendants(matching: .any).matching(identifier: "della-host.chat.composer-field")
+        XCTAssertEqual(matches.count, 1)
+        let field = matches.element(boundBy: 0)
+        XCTAssertTrue(field.elementType == .textField || field.elementType == .textView)
+        XCTAssertEqual(field.label, "Message")
+        XCTAssertTrue(app.frame.insetBy(dx: -1, dy: -1).contains(field.frame))
+        XCTAssertFalse(field.frame.intersects(stop.frame))
+        let observation = app.staticTexts["della-host.sending-geometry"]
+        XCTAssertTrue(observation.waitForExistence(timeout: 10))
+        let predicate = NSPredicate { object, _ in
+            ((object as? XCUIElement)?.label ?? "pending").hasPrefix("{")
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: observation)], timeout: 10), .completed)
+        let data = try XCTUnwrap(observation.label.data(using: .utf8))
+        let geometry = try JSONDecoder().decode([String: [Double]].self, from: data)
+        XCTAssertEqual(Set(geometry.keys), Set(["stage", "transcript", "composer"]))
+        func rectangle(_ name: String) throws -> CGRect {
+            let values = try XCTUnwrap(geometry[name])
+            XCTAssertEqual(values.count, 4)
+            XCTAssertTrue(values.allSatisfy { $0.isFinite })
+            return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        }
+        let stage = try rectangle("stage"), transcript = try rectangle("transcript"), composer = try rectangle("composer")
+        XCTAssertEqual(stage.height, 208 * 620 / 414 + 40, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(transcript.height, 44)
+        XCTAssertFalse(transcript.intersects(composer))
+        XCTAssertTrue(composer.insetBy(dx: -1, dy: -1).contains(field.frame))
+        XCTAssertTrue(composer.insetBy(dx: -1, dy: -1).contains(stop.frame))
+        XCTAssertFalse(stage.intersects(composer))
+        print("KADE_PUPPET_COMPLETION_UI_PHASE_PASS roomy-sending-light")
+        app.terminate()
+    }
+
     func testAllCastKeyposes() throws {
         let app = launch(events: false)
         let phases = people.flatMap { person in ["neutral", "gesturePeak", "settled"].map { person + "-" + $0 } }

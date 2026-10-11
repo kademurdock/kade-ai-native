@@ -28,7 +28,7 @@ sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/della-host-layout-audit'
 REPOSITORY='kademurdock/kade-ai-native'
-BRANCH='codex/puppet-body-host-layout-20261010'
+BRANCH='codex/puppet-completion-host-20261011'
 BUNDLE_ID='com.kademurdock.kadeai'
 APP=ROOT/'build/della-host-layout-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
 MASTER_SHA='285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2'
@@ -38,7 +38,7 @@ PINS={
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'7106b3783cddc4a6cc79d1d72cffed82b1e27d6eb8784674df67de8f8c7e6dd9',
+    'Sources/CharacterPortraitView.swift':'178fb8de50c540033cdcbd3c935129750adaeedd213307f9dfdab6e73c711aa8',
     'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(
@@ -57,6 +57,20 @@ SOURCE_INPUTS=(
     'dev/prepare-della-articulated-review.py','dev/validate-angel-vector.py',
     '.github/workflows/della-host-layout-review.yml','dev/della-host-layout-audit.py',
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/Contents.json',
+    'Sources/CharacterConversationBodyArtwork.swift','Sources/CharacterConversationBodyGeometry.swift',
+    'Sources/CharacterConversationBodyView.swift','Sources/CharacterConversationHostReview.swift',
+    'Sources/CharacterPuppetCompletionAudit.swift','Sources/CharacterPuppetCompletionAuditView.swift',
+    'UITests/PuppetCompletionUITests.swift','dev/puppet-completion-audit.py',
+    'Sources/CharacterPerformance.swift','Sources/CharacterFigureMotion.swift',
+    'Sources/CharacterAnimationBudget.swift','Sources/KadeMotionPolicy.swift',
+    'Sources/CharacterAngelVectorMotion.swift','Sources/CharacterAngelVectorView.swift',
+    'Sources/CharacterAngelVectorArt.swift','Sources/VoiceService.swift','Sources/StreamingCallService.swift',
+    'CharacterMotionTests/CharacterBodyPerformanceTests.swift',
+    'CharacterMotionTests/CharacterAnimationBudgetTests.swift',
+    'CharacterMotionTests/CharacterConversationBodyTests.swift',
+    'CharacterMotionTests/CharacterOutputEpisodeTests.swift',
+    'CharacterMotionTests/AngelVectorMotionTests.swift',
+    'dev/puppet-completion/protocol-tests.py',
 )
 HOST_MODEL_INPUTS=('Sources/CharacterDellaHostLayout.swift',
                    'CharacterMotionTests/CharacterDellaHostLayoutTests.swift')
@@ -154,7 +168,7 @@ PREFLIGHT_OUTPUT_BYTES=64*1024
 UI_SECONDS={'large':600,'small':480}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
-EXPECTED_MODEL_CHECKS=27192
+EXPECTED_MODEL_CHECKS=169750
 JOB_SECONDS=55*60
 OPERATION_SECONDS=52*60
 FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS
@@ -260,7 +274,7 @@ def required_phases():
             'Targeted two-device UI method/phase contract drift')
     require(all(re.fullmatch(r'(chat|call)-[a-z0-9-]+',phase) for phase in PHASES),
             'Invalid frozen host case label')
-    require(len(set(PINS)|set(SOURCE_INPUTS)|set(HOST_MODEL_INPUTS))==36 and len(PINS)==7
+    require(len(set(PINS)|set(SOURCE_INPUTS)|set(HOST_MODEL_INPUTS))==59 and len(PINS)==7
             and PINS.get('Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png')==MASTER_SHA
             and 'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/Contents.json' in SOURCE_INPUTS,
             'Exact registered production source/catalog pin contract drift')
@@ -301,7 +315,7 @@ def source(expected,clean=False,require_staged=False):
     declared=set(re.findall(r'\bfunc (test[A-Za-z]+)\(',
                             (ROOT/'UITests/DellaHostControlsUITests.swift').read_text(encoding='utf-8')))
     require(declared==set(UI_METHODS),'Exact native UI method/device selector source drift')
-    return {'schema':'kade.della-host-native-source.v1','sha':expected,'repository':REPOSITORY,
+    return {'schema':'kade.della-host-native-source.v2','sha':expected,'repository':REPOSITORY,
             'branch':BRANCH,'inputs':inputs,'checkedAtUtc':now(),'unsignedSimulatorOnly':True,
             'releasePublished':False,'physicalPhoneVerified':False,'batteryPerformanceVerified':False,
             'physicalVoiceOverVerified':False,'audioStarted':False,'microphoneStarted':False,
@@ -471,7 +485,7 @@ def compiled_tests(expected,emit_inventory=True):
                 and (path/executable).is_file() and (path/executable).stat().st_size<=512*1024*1024,
                 'Compiled '+role+' executable missing or unbounded')
         if role=='app':
-            require(info.get('CFBundleShortVersionString')=='2.2.12' and str(info.get('CFBundleVersion'))=='100'
+            require(info.get('CFBundleShortVersionString')=='2.2.13' and str(info.get('CFBundleVersion'))=='100'
                     and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                     'Compiled app version/orientation drift')
         artifacts[role]={'path':str(path.relative_to(ROOT)),'bundleId':identities[role],
@@ -841,14 +855,17 @@ def sanitize_ui_line(line):
     return ''.join(character for character in line if character=='\t' or ord(character)>=32)[:320]
 
 
-def observe_ui_line(report,line,key):
-    methods=ui_methods(key)
+def observe_ui_line(report,line,key,completion=False):
+    methods=({'testAllCastKeyposes':'allCastKeyposes',
+              'testCompactAndMotionPolicies':'compactAndMotionPolicies',
+              'testRoomySendingKeepsBodyAndComposer':'roomySendingLight'} if completion else ui_methods(key))
     if re.search(r'Command line invocation:|xcodebuild |Build settings from command line:|Testing started|Test Suite .* started|Selected tests|Preparing|Writing result bundle|[Ss]imulator|destination',line):
         report['startupMessages']=(report['startupMessages']+[sanitize_ui_line(line)])[-6:]
     if re.search(r'\bt\s*=\s*[0-9.]+s?\s+(Launch|Wait for|Find|Get number|Checking|Query|Tap|Scroll|Swipe)\b',line):
         report['activityMessages']=(report['activityMessages']+[sanitize_ui_line(line)])[-12:]
     if 'Testing started' in line or re.search(r'Test Suite .* started',line): report['startupStage']='testingStarted'
-    match=re.search(r'Test Case [^\r\n]{0,180}DellaHostControlsUITests[ .]+(test[A-Za-z]+)'
+    test_class='PuppetCompletionUITests' if completion else 'DellaHostControlsUITests'
+    match=re.search(r'Test Case [^\r\n]{0,180}'+test_class+r'[ .]+(test[A-Za-z]+)'
                     r'[^\r\n]{0,8} (started|passed|failed)(?: \(([0-9.]+) seconds\))?',line)
     if match and match[1] in methods:
         method,state,duration=match.groups();entry=report['testMethods'].setdefault(method,{'phase':methods[method]})
@@ -856,7 +873,8 @@ def observe_ui_line(report,line,key):
         if state=='started': report['lastStartedMethod']=method
         if duration is not None and number(float(duration)) and 0<=float(duration)<=3600:
             entry['durationSeconds']=float(duration)
-        print('KADE_DELLA_HOST_UI_TEST '+json.dumps({'device':key,'method':method,**entry},separators=(',',':')),flush=True)
+        print(('KADE_PUPPET_COMPLETION_UI_TEST ' if completion else 'KADE_DELLA_HOST_UI_TEST ')
+              +json.dumps({'device':key,'method':method,**entry},separators=(',',':')),flush=True)
     if re.search(r'\berror:|XCTAssert|failed -|Error Domain|Failed to|Unable to|Testing failed|\*\* TEST FAILED \*\*|KADE_DELLA_HOST_CONTROLS_FAILED',line):
         bounded=sanitize_ui_line(line)
         report['failureLines']=(report['failureLines']+[bounded])[-12:]
@@ -930,9 +948,13 @@ def ui_launch_record(initial,key):
             'exitCode':None,'startedAtUtc':now(),'status':'startupFailed'}
 
 
-def run_ui(expected,key):
+def run_ui(expected,key,completion=False):
     initial=initial_source(expected)
     report=ui_launch_record(initial,key)
+    if completion:
+        require(key=='large','Completion UI uses the proved Pro Max runner')
+        report['schema']='kade.puppet-completion-ui-launch.v1'
+    prefix='completion' if completion else key
     started=time.monotonic();process=None
     try:
         require(sys.platform=='darwin','Bounded native UI launch requires standard macOS')
@@ -946,19 +968,20 @@ def run_ui(expected,key):
                                 'UI launch app/runner differs from the actual offline app preflight')
         identifier=simulator_record(expected)['devices'][key]['identifier']
         require(identifier==boot['identifier'],'UI launch device differs from explicit boot')
-        bundle=OUT/('ui-tests-'+key+'.xcresult')
+        bundle=OUT/('ui-tests-'+prefix+'.xcresult')
         require(not bundle.exists(),'Refusing to overwrite a native UI result bundle')
         command=['xcodebuild','-jobs','2','test-without-building','-xctestrun',str(ROOT/compiled['xctestrun']),
                  '-destination','platform=iOS Simulator,id='+identifier,'-resultBundlePath',str(bundle),
                  '-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1',
-                 *['-only-testing:KadeAIUITests/DellaHostControlsUITests/'+method for method in ui_methods(key)],
+                 *['-only-testing:KadeAIUITests/'+('PuppetCompletionUITests' if completion else 'DellaHostControlsUITests')+'/'+method
+                   for method in (('testAllCastKeyposes','testCompactAndMotionPolicies','testRoomySendingKeepsBodyAndComposer') if completion else ui_methods(key))],
                  'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=']
         effective=operation_remaining(UI_SECONDS[key]);report['effectiveTimeoutSeconds']=effective
         process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
                                  start_new_session=True,bufsize=0,cwd=ROOT)
         report['startupStage']='processStarted';report['status']='running';launched=time.monotonic()
         deadline=launched+effective;raw_bytes=0;pending=b'';drain_deadline=None
-        with (OUT/('ui-tests-'+key+'.log')).open('wb') as log, selectors.DefaultSelector() as selector:
+        with (OUT/('ui-tests-'+prefix+'.log')).open('wb') as log, selectors.DefaultSelector() as selector:
             selector.register(process.stdout,selectors.EVENT_READ)
             while selector.get_map():
                 if time.monotonic()>=deadline and process.poll() is None:
@@ -977,10 +1000,10 @@ def run_ui(expected,key):
                         report['logLimitExceeded']=True;report['status']='logLimit';stop_ui_process(process)
                     pending+=chunk
                     while b'\n' in pending:
-                        line,pending=pending.split(b'\n',1);observe_ui_line(report,line[:4096].decode('utf-8','replace'),key)
+                        line,pending=pending.split(b'\n',1);observe_ui_line(report,line[:4096].decode('utf-8','replace'),key,completion)
                     if len(pending)>4096: pending=pending[-4096:]
                 if process.poll() is not None and not selector.get_map(): break
-            if pending: observe_ui_line(report,pending.decode('utf-8','replace'),key)
+            if pending: observe_ui_line(report,pending.decode('utf-8','replace'),key,completion)
         report['testElapsedSeconds']=round(time.monotonic()-launched,3)
         report['exitCode']=process.wait(timeout=UI_STOP_SECONDS)
         if not report['timedOut'] and not report['logLimitExceeded']:
@@ -999,9 +1022,9 @@ def run_ui(expected,key):
                 report.update(passed=False,cleanupErrorType=type(error).__name__)
             report['exitCode']=process.poll()
         report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
-        save('ui-run-'+key+'.json',report)
+        save('ui-run-'+prefix+'.json',report)
         for line in report['failureLines']: print('KADE_DELLA_HOST_UI_FAILURE '+line,flush=True)
-        print('KADE_DELLA_HOST_UI_LAUNCH '+json.dumps({name:report[name] for name in
+        print(('KADE_PUPPET_COMPLETION_UI_LAUNCH ' if completion else 'KADE_DELLA_HOST_UI_LAUNCH ')+json.dumps({name:report[name] for name in
               ('device','status','startupStage','timedOut','logLimitExceeded','lastStartedMethod','exitCode')},separators=(',',':')),flush=True)
     return report
 
@@ -1315,14 +1338,14 @@ def capture(expected):
     try:
         require(APP.is_dir(),'Unsigned Debug host app missing')
         info=plistlib.loads((APP/'Info.plist').read_bytes())
-        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.12'
+        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.13'
                 and str(info.get('CFBundleVersion'))=='100','Built app identity/version drift')
         require(info.get('DTPlatformName')=='iphonesimulator'
                 or 'iPhoneSimulator' in info.get('CFBundleSupportedPlatforms',[]),'App is not the simulator target')
         require(info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                 'Host review must retain the actual phone portrait-only app declaration')
         require(not (APP/'_CodeSignature').exists(),'Signed app appeared in unsigned host review')
-        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.12','buildVersion':'100',
+        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.13','buildVersion':'100',
                              'platform':'iphonesimulator','infoPlistSha256':sha(APP/'Info.plist'),
                              'developerSigningIdentityUsed':False}
         for key,device in records.items():

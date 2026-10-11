@@ -73,7 +73,11 @@ enum CharacterDellaHostAudit {
 /// and transcript/composer remain intact. No API request or media is started.
 struct CharacterDellaHostAuditView: View {
     @EnvironmentObject private var client: KadeAPIClient
+    @State private var sendingGeometry = "pending"
     private var scenario: CharacterDellaHostAudit.Scenario? { CharacterDellaHostAudit.scenario }
+    private var sendingAudit: Bool {
+        scenario == .chatRoomy && ProcessInfo.processInfo.environment["KADE_PUPPET_HOST_SENDING"] == "1"
+    }
 
     var body: some View {
         Group {
@@ -91,6 +95,28 @@ struct CharacterDellaHostAuditView: View {
         }
         .preferredColorScheme(scenario?.dark == true ? .dark : .light)
         .environment(\.dynamicTypeSize, scenario?.accessibility == true ? .accessibility5 : .large)
+        .overlay(alignment: .topTrailing) {
+            if sendingAudit {
+                Text(sendingGeometry).font(.caption2).lineLimit(1)
+                    .accessibilityIdentifier("della-host.sending-geometry")
+            }
+        }
+        .task {
+            guard sendingAudit else { return }
+            for _ in 0..<30 {
+                let geometry = CharacterDellaHostAuditRecorder.geometry
+                if let stage = geometry["stage"], let transcript = geometry["transcript"],
+                   let composer = geometry["composer"], stage.height > 0,
+                   transcript.height > 0, composer.height > 0 {
+                    let observed = ["stage": stage, "transcript": transcript, "composer": composer]
+                        .mapValues { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] }
+                    if let data = try? JSONSerialization.data(withJSONObject: observed, options: [.sortedKeys]),
+                       let text = String(data: data, encoding: .utf8) { sendingGeometry = text }
+                    return
+                }
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+            }
+        }
     }
 }
 

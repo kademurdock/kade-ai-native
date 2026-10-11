@@ -88,8 +88,8 @@ jobs:
       - name: Reuse approved family signing material and upload only
         if: ${{ steps.proof-gates.outcome == 'success' }}
         env:
-          # These are deliberately unconfigured. Provisioning this new CI
-          # destination and using it require the user's final approval.
+          # Existing encrypted repository secrets were explicitly approved.
+          # Reuse them; this workflow does not provision or rotate private keys.
           KADE_FAMILY_CERT_KEY_BASE64: ${{ secrets.KADE_FAMILY_CERT_KEY_BASE64 }}
           KADE_ASC_ISSUER_ID: ${{ secrets.KADE_ASC_ISSUER_ID }}
           KADE_ASC_KEY_ID: ${{ secrets.KADE_ASC_KEY_ID }}
