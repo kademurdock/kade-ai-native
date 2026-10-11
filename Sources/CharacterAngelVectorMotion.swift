@@ -4,7 +4,7 @@ import Foundation
 /// master geometry; they never select another character's image or move a
 /// mouth independently of its head. Eyebrow offsets are fractions of the
 /// authored eye height, slopes and smile curvature are signed -1...1.
-struct AngelVectorFacialPose {
+struct AngelVectorFacialPose: Equatable {
     let leftEye: Double
     let rightEye: Double
     let leftBrow: Double
@@ -16,6 +16,67 @@ struct AngelVectorFacialPose {
     let smile: Double
     let cheekLift: Double
     let restingMouth: Double
+
+    func interpolated(to other: Self, amount: Double) -> Self {
+        let p = amount.isFinite ? min(1, max(0, amount)) : 1
+        if p == 0 { return self }
+        if p == 1 { return other }
+        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * p }
+        return Self(leftEye: mix(leftEye, other.leftEye), rightEye: mix(rightEye, other.rightEye),
+            leftBrow: mix(leftBrow, other.leftBrow), rightBrow: mix(rightBrow, other.rightBrow),
+            leftBrowSlope: mix(leftBrowSlope, other.leftBrowSlope),
+            rightBrowSlope: mix(rightBrowSlope, other.rightBrowSlope),
+            gazeX: mix(gazeX, other.gazeX), gazeY: mix(gazeY, other.gazeY),
+            smile: mix(smile, other.smile), cheekLift: mix(cheekLift, other.cheekLift),
+            restingMouth: mix(restingMouth, other.restingMouth))
+    }
+
+    func withBlink(_ blink: Double, gazeX x: Double = 0, gazeY y: Double = 0) -> Self {
+        let aperture = 1 - (blink.isFinite ? min(1, max(0, blink)) : 0)
+        return Self(leftEye: leftEye * aperture, rightEye: rightEye * aperture,
+            leftBrow: leftBrow, rightBrow: rightBrow,
+            leftBrowSlope: leftBrowSlope, rightBrowSlope: rightBrowSlope,
+            gazeX: min(0.4, max(-0.4, gazeX + x)), gazeY: min(0.4, max(-0.4, gazeY + y)),
+            smile: smile, cheekLift: cheekLift, restingMouth: restingMouth)
+    }
+}
+
+/// One portrait-owned transition on the existing TimelineView. It interpolates
+/// contours, rather than cross-fading duplicate eyes, brows or mouths. No timer
+/// or publisher is needed, and a policy stop clears the pending transition.
+final class AngelVectorFaceClock {
+    static let transitionDuration = 0.28
+    private var targetFace: CharacterFace?
+    private var startTime = 0.0
+    private var from = AngelVectorMotion.facial(.neutral, blink: 0, active: true)
+    private var target = AngelVectorMotion.facial(.neutral, blink: 0, active: true)
+
+    func reset() { targetFace = nil }
+
+    func pose(face: CharacterFace, blink: Double, time: Double, active: Bool,
+              activity: CharacterActivity) -> AngelVectorFacialPose {
+        guard active, time.isFinite, time >= 0 else {
+            reset()
+            return AngelVectorMotion.facial(.neutral, blink: 0, active: false)
+        }
+        func current() -> AngelVectorFacialPose {
+            let p = min(1, max(0, (time - startTime) / Self.transitionDuration))
+            return from.interpolated(to: target, amount: p * p * (3 - 2 * p))
+        }
+        if targetFace == nil || time < startTime {
+            targetFace = face
+            target = AngelVectorMotion.facial(face, blink: 0, active: true)
+            from = target
+            startTime = time
+        } else if targetFace != face {
+            from = current()
+            target = AngelVectorMotion.facial(face, blink: 0, active: true)
+            targetFace = face
+            startTime = time
+        }
+        let glance = AngelVectorMotion.attention(time: time, activity: activity)
+        return current().withBlink(blink, gazeX: glance.0, gazeY: glance.1)
+    }
 }
 
 /// The authored mouth box supplies width and height. Aperture is a geometric
@@ -105,8 +166,8 @@ enum AngelVectorMotion {
     /// Same semantic visemes as CharacterMotion. Noise/pause/old owner already
     /// produce role zero at the caller. `active` additionally enforces still art.
     static func mouth(role: Int, strength: Double, face: CharacterFace,
-                      active: Bool) -> AngelVectorMouthPose {
-        let expression = facial(face, blink: 0, active: active)
+                      active: Bool, facialPose: AngelVectorFacialPose? = nil) -> AngelVectorMouthPose {
+        let expression = facialPose ?? facial(face, blink: 0, active: active)
         guard active else {
             return AngelVectorMouthPose(width: 1, aperture: 0,
                 roundness: 0.25, smile: expression.smile,
@@ -153,14 +214,24 @@ enum AngelVectorMotion {
     /// output energy parks the entire clasp during silence and other speakers.
     static func arms(time: Double, level: Double, active: Bool,
                      presentation: CharacterPresentation,
-                     performanceElapsed: Double? = nil) -> AngelVectorArmPose {
-        guard active, time.isFinite, time >= 0, level.isFinite,
-              presentation.activity == .speaking else { return .still }
-        let audio = min(1, max(0, (level - 0.008) * 5))
+                     performanceElapsed: Double? = nil,
+                     performance: CharacterBodyPerformanceSample? = nil) -> AngelVectorArmPose {
+        guard active, time.isFinite, time >= 0, level.isFinite else { return .still }
+        if presentation.activity == .listening || presentation.activity == .thinking {
+            let cycle = time.truncatingRemainder(dividingBy: 23)
+            let acknowledgement = CharacterFigureMotion.pulse(cycle,
+                start: presentation.activity == .thinking ? 5 : 15,
+                rise: 0.85, hold: 0.45, fall: 1.4)
+            return AngelVectorArmPose(degrees: -0.45 * acknowledgement,
+                offsetX: 0, offsetY: -0.0025 * acknowledgement)
+        }
+        guard presentation.activity == .speaking else { return .still }
+        let audio = performance?.energy ?? min(1, max(0, (level - 0.008) * 5))
         guard audio > 0 else { return .still }
         let elapsed = performanceElapsed ?? presentation.elapsed
-        let gesture = CharacterFigureMotion.gestureEnvelope(elapsed: elapsed,
-            tempo: CharacterFigureMotion.profile(id: CharacterMotion.angelID).tempo)
+        let tempo = CharacterFigureMotion.profile(id: CharacterMotion.angelID).tempo
+        let gesture = performance.map { CharacterFigureMotion.gestureEnvelope(performance: $0, tempo: tempo) }
+            ?? CharacterFigureMotion.gestureEnvelope(elapsed: elapsed, tempo: tempo)
         guard gesture > 0 else { return .still }
         let recipe: (Double, Double, Double)
         switch presentation.expression {
@@ -178,6 +249,26 @@ enum AngelVectorMotion {
         let amount = gesture * audio
         return AngelVectorArmPose(degrees: recipe.0 * amount,
             offsetX: recipe.1 * amount, offsetY: recipe.2 * amount)
+    }
+
+    /// Sparse glances always settle back toward the person. A thinking glance
+    /// looks slightly away/up; listening briefly re-centers after a side glance.
+    /// This is local attention choreography, not an inferred emotional state.
+    static func attention(time: Double, activity: CharacterActivity) -> (Double, Double) {
+        guard time.isFinite, time >= 0 else { return (0, 0) }
+        let cycle = time.truncatingRemainder(dividingBy: 29)
+        switch activity {
+        case .thinking:
+            let amount = CharacterFigureMotion.pulse(cycle, start: 3.2, rise: 0.7, hold: 1.1, fall: 1.2)
+            return (-0.14 * amount, -0.10 * amount)
+        case .listening:
+            let amount = CharacterFigureMotion.pulse(cycle, start: 17.4, rise: 0.65, hold: 0.25, fall: 0.9)
+            return (0.11 * amount, 0.025 * amount)
+        case .idle:
+            let amount = CharacterFigureMotion.pulse(cycle, start: 24.5, rise: 0.85, hold: 0.2, fall: 1.0)
+            return (-0.08 * amount, 0)
+        case .speaking: return (0, 0)
+        }
     }
 
     /// Uses the portrait's shared time/active state. No timer, random positions,

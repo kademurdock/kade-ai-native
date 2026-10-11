@@ -2973,9 +2973,12 @@ struct ConversationDetailView: View {
         let side = CharacterStageLayout.chatSide(height: Double(tall), keyboard: keyboardUp,
             compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
-        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId
+        let offeredOutput = voiceService.characterPresentation()
+        let holdsOutput = offeredOutput.outputPhase == .queuedGap || offeredOutput.outputPhase == .paused
+        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId)
+            : (holdsOutput ? (offeredOutput.outputSpeakerID ?? selectedAgentId) : selectedAgentId)
         let avatar = agentsService.agents.first { $0.id == portraitAgentID }?.avatar?.filepath
-        let eligible = CharacterDellaHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
+        let eligible = CharacterConversationHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
             agentID: portraitAgentID, avatarPath: avatar)
         let hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
             keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
@@ -3004,7 +3007,8 @@ struct ConversationDetailView: View {
                 name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
-                    if voiceService.isClipPlaying { return voiceService.characterPresentation() }
+                    let output = voiceService.characterPresentation()
+                    if output.outputPhase != .stopped { return output }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
                 }, hostLayout: hostLayout)
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
@@ -4058,7 +4062,8 @@ struct ConversationDetailView: View {
                                 text: piece,
                                 agentId: selectedAgentId,
                                 agentName: agentDisplayLabel,
-                                key: nil
+                                key: nil,
+                                replyScopeKey: turnRequestId
                             )
                         }
                     }
@@ -4284,7 +4289,8 @@ struct ConversationDetailView: View {
                         text: piece,
                         agentId: selectedAgentId,
                         agentName: agentDisplayLabel,
-                        key: nil
+                        key: nil,
+                        replyScopeKey: turnRequestId
                     )
                 }
                 /* PART 92.13 — hand the streamed reply its id now that one

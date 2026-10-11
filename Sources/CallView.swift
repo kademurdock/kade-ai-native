@@ -334,7 +334,7 @@ struct CallView: View {
             width: Double(geometry.size.width), height: Double(geometry.size.height),
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
         let avatarPath = agentsService.agents.first { $0.id == agentId }?.avatar?.filepath
-        let candidateEligible = CharacterDellaHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
+        let candidateEligible = CharacterConversationHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
             agentID: agentId, avatarPath: avatarPath)
         let layout = CharacterDellaHostLayout.call(preferredSide: preferredSide,
             availableHeight: Double(geometry.size.height),

@@ -19,7 +19,8 @@ enum CharacterDellaArmMotion {
 
     static func pose(time: Double, level: Double, active: Bool,
                      presentation: CharacterPresentation,
-                     performanceElapsed: Double? = nil) -> CharacterDellaArmPose {
+                     performanceElapsed: Double? = nil,
+                     performance: CharacterBodyPerformanceSample? = nil) -> CharacterDellaArmPose {
         guard active, time.isFinite, time >= 0, level.isFinite, level >= 0 else { return .still }
         switch presentation.activity {
         case .idle, .thinking:
@@ -27,7 +28,8 @@ enum CharacterDellaArmMotion {
         case .listening:
             // A small, slow acknowledgement followed by a long rest. Output
             // audio cannot enlarge it; this is an attentive listening pose.
-            let cycle = time.truncatingRemainder(dividingBy: listeningPeriod)
+            let attention = performance?.attentionVariant ?? 0
+            let cycle = (time + Double(attention) * 2.1).truncatingRemainder(dividingBy: listeningPeriod)
             let acknowledgement = CharacterFigureMotion.pulse(cycle,
                 start: 14, rise: 0.75, hold: 0.4, fall: 1.25)
             return CharacterDellaArmPose(viewerLeftDegrees: -0.25 * acknowledgement,
@@ -35,13 +37,14 @@ enum CharacterDellaArmMotion {
         case .speaking:
             let elapsed = performanceElapsed ?? presentation.elapsed
             guard elapsed.isFinite, elapsed >= 0 else { return .still }
-            let energy = min(1, max(0, (level - 0.008) * 5))
+            let energy = performance?.energy ?? min(1, max(0, (level - 0.008) * 5))
             guard energy > 0 else { return .still }
             // Reuse the established turn's entrance/hold/settle and softer
             // follow-throughs at Della's slower pace. A later sentence cannot
             // replay the entrance when the shared performance clock is passed.
-            let gesture = CharacterFigureMotion.gestureEnvelope(elapsed: elapsed,
-                tempo: CharacterFigureMotion.profile(id: CharacterMotion.dellaID).tempo)
+            let tempo = CharacterFigureMotion.profile(id: CharacterMotion.dellaID).tempo
+            let gesture = performance.map { CharacterFigureMotion.gestureEnvelope(performance: $0, tempo: tempo) }
+                ?? CharacterFigureMotion.gestureEnvelope(elapsed: elapsed, tempo: tempo)
             guard gesture > 0 else { return .still }
             let recipe: (Double, Double)
             switch presentation.expression {

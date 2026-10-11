@@ -56,7 +56,7 @@ enum CharacterMotion {
     /// oo, 5 spread ee, 6 pressed, 7 teeth together, 8 wide open.
     static func viseme(time: Double, strength: Double, seed: UInt32) -> Int {
         guard strength.isFinite, strength > 0.06, time.isFinite, time >= 0 else { return 0 }
-        let slot = UInt32(truncatingIfNeeded: Int(time / 0.14))
+        let slot = UInt32(min(4294967295, time.truncatingRemainder(dividingBy: 4294967296 * 0.14) / 0.14))
         var h: UInt32 = ((slot &+ 1) &* 2654435761) ^ seed
         h = (h ^ (h >> 15)) &* 2246822519
         let r = Double(h ^ (h >> 13)) / 4294967296.0
@@ -64,44 +64,66 @@ enum CharacterMotion {
         if strength < 0.55 { return r < 0.45 ? 2 : (r < 0.75 ? 5 : 4) }
         return r < 0.4 ? 3 : (r < 0.75 ? 8 : 2)
     }
-    static func pose(id: String, time: Double, level: Double, active: Bool, presentation: CharacterPresentation = .idle) -> CharacterPose {
+    static func pose(id: String, time: Double, level: Double, active: Bool,
+                     presentation: CharacterPresentation = .idle,
+                     performance: CharacterBodyPerformanceSample? = nil) -> CharacterPose {
         guard active, time.isFinite, time >= 0 else { return .still }
         // Stable per-character phase; no synchronized marching portraits.
         let seed = id.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
         let phase = Double(seed % 1000) / 1000
         let period = 4.3 + phase * 0.8
-        let t = time + phase * period
-        let blinkPhase = t.truncatingRemainder(dividingBy: period)
-        let secondBlink = floor(t / period).truncatingRemainder(dividingBy: 3) == 1 && blinkPhase > period - 0.52 && blinkPhase < period - 0.36
+        let blinkTime = time.truncatingRemainder(dividingBy: period) + phase * period
+        let blinkPhase = blinkTime.truncatingRemainder(dividingBy: period)
+        let secondBlink = (floor(time / period) + floor(blinkTime / period)).truncatingRemainder(dividingBy: 3) == 1 && blinkPhase > period - 0.52 && blinkPhase < period - 0.36
         let blink = secondBlink ? sin((blinkPhase - period + 0.52) / 0.16 * .pi) : (blinkPhase > period - 0.2 ? sin((blinkPhase - period + 0.2) / 0.2 * .pi) : 0)
-        let mouth = level.isFinite ? max(0, min(1, (level - 0.008) * 5)) : 0
+        let holdsOutput = presentation.outputPhase == .queuedGap || presentation.outputPhase == .paused
+            || presentation.outputPhase == .stopped
+        let mouth = level.isFinite && !holdsOutput ? max(0, min(1, (level - 0.008) * 5)) : 0
         let rig = rigID(id)
         let tempo = rig == dellaID ? 0.72 : (rig == harleyID ? 0.83 : (rig == lillyID ? 1.18 : 1.0))
+        let motionTime = performance?.activityElapsed ?? time
+        let t = (motionTime.isFinite && motionTime >= 0 ? motionTime : 0)
+            .truncatingRemainder(dividingBy: 120 * .pi) + phase * period
+        let bodyEnergy = min(1, max(0, performance?.energy ?? mouth))
         var tilt = sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32
-        var lift = sin(t * 1.1 * tempo) * (0.18 + mouth * 0.4)
+        var lift = sin(t * 1.1 * tempo) * (0.18 + bodyEnergy * 0.4)
         if presentation.activity == .listening {
-            let nod = t.truncatingRemainder(dividingBy: 7.3)
-            lift += nod > 6.4 ? sin((nod - 6.4) / 0.9 * .pi) * 0.75 : 0
+            let attention = Double(performance?.attentionVariant ?? 0)
+            let period = performance == nil ? 7.3 : 11.2 + attention * 1.8
+            let nod = t.truncatingRemainder(dividingBy: period)
+            let start = performance == nil ? 6.4 : 3.0 + attention * 1.4
+            lift += CharacterFigureMotion.pulse(nod, start: start, rise: 0.24, hold: 0.10, fall: 0.72) * 0.75
             tilt *= 1.3
         } else if presentation.activity == .thinking { tilt += 0.5 * tempo }
-        let gesture = sin(min(max(0, presentation.elapsed), 1) * .pi)
-        if presentation.expression == .amused { lift += gesture * 0.75 }
-        if presentation.expression == .skeptical { tilt += gesture * 0.8 }
-        if presentation.expression == .concerned { tilt -= gesture * 0.5 }
+        let gesture = performance.map { CharacterFigureMotion.gestureEnvelope(performance: $0, tempo: tempo) }
+            ?? sin(min(max(0, presentation.elapsed.isFinite ? presentation.elapsed : 0), 1) * .pi)
+        func authoredPosture(_ expression: CharacterExpression) -> (tilt: Double, lift: Double) {
+            switch expression {
+            case .amused: return (0, gesture * 0.75)
+            case .skeptical: return (gesture * 0.8, 0)
+            case .concerned: return (-gesture * 0.5, 0)
+            default: return (0, 0)
+            }
+        }
+        let old = authoredPosture(performance?.previousExpression ?? presentation.expression)
+        let next = authoredPosture(presentation.expression)
+        let mix = min(1, max(0, performance?.expressionBlend ?? 1))
+        tilt += old.tilt + (next.tilt - old.tilt) * mix
+        lift += old.lift + (next.lift - old.lift) * mix
         let energy = rig == dellaID ? 0.72 : (rig == harleyID ? 0.82 : (rig == lillyID ? 1.15 : 1.0))
         let quiet: Double = [.sad, .tired, .serious, .concerned, .afraid].contains(presentation.expression) ? 0.45 : 1
         let beat = (t * tempo).truncatingRemainder(dividingBy: 8.6)
         let nod = beat > 6.7 ? pow(sin((beat - 6.7) / 1.9 * .pi), 2) : 0
         if animatedIDs.contains(id) {
             tilt += (sin(t * tempo * 0.43) * 0.75 + sin(t * tempo * 0.19) * 0.45) * energy * quiet
-            lift += (nod * 1.5 + sin(t * tempo * 1.25) * mouth * 0.65) * energy * quiet
+            lift += (nod * 1.5 + sin(t * tempo * 1.25) * bodyEnergy * 0.65) * energy * quiet
         }
         tilt = max(-2.8, min(2.8, tilt))
         lift = max(-3.2, min(3.2, lift))
         return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
-            brow: presentation.expression == .neutral ? mouth * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - mouth) : 0,
+            brow: presentation.expression == .neutral ? bodyEnergy * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - bodyEnergy) : 0,
             viseme: viseme(time: time, strength: mouth, seed: seed),
-            scale: animatedIDs.contains(id) ? 1.012 + sin(t * tempo * 0.85) * 0.004 + mouth * 0.012 * quiet : 1)
+            scale: animatedIDs.contains(id) ? 1.012 + sin(t * tempo * 0.85) * 0.004 + bodyEnergy * 0.012 * quiet : 1)
     }
 }
 

@@ -33,8 +33,9 @@ struct CharacterBustMotionLimits {
         headOffsetPixels: 1.7, bodyOffsetPixels: 0)
 }
 
-/// Native close busts preserve the approved face atlas. Each supporting body is
-/// one plate; independent arm/hand rigs remain a separate future art contract.
+/// Close framing and source registration for the immutable approved atlas.
+/// Tall conversation hosts reuse these heads with the articulated body
+/// compositor; compact hosts retain the original supporting plates.
 struct CharacterBustArtwork {
     let bodyAsset: String
     let maskAsset: String?

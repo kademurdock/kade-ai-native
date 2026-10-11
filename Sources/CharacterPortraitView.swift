@@ -38,6 +38,7 @@ struct CharacterPortraitView: View {
     var angelArmAudit: AngelVectorArmPose? = nil
     var dellaArmAudit: CharacterDellaArmPose? = nil
     var dellaHeadAudit: CharacterBustPose? = nil
+    var completionAuditSample: CharacterPuppetCompletionSample? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
     @Environment(\.scenePhase) private var scenePhase
@@ -46,6 +47,7 @@ struct CharacterPortraitView: View {
     @State private var visible = false
     @State private var onScreen = true
     @State private var bodyClock = CharacterBodyPerformanceClock()
+    @State private var angelFaceClock = AngelVectorFaceClock()
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
@@ -67,8 +69,16 @@ struct CharacterPortraitView: View {
         return CharacterDellaHostReview.available(enabled: dellaArticulatedReview,
             stage: stage, side: side, agentID: agentID, avatarPath: path)
     }
+    private var conversationBodyArtwork: CharacterConversationBodyArtwork? {
+        guard dellaArticulatedReview,
+              CharacterConversationHostReview.available(enabled: true, stage: stage,
+                side: side, agentID: agentID, avatarPath: path) else { return nil }
+        return CharacterConversationBodyArtwork.approved(stage: stage, side: side,
+            agentID: agentID, avatarPath: path)
+    }
     private var renderedPortraitHeight: Double {
         if articulatedDellaAvailable { return CharacterDellaArticulatedGeometry.stageHeight(side: side) }
+        if let artwork = conversationBodyArtwork { return artwork.stageHeight(side: side) }
         return side
     }
     private var active: Bool { enabled && !motionPaused && motionAllowed && scenePhase == .active && visible && onScreen && (playing || listening || stage) }
@@ -79,24 +89,44 @@ struct CharacterPortraitView: View {
     var body: some View {
         if enabled {
             let budget = CharacterAnimationBudget(active: active,
-                activity: playing ? .speaking : presentation().activity, thermal: $motionAllowed)
+                activity: samplingActivity, thermal: $motionAllowed)
             let viewportBounds = viewport ?? UIScreen.main.bounds
-            TimelineView(.animation(minimumInterval: budget.minimumInterval, paused: budget.paused)) { timeline in
-                let performance = active ? presentation() : .idle
+            TimelineView(.animation(minimumInterval: budget.minimumInterval,
+                paused: budget.paused || completionCaptureFrozen)) { timeline in
+                let offeredPerformance = resolvedPresentation()
+                let ownsOutput = offeredPerformance.outputPhase == .unspecified
+                    || offeredPerformance.outputPhase == .stopped
+                    || offeredPerformance.outputSpeakerID == agentID
+                let performance = active && ownsOutput ? offeredPerformance : .idle
                 let face = reviewedFace(CharacterFacialPolicy.face(for: performance, agentID: agentID))
-                let time = timeline.date.timeIntervalSinceReferenceDate
+                let time = resolvedTime(timeline.date.timeIntervalSinceReferenceDate)
                 // Server status can become listening before the last rendered
                 // audio drains. The output presentation owns the visible mouth.
                 let speaking = active && performance.activity == .speaking
-                let outputLevel = speaking ? level() : 0
-                let performanceElapsed = bodyClock.elapsed(
+                    && performance.outputPhase != .queuedGap && performance.outputPhase != .paused
+                    && performance.outputPhase != .stopped
+                let outputLevel = speaking ? resolvedLevel() : 0
+                let bodyPerformance = bodyClock.sample(
                     identity: (agentID ?? "unknown") + "|" + (path ?? ""),
-                    time: time, active: active, presentation: performance)
+                    time: time, level: outputLevel, active: active, presentation: performance)
+                let performanceElapsed = resolvedElapsed(bodyPerformance.elapsed)
                 let bodyPose = CharacterFigureMotion.pose(id: agentID ?? "unknown",
                     time: time, level: outputLevel, active: active,
-                    presentation: performance, performanceElapsed: performanceElapsed)
+                    presentation: performance, performanceElapsed: performanceElapsed,
+                    performance: bodyPerformance)
                 let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
-                    time: time, level: outputLevel, active: active, presentation: performance))
+                    time: time, level: outputLevel, active: active, presentation: performance,
+                    performance: bodyPerformance))
+                let angelFacial = angelArtwork.map { _ in
+                    angelFaceClock.pose(face: face, blink: pose.blink,
+                        time: time, active: active, activity: performance.activity)
+                }
+                #if DEBUG && targetEnvironment(simulator)
+                let _ = completionRecord(time: time, budget: budget, face: face,
+                    pose: pose, body: bodyPose, presentation: performance,
+                    elapsed: performanceElapsed, outputLevel: outputLevel,
+                    performance: bodyPerformance, angelFacial: angelFacial)
+                #endif
                 // Facial expression and individual gestures carry the performance;
                 // the larger stage adds a little reach without amplifying it sixfold.
                 let reach = stage ? 1.6 : 1.0
@@ -113,17 +143,23 @@ struct CharacterPortraitView: View {
                             motion: reviewedDellaMotion(CharacterBustMotion.pose(bodyPose,
                                 limits: CharacterDellaBustGeometry.artwork.motionLimits)),
                             arms: reviewedDellaArms(CharacterDellaArmMotion.pose(time: time, level: outputLevel,
-                                active: active, presentation: performance, performanceElapsed: performanceElapsed)))
+                                active: active, presentation: performance, performanceElapsed: performanceElapsed,
+                                performance: bodyPerformance)))
+                    } else if let artwork = conversationBodyArtwork {
+                        conversationBody(artwork, pose: pose, face: face, body: bodyPose,
+                            presentation: performance, elapsed: performanceElapsed,
+                            outputLevel: outputLevel, performance: bodyPerformance)
                     } else if let art = angelArtwork {
+                        let facial = angelFacial ?? AngelVectorMotion.facial(face, blink: pose.blink, active: active)
                         CharacterAngelVectorView(art: art,
-                            facial: AngelVectorMotion.facial(face, blink: pose.blink, active: active),
+                            facial: facial,
                             mouth: AngelVectorMotion.mouth(role: pose.viseme, strength: voice,
-                                face: face, active: active),
+                                face: face, active: active, facialPose: facial),
                             ornaments: reviewedAngelOrnaments(AngelVectorMotion.ornaments(time: time, active: active,
                                 expression: performance.expression)),
                             arms: reviewedAngelArms(AngelVectorMotion.arms(time: time,
                                 level: outputLevel, active: active, presentation: performance,
-                                performanceElapsed: performanceElapsed)),
+                                performanceElapsed: performanceElapsed, performance: bodyPerformance)),
                             motion: reviewedAngelMotion(CharacterBustMotion.pose(bodyPose,
                                 limits: CharacterAngelArtwork.limits)))
                             .frame(width: side, height: side)
@@ -165,10 +201,121 @@ struct CharacterPortraitView: View {
                 return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
             }) { onScreen = $0 }
             .onAppear { visible = true }
-            .onDisappear { visible = false; bodyClock.reset() }
+            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset() }
+            .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
+                bodyClock.reset(); angelFaceClock.reset()
+            }
             .task { await agents.loadIfNeeded() }
         }
     }
+    private var completionCaptureFrozen: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return CharacterPuppetCompletionAudit.isEnabled && completionAuditSample?.captureFrozen == true
+        #else
+        return false
+        #endif
+    }
+    private var samplingActivity: CharacterActivity {
+        let offered = resolvedPresentation()
+        if offered.outputPhase == .paused || offered.outputPhase == .queuedGap
+            || offered.outputPhase == .stopped && offered.activity == .speaking { return .idle }
+        return playing ? .speaking : offered.activity
+    }
+    private func resolvedPresentation() -> CharacterPresentation {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterPuppetCompletionAudit.isEnabled, let sample = completionAuditSample { return sample.presentation }
+        #endif
+        return presentation()
+    }
+    private func resolvedTime(_ time: Double) -> Double {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterPuppetCompletionAudit.isEnabled, let sample = completionAuditSample { return sample.time }
+        #endif
+        return time
+    }
+    private func resolvedLevel() -> Double {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterPuppetCompletionAudit.isEnabled, let sample = completionAuditSample { return sample.outputLevel }
+        #endif
+        return level()
+    }
+    private func resolvedElapsed(_ elapsed: Double) -> Double {
+        #if DEBUG && targetEnvironment(simulator)
+        if CharacterPuppetCompletionAudit.isEnabled, let sample = completionAuditSample { return sample.performanceElapsed }
+        #endif
+        return elapsed
+    }
+    #if DEBUG && targetEnvironment(simulator)
+    private func completionRecord(time: Double, budget: CharacterAnimationBudget,
+                                  face: CharacterFace, pose: CharacterPose, body: CharacterFigurePose,
+                                  presentation: CharacterPresentation, elapsed: Double, outputLevel: Double,
+                                  performance: CharacterBodyPerformanceSample,
+                                  angelFacial: AngelVectorFacialPose?) {
+        guard CharacterPuppetCompletionAudit.isEnabled else { return }
+        let renderer: String
+        let assets: [String]
+        let limits: CharacterBustMotionLimits
+        if articulatedDellaAvailable {
+            renderer = "della-articulated"
+            assets = CharacterDellaArticulatedGeometry.requiredAssets
+            limits = CharacterDellaBustGeometry.artwork.motionLimits
+        } else if let artwork = conversationBodyArtwork {
+            renderer = artwork.rendererKey
+            assets = artwork.requiredAssets
+            limits = artwork.existingBust.motionLimits
+        } else if angelArtwork != nil {
+            renderer = "angel-vector"
+            assets = [CharacterAngelArtwork.assetName]
+            limits = CharacterAngelArtwork.limits
+        } else if let artwork = bustArtwork {
+            renderer = "bust"
+            assets = artwork.requiredAssets
+            limits = artwork.motionLimits
+        } else {
+            renderer = "portrait"
+            assets = sheet.map { [$0.faces, $0.mouths] } ?? []
+            limits = .harley
+        }
+        let motion = CharacterBustMotion.pose(body, limits: limits)
+        var values = ["headAngle": motion.headAngle, "bodyAngle": motion.bodyAngle,
+            "headOffsetY": motion.headOffsetY, "bodyOffsetY": motion.bodyOffsetY,
+            "nearArmAngle": body.nearArmAngle, "farArmAngle": body.farArmAngle]
+        if let artwork = conversationBodyArtwork {
+            let joints = CharacterConversationBodyGeometry.pose(artwork: artwork, active: active,
+                presentation: presentation, figurePose: body, elapsed: elapsed,
+                outputLevel: outputLevel, performance: performance)
+            values.merge(joints.auditValues, uniquingKeysWith: { _, value in value })
+            values["headAngle"] = joints.headDegrees
+            values["bodyAngle"] = joints.bodyDegrees
+            // Common offset fields retain the original source-pixel units.
+            values["headOffsetY"] = joints.headLift * artwork.existingBust.cropSide
+            values["bodyOffsetY"] = -joints.bodyLift * artwork.existingBust.cropSide
+            values["nearArmAngle"] = joints.viewerRight.shoulderDegrees
+            values["farArmAngle"] = joints.viewerLeft.shoulderDegrees
+        } else if articulatedDellaAvailable {
+            let arms = reviewedDellaArms(CharacterDellaArmMotion.pose(time: time, level: outputLevel,
+                active: active, presentation: presentation, performanceElapsed: elapsed, performance: performance))
+            values["leftShoulderDegrees"] = -arms.viewerLeftDegrees
+            values["rightShoulderDegrees"] = -arms.viewerRightDegrees
+            values["nearArmAngle"] = -arms.viewerRightDegrees
+            values["farArmAngle"] = -arms.viewerLeftDegrees
+        } else if angelArtwork != nil {
+            let arms = reviewedAngelArms(AngelVectorMotion.arms(time: time, level: outputLevel,
+                active: active, presentation: presentation, performanceElapsed: elapsed, performance: performance))
+            values["claspDegrees"] = arms.degrees
+            values["claspOffsetX"] = arms.offsetX
+            values["claspOffsetY"] = arms.offsetY
+            values["nearArmAngle"] = arms.degrees
+            values["farArmAngle"] = arms.degrees
+            values["gazeX"] = angelFacial?.gazeX ?? 0
+            values["gazeY"] = angelFacial?.gazeY ?? 0
+        }
+        CharacterPuppetCompletionRecorder.recordTick(agentID: agentID, renderer: renderer,
+            assets: assets, side: side, height: renderedPortraitHeight,
+            time: time, active: active, budget: budget, face: face, viseme: pose.viseme,
+            values: values)
+    }
+    #endif
     /// Sep 19 2026: expression sheets (art by Kade through ChatGPT image
     /// generation). Each character has two 3 by 3 sheets made as ONE image each,
     /// so all nine panels share a pose: nine faces and nine mouth shapes, 1254 px
@@ -214,10 +361,18 @@ struct CharacterPortraitView: View {
         return pose
     }
     private func reviewedAngelArms(_ pose: AngelVectorArmPose) -> AngelVectorArmPose {
+        guard active else { return .still }
         #if DEBUG && targetEnvironment(simulator)
-        if active, let sample = angelArmAudit { return sample }
+        let selected = angelArmAudit ?? pose
+        #else
+        let selected = pose
         #endif
-        return pose
+        func bounded(_ value: Double, _ limit: Double) -> Double {
+            value.isFinite ? min(limit, max(-limit, value)) : 0
+        }
+        return AngelVectorArmPose(degrees: bounded(selected.degrees, AngelVectorArmPose.maximumDegrees),
+            offsetX: bounded(selected.offsetX, AngelVectorArmPose.maximumOffsetX),
+            offsetY: bounded(selected.offsetY, AngelVectorArmPose.maximumOffsetY))
     }
     private func reviewedDellaArms(_ pose: CharacterDellaArmPose) -> CharacterDellaArmPose {
         guard active else { return .still }
@@ -345,6 +500,35 @@ struct CharacterPortraitView: View {
 
     /// Same native face/patch/matte compositor, with the accepted square's
     /// width and face scale. The resolved host adds room below the bust.
+    private func conversationBody(_ artwork: CharacterConversationBodyArtwork,
+                                  pose: CharacterPose, face: CharacterFace, body: CharacterFigurePose,
+                                  presentation: CharacterPresentation, elapsed: Double,
+                                  outputLevel: Double, performance: CharacterBodyPerformanceSample) -> some View {
+        let bust = artwork.existingBust
+        let unit = side / bust.cropSide
+        return ZStack(alignment: .topLeading) {
+            CharacterConversationBodyView(artwork: artwork, side: side, active: active,
+                presentation: presentation, figurePose: body, elapsed: elapsed,
+                outputLevel: outputLevel, performance: performance) {
+                    maskedBustHead(bust, pose: pose, face: face, unit: unit)
+                        .clipShape(CharacterBustCut(artwork: bust, outline: bust.headOutline))
+                }
+            if let sheet {
+                ForEach(bust.accessoryOutlines, id: \.self) { outline in
+                    panel(sheet.faces, CharacterFace.neutral.rawValue)
+                        .frame(width: side, height: side)
+                        .scaleEffect(bust.panelSide / bust.cropSide, anchor: .topLeading)
+                        .offset(x: (bust.panelX - bust.cropX) * unit,
+                                y: (bust.panelY - bust.cropY) * unit)
+                        .frame(width: side, height: side, alignment: .topLeading)
+                        .clipShape(CharacterBustCut(artwork: bust, outline: outline))
+                }
+            }
+        }
+        .frame(width: side, height: artwork.stageHeight(side: side), alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+
     private func articulatedDella(pose: CharacterPose, face: CharacterFace,
                                   motion: CharacterBustPose, arms: CharacterDellaArmPose) -> some View {
         let geometry = CharacterDellaArticulatedGeometry.self
