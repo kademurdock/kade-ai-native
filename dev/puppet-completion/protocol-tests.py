@@ -5,6 +5,7 @@ native observations, phone/battery measurements or release evidence. Importing
 the helper is safe; source/build/simulator/service entry points are fenced off.
 Run with Python -B so this test does not create bytecode or copy artifacts.
 """
+import ast
 import cmath
 import copy
 import ctypes
@@ -15,7 +16,8 @@ import importlib.util
 from io import BytesIO
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import plistlib
 import re
 import subprocess
 import struct
@@ -48,6 +50,7 @@ spec.loader.exec_module(audit)
 NATIVE_SNAPSHOT=audit.host.native_process_snapshot
 NATIVE_BIRTH=audit.host.native_process_birth
 OWNED_IDENTITY=audit.host.owned_process_identity
+COMPILED_TESTS=audit.host.compiled_tests
 audit.host.os.kill=forbidden
 audit.host.native_process_snapshot=forbidden
 audit.host.native_process_birth=forbidden
@@ -232,6 +235,123 @@ def synthetic_filtered_scanlines(rows, channels, filters):
 
 
 class ProtocolChecks(unittest.TestCase):
+    def compiled_memory(self, sidecar=None, dangling=False, main=b"synthetic-main-code-v1", other_sidecars=False, hash_log=None):
+        """Exercise the real compiled_tests reader with only invented in-memory files."""
+        host = audit.host
+        root = "/memory/identity-audit"
+        products = root + "/build/della-host-layout-simulator/Build/Products"
+        app = products + "/Debug-iphonesimulator/KadeAI.app"
+        runner = products + "/Debug-iphonesimulator/KadeAIUITests-Runner.app"
+        bundle = runner + "/PlugIns/KadeAIUITests.xctest"
+        run = products + "/KadeAIA11yAudit_synthetic.xctestrun"
+        initial = {"sha": SOURCE}
+        files = {run: plistlib.dumps({"__xctestrun_metadata__": {"FormatVersion": 1}, "KadeAIUITests": {
+            "BlueprintName": "KadeAIUITests", "IsUITestBundle": True, "UseDestinationArtifacts": False,
+            "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/KadeAIUITests-Runner.app",
+            "TestBundlePath": "__TESTHOST__/PlugIns/KadeAIUITests.xctest",
+            "UITargetAppPath": "__TESTROOT__/Debug-iphonesimulator/KadeAI.app"}})}
+        directories = {products, app, runner, bundle}; links = set(); hashed = hash_log if hash_log is not None else []
+        for path, executable, identifier in ((app, "KadeAI", host.BUNDLE_ID),
+            (runner, "KadeAIUITests-Runner", "com.kademurdock.kadeai.uitests.xctrunner"),
+            (bundle, "KadeAIUITests", "com.kademurdock.kadeai.uitests")):
+            info = {"CFBundleIdentifier": identifier, "CFBundleExecutable": executable, "DTPlatformName": "iphonesimulator"}
+            if path == app:
+                info.update(CFBundleShortVersionString="2.2.13", CFBundleVersion="100",
+                            UISupportedInterfaceOrientations=["UIInterfaceOrientationPortrait"])
+            files[path + "/Info.plist"] = plistlib.dumps(info)
+            files[path + "/" + executable] = main if path == app else ("synthetic-" + executable).encode()
+        if sidecar:
+            path = app + "/" + sidecar
+            if dangling: links.add(path)
+            else: files[path] = b"synthetic-unhashed-app-code"
+        if other_sidecars:
+            files[runner + "/KadeAIUITests-Runner.debug.dylib"] = b"synthetic-other-role"
+            files[bundle + "/__preview.dylib"] = b"synthetic-other-role"
+        class MemoryPath:
+            def __init__(self, value): self.value = str(value)
+            def __str__(self): return self.value
+            def __eq__(self, other): return isinstance(other, MemoryPath) and self.value == other.value
+            def __truediv__(self, value): return MemoryPath(str(PurePosixPath(self.value) / value))
+            @property
+            def parent(self): return MemoryPath(str(PurePosixPath(self.value).parent))
+            @property
+            def name(self): return PurePosixPath(self.value).name
+            def resolve(self, strict=False): return self
+            def is_relative_to(self, other): return PurePosixPath(self.value).is_relative_to(PurePosixPath(str(other)))
+            def relative_to(self, other): return MemoryPath(str(PurePosixPath(self.value).relative_to(PurePosixPath(str(other)))))
+            def glob(self, pattern):
+                self_test.assertEqual((self.value, pattern), (products, "KadeAIA11yAudit_*.xctestrun"))
+                return [MemoryPath(run)]
+            def is_dir(self): return self.value in directories
+            def is_file(self): return self.value in files
+            def exists(self): return self.value in files or self.value in directories
+            def is_symlink(self): return self.value in links
+            def stat(self): return type("MemoryStat", (), {"st_size": len(files[self.value])})()
+            def read_bytes(self): return files[self.value]
+        self_test = self
+        def hash_memory(path):
+            hashed.append(str(path))
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        with patch.object(host, "Path", MemoryPath), patch.object(host, "ROOT", MemoryPath(root)), \
+             patch.object(host, "APP", MemoryPath(app)), patch.object(host, "initial_source", return_value=initial), \
+             patch.object(host, "sha", side_effect=hash_memory):
+            return COMPILED_TESTS(SOURCE, emit_inventory=False), hashed, app
+
+    def test_compiled_app_cannot_hide_code_in_debug_or_preview_sidecars(self):
+        global CHECKS
+        result, hashed, app = self.compiled_memory()
+        self.assertEqual(set(result), {"schema", "source", "formatVersion", "xctestrun", "xctestrunSha256", "artifacts",
+                                       "unsignedSimulatorOnly", "testTarget"}); CHECKS += 1
+        self.assertEqual(result["schema"], "kade.della-host-compiled-tests.v1"); CHECKS += 1
+        for item in result["artifacts"].values():
+            self.assertEqual(set(item), {"path", "bundleId", "infoPlistSha256", "executableSha256"}); CHECKS += 1
+        self.assertIn(app + "/KadeAI", hashed); CHECKS += 1
+        # The real integration must reject each presence mode before reaching
+        # main-binary hashing, rather than merely testing a detached predicate.
+        for leaf in ("KadeAI.debug.dylib", "__preview.dylib"):
+            for dangling in (False, True):
+                calls = []
+                with self.assertRaisesRegex(RuntimeError, "Compiled app code is split from the fingerprinted main executable"):
+                    self.compiled_memory(leaf, dangling, hash_log=calls)
+                self.assertFalse(calls); CHECKS += 1
+        different, _, _ = self.compiled_memory(main=b"synthetic-main-code-v2")
+        self.assertNotEqual(result["artifacts"]["app"]["executableSha256"],
+                            different["artifacts"]["app"]["executableSha256"]); CHECKS += 1
+        self.assertEqual(result["artifacts"]["app"]["infoPlistSha256"],
+                         different["artifacts"]["app"]["infoPlistSha256"]); CHECKS += 1
+        other_roles, _, _ = self.compiled_memory(other_sidecars=True)
+        self.assertEqual(other_roles, result); CHECKS += 1
+
+    def test_app_debug_override_preserves_every_other_project_setting_and_build_argument(self):
+        global CHECKS
+        project = (ROOT / "project.yml").read_text(encoding="utf-8")
+        helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
+        original_project_sha = "82d122d7f1000c82042e8d8fc2a56cf41917aa520f884b47c6c33d04cc8b450c"
+        original_command_sha = "56b05a2951094043904a347a37fce0fc3c556e766915c47a741fb0ea15a531d7"
+        snippet = '      configs:\n        Debug:\n          ENABLE_DEBUG_DYLIB: "NO"\n'
+        def coherent_project(value):
+            section = re.search(r"^  KadeAI:\n(.*?)(?=^  [A-Za-z][A-Za-z0-9]*:|\Z)", value, re.M | re.S)
+            if value.count("ENABLE_DEBUG_DYLIB") != 1 or value.count(snippet) != 1 or section is None \
+               or snippet not in section[1] or hashlib.sha256(value.replace(snippet, "").encode()).hexdigest() != original_project_sha:
+                raise ValueError("The sole KadeAI Debug configuration must preserve all other project bytes")
+        def command_expression(value):
+            builds = [node for node in ast.parse(value).body if isinstance(node, ast.FunctionDef) and node.name == "build_tests"]
+            if len(builds) != 1: raise ValueError("Missing unique build_tests function")
+            commands = [node.value for node in ast.walk(builds[0]) if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "command" for target in node.targets)]
+            if len(commands) != 1 or hashlib.sha256(ast.dump(commands[0], include_attributes=False).encode()).hexdigest() != original_command_sha:
+                raise ValueError("The single unsigned Debug host build argument list changed")
+        coherent_project(project); command_expression(helper); CHECKS += 2
+        for changed in (project.replace('ENABLE_DEBUG_DYLIB: "NO"', 'ENABLE_DEBUG_DYLIB: false', 1), project.replace("        Debug:\n", "        Release:\n", 1),
+                        project.replace(snippet, ""), project + snippet, project.replace("  KadeAI:\n", "  AnotherApp:\n", 1),
+                        project.replace("MARKETING_VERSION: \"2.2.13\"", "MARKETING_VERSION: \"2.2.14\"", 1)):
+            with self.assertRaises(ValueError): coherent_project(changed)
+            CHECKS += 1
+        with self.assertRaises(ValueError): command_expression(helper.replace("'-configuration','Debug'", "'-configuration','Release'", 1))
+        CHECKS += 1
+        with self.assertRaises(ValueError): command_expression(helper.replace("'build-for-testing']", "'ENABLE_DEBUG_DYLIB=NO','build-for-testing']", 1))
+        CHECKS += 1
+
     def png_memory_path(self, content):
         class MemoryPNG:
             name = "synthetic-frame.png"

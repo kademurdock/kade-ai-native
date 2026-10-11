@@ -554,6 +554,9 @@ def compiled_tests(expected,emit_inventory=True):
                 and (path/executable).is_file() and (path/executable).stat().st_size<=512*1024*1024,
                 'Compiled '+role+' executable missing or unbounded')
         if role=='app':
+            require(all(not (path/name).exists() and not (path/name).is_symlink()
+                        for name in ('KadeAI.debug.dylib','__preview.dylib')),
+                    'Compiled app code is split from the fingerprinted main executable')
             require(info.get('CFBundleShortVersionString')=='2.2.13' and str(info.get('CFBundleVersion'))=='100'
                     and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                     'Compiled app version/orientation drift')
