@@ -23,6 +23,7 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
@@ -55,6 +56,56 @@ class ControlledError(ValueError):
 def require(value, message):
     if not value:
         raise ControlledError(message)
+
+
+def archive_failure_codes(raw):
+    """Return only fixed codes/booleans; matched signing text never leaves memory."""
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", errors="replace"))
+    patterns = {
+        "provisioning-profile-missing": r"no (?:matching )?profiles? for|requires a provisioning profile|no matching provisioning profiles",
+        "provisioning-profile-mismatch": r"provisioning profile[^\n]*(?:does not|doesn't) (?:include|match|support)",
+        "signing-identity-missing": r"no signing certificate|no code signing identity found|could not find a signing identity",
+        "signing-key-access": r"errSecInternalComponent|user interaction is not allowed|unable to build chain to self-signed root",
+        "signing-error": r"(?:codesign|code signing)[^\n]*(?:failed|error)",
+        "entitlements-mismatch": r"(?:error:[^\n]*entitlements?|entitlements?[^\n]*(?:does not|doesn't|mismatch))",
+        "compiler-error": r"\.(?:swift|m|mm|c|cc|cpp|h):\d+(?::\d+)?:\s*error:|(?:SwiftCompile|CompileSwift)[^\n]*failed",
+        "linker-error": r"undefined symbols|linker command failed|ld: [^\n]*(?:error|not found)",
+        "resource-error": r"(?:actool|ibtool)[^\n]*error:|CompileAssetCatalog[^\n]*failed",
+        "sdk-destination-error": r"unable to find a destination matching|SDK[^\n]*(?:cannot be located|not found)",
+        "build-settings-error": r"invalid option|unrecognized option|unknown build action",
+        "script-error": r"command PhaseScriptExecution failed",
+        "export-error": r"error: exportArchive|failed to export archive",
+    }
+    categories = sorted(code for code, pattern in patterns.items() if re.search(pattern, text, re.IGNORECASE))
+    # Fixed phrases from codemagic0.70.0 XcodeProject.build_ipa/Xcodebuild;
+    # these are diagnostic observations, never artifact or upload proof.
+    stages = {"archiveStarted": r"^\s*Archive .+$", "archiveCompleted": r"^\s*Successfully created archive at ",
+              "exportStarted": r"^\s*Export .+ to .+$", "exportCompleted": r"^\s*Successfully exported ipa to ",
+              "archiveFailureReported": r"Failed to archive |\*\* ARCHIVE FAILED \*\*",
+              "exportFailureReported": r"Failed to export archive |\*\* EXPORT FAILED \*\*"}
+    return {"categories": categories or ["unknown"],
+            **{key: bool(re.search(pattern, text, re.MULTILINE)) for key, pattern in stages.items()}}
+
+
+def archive_failure_diagnostic(path, operation, receipt):
+    limit, raw = 2 * 1024 * 1024, b""
+    try:
+        with path.open("rb") as stream:
+            if operation["logBytes"] > limit:
+                raw = stream.read(limit // 2)
+                stream.seek(-limit // 2, os.SEEK_END)
+                raw += stream.read(limit // 2)
+            else:
+                raw = stream.read(limit)
+    except OSError:
+        pass  # Preserve the original false operation without exposing exception text.
+    scope = {key: value if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{40}", value) else None
+             for key, value in (("sourceCommit", receipt.get("sourceCommit")), ("toolCommit", receipt.get("toolCommit")))}
+    run = os.environ.get("GITHUB_RUN_ID", "")
+    return {"schema": "kade.archive-failure-diagnostics.v1", "operation": "signed-archive-and-ipa", "passed": False,
+            **scope, "githubRunId": run if re.fullmatch(r"[1-9][0-9]{0,19}", run) else None,
+            **{key: operation[key] for key in ("exitCode", "timedOut", "outputLimitExceeded", "logBytes", "logSha256")},
+            "scanBytes": len(raw), "scanTruncated": len(raw) < operation["logBytes"], **archive_failure_codes(raw)}
 
 
 def sha(path):
@@ -131,6 +182,9 @@ class Runner:
                   "timeoutSeconds": round(budget, 3), "logBytes": path.stat().st_size,
                   "logSha256": sha(path), "passed": process.returncode == 0 and not timed_out and not overflow}
         self.receipt["operations"].append(record)
+        if name == "signed-archive-and-ipa" and not record["passed"]:
+            print("KADE_ARCHIVE_FAILURE_DIAGNOSTIC " + json.dumps(
+                archive_failure_diagnostic(path, record, self.receipt), sort_keys=True, separators=(",", ":")), flush=True)
         # Never echo signing output, environment dumps, profiles or private material.
         require(record["passed"], "Bounded operation failed: " + name)
         return path
@@ -313,6 +367,114 @@ def cleanup_asc_leaf(folder):
     marker_path.unlink()
 
 
+def profile_destination_root():
+    # Codemagic0.70 ProvisioningProfile.DEFAULT_LOCATION, for Xcode16+.
+    root = Path.home()
+    require(not root.is_symlink() and root.is_dir(), "Invalid native profile home")
+    for name in ("Library", "Developer", "Xcode", "UserData", "Provisioning Profiles"):
+        root = root / name
+        require(not root.is_symlink(), "Native profile directory must not be a symlink")
+        root.mkdir(exist_ok=True)
+        require(root.is_dir(), "Native profile directory required")
+    return root.resolve()
+
+
+def write_profile_ledger(path, ledger, exclusive=False):
+    require(not path.is_symlink(), "Owned profile ledger must not be a symlink")
+    temporary = path if exclusive else path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    created = False
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            created = True
+            stream.write(json.dumps(ledger, sort_keys=True)); stream.flush(); os.fsync(stream.fileno())
+        if not exclusive:
+            require(not path.is_symlink() and not temporary.is_symlink()
+                    and temporary.resolve().parent == path.resolve().parent, "Confined atomic profile ledger required")
+            os.replace(temporary, path)
+    finally:
+        if not exclusive and created and temporary.exists():
+            require(not temporary.is_symlink() and temporary.resolve().parent == path.resolve().parent,
+                    "Confined owned ledger temporary required")
+            temporary.unlink()
+
+
+def install_approved_profiles(folder, selected):
+    require(set(selected) == set(BUNDLES.values()), "Exactly four approved native profiles required")
+    require(len({item[1]["uuid"] for item in selected.values()}) == 4, "Four distinct approved profile UUIDs required")
+    require(not (folder / "profiles").is_symlink() and (folder / "profiles").resolve().parent == folder.resolve(),
+            "Confined approved profile source directory required")
+    destination_root, marker = profile_destination_root(), folder / "owned-native-profiles.json"
+    ledger = {"schema": "kade.job-owned-native-profiles.v1", "githubRunId": os.environ["GITHUB_RUN_ID"], "profiles": []}
+    write_profile_ledger(marker, ledger, exclusive=True)
+    for identifier in BUNDLES.values():
+        source, metadata = selected[identifier]
+        profile_uuid = metadata["uuid"]
+        require(isinstance(profile_uuid, str) and re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", profile_uuid),
+                "Canonical approved profile UUID required")
+        require(not source.is_symlink() and source.resolve().parent == (folder / "profiles").resolve()
+                and source.is_file() and 0 < source.stat().st_size <= 4 * 1024 * 1024,
+                "Bounded exact approved profile source required")
+        raw = source.read_bytes()
+        require(hashlib.sha256(raw).hexdigest() == metadata["sha256"], "Approved profile bytes changed before installation")
+        destination = destination_root / (profile_uuid + ".mobileprovision")
+        require(not destination.is_symlink() and destination.resolve().parent == destination_root,
+                "Confined native profile leaf required")
+        with destination.open("xb") as stream:
+            owned = os.fstat(stream.fileno())
+            entry = {"uuid": profile_uuid, "sha256": metadata["sha256"], "device": owned.st_dev,
+                     "inode": owned.st_ino, "complete": False}
+            ledger["profiles"].append(entry)
+            # Record exact exclusive ownership before copying any profile bytes.
+            try:
+                write_profile_ledger(marker, ledger)
+            except Exception:
+                state = destination.stat()
+                require(not destination.is_symlink() and (state.st_dev, state.st_ino) == (owned.st_dev, owned.st_ino)
+                        and state.st_size == 0, "New empty native profile ownership changed")
+                destination.unlink()
+                raise
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+        require(sha(destination) == metadata["sha256"], "Installed native profile bytes differ")
+        entry["complete"] = True
+        write_profile_ledger(marker, ledger)
+
+
+def cleanup_native_profiles(folder):
+    marker = folder / "owned-native-profiles.json"
+    require(not marker.is_symlink(), "Owned native profile marker must not be a symlink")
+    if not marker.exists():
+        return
+    require(marker.stat().st_size <= 16 * 1024, "Owned profile ledger exceeded bound")
+    ledger = json.loads(marker.read_text(encoding="utf-8"))
+    entries = ledger.get("profiles", [])
+    require(set(ledger) == {"schema", "githubRunId", "profiles"} and ledger["schema"] == "kade.job-owned-native-profiles.v1"
+            and ledger["githubRunId"] == os.environ["GITHUB_RUN_ID"] and isinstance(entries, list) and len(entries) <= 4,
+            "Fresh exact native profile ownership required")
+    destination_root = profile_destination_root()
+    failures = False
+    for entry in entries:
+        try:
+            require(set(entry) == {"uuid", "sha256", "device", "inode", "complete"}
+                    and isinstance(entry["uuid"], str)
+                    and re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", entry["uuid"])
+                    and re.fullmatch(r"[a-f0-9]{64}", entry["sha256"])
+                    and type(entry["device"]) is int and entry["device"] >= 0
+                    and type(entry["inode"]) is int and entry["inode"] > 0 and type(entry["complete"]) is bool,
+                    "Bounded owned native profile entry required")
+            path = destination_root / (entry["uuid"] + ".mobileprovision")
+            require(not path.is_symlink() and path.resolve().parent == destination_root, "Confined owned native profile leaf required")
+            if path.exists():
+                state = path.stat()
+                require(path.is_file() and (state.st_dev, state.st_ino) == (entry["device"], entry["inode"])
+                        and state.st_size <= 4 * 1024 * 1024, "Native profile ownership changed")
+                require(not entry["complete"] or sha(path) == entry["sha256"], "Owned native profile bytes changed")
+                path.unlink()  # Only this run's exclusive, inode-bound UUID leaf.
+        except Exception:
+            failures = True
+    require(not failures, "Owned native profile cleanup incomplete")
+    marker.unlink()
+
+
 def sign(source, receipt):
     folder = work()
     prior = json.loads((folder / "gate.json").read_text(encoding="utf-8"))
@@ -395,6 +557,7 @@ def sign(source, receipt):
     require(set(selected) == set(BUNDLES.values()), "Existing family profiles for all four bundles are required")
     ledger = [selected[identifier][1] for identifier in BUNDLES.values()]
     receipt["existingProfiles"] = ledger
+    install_approved_profiles(folder, selected)
     keychain = folder / "signing.keychain-db"
     require(not keychain.is_symlink() and keychain.resolve().parent == folder, "Invalid ephemeral keychain path")
     runner.run("initialize-keychain", [cli("keychain"), "initialize", "--path", str(keychain), "--timeout", "2100"])
@@ -492,6 +655,10 @@ def cleanup():
     if not folder.exists():
         return
     failures = []
+    try:
+        cleanup_native_profiles(folder)
+    except Exception:
+        failures.append("owned native profiles")
     try:
         cleanup_asc_leaf(folder)
     except Exception:
