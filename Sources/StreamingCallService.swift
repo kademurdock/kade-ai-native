@@ -213,9 +213,15 @@ final class StreamingCallService: NSObject, ObservableObject {
         return Double(time.sampleTime) / time.sampleRate
     }
     var characterPresentation: CharacterPresentation {
-        if !liveOn, let time = characterPlayerTime,
-           let value = characterTimeline.presentation(at: time, expectedID: callAgentId) { return value }
-        return CharacterPresentation(activity: status == .thinking ? .thinking : .listening)
+        if !liveOn, let time = characterPlayerTime {
+            if let value = characterTimeline.presentation(at: time, expectedID: callAgentId) { return value }
+            if status == .speaking,
+               let gap = characterTimeline.queuedGapPresentation(at: time, expectedID: callAgentId) {
+                return gap
+            }
+        }
+        return CharacterPresentation(activity: status == .thinking ? .thinking : .listening,
+            outputPhase: .stopped)
     }
     var characterLevel: Double {
         guard !liveOn, let time = characterPlayerTime,

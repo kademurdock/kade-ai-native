@@ -58,6 +58,10 @@ enum CharacterExpression: String, Codable, CaseIterable {
 
 enum CharacterActivity { case idle, listening, thinking, speaking }
 
+/// The audio owner supplies these states. A queue gap is not a new reply,
+/// and a paused source clock must not spend or restart a body gesture.
+enum CharacterOutputPhase { case unspecified, playing, queuedGap, paused, stopped }
+
 /// Reads authored leading speech directions only. Never analyzes a person's
 /// words or assigns invented word-to-audio timestamps.
 struct CharacterCue: Equatable {
@@ -154,6 +158,9 @@ struct CharacterPresentation {
     var expression: CharacterExpression = .neutral
     var elapsed: Double = 0
     var laughing = false
+    var outputEpisodeKey: String? = nil
+    var outputPhase: CharacterOutputPhase = .unspecified
+    var outputSpeakerID: String? = nil
     var face: CharacterFace {
         if laughing { return .laugh }
         if expression == .neutral && activity == .thinking { return .thoughtful }
@@ -161,6 +168,79 @@ struct CharacterPresentation {
         return expression.face
     }
     static let idle = CharacterPresentation()
+}
+
+/// Pure reply-scoped authored directions. No words, audio or message body are
+/// retained. An adopted server key names the same already-playing reply;
+/// every other owner/key change starts a fresh local episode.
+struct CharacterCueCarryState {
+    private(set) var outputEpisodeKey: String?
+    private(set) var speakerID: String?
+    private(set) var messageKey: String?
+    private(set) var baseCue = CharacterCue.neutral
+    private var serial: UInt64 = 0
+    private var active = false
+
+    mutating func reset() {
+        outputEpisodeKey = nil
+        speakerID = nil
+        messageKey = nil
+        baseCue = .neutral
+        active = false
+        // Keep the serial across stops, even if the portrait missed idle.
+    }
+
+    /// A streamed reply may briefly drain the existing pump before its next
+    /// sentence arrives. Retain one scoped base cue, but offer no output while
+    /// inactive. Stop/supersede and any different enqueue scope fully reset it.
+    mutating func finish() { active = false }
+
+    mutating func adoptMessageKey(_ key: String) {
+        guard outputEpisodeKey != nil, messageKey == nil, !key.isEmpty else { return }
+        messageKey = key
+    }
+
+    mutating func cue(for text: String, speakerID owner: String?, messageKey key: String?,
+                      episodeKey: String? = nil) -> CharacterCue {
+        if outputEpisodeKey == nil || speakerID != owner || messageKey != key {
+            reset()
+            serial &+= 1
+            if let episodeKey, !episodeKey.isEmpty, episodeKey.count <= 106 {
+                outputEpisodeKey = "\(episodeKey)-\(serial)"
+            } else { outputEpisodeKey = "voice-\(serial)" }
+            speakerID = owner
+            messageKey = key
+        }
+        let cue = CharacterCue.fromSpeech(text, carrying: baseCue)
+        baseCue = CharacterCue(expression: cue.expression, moment: nil)
+        active = true
+        return cue
+    }
+
+    func presentation(phase: CharacterOutputPhase, elapsed: Double = 0,
+                      playingCue: CharacterCue? = nil) -> CharacterPresentation {
+        guard active, let outputEpisodeKey else { return CharacterPresentation(outputPhase: .stopped) }
+        let validElapsed = elapsed.isFinite && elapsed >= 0 ? elapsed : 0
+        let heldCue = phase == .paused ? playingCue : nil
+        return CharacterPresentation(activity: .speaking,
+            expression: heldCue?.expression(at: validElapsed) ?? baseCue.expression,
+            elapsed: validElapsed, laughing: heldCue?.laughing(at: validElapsed) ?? false,
+            outputEpisodeKey: outputEpisodeKey, outputPhase: phase, outputSpeakerID: speakerID)
+    }
+}
+
+/// An enqueue without an explicit streamed-reply grouping is its own episode.
+/// Callers already own a local turn UUID; sentence pieces may share that UUID
+/// without changing the player's message/row key or its scheduling.
+struct CharacterReplyScope {
+    private var serial: UInt64 = 0
+    mutating func key(replyScopeKey: String?) -> String {
+        if let replyScopeKey, !replyScopeKey.isEmpty, replyScopeKey.count <= 96 {
+            return "reply-" + replyScopeKey
+        }
+        serial &+= 1
+        return "voice-item-\(serial)"
+    }
 }
 
 struct CharacterAudioIdentity {
@@ -179,25 +259,68 @@ struct CharacterAudioIdentity {
 /// Presentation-only queue against the existing player's source clock. It never
 /// supplies times to the audio scheduler, and retains no sound or transcript.
 struct CharacterPlaybackTimeline {
-    struct Clip { let start: Double; let end: Double; let identity: CharacterAudioIdentity? }
+    struct Clip {
+        let start: Double
+        let end: Double
+        let identity: CharacterAudioIdentity?
+        let episodeKey: String?
+    }
     private(set) var clips: [Clip] = []
     private var end = 0.0
     private var blocked = false
-    mutating func reset() { clips.removeAll(keepingCapacity: true); end = 0; blocked = false }
+    private var serial: UInt64 = 0
+    private var lastEndedClip: Clip?
+    static let queueGap = 1.2
+    mutating func reset() {
+        clips.removeAll(keepingCapacity: true)
+        end = 0
+        blocked = false
+        lastEndedClip = nil
+    }
     mutating func append(identity: CharacterAudioIdentity?, duration: Double, now: Double) {
         guard !blocked else { return }
         guard duration.isFinite, duration > 0, duration <= 120, now.isFinite, now >= 0 else { reset(); blocked = true; return }
+        if let ended = clips.last(where: { $0.end <= now }) { lastEndedClip = ended }
         clips.removeAll { $0.end <= now }
         guard clips.count < 128 else { reset(); blocked = true; return }
         let start = max(end, now)
-        clips.append(Clip(start: start, end: start + duration, identity: identity))
-        end = start + duration
+        let finish = start + duration
+        guard finish.isFinite, finish > start else { reset(); blocked = true; return }
+        let previous = clips.last ?? lastEndedClip
+        var episodeKey: String?
+        if let identity, identity.speech {
+            if let previous, let owner = previous.identity, owner.speech,
+               owner.speakerID == identity.speakerID, start - previous.end <= Self.queueGap,
+               let previousKey = previous.episodeKey {
+                episodeKey = previousKey
+            } else {
+                serial &+= 1
+                episodeKey = "call-\(serial)"
+            }
+        }
+        clips.append(Clip(start: start, end: finish, identity: identity, episodeKey: episodeKey))
+        end = finish
     }
     func presentation(at time: Double, expectedID: String?) -> CharacterPresentation? {
         guard time.isFinite, time >= 0, let expectedID,
               let clip = clips.first(where: { $0.start <= time && time < $0.end }),
               let identity = clip.identity, identity.speech, identity.speakerID == expectedID else { return nil }
         let elapsed = time - clip.start
-        return CharacterPresentation(activity: .speaking, expression: identity.cue.expression(at: elapsed), elapsed: elapsed, laughing: identity.cue.laughing(at: elapsed))
+        return CharacterPresentation(activity: .speaking, expression: identity.cue.expression(at: elapsed),
+            elapsed: elapsed, laughing: identity.cue.laughing(at: elapsed),
+            outputEpisodeKey: clip.episodeKey, outputPhase: .playing, outputSpeakerID: identity.speakerID)
+    }
+
+    /// Only the call's speaking state may request this short presentation hold.
+    /// Unknown/effect intervals and a different owner never inherit a cue.
+    func queuedGapPresentation(at time: Double, expectedID: String?) -> CharacterPresentation? {
+        guard !blocked, time.isFinite, time >= 0, let expectedID,
+              !clips.contains(where: { $0.start <= time && time < $0.end }),
+              let previous = clips.last(where: { $0.end <= time }) ?? lastEndedClip,
+              time >= previous.end, time - previous.end <= Self.queueGap,
+              let identity = previous.identity, identity.speech, identity.speakerID == expectedID,
+              let episodeKey = previous.episodeKey else { return nil }
+        return CharacterPresentation(activity: .speaking, expression: identity.cue.expression,
+            outputEpisodeKey: episodeKey, outputPhase: .queuedGap, outputSpeakerID: identity.speakerID)
     }
 }

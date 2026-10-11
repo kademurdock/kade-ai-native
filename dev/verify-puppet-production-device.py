@@ -20,17 +20,26 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/puppet-production-20261010"
+BRANCH = "codex/puppet-completion-device-20261011"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
-VERSION = "2.2.12"
+VERSION = "2.2.13"
 OPERATION_SECONDS = 1800
-EXPECTED_MODEL_CHECKS = 27192
+EXPECTED_MODEL_CHECKS = 169760
 MODEL_GROUPS = {"Character motion", "Call meter and expression", "Character reactions and playback ownership",
                 "Authored facial selection", "Isolated hand study", "Layered figure motion",
                 "Character bust review and transforms", "Production puppet identity and safety",
                 "Character stage layout", "Angel vector geometry and motion", "Fresh agent chat routing"}
 MASTER_SHA = "285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2"
 ASSET_NAME = "CharacterDellaArticulatedReview"
+CAST_IMAGES = {
+    'CharacterDellaArticulatedReview':(1254,1254),'CharacterDellaBustBody':(1254,1254),'CharacterDellaBustMask':(1254,1254),
+    'CharacterHarleyBustBody':(1024,1536),'CharacterHarleyBustMask':(1254,1254),
+    'CharacterHarleyFaces':(1254,1254),'CharacterHarleyMouths':(1254,1254),'CharacterHarleyNuance':(1254,1254),
+    'CharacterKianaFaces':(1254,1254),'CharacterKianaMouths':(1254,1254),'CharacterKianaNuance':(1254,1254),
+    'CharacterLillyBustBody':(1254,1254),'CharacterLillyFaces':(1254,1254),'CharacterLillyMouths':(1254,1254),'CharacterLillyNuance':(1254,1254),
+    'CharacterWitherspoonBustBody':(1024,1536),'CharacterWitherspoonFaces':(1254,1254),'CharacterWitherspoonMouths':(1254,1254),
+}
+CAST_DATA = 'CharacterAngelVectorArt'
 BUNDLES = {"KadeAI.app": "com.kademurdock.kadeai",
            "KadeAI.app/PlugIns/KadeKeyboard.appex": "com.kademurdock.kadeai.keyboard",
            "KadeAI.app/PlugIns/KadeShare.appex": "com.kademurdock.kadeai.share",
@@ -131,8 +140,20 @@ def catalog_metadata(records):
     require(matches and all(row.get("AssetType") == "Image" and row.get("PixelWidth") == 1254
                             and row.get("PixelHeight") == 1254 for row in matches),
             "Compiled Della master image/name/1254-square dimensions are missing or changed")
+    images = {}
+    for name,pixels in CAST_IMAGES.items():
+        found = [row for row in records if row.get('Name') == name]
+        require(found and all(row.get('AssetType') == 'Image'
+                and type(row.get('PixelWidth')) is int and type(row.get('PixelHeight')) is int
+                and (row['PixelWidth'],row['PixelHeight']) == pixels for row in found),
+                'Compiled all-cast image/name/dimensions are missing or changed: '+name)
+        images[name] = {'pixels':list(pixels),'matchingRenditions':len(found)}
+    data = [row for row in records if row.get('Name') == CAST_DATA]
+    require(data and all(row.get('AssetType') == 'Data' for row in data),
+            'Compiled Angel vector data asset is missing or changed')
     return {"passed": True, "name": ASSET_NAME, "pixels": [1254, 1254],
-            "catalogRecords": len(records), "matchingImageRenditions": len(matches)}
+            "catalogRecords": len(records), "matchingImageRenditions": len(matches),
+            'requiredImages':images,'requiredDataAssets':[CAST_DATA]}
 
 
 class Runner:
@@ -270,7 +291,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-sha", required=True)
     arguments = parser.parse_args()
-    receipt = {"schema": "kade.puppet-production-device-proof.v1", "expectedSource": arguments.expected_sha,
+    receipt = {"schema": "kade.puppet-production-device-proof.v2", "expectedSource": arguments.expected_sha,
                "passed": False, "unsignedDeviceCompileOnly": True, "physicalPhoneVerified": False,
                "batteryPerformanceVerified": False, "physicalVoiceOverVerified": False,
                "runtimeAcceptance": False, "releasePublished": False, "artifactsUploaded": False,

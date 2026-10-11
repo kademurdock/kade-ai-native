@@ -22,6 +22,7 @@ final class DellaHostControlsUITests: XCTestCase {
 
     private struct TranscriptDragState {
         var used = 0
+        var keyboardDismissalDrags = 0
         var lastContext = "no gesture issued"
     }
 
@@ -192,6 +193,7 @@ final class DellaHostControlsUITests: XCTestCase {
             // position alone. Only real native transcript gestures may dismiss it.
             var drags = TranscriptDragState()
             try dismissKeyboardWithTranscriptDrags(app, state: &drags)
+            drags.keyboardDismissalDrags = drags.used
             core = try checkChatCore(app, attachment: attachment, keyboard: false)
             try scrollTranscriptToTarget(app, state: &drags)
             core = try checkChatCore(app, attachment: attachment, keyboard: false)
@@ -395,7 +397,8 @@ final class DellaHostControlsUITests: XCTestCase {
 
     private func dragTranscript(_ app: XCUIApplication, region: CGRect,
                                 keyboardWaitSeconds: TimeInterval,
-                                state: inout TranscriptDragState) throws {
+                                state: inout TranscriptDragState,
+                                verticalDisplacement: CGFloat? = nil) throws {
         try require(state.used < 8, "native transcript gestures share one eight-drag budget")
         try require(region.height >= 44, "transcript interaction region has enough room for a native drag")
         // Use actual screen points inside the region. Normalizing the raw AX
@@ -404,8 +407,12 @@ final class DellaHostControlsUITests: XCTestCase {
         // an interaction bound; the separate capture gate measures the viewport.
         let window = app.frame
         let interior = min(24, region.height * 0.2)
-        let startPoint = CGPoint(x: region.midX, y: region.maxY - interior)
-        let finishPoint = CGPoint(x: region.midX, y: region.minY + interior)
+        var startPoint = CGPoint(x: region.midX, y: region.maxY - interior)
+        var finishPoint = CGPoint(x: region.midX, y: region.minY + interior)
+        if let verticalDisplacement {
+            startPoint.y = verticalDisplacement > 0 ? region.minY + interior : region.maxY - interior
+            finishPoint.y = startPoint.y + verticalDisplacement
+        }
         let keyboardBefore = app.keyboards.count
         try require(state.used > 0 || keyboardBefore == 1,
                     "keyboard is present before the first real transcript gesture")
@@ -415,7 +422,14 @@ final class DellaHostControlsUITests: XCTestCase {
         let finish = origin.withOffset(CGVector(dx: finishPoint.x - window.minX,
                                                dy: finishPoint.y - window.minY))
         state.used += 1
-        start.press(forDuration: 0.05, thenDragTo: finish)
+        if verticalDisplacement != nil {
+            // Target search uses a controlled release instead of the default
+            // drag velocity; the keyboard dismissal gesture remains unchanged.
+            start.press(forDuration: 0.05, thenDragTo: finish,
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+        } else {
+            start.press(forDuration: 0.05, thenDragTo: finish)
+        }
         if keyboardWaitSeconds > 0 {
             let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
                 (object as? XCUIApplication)?.keyboards.count == 0
@@ -459,16 +473,71 @@ final class DellaHostControlsUITests: XCTestCase {
             let targetBounds = region.insetBy(dx: -0.5, dy: -0.5)
             try require(app.keyboards.count == 0,
                         "software keyboard stays absent during target search [" + state.lastContext + "]")
-            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && targetBounds.contains($0.frame) }) {
+            let observations = targets.map { target in
+                let exists = target.exists
+                return (exists: exists, frame: exists ? target.frame : CGRect.null)
+            }
+            if zip(targets, observations).allSatisfy({ pair in
+                pair.1.exists && pair.0.isHittable && valid(pair.1.frame) && targetBounds.contains(pair.1.frame)
+            }) {
                 return
             }
-            try dragTranscript(app, region: region, keyboardWaitSeconds: 0, state: &state)
+            guard let displacement = transcriptTargetDisplacement(observations.map { $0.frame }, in: region) else {
+                break
+            }
+            try dragTranscript(app, region: region, keyboardWaitSeconds: 0, state: &state,
+                               verticalDisplacement: displacement)
         }
         let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
         try require(app.keyboards.count == 0,
                     "software keyboard stays absent after target search [" + state.lastContext + "]")
-        try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) },
+        let reachable = targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) }
+        if !reachable {
+            // These are fresh observations after the failed predicate. They
+            // explain its native boundaries without changing any gesture or
+            // accepting a target from a later diagnostic observation.
+            printTargetFailure("drags=\(state.used)/8 dismissal=\(state.keyboardDismissalDrags)"
+                + " search=\(state.used - state.keyboardDismissalDrags) keyboard=\(app.keyboards.count)"
+                + " region=" + rectangle(region))
+            for (identifier, target) in zip(identifiers, targets) {
+                let exists = target.exists
+                if exists {
+                    let hittable = target.isHittable
+                    let frame = target.frame
+                    printTargetFailure("id=" + identifier + " exists=\(exists) hittable=\(hittable)"
+                        + " valid=\(valid(frame)) inside=\(region.contains(frame)) frame=" + rectangle(frame))
+                } else {
+                    printTargetFailure("id=" + identifier
+                        + " exists=false hittable=unqueried valid=unqueried inside=unqueried frame=unavailable")
+                }
+            }
+        }
+        try require(reachable,
                     "bounded real drags make every target reachable [" + state.lastContext + "]")
+    }
+
+    /// Native target geometry chooses the direction after each real gesture.
+    /// A target already above the region must move down; continuing upward can
+    /// pass the controls and spend the remaining budget moving away from them.
+    private func transcriptTargetDisplacement(_ frames: [CGRect], in region: CGRect) -> CGFloat? {
+        guard !frames.isEmpty, frames.allSatisfy(valid), valid(region) else { return nil }
+        let group = frames.dropFirst().reduce(frames[0]) { $0.union($1) }
+        let bounds = region.insetBy(dx: -0.5, dy: -0.5)
+        guard valid(group), group.width <= bounds.width, group.height <= bounds.height,
+              group.minX >= bounds.minX, group.maxX <= bounds.maxX else { return nil }
+        let interior = min(24, region.height * 0.2)
+        let limit = (region.height - 2 * interior) * 0.5
+        let delta = bounds.midY - group.midY
+        let displacement = min(limit, max(-limit, delta))
+        // Missing/impossible geometry or no usable movement falls through to
+        // the original target diagnostics and strict final reachability check.
+        guard displacement.isFinite, abs(displacement) >= 1 else { return nil }
+        return displacement
+    }
+
+    private func printTargetFailure(_ detail: String) {
+        let line = "KADE_DELLA_HOST_CONTROLS_FAILED " + phase + " target-diagnostic " + detail
+        print(String(line.prefix(300)))
     }
 
     private func checkCall(_ requestedPhase: String, secondaryControlsVisible: Bool) throws {

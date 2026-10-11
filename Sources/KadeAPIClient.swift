@@ -26,7 +26,7 @@ final class KadeAPIClient: ObservableObject {
     /// including incidental requests from ordinary screen observers.
     private func rejectOfflineHostRequest() throws {
         #if DEBUG && targetEnvironment(simulator)
-        if CharacterDellaHostAudit.isEnabled {
+        if CharacterDellaHostAudit.isEnabled || CharacterPuppetCompletionAudit.isEnabled {
             Self.hostAuditBlockedRequestCount += 1
             throw URLError(.cancelled)
         }

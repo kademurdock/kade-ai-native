@@ -1021,6 +1021,9 @@ struct ConversationDetailView: View {
          * revert is: delete this whole `.task(id:)` block. Nothing else depends
          * on it. */
         .task(id: sendState) {
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             guard voiceOverOn, case .sending = sendState else { return }
             guard !UIAccessibility.isReduceMotionEnabled,
                   UserDefaults.standard.bool(forKey: "kade.feedback.haptics"),
@@ -1061,6 +1064,9 @@ struct ConversationDetailView: View {
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { draftInputSource = nil }
         }
         .onChange(of: sendState) { old, new in
+            #if DEBUG && targetEnvironment(simulator)
+            if CharacterDellaHostAudit.isEnabled { return }
+            #endif
             if case .sending = new {
                 endSpeechWait()
                 let waitGeneration = speechWaitGeneration
@@ -2887,7 +2893,8 @@ struct ConversationDetailView: View {
         generatedTitle = "Offline Della layout check"
         readAloudEnabled = false
         thinkMode = .auto
-        sendState = .idle
+        sendState = scenario == .chatRoomy
+            && ProcessInfo.processInfo.environment["KADE_PUPPET_HOST_SENDING"] == "1" ? .sending : .idle
         let rows: [(Bool, String)] = [
             (true, "Can we talk about a quiet afternoon by the lake?"),
             (false, "Of course. We can sit on the porch, listen to the birds, and take our time."),
@@ -2973,15 +2980,18 @@ struct ConversationDetailView: View {
         let side = CharacterStageLayout.chatSide(height: Double(tall), keyboard: keyboardUp,
             compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize)
-        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId) : selectedAgentId
+        let offeredOutput = voiceService.characterPresentation()
+        let holdsOutput = offeredOutput.outputPhase == .queuedGap || offeredOutput.outputPhase == .paused
+        let portraitAgentID = talking ? (voiceService.nowPlayingAgentID ?? selectedAgentId)
+            : (holdsOutput ? (offeredOutput.outputSpeakerID ?? selectedAgentId) : selectedAgentId)
         let avatar = agentsService.agents.first { $0.id == portraitAgentID }?.avatar?.filepath
-        let eligible = CharacterDellaHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
+        let eligible = CharacterConversationHostReview.available(enabled: CharacterDellaHostReview.enabledForHost,
             agentID: portraitAgentID, avatarPath: avatar)
         let hostLayout = CharacterDellaHostLayout.chat(preferredSide: side, availableHeight: Double(tall),
             keyboard: keyboardUp, editing: composerEditing, compactHeight: verticalSizeClass == .compact,
             accessibilityText: dynamicTypeSize.isAccessibilitySize,
             competingControls: pendingAttachment != nil || attachmentIsBusy || pushCardOnScreen
-                || isSending || voiceInputError != nil,
+                || voiceInputError != nil,
             candidateEligible: eligible)
         #if DEBUG && targetEnvironment(simulator)
         if CharacterDellaHostAudit.isEnabled {
@@ -3004,7 +3014,8 @@ struct ConversationDetailView: View {
                 name: agentDisplayLabel, playing: talking && !voiceService.isPaused, side: side,
                 level: { voiceService.characterLevel() },
                 presentation: {
-                    if voiceService.isClipPlaying { return voiceService.characterPresentation() }
+                    let output = voiceService.characterPresentation()
+                    if output.outputPhase != .stopped { return output }
                     return thinking ? CharacterPresentation(activity: .thinking) : .idle
                 }, hostLayout: hostLayout)
         /* B3 (Sep 23 2026 redesign): a tap anywhere on the stage opens the
@@ -4058,7 +4069,8 @@ struct ConversationDetailView: View {
                                 text: piece,
                                 agentId: selectedAgentId,
                                 agentName: agentDisplayLabel,
-                                key: nil
+                                key: nil,
+                                replyScopeKey: turnRequestId
                             )
                         }
                     }
@@ -4284,7 +4296,8 @@ struct ConversationDetailView: View {
                         text: piece,
                         agentId: selectedAgentId,
                         agentName: agentDisplayLabel,
-                        key: nil
+                        key: nil,
+                        replyScopeKey: turnRequestId
                     )
                 }
                 /* PART 92.13 — hand the streamed reply its id now that one

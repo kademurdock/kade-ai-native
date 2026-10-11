@@ -73,16 +73,27 @@ final class VoiceService: NSObject, ObservableObject {
     @Published private(set) var nowPlayingAgentID: String?
     private var playingCharacterCue = CharacterCue.neutral
     /// The direction in force for the reply being spoken; see CharacterCue.fromSpeech(_:carrying:).
-    private var carriedCharacterCue = CharacterCue.neutral
-    private func characterCue(for text: String) -> CharacterCue {
-        let cue = CharacterCue.fromSpeech(text, carrying: carriedCharacterCue)
-        carriedCharacterCue = CharacterCue(expression: cue.expression, moment: nil)
-        return cue
+    private var characterCueState = CharacterCueCarryState()
+    private var characterReplyScopes = CharacterReplyScope()
+    private var pausedCharacterElapsed = 0.0
+    private func characterCue(for text: String, agentID: String?, key: String?) -> CharacterCue {
+        characterCueState.cue(for: text, speakerID: agentID, messageKey: key, episodeKey: key)
     }
     func characterPresentation() -> CharacterPresentation {
-        guard isClipPlaying, !isPaused else { return .idle }
+        if isPaused, isClipPlaying {
+            return characterCueState.presentation(phase: .paused, elapsed: pausedCharacterElapsed,
+                playingCue: playingCharacterCue)
+        }
+        guard isClipPlaying else {
+            return isSpeaking ? characterCueState.presentation(phase: .queuedGap)
+                : CharacterPresentation(outputPhase: .stopped)
+        }
         let elapsed = streamedClipActive ? streamingPlayer.characterElapsed : (currentPlayer?.currentTime ?? 0)
-        return CharacterPresentation(activity: .speaking, expression: playingCharacterCue.expression(at: elapsed), elapsed: elapsed, laughing: playingCharacterCue.laughing(at: elapsed))
+        return CharacterPresentation(activity: .speaking,
+            expression: playingCharacterCue.expression(at: elapsed), elapsed: elapsed,
+            laughing: playingCharacterCue.laughing(at: elapsed),
+            outputEpisodeKey: characterCueState.outputEpisodeKey, outputPhase: .playing,
+            outputSpeakerID: nowPlayingAgentID)
     }
     func characterLevel() -> Double {
         guard isClipPlaying, !isPaused else { return 0 }
@@ -102,7 +113,7 @@ final class VoiceService: NSObject, ObservableObject {
     /// paces itself on real playback, not guesses). Chat's enqueueSpeak
     /// path is byte-identical in behavior: nil/nil/nil.
     /// Part 91.10 — named so the prefetcher can take one whole.
-    typealias SpeakItem = (text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, completion: CheckedContinuation<Void, Never>?)
+    typealias SpeakItem = (text: String, agentId: String?, agentName: String?, explicitVoice: String?, explicitRate: Double?, key: String?, characterReplyKey: String, completion: CheckedContinuation<Void, Never>?)
     /* Part 98 — one queue, two kinds of clip. `.buffered` is the path every
      * build through 249 shipped: a Task that resolves to the whole clip's
      * Data. `.streamed` starts the HTTP call at prefetch time exactly like
@@ -615,12 +626,17 @@ final class VoiceService: NSObject, ObservableObject {
     /// repeatedly while a previous line is still playing -- lines speak in
     /// order, one at a time, same as the web app's own read-aloud queue
     /// (`kadeRoomPage.js`'s `speakQ`/`pumpSpeech`).
-    func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil, refreshVoice: Bool = false) {
+    func enqueueSpeak(text: String, agentId: String?, agentName: String?, key: String? = nil,
+                      replyScopeKey: String? = nil, refreshVoice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if refreshVoice { invalidateVoiceSelections() }
         supersedePausedClip()
-        speakQueue.append((trimmed, agentId, agentName, nil, nil, key, nil))
+        if !hasPendingSpeech {
+            streamedTurnKey = nil
+        }
+        let characterReplyKey = characterReplyScopes.key(replyScopeKey: replyScopeKey)
+        speakQueue.append((trimmed, agentId, agentName, nil, nil, key, characterReplyKey, nil))
         guard !isPumping, !pumpScheduled else { return }
         pumpScheduled = true
         Task { await pumpSpeakQueue(); pumpScheduled = false }
@@ -670,6 +686,10 @@ final class VoiceService: NSObject, ObservableObject {
         isPaused = false
         isClipPlaying = false
         nowPlayingKey = nil
+        nowPlayingAgentID = nil
+        playingCharacterCue = .neutral
+        characterCueState.reset()
+        pausedCharacterElapsed = 0
         playbackContinuation?.resume()
         playbackContinuation = nil
     }
@@ -679,6 +699,8 @@ final class VoiceService: NSObject, ObservableObject {
     /// more than once and safe to call when nothing is playing.
     func adoptStreamedTurn(as key: String) {
         streamedTurnKey = key
+        // The character's local reply scope was fixed at enqueue time; only
+        // playback row keys are adopted here, including prefetched pieces.
         // The clip in the speaker right now, if it came from the stream.
         if isClipPlaying, nowPlayingKey == nil { nowPlayingKey = key }
         // Everything still waiting its turn.
@@ -697,7 +719,8 @@ final class VoiceService: NSObject, ObservableObject {
         guard !trimmed.isEmpty else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             supersedePausedClip()
-            speakQueue.append((trimmed, nil, nil, voiceId, rate, nil, continuation))
+            speakQueue.append((trimmed, nil, nil, voiceId, rate, nil,
+                characterReplyScopes.key(replyScopeKey: nil), continuation))
             guard !isPumping, !pumpScheduled else { return }
             pumpScheduled = true
             Task { await self.pumpSpeakQueue(); self.pumpScheduled = false }
@@ -731,7 +754,8 @@ final class VoiceService: NSObject, ObservableObject {
         nowPlayingKey = nil
         nowPlayingAgentID = nil
         playingCharacterCue = .neutral
-        carriedCharacterCue = .neutral
+        characterCueState.reset()
+        pausedCharacterElapsed = 0
         isPumping = false
         streamedTurnKey = nil
     }
@@ -749,11 +773,13 @@ final class VoiceService: NSObject, ObservableObject {
         // pause — same contract (a pause is not a stop; the queue waits).
         if streamedClipActive {
             guard streamingPlayer.isPlaying else { return }
+            pausedCharacterElapsed = streamingPlayer.characterElapsed
             streamingPlayer.pause()
             isPaused = true
             return
         }
         guard let player = currentPlayer, player.isPlaying else { return }
+        pausedCharacterElapsed = player.currentTime
         player.pause()
         isPaused = true
     }
@@ -966,7 +992,8 @@ final class VoiceService: NSObject, ObservableObject {
                     // `?? streamedTurnKey` covers the pieces that were prefetched
                     // BEFORE the reload handed us an id — they are already out of
                     // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: characterCue(for: current.item.text))
+                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                        cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
                     playedAnything = true
                 } else {
                     // Session 23's boop lives on below, at the END of the pump and
@@ -1007,7 +1034,7 @@ final class VoiceService: NSObject, ObservableObject {
                 if hasAudio {
                     streamedClipActive = true
                     streamedOK = await streamingPlayer.play(fetch: fetch, rate: Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor), onPlaybackStarted: { [weak self] in
-                        guard let self else { return }
+                        guard let self, generation == self.cancelGeneration else { return }
                         self.isClipPlaying = true
                         // Known bug #2: pause a running book the moment this
                         // clip is really audible (any VoiceService, not only
@@ -1016,7 +1043,9 @@ final class VoiceService: NSObject, ObservableObject {
                         self.isPaused = false
                         self.nowPlayingKey = current.item.key ?? self.streamedTurnKey
                         self.nowPlayingAgentID = current.item.agentId
-                        self.playingCharacterCue = self.characterCue(for: current.item.text)
+                        self.pausedCharacterElapsed = 0
+                        self.playingCharacterCue = self.characterCue(for: current.item.text,
+                            agentID: current.item.agentId, key: current.item.characterReplyKey)
                     })
                     streamedClipActive = false
                     isClipPlaying = false
@@ -1047,7 +1076,8 @@ final class VoiceService: NSObject, ObservableObject {
                         return
                     }
                     if let data {
-                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId, cue: characterCue(for: current.item.text))
+                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                            cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
                         playedAnything = true
                     } else {
                         failedPieces += 1
@@ -1072,6 +1102,9 @@ final class VoiceService: NSObject, ObservableObject {
         isSpeaking = false
         isPumping = false
         streamedTurnKey = nil
+        characterCueState.finish()
+        playingCharacterCue = .neutral
+        pausedCharacterElapsed = 0
     }
 
     /* PART 91.10 — SYNTHESIS SPLIT OUT OF PLAYBACK, so the next sentence can
@@ -1278,6 +1311,7 @@ final class VoiceService: NSObject, ObservableObject {
                     nowPlayingKey = key
                     nowPlayingAgentID = agentID
                     playingCharacterCue = cue
+                    pausedCharacterElapsed = 0
                     #if DEBUG && targetEnvironment(simulator)
                     CharacterAuditCheckpoint.mark("Voice player started")
                     #endif
@@ -1290,7 +1324,8 @@ final class VoiceService: NSObject, ObservableObject {
 
     #if DEBUG && targetEnvironment(simulator)
     func auditPlay(_ data: Data, agentID: String, direction: String) async {
-        await playAudio(data, key: "character-audit", agentID: agentID, cue: CharacterCue.fromSpeech(direction))
+        await playAudio(data, key: "character-audit", agentID: agentID,
+            cue: characterCue(for: direction, agentID: agentID, key: "character-audit"))
     }
     #endif
 

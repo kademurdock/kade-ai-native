@@ -571,6 +571,8 @@ let angelBefore = count
 runAngelVectorMotionChecks(check)
 runCharacterAnimationBudgetTests(check)
 runCharacterBodyPerformanceChecks(check)
+runCharacterOutputEpisodeChecks(check)
+runCharacterConversationBodyChecks(check)
 runCharacterDellaArmMotionChecks(check)
 runCharacterDellaArticulatedGeometryChecks(check)
 runCharacterDellaHostLayoutChecks(check)

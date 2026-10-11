@@ -124,6 +124,35 @@ func runAngelVectorMotionChecks(_ check: (Bool, String) -> Void) {
     check(ornamentValues(AngelVectorMotion.ornaments(time: .greatestFiniteMagnitude,
           active: true, expression: .calm)).allSatisfy(\.isFinite),
           "Very large finite Angel clocks remain bounded")
+
+    let transition = AngelVectorFaceClock()
+    let first = transition.pose(face: .tender, blink: 0, time: 100, active: true, activity: .speaking)
+    let start = transition.pose(face: .angry, blink: 0, time: 101, active: true, activity: .speaking)
+    check(start == first, "Angel changes expression from the current contours without a discontinuity")
+    let middle = transition.pose(face: .angry, blink: 0, time: 101.14, active: true, activity: .speaking)
+    let end = transition.pose(face: .angry, blink: 0, time: 101.3, active: true, activity: .speaking)
+    check(middle.leftBrowSlope < first.leftBrowSlope && middle.leftBrowSlope > end.leftBrowSlope,
+          "Angel smoothly passes through an intermediate brow pose")
+    check(end == angry, "Angel finishes the transition at the authored expression")
+    let stopped = transition.pose(face: .angry, blink: 1, time: 102, active: false, activity: .speaking)
+    check(stopped == neutral, "Policy stop clears Angel's pending expression motion")
+    let reopened = transition.pose(face: .tender, blink: 0, time: 103, active: true, activity: .speaking)
+    check(reopened == first, "Angel resume starts with the current expression rather than an old transition")
+    let attention = AngelVectorMotion.attention(time: 18.2, activity: .listening)
+    check(attention.0 > 0 && AngelVectorMotion.attention(time: 22, activity: .listening).0 == 0,
+          "Angel's listening glance settles back toward the person")
+    for state in [CharacterActivity.listening, .thinking] {
+        var seen = false
+        for tick in 0...300 {
+            let pose = AngelVectorMotion.arms(time: Double(tick) / 10, level: 0, active: true,
+                presentation: CharacterPresentation(activity: state))
+            seen = seen || pose != .still
+            check(abs(pose.degrees) <= AngelVectorArmPose.maximumDegrees
+                  && abs(pose.offsetY) <= AngelVectorArmPose.maximumOffsetY,
+                  "Angel's attentive clasp stays inside its connected arm limits")
+        }
+        check(seen, "Angel has an attentive clasp pose without pretending to speak")
+    }
 }
 
 /// Conservative control-point hulls enclose each Bezier curve. Every authored
