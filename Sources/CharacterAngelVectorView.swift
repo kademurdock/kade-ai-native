@@ -15,6 +15,38 @@ enum CharacterAngelArtwork {
               art.isValid else { return nil }
         return art
     }()
+    /// Compile the verified master once. Frames only change transforms and the
+    /// small facial curves, rather than rebuilding all 149 ornamental paths.
+    fileprivate static let drawing = loaded.map(CharacterAngelVectorDrawing.init)
+    #if DEBUG && targetEnvironment(simulator)
+    struct CacheAudit {
+        let shapeCount: Int
+        let groupCount: Int
+        let retainsSourceOrder: Bool
+        let finiteGeometry: Bool
+        let paintContractsMatch: Bool
+    }
+    /// Inspect the actual compiled drawing used by Canvas. This diagnostic is
+    /// absent from production and does not rebuild or replace any geometry.
+    static var cacheAudit: CacheAudit? {
+        guard let art = loaded, let cached = drawing else { return nil }
+        let shapes = cached.groups.values.flatMap { $0 }
+        let source = Dictionary(uniqueKeysWithValues: art.shapes.map { ($0.id, $0) })
+        return CacheAudit(shapeCount: shapes.count, groupCount: cached.groups.count,
+            retainsSourceOrder: CharacterAngelVectorArt.groups.allSatisfy { group in
+                cached.groups[group]?.map(\.id) == art.shapes.filter { $0.group == group }.map(\.id)
+            }, finiteGeometry: shapes.allSatisfy { shape in
+                let bounds = shape.path.boundingRect
+                return !shape.path.isEmpty && [bounds.minX, bounds.minY, bounds.width, bounds.height].allSatisfy(\.isFinite)
+            }, paintContractsMatch: shapes.allSatisfy { shape in
+                guard let original = source[shape.id] else { return false }
+                return (shape.fill == nil) == (original.fill == "none")
+                    && (shape.stroke == nil) == (original.stroke == nil)
+                    && shape.strokeStyle.map { Double($0.lineWidth) } == original.strokeWidth
+                    && shape.opacity == (original.opacity ?? 1)
+            })
+    }
+    #endif
     static func approved(agentID: String?, avatarPath: String?) -> CharacterAngelVectorArt? {
         guard agentID == CharacterMotion.angelID,
               CharacterMotion.prepared(id: agentID, path: avatarPath) else { return nil }
@@ -24,6 +56,81 @@ enum CharacterAngelArtwork {
         bodyDegrees: 0.4, headOffsetPixels: 2, bodyOffsetPixels: 1.5)
 }
 
+fileprivate struct CharacterAngelVectorDrawing {
+    struct Shape {
+        let id: String
+        let path: Path
+        let fill: GraphicsContext.Shading?
+        let stroke: GraphicsContext.Shading?
+        let strokeStyle: StrokeStyle?
+        let opacity: Double
+        let glimmers: Bool
+        let claspedArm: Bool
+    }
+    let groups: [String: [Shape]]
+
+    init(_ art: CharacterAngelVectorArt) {
+        let paints = art.gradients.mapValues { paint -> GraphicsContext.Shading in
+            let gradient = Gradient(stops: paint.stops.map {
+                Gradient.Stop(color: Self.color($0.color, opacity: $0.opacity ?? 1), location: $0.at)
+            })
+            if paint.kind == "radial", let center = paint.center, let radius = paint.radius {
+                return .radialGradient(gradient, center: CGPoint(x: center[0], y: center[1]),
+                    startRadius: 0, endRadius: radius)
+            }
+            let start = paint.start!, end = paint.end!
+            return .linearGradient(gradient, startPoint: CGPoint(x: start[0], y: start[1]),
+                endPoint: CGPoint(x: end[0], y: end[1]))
+        }
+        func shading(_ fill: String) -> GraphicsContext.Shading {
+            paints[fill] ?? .color(Self.color(fill))
+        }
+        var compiled: [String: [Shape]] = [:]
+        for shape in art.shapes {
+            compiled[shape.group, default: []].append(Shape(id: shape.id,
+                path: Self.path(shape.path),
+                fill: shape.fill == "none" ? nil : shading(shape.fill),
+                stroke: shape.stroke.map(shading),
+                strokeStyle: shape.strokeWidth.map {
+                    StrokeStyle(lineWidth: $0, lineCap: .round, lineJoin: .round)
+                }, opacity: shape.opacity ?? 1,
+                glimmers: shape.id.hasPrefix("sparkle") || shape.id.hasPrefix("robe-jewel-")
+                    || shape.id.hasPrefix("robe-sequin-") || shape.id.hasPrefix("halo-pearl-")
+                    || shape.id.hasPrefix("hair-pearl-") || shape.id == "heart-star",
+                claspedArm: AngelVectorArmPose.shapeIDs.contains(shape.id)))
+        }
+        groups = compiled
+    }
+
+    private static func path(_ commands: [CharacterAngelVectorArt.Command]) -> Path {
+        var value = Path()
+        for command in commands {
+            let v = command.v
+            switch command.op {
+            case "M": value.move(to: CGPoint(x: v[0], y: v[1]))
+            case "L": value.addLine(to: CGPoint(x: v[0], y: v[1]))
+            case "Q": value.addQuadCurve(to: CGPoint(x: v[2], y: v[3]), control: CGPoint(x: v[0], y: v[1]))
+            case "C": value.addCurve(to: CGPoint(x: v[4], y: v[5]),
+                control1: CGPoint(x: v[0], y: v[1]), control2: CGPoint(x: v[2], y: v[3]))
+            case "Z": value.closeSubpath()
+            default: break
+            }
+        }
+        return value
+    }
+
+    static func color(_ value: String, opacity: Double = 1) -> Color {
+        var digits = String(value.dropFirst())
+        if digits.count == 3 { digits = digits.map { String(repeating: String($0), count: 2) }.joined() }
+        let number = UInt64(digits, radix: 16) ?? 0
+        let alpha = digits.count == 8 ? Double(number & 0xff) / 255 : 1
+        let rgb = digits.count == 8 ? number >> 8 : number
+        return Color(.sRGB, red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255, blue: Double(rgb & 0xff) / 255,
+            opacity: alpha * opacity)
+    }
+}
+
 /// Angel's own shaded vector face and clothing. One small decorative Canvas
 /// consumes the existing portrait timeline; it owns no audio, timers or text.
 struct CharacterAngelVectorView: View {
@@ -31,6 +138,7 @@ struct CharacterAngelVectorView: View {
     let facial: AngelVectorFacialPose
     let mouth: AngelVectorMouthPose
     let ornaments: AngelVectorOrnamentPose
+    var arms = AngelVectorArmPose.still
     var motion = CharacterBustPose(headAngle: 0, bodyAngle: 0, headOffsetY: 0, bodyOffsetY: 0)
 
     var body: some View {
@@ -66,64 +174,28 @@ struct CharacterAngelVectorView: View {
         context.translateBy(x: -pivot[0], y: -pivot[1])
     }
 
-    private func path(_ commands: [CharacterAngelVectorArt.Command]) -> Path {
-        var value = Path()
-        for command in commands {
-            let v = command.v
-            switch command.op {
-            case "M": value.move(to: CGPoint(x: v[0], y: v[1]))
-            case "L": value.addLine(to: CGPoint(x: v[0], y: v[1]))
-            case "Q": value.addQuadCurve(to: CGPoint(x: v[2], y: v[3]), control: CGPoint(x: v[0], y: v[1]))
-            case "C": value.addCurve(to: CGPoint(x: v[4], y: v[5]),
-                control1: CGPoint(x: v[0], y: v[1]), control2: CGPoint(x: v[2], y: v[3]))
-            case "Z": value.closeSubpath()
-            default: break // Validated before this Canvas is constructed.
-            }
-        }
-        return value
-    }
-
     private func color(_ value: String, opacity: Double = 1) -> Color {
-        var digits = String(value.dropFirst())
-        if digits.count == 3 { digits = digits.map { String(repeating: String($0), count: 2) }.joined() }
-        let number = UInt64(digits, radix: 16) ?? 0
-        let alpha = digits.count == 8 ? Double(number & 0xff) / 255 : 1
-        let rgb = digits.count == 8 ? number >> 8 : number
-        return Color(.sRGB, red: Double((rgb >> 16) & 0xff) / 255,
-            green: Double((rgb >> 8) & 0xff) / 255, blue: Double(rgb & 0xff) / 255,
-            opacity: alpha * opacity)
-    }
-
-    private func shading(_ fill: String) -> GraphicsContext.Shading {
-        guard let paint = art.gradients[fill] else { return .color(color(fill)) }
-        let gradient = Gradient(stops: paint.stops.map {
-            Gradient.Stop(color: color($0.color, opacity: $0.opacity ?? 1), location: $0.at)
-        })
-        if paint.kind == "radial", let center = paint.center, let radius = paint.radius {
-            return .radialGradient(gradient, center: CGPoint(x: center[0], y: center[1]),
-                startRadius: 0, endRadius: radius)
-        }
-        let start = paint.start!, end = paint.end!
-        return .linearGradient(gradient, startPoint: CGPoint(x: start[0], y: start[1]),
-            endPoint: CGPoint(x: end[0], y: end[1]))
+        CharacterAngelVectorDrawing.color(value, opacity: opacity)
     }
 
     private func draw(group: String, into context: inout GraphicsContext) {
-        for shape in art.shapes where shape.group == group {
+        for shape in CharacterAngelArtwork.drawing?.groups[group] ?? [] {
             var local = context
-            local.opacity = shape.opacity ?? 1
-            if shape.id.hasPrefix("sparkle") || shape.id.hasPrefix("robe-jewel-")
-                || shape.id.hasPrefix("robe-sequin-") || shape.id.hasPrefix("halo-pearl-")
-                || shape.id.hasPrefix("hair-pearl-") || shape.id == "heart-star" {
+            if shape.claspedArm {
+                // Sleeves, hands and the finger seam share one transform.
+                // Keep their authored draw order and overlapping wrist joins.
+                local.translateBy(x: arms.offsetX * art.canvas, y: arms.offsetY * art.canvas)
+                rotate(&local, degrees: arms.degrees, around: AngelVectorArmPose.pivot)
+            }
+            local.opacity = shape.opacity
+            if shape.glimmers {
                 // Neutral SVG and native art have exactly the same opacity.
                 // Slow changes only dim an authored jewel by at most 10.5%.
                 local.opacity *= 1 - abs(ornaments.sparkle - AngelVectorOrnamentPose.still.sparkle) * 0.7
             }
-            let curve = path(shape.path)
-            if shape.fill != "none" { local.fill(curve, with: shading(shape.fill)) }
-            if let stroke = shape.stroke, let width = shape.strokeWidth {
-                local.stroke(curve, with: shading(stroke), style: StrokeStyle(
-                    lineWidth: width, lineCap: .round, lineJoin: .round))
+            if let fill = shape.fill { local.fill(shape.path, with: fill) }
+            if let stroke = shape.stroke, let style = shape.strokeStyle {
+                local.stroke(shape.path, with: stroke, style: style)
             }
         }
     }

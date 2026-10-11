@@ -100,12 +100,13 @@ struct CallView: View {
                         // speaking. See KadeCallStateOrb for the motion gates.
                         if !callService.liveOn && [.listening, .thinking, .speaking].contains(callService.status) {
                             CharacterPortraitView(agentID: agentId, name: agentName,
-                                playing: true,
+                                playing: callService.status == .speaking,
                                 level: { callService.characterLevel }, listening: true,
                                 presentation: { callService.characterPresentation },
                                 stage: true, side: CharacterStageLayout.callSide(
                                     width: Double(geometry.size.width), height: Double(geometry.size.height),
-                                    accessibilityText: dynamicTypeSize.isAccessibilitySize))
+                                    accessibilityText: dynamicTypeSize.isAccessibilitySize),
+                                viewport: geometry.frame(in: .global))
                         } else {
                             KadeCallStateOrb(status: callService.status).padding(.bottom, 8)
                         }

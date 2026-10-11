@@ -46,6 +46,24 @@ struct AngelVectorOrnamentPose {
         rightWingDegrees: 0, haloOffsetY: 0, haloDegrees: 0, sparkle: 0.36)
 }
 
+/// Angel's original hands are clasped and her cuffs overlap them. Both sleeves,
+/// both hands and their finger marks therefore share ONE rigid transform.
+/// Rotating each hand at a separate shoulder would tear the clasp and wrists.
+/// Offsets are fractions of the unchanged 1024-pixel square master canvas.
+struct AngelVectorArmPose: Equatable {
+    let degrees: Double
+    let offsetX: Double
+    let offsetY: Double
+
+    static let pivot = [512.0, 752.0]
+    static let shapeIDs: Set<String> = ["sleeve-left", "sleeve-right",
+        "left-hand", "right-hand", "fingers"]
+    static let maximumDegrees = 1.5
+    static let maximumOffsetX = 0.004
+    static let maximumOffsetY = 0.008
+    static let still = AngelVectorArmPose(degrees: 0, offsetX: 0, offsetY: 0)
+}
+
 enum AngelVectorMotion {
     /// All seventeen existing semantic faces have Angel's own parameter pose.
     /// The selected pose can change immediately while its eyelid aperture stays
@@ -127,6 +145,39 @@ enum AngelVectorMotion {
             aperture: opening * (0.72 + 0.28 * intensity), roundness: roundness,
             smile: expression.smile, upperTeeth: upperTeeth,
             lowerTeeth: lowerTeeth, tongue: tongue)
+    }
+
+    /// Conservative body language from Angel's authored clasped-arm geometry.
+    /// There are no new limbs or drawn pixels. The shared turn clock prevents
+    /// sentence boundaries from replaying a full arm gesture, while actual
+    /// output energy parks the entire clasp during silence and other speakers.
+    static func arms(time: Double, level: Double, active: Bool,
+                     presentation: CharacterPresentation,
+                     performanceElapsed: Double? = nil) -> AngelVectorArmPose {
+        guard active, time.isFinite, time >= 0, level.isFinite,
+              presentation.activity == .speaking else { return .still }
+        let audio = min(1, max(0, (level - 0.008) * 5))
+        guard audio > 0 else { return .still }
+        let elapsed = performanceElapsed ?? presentation.elapsed
+        let gesture = CharacterFigureMotion.gestureEnvelope(elapsed: elapsed,
+            tempo: CharacterFigureMotion.profile(id: CharacterMotion.angelID).tempo)
+        guard gesture > 0 else { return .still }
+        let recipe: (Double, Double, Double)
+        switch presentation.expression {
+        case .surprised, .excited: recipe = (1.20, 0, -0.008)
+        case .amused, .playful: recipe = (1.40, 0.003, -0.006)
+        case .warm, .tender: recipe = (-0.65, -0.001, -0.006)
+        case .concerned, .sad, .afraid: recipe = (-0.55, 0, -0.005)
+        case .skeptical, .dry, .disgusted: recipe = (-1.30, -0.004, -0.002)
+        case .curious, .thoughtful: recipe = (0.90, 0.002, -0.004)
+        case .confident, .serious, .smug: recipe = (-0.45, 0, -0.003)
+        case .angry, .frustrated: recipe = (0.40, 0.001, -0.006)
+        case .tired: recipe = (-0.35, -0.001, 0.003)
+        case .neutral, .calm: recipe = (0.35, 0, -0.003)
+        }
+        let amount = gesture * audio
+        return AngelVectorArmPose(degrees: recipe.0 * amount,
+            offsetX: recipe.1 * amount, offsetY: recipe.2 * amount)
     }
 
     /// Uses the portrait's shared time/active state. No timer, random positions,

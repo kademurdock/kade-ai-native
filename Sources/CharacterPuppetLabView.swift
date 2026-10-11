@@ -48,7 +48,7 @@ struct CharacterPuppetLabView: View {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.menu)
                 Picker("Delivery", selection: $expression) {
-                    ForEach([CharacterExpression.warm, .amused, .serious, .concerned, .skeptical, .surprised], id: \.self) {
+                    ForEach(CharacterExpression.allCases, id: \.self) {
                         Text($0.rawValue.capitalized).tag($0)
                     }
                 }.pickerStyle(.menu)
