@@ -646,7 +646,7 @@ def sign(source, receipt):
     register_asc_leaf(folder)
     receipt["uploadStatus"] = "unknown"
     runner.run("single-upload-only", asc("publish") + ["--path", str(ipa), "--altool-retries", "1",
-               "--max-find-build-wait", "0", "--max-build-processing-wait", "0"], seconds=300, credentials=True)
+               "--max-find-build-wait", "1", "--max-build-processing-wait", "0"], seconds=300, credentials=True)
     receipt.update({"passed": True, "uploadStatus": "acknowledged", "processingVerified": False})
 
 
