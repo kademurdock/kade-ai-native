@@ -129,9 +129,15 @@ jobs:
         timeout-minutes: 2
         run: python3 dev/della-host-layout-audit.py ui-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 
+      - name: Reboot and preflight the Pro Max for the all-cast suite
+        id: completion-boot
+        if: ${{ always() && !cancelled() && steps.native-ui-results.outcome == 'success' }}
+        timeout-minutes: 8
+        run: python3 -B dev/puppet-completion-audit.py boot --expected-sha "$KADE_EXPECTED_COMMIT"
+
       - name: Require all-cast keyposes, motion stops and roomy sending with the exact compiled runner
         id: completion-ui
-        if: ${{ always() && !cancelled() && steps.native-ui-results.outcome == 'success' }}
+        if: ${{ always() && !cancelled() && steps.completion-boot.outcome == 'success' }}
         timeout-minutes: 12
         run: python3 -B dev/puppet-completion-audit.py ui --expected-sha "$KADE_EXPECTED_COMMIT"
 

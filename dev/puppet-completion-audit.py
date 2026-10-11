@@ -74,6 +74,13 @@ READY_FIELDS = {'schema','source','phase','character','avatarPath','appearance',
 
 def require(value, message): host.require(value, message)
 def integer(value, lower=0, upper=256): return type(value) is int and lower<=value<=upper
+def require_boot_order(regression,boot,launch):
+    moments=[datetime.fromisoformat(record[key]) for record,key in
+             ((regression,'finishedAtUtc'),(boot,'startedAtUtc'),(boot,'finishedAtUtc'),(launch,'startedAtUtc'))]
+    require(all(moment.tzinfo is not None for moment in moments)
+            and all(first<second for first,second in zip(moments,moments[1:])),
+            'Completion boot/launch must follow the completed regression suite in order')
+
 def save(name, data):
     OUT.mkdir(parents=True,exist_ok=True)
     packed=(json.dumps(data,indent=2)+'\n').encode()
@@ -212,7 +219,12 @@ def ui(expected):
         regression=json.loads((host.OUT/'ui-tests.json').read_text())
         require(regression.get('source')==initial and regression.get('passed') is True
                 and regression.get('nativeUITreeVerified') is True,'Completion UI requires all24 real host regressions first')
+        boot=json.loads((host.OUT/'ui-boot-completion.json').read_bytes())
+        host.validate_ui_boot(boot,'large',initial)
+        require(boot.get('passed') is True,'Completion UI requires its own successful fresh Pro Max boot')
         launch=host.run_ui(expected,'large',completion=True);report['launch']=launch
+        require(launch.get('boot')==boot,'Completion UI differs from its distinct native boot record')
+        require_boot_order(regression,boot,launch)
         require(launch['passed'] is True and launch['exitCode']==0 and not launch['timedOut'] and not launch['logLimitExceeded'],
                 'Completion native UI launch did not complete')
         log=(host.OUT/'ui-tests-completion.log').read_text(encoding='utf-8',errors='replace')
@@ -233,6 +245,16 @@ def ui(expected):
                       logSha256=host.sha(host.OUT/'ui-tests-completion.log'),
                       regressionReceiptSha256=host.sha(host.OUT/'ui-tests.json'))
     finally:
+        # run_ui saves its native process/last-method record even when it raises.
+        launch_path=host.OUT/'ui-run-completion.json'
+        if launch_path.is_file():
+            require(0<launch_path.stat().st_size<=256*1024,'Completion launch diagnostic exceeds256KiB')
+            retained=json.loads(launch_path.read_bytes())
+            require(retained.get('schema')=='kade.puppet-completion-ui-launch.v1'
+                    and retained.get('source')==initial and retained.get('device')=='large',
+                    'Completion launch diagnostic source/class drift')
+            if 'launch' in report:require(report['launch']==retained,'Saved completion launch differs from native return')
+            report['launch']=retained
         report['finishedAtUtc']=host.now();save('ui-tests.json',report)
     return {'passed':True,'nativeUITreeVerified':True,'methods':3,'phaseChecks':50}
 
@@ -304,6 +326,16 @@ def emit(expected):
         if path.is_file():
             require(path.stat().st_size<=256*1024,'Completion JSON exceeds256KiB')
             record=json.loads(path.read_bytes());require(record.get('source')==initial,'Completion evidence source drift')
+            if name=='ui-tests.json' and record.get('passed') is True:
+                boot_path=host.OUT/'ui-boot-completion.json'
+                require(boot_path.is_file() and 0<boot_path.stat().st_size<=256*1024,'Distinct completion boot record missing/oversized')
+                boot=json.loads(boot_path.read_bytes());host.validate_ui_boot(boot,'large',initial)
+                require(boot.get('passed') is True and record.get('launch',{}).get('boot')==boot,
+                        'Completion evidence boot differs from the distinct native preflight')
+                regression=json.loads((host.OUT/'ui-tests.json').read_bytes())
+                require(regression.get('source')==initial and regression.get('passed') is True,
+                        'Completion evidence lost the successful regression source')
+                require_boot_order(regression,boot,record['launch'])
             files[name]=path.read_bytes()
             if name=='receipt.json':
                 for phase,metadata in record.get('captures',{}).items():
@@ -333,7 +365,7 @@ def emit(expected):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('ui','capture','emit-all'));parser.add_argument('--expected-sha',required=True)
+    parser.add_argument('action',choices=('boot','ui','capture','emit-all'));parser.add_argument('--expected-sha',required=True)
     args=parser.parse_args()
     source_path=host.OUT/'source.json'
     require(source_path.is_file() and 0<source_path.stat().st_size<=256*1024,'Original completion source record missing or oversized')
@@ -342,11 +374,12 @@ def main():
     if args.action=='emit-all':host._OPERATION_DEADLINE=min(time.time()+60,started+host.JOB_SECONDS-15)
     else:
         shared=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
-        action=time.time()+(660 if args.action=='ui' else CAPTURE_SECONDS+15)
+        action=time.time()+(host.BOOT_SECONDS+30 if args.action=='boot' else 660 if args.action=='ui' else CAPTURE_SECONDS+15)
         host._OPERATION_DEADLINE=min(shared,action)
         host._DEADLINE_ROLE='actionGuardDeadline' if action<shared else 'sharedOperationDeadline'
     host.initial_source(args.expected_sha)
-    if args.action=='ui':print(json.dumps(ui(args.expected_sha)))
+    if args.action=='boot':print(json.dumps(host.boot_ui(args.expected_sha,'large',completion=True)))
+    elif args.action=='ui':print(json.dumps(ui(args.expected_sha)))
     elif args.action=='capture':print(json.dumps(capture(args.expected_sha)))
     else:host.emit(args.expected_sha);emit(args.expected_sha)
 

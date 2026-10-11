@@ -805,7 +805,8 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
     return report
 
 
-def boot_ui(expected,key):
+def boot_ui(expected,key,completion=False):
+    require(not completion or key=='large','Completion boot requires the same Pro Max')
     started=time.monotonic()
     initial=initial_source(expected)
     report={'source':initial,'device':key,'passed':False,'timeoutSeconds':BOOT_SECONDS,'startedAtUtc':now()}
@@ -836,14 +837,14 @@ def boot_ui(expected,key):
         raise
     finally:
         report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
-        save('ui-boot-'+key+'.json',report)
+        save('ui-boot-completion.json' if completion else 'ui-boot-'+key+'.json',report)
         if 'appPreflight' in report:
             compact={field:value for field,value in report['appPreflight'].items()
                      if field not in ('source','compiledRunner')}
             compact['source']=initial['sha']
             encoded=json.dumps(compact,separators=(',',':'))
             require(len(encoded.encode())<=64*1024,'Oversized bounded early preflight diagnostic')
-            print('KADE_DELLA_HOST_APP_PREFLIGHT '+encoded,flush=True)
+            print(('KADE_PUPPET_COMPLETION_APP_PREFLIGHT ' if completion else 'KADE_DELLA_HOST_APP_PREFLIGHT ')+encoded,flush=True)
     return report
 
 
@@ -958,7 +959,7 @@ def run_ui(expected,key,completion=False):
     started=time.monotonic();process=None
     try:
         require(sys.platform=='darwin','Bounded native UI launch requires standard macOS')
-        boot=json.loads((OUT/('ui-boot-'+key+'.json')).read_text())
+        boot=json.loads((OUT/('ui-boot-completion.json' if completion else 'ui-boot-'+key+'.json')).read_text())
         validate_ui_boot(boot,key,initial)
         require(boot.get('source')==initial and boot.get('device')==key and boot.get('passed') is True,
                 'UI launch requires the exact successful explicit device boot')

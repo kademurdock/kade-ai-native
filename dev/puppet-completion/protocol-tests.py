@@ -35,7 +35,7 @@ subprocess.Popen = forbidden
 spec = importlib.util.spec_from_file_location("puppet_completion_protocol", ROOT / "dev/puppet-completion-audit.py")
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
-for entry in ("source", "initial_source", "sim", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit"):
+for entry in ("source", "initial_source", "sim", "boot_ui", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit"):
     setattr(audit.host, entry, forbidden)
 for entry in ("save", "ui", "capture", "emit", "main"):
     setattr(audit, entry, forbidden)
@@ -115,6 +115,30 @@ def fixture(person, pose):
 
 
 class ProtocolChecks(unittest.TestCase):
+    def test_distinct_boot_order_and_unchanged_proof_budgets(self):
+        global CHECKS
+        regression={"finishedAtUtc":"2026-10-11T05:00:00+00:00"}
+        boot={"startedAtUtc":"2026-10-11T05:00:01+00:00","finishedAtUtc":"2026-10-11T05:00:02+00:00"}
+        launch={"startedAtUtc":"2026-10-11T05:00:03+00:00"}
+        CHECKS += 1
+        audit.require_boot_order(regression,boot,launch)
+        for owner,key,value in ((regression,"finishedAtUtc",boot["startedAtUtc"]),
+                                (boot,"startedAtUtc",regression["finishedAtUtc"]),
+                                (boot,"finishedAtUtc",boot["startedAtUtc"]),
+                                (launch,"startedAtUtc",boot["finishedAtUtc"]),
+                                (launch,"startedAtUtc","2026-10-11T04:59:59+00:00"),
+                                (launch,"startedAtUtc","2026-10-11T05:00:03")):
+            old=owner[key];owner[key]=value
+            CHECKS += 1
+            with self.assertRaises(RuntimeError):audit.require_boot_order(regression,boot,launch)
+            owner[key]=old
+        for actual,expected in ((audit.host.BOOT_SECONDS,420),(audit.host.UI_SECONDS["large"],600),
+                                (audit.host.UI_SECONDS["small"],480),(audit.host.OPERATION_SECONDS,3120),
+                                (audit.host.JOB_SECONDS,3300),(audit.CAPTURE_SECONDS,300),(audit.MAX_FILES,25),
+                                (len(audit.PHASES),21),(len(audit.EVENTS),28),(len(audit.UI_METHODS),3)):
+            CHECKS += 1
+            self.assertEqual(actual,expected)
+
     def accepted(self, data):
         global CHECKS
         CHECKS += 1

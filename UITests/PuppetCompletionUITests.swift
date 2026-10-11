@@ -15,32 +15,27 @@ final class PuppetCompletionUITests: XCTestCase {
     ]
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor
     func testRoomySendingKeepsBodyAndComposer() throws {
         let app = XCUIApplication()
         app.launchEnvironment = ["KADE_A11Y_AUDIT": "1", "KADE_CHARACTER_AUDIT": "1",
             "KADE_DELLA_HOST_AUDIT": "1", "KADE_DELLA_HOST_CASE": "chat-roomy-light",
             "KADE_PUPPET_HOST_SENDING": "1"]
         app.launch()
-        let stop = app.buttons["della-host.chat.send"]
-        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        let native = try sendingSnapshot(app)
+        let stop = try native.exact("della-host.chat.send", type: .button)
         XCTAssertEqual(stop.label, "Stop")
-        XCTAssertTrue(stop.isEnabled && stop.isHittable)
+        XCTAssertTrue(stop.isEnabled)
+        XCTAssertTrue(app.buttons["della-host.chat.send"].isHittable)
         XCTAssertGreaterThanOrEqual(stop.frame.width, 44)
         XCTAssertGreaterThanOrEqual(stop.frame.height, 44)
-        XCTAssertTrue(app.frame.insetBy(dx: -1, dy: -1).contains(stop.frame))
-        let matches = app.descendants(matching: .any).matching(identifier: "della-host.chat.composer-field")
-        XCTAssertEqual(matches.count, 1)
-        let field = matches.element(boundBy: 0)
+        XCTAssertTrue(native.window.insetBy(dx: -1, dy: -1).contains(stop.frame))
+        let field = try native.exact("della-host.chat.composer-field")
         XCTAssertTrue(field.elementType == .textField || field.elementType == .textView)
         XCTAssertEqual(field.label, "Message")
-        XCTAssertTrue(app.frame.insetBy(dx: -1, dy: -1).contains(field.frame))
+        XCTAssertTrue(native.window.insetBy(dx: -1, dy: -1).contains(field.frame))
         XCTAssertFalse(field.frame.intersects(stop.frame))
-        let observation = app.staticTexts["della-host.sending-geometry"]
-        XCTAssertTrue(observation.waitForExistence(timeout: 10))
-        let predicate = NSPredicate { object, _ in
-            ((object as? XCUIElement)?.label ?? "pending").hasPrefix("{")
-        }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: observation)], timeout: 10), .completed)
+        let observation = try native.exact("della-host.sending-geometry", type: .staticText)
         let data = try XCTUnwrap(observation.label.data(using: .utf8))
         let geometry = try JSONDecoder().decode([String: [Double]].self, from: data)
         XCTAssertEqual(Set(geometry.keys), Set(["stage", "transcript", "composer"]))
@@ -61,53 +56,56 @@ final class PuppetCompletionUITests: XCTestCase {
         app.terminate()
     }
 
+    @MainActor
     func testAllCastKeyposes() throws {
         let app = launch(events: false)
         let phases = people.flatMap { person in ["neutral", "gesturePeak", "settled"].map { person + "-" + $0 } }
         for (index, phase) in phases.enumerated() {
-            try ready(app, phase: phase)
+            let observed = try ready(app, phase: phase)
             let person = people[index / 3]
-            XCTAssertEqual(text(app, "renderer"), renderers[person])
-            XCTAssertGreaterThanOrEqual(number(app, "activeSamples"), 3)
-            XCTAssertGreaterThanOrEqual(number(app, "distinctVectors"), 2)
-            XCTAssertEqual(number(app, "fps"), index % 3 == 0 ? 8 : 24)
-            XCTAssertEqual(number(app, "face"), index % 3 == 0 ? 0 : 1)
-            if index % 3 == 1 { XCTAssertTrue((1...8).contains(number(app, "viseme"))) }
-            else { XCTAssertEqual(number(app, "viseme"), 0) }
+            XCTAssertEqual(observed.text("renderer"), renderers[person])
+            XCTAssertGreaterThanOrEqual(observed.number("activeSamples"), 3)
+            XCTAssertGreaterThanOrEqual(observed.number("distinctVectors"), 2)
+            XCTAssertEqual(observed.number("fps"), index % 3 == 0 ? 8 : 24)
+            XCTAssertEqual(observed.number("face"), index % 3 == 0 ? 0 : 1)
+            if index % 3 == 1 { XCTAssertTrue((1...8).contains(observed.number("viseme"))) }
+            else { XCTAssertEqual(observed.number("viseme"), 0) }
             print("KADE_PUPPET_COMPLETION_UI_PHASE_PASS " + phase)
-            if index + 1 < phases.count { try next(app) }
+            if index + 1 < phases.count { try next(app, observed: observed) }
         }
         app.terminate()
     }
 
+    @MainActor
     func testCompactAndMotionPolicies() throws {
         let app = launch(events: true)
         let policies = ["compact", "reduceMotion", "offscreen", "resume"]
         let phases = people.flatMap { person in policies.map { person + "-" + $0 } }
         for (index, phase) in phases.enumerated() {
-            try ready(app, phase: phase)
+            let observed = try ready(app, phase: phase)
             let person = people[index / 4]
             let policy = policies[index % 4]
             if policy == "compact" {
-                XCTAssertEqual(text(app, "renderer"), person == "angel" ? "angel-vector" : "portrait")
-                XCTAssertGreaterThanOrEqual(number(app, "activeSamples"), 3)
-                XCTAssertEqual(number(app, "fps"), 24)
+                XCTAssertEqual(observed.text("renderer"), person == "angel" ? "angel-vector" : "portrait")
+                XCTAssertGreaterThanOrEqual(observed.number("activeSamples"), 3)
+                XCTAssertEqual(observed.number("fps"), 24)
             } else if policy == "reduceMotion" || policy == "offscreen" {
-                XCTAssertEqual(text(app, "renderer"), renderers[person])
-                XCTAssertEqual(number(app, "fps"), 0)
-                XCTAssertEqual(number(app, "viseme"), 0)
+                XCTAssertEqual(observed.text("renderer"), renderers[person])
+                XCTAssertEqual(observed.number("fps"), 0)
+                XCTAssertEqual(observed.number("viseme"), 0)
             } else {
-                XCTAssertEqual(text(app, "renderer"), renderers[person])
-                XCTAssertGreaterThanOrEqual(number(app, "activeSamples"), 3)
-                XCTAssertGreaterThanOrEqual(number(app, "distinctVectors"), 2)
-                XCTAssertEqual(number(app, "fps"), 24)
+                XCTAssertEqual(observed.text("renderer"), renderers[person])
+                XCTAssertGreaterThanOrEqual(observed.number("activeSamples"), 3)
+                XCTAssertGreaterThanOrEqual(observed.number("distinctVectors"), 2)
+                XCTAssertEqual(observed.number("fps"), 24)
             }
             print("KADE_PUPPET_COMPLETION_UI_PHASE_PASS " + phase)
-            if index + 1 < phases.count { try next(app) }
+            if index + 1 < phases.count { try next(app, observed: observed) }
         }
         app.terminate()
     }
 
+    @MainActor
     private func launch(events: Bool) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment = ["KADE_A11Y_AUDIT": "1", "KADE_CHARACTER_AUDIT": "1",
@@ -117,25 +115,108 @@ final class PuppetCompletionUITests: XCTestCase {
         app.launch()
         return app
     }
-    private func ready(_ app: XCUIApplication, phase: String) throws {
-        let current = app.staticTexts["puppet-completion.phase"]
-        XCTAssertTrue(current.waitForExistence(timeout: 10))
-        XCTAssertEqual(current.label, phase)
-        let ready = app.staticTexts["puppet-completion.status"]
-        let predicate = NSPredicate(format: "label == %@", "ready")
-        let observation = XCTNSPredicateExpectation(predicate: predicate, object: ready)
-        XCTAssertEqual(XCTWaiter.wait(for: [observation], timeout: 10), .completed)
-        XCTAssertEqual(ready.label, "ready")
-        let window = app.frame
-        XCTAssertGreaterThan(window.height, window.width)
+    private struct NativeElement {
+        let label: String
+        let frame: CGRect
+        let isEnabled: Bool
+        let elementType: XCUIElement.ElementType
+
+        @MainActor
+        init(_ element: any XCUIElementSnapshot) {
+            label = element.label; frame = element.frame
+            isEnabled = element.isEnabled; elementType = element.elementType
+        }
     }
-    private func text(_ app: XCUIApplication, _ key: String) -> String {
-        app.staticTexts["puppet-completion." + key].label
+    private struct NativeTree {
+        let window: CGRect
+        let elements: [String: [NativeElement]]
+
+        func exact(_ identifier: String, type: XCUIElement.ElementType? = nil) throws -> NativeElement {
+            let matches = elements[identifier] ?? []
+            XCTAssertEqual(matches.count, 1, "Unique native element: " + identifier)
+            let element = try XCTUnwrap(matches.first)
+            if let type { XCTAssertEqual(element.elementType, type, identifier) }
+            return element
+        }
     }
-    private func number(_ app: XCUIApplication, _ key: String) -> Int { Int(text(app, key)) ?? -1 }
-    private func next(_ app: XCUIApplication) throws {
+    private struct PhaseObservation {
+        let labels: [String: String]
+        let next: NativeElement?
+        func text(_ key: String) -> String { labels[key] ?? "" }
+        func number(_ key: String) -> Int { Int(text(key)) ?? -1 }
+    }
+    private enum SnapshotFailure: Error { case treeLimit, notReady }
+
+    @MainActor
+    private func nativeTree(_ app: XCUIApplication) throws -> NativeTree {
+        let snapshot = try app.snapshot()
+        var pending: [(element: any XCUIElementSnapshot, depth: Int)] = [(snapshot, 0)]
+        var elements: [String: [NativeElement]] = [:]
+        var visited = 0
+        while let entry = pending.popLast() {
+            visited += 1
+            guard visited <= 4096 && entry.depth <= 64 else { throw SnapshotFailure.treeLimit }
+            let identifier = entry.element.identifier
+            if identifier.hasPrefix("puppet-completion.")
+                || ["della-host.chat.send", "della-host.chat.composer-field", "della-host.sending-geometry"].contains(identifier) {
+                elements[identifier, default: []].append(NativeElement(entry.element))
+            }
+            for child in entry.element.children.reversed() { pending.append((child, entry.depth + 1)) }
+        }
+        return NativeTree(window: snapshot.frame, elements: elements)
+    }
+
+    @MainActor
+    private func waitForSnapshot(_ app: XCUIApplication, accepts: (NativeTree) -> Bool) throws -> NativeTree {
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        var lastIssue = "No matching native phase and ready state"
+        repeat {
+            do {
+                let tree = try nativeTree(app)
+                if accepts(tree) { return tree }
+            } catch { lastIssue = String(describing: type(of: error)) }
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            if remaining > 0 { RunLoop.current.run(until: Date(timeIntervalSinceNow: min(0.1, remaining))) }
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        XCTFail("Native readiness exceeded 10 seconds: " + lastIssue)
+        throw SnapshotFailure.notReady
+    }
+
+    @MainActor
+    private func ready(_ app: XCUIApplication, phase: String) throws -> PhaseObservation {
+        let tree = try waitForSnapshot(app) { tree in
+            let current = tree.elements["puppet-completion.phase"] ?? []
+            let status = tree.elements["puppet-completion.status"] ?? []
+            return current.count == 1 && status.count == 1 && current[0].elementType == .staticText
+                && status[0].elementType == .staticText && current[0].label == phase && status[0].label == "ready"
+        }
+        var labels: [String: String] = [:]
+        for key in ["phase", "status", "renderer", "activeSamples", "distinctVectors", "fps", "face", "viseme"] {
+            labels[key] = try tree.exact("puppet-completion." + key, type: .staticText).label
+        }
+        XCTAssertEqual(labels["phase"], phase)
+        XCTAssertEqual(labels["status"], "ready")
+        XCTAssertGreaterThan(tree.window.height, tree.window.width)
+        let next: NativeElement?
+        if (tree.elements["puppet-completion.next"] ?? []).isEmpty { next = nil }
+        else { next = try tree.exact("puppet-completion.next", type: .button) }
+        return PhaseObservation(labels: labels, next: next)
+    }
+
+    @MainActor
+    private func sendingSnapshot(_ app: XCUIApplication) throws -> NativeTree {
+        try waitForSnapshot(app) { tree in
+            let geometry = tree.elements["della-host.sending-geometry"] ?? []
+            return geometry.count == 1 && geometry[0].elementType == .staticText && geometry[0].label.hasPrefix("{")
+        }
+    }
+
+    @MainActor
+    private func next(_ app: XCUIApplication, observed: PhaseObservation) throws {
+        let native = try XCTUnwrap(observed.next)
+        XCTAssertTrue(native.isEnabled)
         let button = app.buttons["puppet-completion.next"]
-        XCTAssertTrue(button.exists && button.isEnabled && button.isHittable)
+        XCTAssertTrue(button.isHittable)
         button.tap()
     }
 }

@@ -274,10 +274,10 @@ def gate(source, receipt):
                              + str(run["run_attempt"]) + "/jobs?per_page=100")
         document = (source / ".github/workflows" / workflow).read_text(encoding="utf-8")
         steps = re.findall(r"^\s+- name: ([^\n]+)$", document, re.M)
-        require(len(steps) >= (17 if branch == HOST_BRANCH else 3)
+        require(len(steps) >= (18 if branch == HOST_BRANCH else 3)
                 and len(steps) == len(set(steps)), "Frozen proof step contract is missing")
         if branch == HOST_BRANCH:
-            require(all("id: " + value in document for value in ("ui-large", "ui-small", "native-ui-results", "completion-ui", "completion-capture", "host-capture")),
+            require(all("id: " + value in document for value in ("ui-large", "ui-small", "native-ui-results", "completion-boot", "completion-ui", "completion-capture", "host-capture")),
                     "Complete native UI/capture gates must be present in proved source")
         records.append(proof(run, jobs, expected, branch, workflow, name, steps))
     count, source_digest = runner.inputs()
