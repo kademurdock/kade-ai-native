@@ -266,14 +266,16 @@ def capture(expected):
     compiled=host.compiled_tests(expected)
     require(compiled==proof['launch']['compiledRunner'],'Completion screenshot app differs from tested compiled runner')
     device=host.simulator_record(expected)['devices']['large'];identifier=device['identifier']
-    report={'schema':'kade.puppet-completion-capture.v1','source':initial,'passed':False,'captures':{},'nativeReady':{},
+    report={'schema':'kade.puppet-completion-capture.v2','source':initial,'passed':False,'captures':{},'nativeReady':{},
+        'ownedProcess':None,'ownedTermination':None,'compiledAfterVerified':False,
         'compiledRunner':compiled,'device':device,'syntheticOutput':True,'audioStarted':False,'microphoneStarted':False,
         'cameraStarted':False,'networkStarted':False,'physicalPhoneVerified':False,'batteryMeasured':False,'voiceOverVerified':False,
         'captureTimeoutSeconds':CAPTURE_SECONDS,'startedAtUtc':host.now()}
     started=time.monotonic();deadline=started+host.operation_remaining(CAPTURE_SECONDS)
     def remaining(bound):
-        require(time.monotonic()<deadline,'Finite completion capture deadline expired')
-        return min(bound,deadline-time.monotonic(),host.operation_remaining(bound))
+        work_deadline=deadline-15
+        require(time.monotonic()<work_deadline,'Finite completion capture work deadline expired')
+        return min(bound,work_deadline-time.monotonic(),host.operation_remaining(bound))
     try:
         OUT.mkdir(parents=True,exist_ok=True)
         documents=Path(host.sim('get_app_container',identifier,host.BUNDLE_ID,'data',timeout=remaining(45)))/'Documents'
@@ -283,7 +285,11 @@ def capture(expected):
         environment=dict(os.environ,SIMCTL_CHILD_KADE_CHARACTER_AUDIT='1',SIMCTL_CHILD_KADE_A11Y_AUDIT='1',
             SIMCTL_CHILD_KADE_PUPPET_COMPLETION_AUDIT='1',SIMCTL_CHILD_KADE_PUPPET_COMPLETION_UI='0',
             SIMCTL_CHILD_KADE_PUPPET_COMPLETION_SOURCE=expected)
-        host.sim('launch','--terminate-running-process',identifier,host.BUNDLE_ID,env=environment,timeout=remaining(45))
+        launch_started=host.now()
+        launched=host.sim('launch',identifier,host.BUNDLE_ID,env=environment,timeout=remaining(45))
+        launch_finished=host.now()
+        report['ownedProcess']=host.owned_process_identity(host.launch_pid(launched),identifier,compiled,
+                                                          deadline-15,launch_started,launch_finished)
         for phase in PHASES:
             ready_deadline=time.monotonic()+remaining(30);data=None
             while time.monotonic()<ready_deadline:
@@ -301,21 +307,57 @@ def capture(expected):
             report['nativeReady'][phase]=data;report['captures'][phase]=metadata
             save('receipt.json',report)
             ack.write_text(phase,encoding='utf-8')
-        require(host.compiled_tests(expected)==compiled,'Compiled app changed during completion capture')
         require(host.source(expected)['inputs']==initial['inputs'],'Completion source drifted during native capture')
         report['passed']=True
     except Exception as error:
         report.update(errorType=type(error).__name__,error=str(error) if isinstance(error,RuntimeError) else 'Bounded completion capture failed')
         raise
     finally:
-        try:host.sim('terminate',identifier,host.BUNDLE_ID,timeout=host.operation_remaining(15))
-        except Exception:report['terminationVerified']=False
-        else:report['terminationVerified']=True
+        cleanup_deadline=None;report['terminationVerified']=False
+        try:
+            cleanup_deadline=min(deadline,time.monotonic()+host.operation_remaining(15))
+            report['ownedTermination']={}
+            host.terminate_owned_process(report['ownedProcess'],identifier,compiled,cleanup_deadline,
+                                         report['ownedTermination'],bound=15)
+            report['terminationVerified']=report['ownedTermination']['passed']
+        except Exception as error:
+            report.update(terminationErrorType=type(error).__name__,terminationError=host.sanitize_ui_line(str(error))
+                          if isinstance(error,RuntimeError) else 'Completion owned process exit failed')
+        try:
+            require(cleanup_deadline is not None,'Completion cleanup has no remaining compiled-after deadline')
+            host.compiled_unchanged(expected,compiled,cleanup_deadline);report['compiledAfterVerified']=True
+        except Exception as error:
+            report.update(compiledAfterErrorType=type(error).__name__,compiledAfterError=host.sanitize_ui_line(str(error))
+                          if isinstance(error,RuntimeError) else 'Completion compiled-after rehash failed')
         report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=host.now()
-        if not report['terminationVerified']:report['passed']=False
+        if not report['terminationVerified'] or not report['compiledAfterVerified']:report['passed']=False
+        validate_capture_ownership(report)
         save('receipt.json',report)
     require(report['passed'],'Completion native app termination did not complete')
     return {'passed':True,'captures':21,'syntheticOutput':True,'physicalPhoneVerified':False}
+
+
+def validate_capture_ownership(report):
+    require(report.get('schema')=='kade.puppet-completion-capture.v2'
+            and type(report.get('compiledAfterVerified')) is bool,'Completion capture owned-process schema mismatch')
+    owned=report.get('ownedProcess');termination=report.get('ownedTermination')
+    host.validate_compiled_record(report['compiledRunner'],report['source'])
+    if owned is not None:
+        host.validate_owned_process(owned,report['device']['identifier'],report['compiledRunner'])
+        require(datetime.fromisoformat(report['startedAtUtc'])<=datetime.fromisoformat(owned['launchStartedAtUtc']),
+                'Owned completion launch precedes its native capture receipt')
+    if termination is not None:
+        host.validate_owned_termination(termination,owned)
+        require(termination['timeoutSeconds']<=15 and report['terminationVerified']==termination['passed'],
+                'Completion exit exceeded its original15-second cap or contradicted observed exit')
+        if 'finishedAtUtc' in report:require(datetime.fromisoformat(termination['finishedAtUtc'])<=datetime.fromisoformat(report['finishedAtUtc']),
+                                            'Owned completion exit follows the final native capture receipt')
+    if report.get('passed'):
+        require(owned is not None and termination is not None and termination['passed'] is True
+                and report['terminationVerified'] is True and report['compiledAfterVerified'] is True
+                and host.number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=CAPTURE_SECONDS+1,
+                'Successful completion capture lacks an observed native exit or unchanged compiled artifacts')
+    return report
 
 
 def emit(expected):
@@ -338,6 +380,7 @@ def emit(expected):
                 require_boot_order(regression,boot,record['launch'])
             files[name]=path.read_bytes()
             if name=='receipt.json':
+                validate_capture_ownership(record)
                 for phase,metadata in record.get('captures',{}).items():
                     require(phase in PHASES and metadata['file']=='puppet-completion-'+phase+'.png','Unsafe completion image name')
                     path=OUT/metadata['file'];require(host.png(path)==metadata,'Completion image changed after capture')

@@ -6,13 +6,20 @@ the helper is safe; source/build/simulator/service entry points are fenced off.
 Run with Python -B so this test does not create bytecode or copy artifacts.
 """
 import cmath
+import copy
+import ctypes
+from datetime import datetime, timezone
+import errno
+import hashlib
 import importlib.util
+from io import BytesIO
 import json
 import math
 from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +42,13 @@ subprocess.Popen = forbidden
 spec = importlib.util.spec_from_file_location("puppet_completion_protocol", ROOT / "dev/puppet-completion-audit.py")
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
+NATIVE_SNAPSHOT=audit.host.native_process_snapshot
+NATIVE_BIRTH=audit.host.native_process_birth
+OWNED_IDENTITY=audit.host.owned_process_identity
+audit.host.os.kill=forbidden
+audit.host.native_process_snapshot=forbidden
+audit.host.native_process_birth=forbidden
+audit.host.owned_process_identity=forbidden
 for entry in ("source", "initial_source", "sim", "boot_ui", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit"):
     setattr(audit.host, entry, forbidden)
 for entry in ("save", "ui", "capture", "emit", "main"):
@@ -115,6 +129,307 @@ def fixture(person, pose):
 
 
 class ProtocolChecks(unittest.TestCase):
+    def owned_fixture(self):
+        identifier='12345678-1234-1234-1234-123456789ABC'
+        path='/Users/runner/Library/Developer/CoreSimulator/Devices/'+identifier+'/data/Containers/Bundle/Application/ABCDEFAB-1234-1234-1234-123456789ABC/KadeAI.app/KadeAI'
+        data={'schema':'kade.della-host-owned-process.v1','pid':2468,'uid':501,'birthSeconds':1791700000,
+              'birthMicroseconds':123456,'identifier':identifier,'bundleInstance':'ABCDEFAB-1234-1234-1234-123456789ABC',
+              'bundleId':audit.host.BUNDLE_ID,'executable':'KadeAI','executablePathSha256':hashlib.sha256(path.encode()).hexdigest(),
+              'infoPlistSha256':'b'*64,'executableSha256':'a'*64,
+              'launchStartedAtUtc':datetime.fromtimestamp(1791700000,timezone.utc).isoformat(),
+              'launchFinishedAtUtc':datetime.fromtimestamp(1791700000.5,timezone.utc).isoformat(),
+              'capturedAtUtc':datetime.fromtimestamp(1791700001,timezone.utc).isoformat()}
+        compiled={'artifacts':{'app':{'infoPlistSha256':'b'*64,'executableSha256':'a'*64}}}
+        kernel={key:data[key] for key in ('pid','uid','birthSeconds','birthMicroseconds')};kernel['path']=path
+        return data,compiled,kernel
+
+    def test_owned_pid_parser_and_exact_native_identity(self):
+        global CHECKS
+        host=audit.host;owned,compiled,kernel=self.owned_fixture()
+        self.assertEqual((ctypes.sizeof(host.DarwinBSDInfo),host.DarwinBSDInfo.birthSeconds.offset,
+                          host.DarwinBSDInfo.birthMicroseconds.offset),(136,120,128));CHECKS+=1
+        self.assertEqual(host.launch_pid(host.BUNDLE_ID+': 2468'),2468);CHECKS+=1
+        for output in (None,True,host.BUNDLE_ID+': 0',host.BUNDLE_ID+': 1',host.BUNDLE_ID+': -2',host.BUNDLE_ID+': +2',
+                       host.BUNDLE_ID+': 2147483648',host.BUNDLE_ID+': 0002',host.BUNDLE_ID+': 2468\nother',
+                       'other.bundle: 2468',host.BUNDLE_ID+': 2468 42'):
+            with self.assertRaises(RuntimeError):host.launch_pid(output)
+            CHECKS+=1
+        self.assertIs(host.validate_owned_process(owned,owned['identifier'],compiled),owned);CHECKS+=1
+        for key,value in [('pid',True),('pid',2468.0),('uid',True),('uid',-1),('birthSeconds',True),('birthMicroseconds',10**6),
+                          ('identifier','wrong'),('bundleId','other'),('executable','KadeKeyboard'),('bundleInstance','private path'),
+                          ('executableSha256','c'*64),('infoPlistSha256','c'*64),('executablePathSha256','raw private path'),
+                          ('launchStartedAtUtc',owned['capturedAtUtc']),('launchFinishedAtUtc',owned['launchStartedAtUtc']),
+                          ('capturedAtUtc',owned['launchStartedAtUtc'])]:
+            changed=copy.deepcopy(owned);changed[key]=value
+            with self.assertRaises(RuntimeError):host.validate_owned_process(changed,owned['identifier'],compiled)
+            CHECKS+=1
+        changed=dict(owned,private='not permitted')
+        with self.assertRaises(RuntimeError):host.validate_owned_process(changed,owned['identifier'],compiled)
+        CHECKS+=1
+
+    def test_native_path_exit_race_and_other_errors(self):
+        global CHECKS
+        host=audit.host;owned,compiled,kernel=self.owned_fixture()
+        class NativeFunction:
+            def __init__(self,action):self.action=action
+            def __call__(self,*args):return self.action(*args)
+        for result,number in [(0,errno.ESRCH),(0,errno.EPERM),(0,errno.ENOENT),(3,0)]:
+            def info(pid,kind,unused,buffer,size):
+                target=ctypes.cast(buffer,ctypes.POINTER(host.DarwinBSDInfo)).contents
+                target.pid=pid;target.uid=501;target.birthSeconds=owned['birthSeconds'];target.birthMicroseconds=123456
+                return size
+            def path(pid,buffer,size):
+                ctypes.set_errno(number)
+                if result:buffer.value=b'/wrong-length'
+                return result
+            library=type('MemoryLibrary',(),{})();library.proc_pidinfo=NativeFunction(info);library.proc_pidpath=NativeFunction(path)
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library):
+                if number==errno.ESRCH:self.assertIsNone(NATIVE_SNAPSHOT(owned['pid']))
+                else:
+                    with self.assertRaises(RuntimeError):NATIVE_SNAPSHOT(owned['pid'])
+            CHECKS+=1
+
+    def test_post_signal_bsd_is_zombie_aware_and_never_reads_a_path(self):
+        global CHECKS
+        host=audit.host;owned,_,_=self.owned_fixture()
+        class NativeFunction:
+            def __init__(self,action):self.action=action
+            def __call__(self,*args):return self.action(*args)
+        for count,number in [(136,0),(0,errno.ESRCH),(0,errno.EPERM),(0,errno.ENOENT),(0,0),(134,0)]:
+            def info(pid,kind,include_zombies,buffer,size):
+                self.assertEqual((kind,include_zombies,size),(3,1,136))
+                target=ctypes.cast(buffer,ctypes.POINTER(host.DarwinBSDInfo)).contents
+                target.pid=pid;target.uid=501;target.birthSeconds=owned['birthSeconds'];target.birthMicroseconds=123456
+                ctypes.set_errno(number);return count
+            # No proc_pidpath symbol is provided; any post-signal path access fails this canary.
+            library=type('MemoryBSDLibrary',(),{})();library.proc_pidinfo=NativeFunction(info)
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library):
+                if count==136:self.assertEqual(NATIVE_BIRTH(owned['pid']),{key:owned[key] for key in ('pid','uid','birthSeconds','birthMicroseconds')})
+                elif number==errno.ESRCH:self.assertIsNone(NATIVE_BIRTH(owned['pid']))
+                else:
+                    with self.assertRaises(RuntimeError):NATIVE_BIRTH(owned['pid'])
+            CHECKS+=1
+
+    def test_owned_installed_bundle_hashes_aliases_uid_and_birth(self):
+        global CHECKS
+        host=audit.host;owned,_,kernel=self.owned_fixture()
+        for scenario in ('valid','uid','pid','device','otherExecutable','alias','plistIdentity','binaryHash','plistHash','birthChanged','oldBirth','oversized'):
+            plist_bytes=host.plistlib.dumps({'CFBundleIdentifier':host.BUNDLE_ID,'CFBundleExecutable':'KadeAI'})
+            binary=b'synthetic compiled executable bytes, never native proof'
+            files={kernel['path']:binary,kernel['path'].rsplit('/',1)[0]+'/Info.plist':plist_bytes}
+            compiled={'artifacts':{'app':{'infoPlistSha256':hashlib.sha256(plist_bytes).hexdigest(),
+                                        'executableSha256':hashlib.sha256(binary).hexdigest()}}}
+            if scenario=='plistIdentity':files[kernel['path'].rsplit('/',1)[0]+'/Info.plist']=host.plistlib.dumps({'CFBundleIdentifier':'other','CFBundleExecutable':'KadeAI'})
+            if scenario=='binaryHash':compiled['artifacts']['app']['executableSha256']='a'*64
+            if scenario=='plistHash':compiled['artifacts']['app']['infoPlistSha256']='a'*64
+            class MemoryPath:
+                def __init__(self,value):self.value=str(value)
+                def __str__(self):return self.value
+                def __eq__(self,other):return isinstance(other,MemoryPath) and self.value==other.value
+                def __truediv__(self,value):return MemoryPath(self.value+'/'+value)
+                @classmethod
+                def home(cls):return cls('/Users/runner')
+                @property
+                def parent(self):return MemoryPath(self.value.rsplit('/',1)[0])
+                def resolve(self,strict=False):return MemoryPath('/alias') if scenario=='alias' else self
+                def is_symlink(self):return scenario=='alias'
+                def is_file(self):return self.value in files
+                def stat(self):return type('MemoryStat',(),{'st_size':300*1024*1024 if scenario=='oversized' else len(files[self.value])})()
+                def open(self,mode):return BytesIO(files[self.value])
+            first=copy.deepcopy(kernel);second=copy.deepcopy(kernel)
+            if scenario=='uid':first['uid']=502
+            if scenario=='pid':first['pid']=2469
+            if scenario=='device':first['path']=first['path'].replace(owned['identifier'],'00000000-1234-1234-1234-123456789ABC')
+            if scenario=='otherExecutable':first['path']=first['path'].replace('/KadeAI.app/KadeAI','/Other.app/Other')
+            if scenario=='birthChanged':second['birthMicroseconds']+=1
+            launch=owned['capturedAtUtc'] if scenario=='oldBirth' else owned['launchStartedAtUtc']
+            with patch.object(host,'Path',MemoryPath),patch.object(host.os,'getuid',return_value=501,create=True),\
+                 patch.object(host,'native_process_snapshot',side_effect=[first,second]),patch.object(host.time,'monotonic',return_value=0),\
+                 patch.object(host,'now',return_value=owned['capturedAtUtc']):
+                if scenario=='valid':
+                    result=OWNED_IDENTITY(owned['pid'],owned['identifier'],compiled,1,launch,owned['launchFinishedAtUtc'])
+                    self.assertEqual(result['executableSha256'],compiled['artifacts']['app']['executableSha256']);CHECKS+=1
+                else:
+                    with self.assertRaises(RuntimeError):OWNED_IDENTITY(owned['pid'],owned['identifier'],compiled,1,launch,owned['launchFinishedAtUtc'])
+                    CHECKS+=1
+
+    def test_one_owned_signal_actual_absence_identity_reuse_and_deadlines(self):
+        global CHECKS
+        host=audit.host;owned,compiled,kernel=self.owned_fixture()
+        scenarios=('exit','pathExitRace','bsdAbsentAlive','alive','shortDeadline','fifteenBoundAlive','freshUidChanged','freshBirthChanged','finalKernelChanged',
+                   'signalPermission','signalAbsent','probePermission','pidReused','unknownPid')
+        for scenario in scenarios:
+            clock=[0.0];signals=[];probes=[0];snapshots=[0];record={}
+            fresh=copy.deepcopy(owned)
+            if scenario=='freshUidChanged':fresh['uid']=502
+            if scenario=='freshBirthChanged':fresh['birthMicroseconds']+=1
+            def kill(pid,signum):
+                self.assertEqual(pid,2468)
+                if signum==host.signal.SIGTERM:
+                    signals.append((pid,signum))
+                    if scenario=='signalPermission':raise PermissionError(errno.EPERM,'synthetic')
+                    if scenario=='signalAbsent':raise ProcessLookupError(errno.ESRCH,'synthetic')
+                else:
+                    self.assertEqual(signum,0);probes[0]+=1
+                    if scenario=='probePermission':raise PermissionError(errno.EPERM,'synthetic')
+                    if scenario in ('exit','pathExitRace') and probes[0]>=3:raise ProcessLookupError(errno.ESRCH,'synthetic')
+            def snapshot(pid):
+                snapshots[0]+=1
+                if scenario=='finalKernelChanged':return dict(kernel,birthMicroseconds=123457)
+                if scenario=='pidReused' and probes[0]:return dict(kernel,birthMicroseconds=123457)
+                if scenario in ('pathExitRace','bsdAbsentAlive') and probes[0]:return None
+                return copy.deepcopy(kernel)
+            def sleep(seconds):clock[0]+=seconds
+            def now():return datetime.fromtimestamp(1791700002+clock[0],timezone.utc).isoformat()
+            with patch.object(host,'owned_process_identity',return_value=fresh),patch.object(host,'native_process_snapshot',side_effect=snapshot),\
+                 patch.object(host,'native_process_birth',side_effect=snapshot),\
+                 patch.object(host.os,'kill',side_effect=kill),patch.object(host.time,'monotonic',side_effect=lambda:clock[0]),\
+                 patch.object(host.time,'sleep',side_effect=sleep),patch.object(host,'now',side_effect=now):
+                if scenario in ('exit','pathExitRace'):
+                    host.terminate_owned_process(owned,owned['identifier'],compiled,100,record)
+                    self.assertTrue(record['passed'] and record['observedExit']);CHECKS+=1
+                else:
+                    with self.assertRaises((RuntimeError,PermissionError,ProcessLookupError)):
+                        host.terminate_owned_process(None if scenario=='unknownPid' else owned,owned['identifier'],compiled,
+                                                     2 if scenario=='shortDeadline' else 100,record,bound=15 if scenario=='fifteenBoundAlive' else 30)
+                    self.assertFalse(record['passed']);CHECKS+=1
+            self.assertLessEqual(len(signals),1);self.assertIsNone(record['exitCode']);CHECKS+=2
+            if scenario in ('unknownPid','freshUidChanged','freshBirthChanged','finalKernelChanged'):
+                self.assertEqual(signals,[]);CHECKS+=1
+            if scenario in ('alive','shortDeadline','bsdAbsentAlive','fifteenBoundAlive'):
+                self.assertTrue(record['timedOut']);self.assertLessEqual(clock[0],15.000001 if scenario=='fifteenBoundAlive' else 30);CHECKS+=2
+            self.assertIs(host.validate_owned_termination(record,None if scenario=='unknownPid' else owned),record);CHECKS+=1
+        valid={'schema':'kade.della-host-owned-exit.v1','pid':owned['pid'],'identitySha256':host.owned_identity_digest(owned),
+               'timeoutSeconds':30,'signal':'SIGTERM','signalSubmitted':True,'identityVerified':True,'observedExit':True,
+               'passed':True,'timedOut':False,'exitCode':None,'pollCount':3,'startedAtUtc':owned['capturedAtUtc'],
+               'finishedAtUtc':datetime.fromtimestamp(1791700003,timezone.utc).isoformat(),'elapsedSeconds':2}
+        for key,value in [('pid',2468.0),('pid',True),('exitCode',0),('exitCode',-15),('signal','SIGKILL'),('signalSubmitted',False),
+                          ('identityVerified',False),('observedExit',False),('timedOut',True),('timeoutSeconds',31),('elapsedSeconds',32),
+                          ('pollCount',True),('identitySha256','c'*64),('error','password=not-real')]:
+            changed=copy.deepcopy(valid);changed[key]=value
+            with self.assertRaises(RuntimeError):host.validate_owned_termination(changed,owned)
+            CHECKS+=1
+        changed=copy.deepcopy(valid);changed['startedAtUtc']=owned['launchStartedAtUtc']
+        with self.assertRaises(RuntimeError):host.validate_owned_termination(changed,owned)
+        CHECKS+=1
+
+    def test_compiled_after_is_attempted_and_clipped_even_when_owned_cleanup_fails(self):
+        global CHECKS
+        host=audit.host;owned,_,_=self.owned_fixture();initial={'sha':SOURCE}
+        compiled={'schema':'kade.della-host-compiled-tests.v1','source':initial,'formatVersion':1,'unsignedSimulatorOnly':True,
+                  'testTarget':'KadeAIUITests','xctestrun':'build/della-host-layout-simulator/Build/Products/KadeAIA11yAudit_memory.xctestrun',
+                  'xctestrunSha256':'c'*64,'artifacts':{}}
+        for role,leaf,identifier in [('app','Debug-iphonesimulator/KadeAI.app',host.BUNDLE_ID),
+            ('runner','Debug-iphonesimulator/KadeAIUITests-Runner.app','com.kademurdock.kadeai.uitests.xctrunner'),
+            ('testBundle','Debug-iphonesimulator/KadeAIUITests-Runner.app/PlugIns/KadeAIUITests.xctest','com.kademurdock.kadeai.uitests')]:
+            compiled['artifacts'][role]={'path':'build/della-host-layout-simulator/Build/Products/'+leaf,'bundleId':identifier,
+                                        'infoPlistSha256':'b'*64,'executableSha256':'a'*64}
+        for scenario in ('cleanupFailure','cleanupAndRehashFailure','cleanupAndChangedRunner'):
+            clock=[0.0];ready=[False];observations=[];report={}
+            class MemoryPath:
+                def __init__(self,value):self.value=str(value)
+                def __str__(self):return self.value
+                def __truediv__(self,value):return MemoryPath(self.value+'/'+value)
+                def mkdir(self,**kwargs):pass
+                def unlink(self,**kwargs):ready[0]=False
+                def exists(self):return ready[0]
+                def is_file(self):return self.value.endswith('compiled-tests.json') or ready[0]
+                def stat(self):return type('MemoryStat',(),{'st_size':len(json.dumps(compiled)) if self.value.endswith('compiled-tests.json') else 2})()
+                def read_text(self):return json.dumps(compiled)
+                def read_bytes(self):return b'{}'
+            def now():return datetime.fromtimestamp(1791700000+clock[0],timezone.utc).isoformat()
+            def command(*args,timeout,deadline,record,env=None):
+                record.update(operation=args[0],timeoutSeconds=timeout,passed=True)
+                if args[0]=='get_app_container':return '/memory/CoreSimulator/Devices/'+owned['identifier']+'/data/Containers/Data/Application/ABCDEFAB-1234-1234-1234-123456789ABC'
+                if args[0]=='launch':ready[0]=True;return host.BUNDLE_ID+': 2468'
+                return ''
+            def identity(*args):
+                result=copy.deepcopy(owned);result.update(birthMicroseconds=0,launchStartedAtUtc=args[-2],launchFinishedAtUtc=args[-1],capturedAtUtc=now())
+                return result
+            def terminate(identity,identifier,artifact,deadline,record):
+                clock[0]+=30;record.update(passed=False)
+                raise RuntimeError('Synthetic owned exit did not occur')
+            def artifacts(expected,emit_inventory=False):
+                observations.append(host._OPERATION_DEADLINE)
+                self.assertFalse(emit_inventory)
+                self.assertLessEqual(host._OPERATION_DEADLINE,1000+100)
+                if len(observations)==2 and scenario=='cleanupAndRehashFailure':raise RuntimeError('Synthetic hash read failed')
+                result=copy.deepcopy(compiled)
+                if len(observations)==2 and scenario=='cleanupAndChangedRunner':result['artifacts']['runner']['executableSha256']='d'*64
+                return result
+            with patch.object(host,'Path',MemoryPath),patch.object(host,'OUT',MemoryPath('/memory/receipts')),\
+                 patch.object(host,'preflight_sim',side_effect=command),patch.object(host,'owned_process_identity',side_effect=identity),\
+                 patch.object(host,'terminate_owned_process',side_effect=terminate),patch.object(host,'compiled_tests',side_effect=artifacts),\
+                 patch.object(host,'validate_ready',return_value={}),patch.object(host,'now',side_effect=now),\
+                 patch.object(host.time,'monotonic',side_effect=lambda:clock[0]),patch.object(host.time,'time',side_effect=lambda:1000+clock[0]),\
+                 patch.object(host,'_OPERATION_DEADLINE',2000):
+                with self.assertRaises(RuntimeError):host.app_preflight(SOURCE,owned['identifier'],initial,{},100,report)
+                self.assertEqual(host._OPERATION_DEADLINE,2000);CHECKS+=1
+            self.assertEqual(observations,[1070,1100]);CHECKS+=1
+            self.assertFalse(report['passed'] or report['terminated']);CHECKS+=1
+            self.assertEqual(report['compiledAfterVerified'],scenario=='cleanupFailure');CHECKS+=1
+            self.assertIn('compiledAfter',report['operationSeconds']);CHECKS+=1
+            if scenario!='cleanupFailure':self.assertIn('compiledAfterErrorType',report);CHECKS+=1
+
+    def test_capture_owned_v2_all_phases_and_original_fifteen_second_bound(self):
+        global CHECKS
+        host=audit.host;owned,_,_=self.owned_fixture();initial={'sha':SOURCE}
+        compiled={'schema':'kade.della-host-compiled-tests.v1','source':initial,'formatVersion':1,'unsignedSimulatorOnly':True,
+                  'testTarget':'KadeAIUITests','xctestrun':'build/della-host-layout-simulator/Build/Products/KadeAIA11yAudit_memory.xctestrun',
+                  'xctestrunSha256':'c'*64,'artifacts':{}}
+        for role,leaf,identifier in [('app','Debug-iphonesimulator/KadeAI.app',host.BUNDLE_ID),
+            ('runner','Debug-iphonesimulator/KadeAIUITests-Runner.app','com.kademurdock.kadeai.uitests.xctrunner'),
+            ('testBundle','Debug-iphonesimulator/KadeAIUITests-Runner.app/PlugIns/KadeAIUITests.xctest','com.kademurdock.kadeai.uitests')]:
+            compiled['artifacts'][role]={'path':'build/della-host-layout-simulator/Build/Products/'+leaf,'bundleId':identifier,
+                                        'infoPlistSha256':'b'*64,'executableSha256':'a'*64}
+        def termination(identity,bound=30):
+            return {'schema':'kade.della-host-owned-exit.v1','pid':identity['pid'],'identitySha256':host.owned_identity_digest(identity),
+                    'timeoutSeconds':bound,'signal':'SIGTERM','signalSubmitted':True,'identityVerified':True,'observedExit':True,
+                    'passed':True,'timedOut':False,'exitCode':None,'pollCount':1,'startedAtUtc':identity['capturedAtUtc'],
+                    'finishedAtUtc':datetime.fromtimestamp(datetime.fromisoformat(identity['capturedAtUtc']).timestamp()+1,timezone.utc).isoformat(),
+                    'elapsedSeconds':1}
+        legacy={'schema':'kade.della-host-capture.v2','source':initial,'passed':True,'compiledAfterVerified':True,'compiledRunner':compiled,
+                'ownedProcesses':{},'ownedTerminations':{},'captureTimings':{},
+                'simulators':{key:{'identifier':owned['identifier']} for key in ('large','small')}}
+        for index,phase in enumerate(host.PHASES):
+            identity=copy.deepcopy(owned);identity['pid']+=index;identity['birthSeconds']+=index
+            for field in ('launchStartedAtUtc','launchFinishedAtUtc','capturedAtUtc'):
+                identity[field]=datetime.fromtimestamp(datetime.fromisoformat(identity[field]).timestamp()+index,timezone.utc).isoformat()
+            legacy['ownedProcesses'][phase]=identity;legacy['ownedTerminations'][phase]=termination(identity)
+            legacy['captureTimings'][phase]={'startedAtUtc':identity['launchStartedAtUtc']}
+        self.assertIs(host.validate_capture_ownership(legacy),legacy);CHECKS+=1
+        phase=host.PHASES[0]
+        mutations=[lambda value:value.update(schema='old'),lambda value:value.update(compiledAfterVerified=False),
+                   lambda value:value['ownedProcesses'].pop(phase),lambda value:value['ownedTerminations'].pop(phase),
+                   lambda value:value['ownedTerminations'][phase].update(passed=False),
+                   lambda value:value['ownedTerminations'][phase].update(exitCode=0),
+                   lambda value:value['ownedProcesses'][phase].update(uid=True)]
+        for mutate in mutations:
+            changed=copy.deepcopy(legacy);mutate(changed)
+            with self.assertRaises(RuntimeError):host.validate_capture_ownership(changed)
+            CHECKS+=1
+        duplicate=copy.deepcopy(legacy);duplicate['ownedProcesses'][host.PHASES[1]]=copy.deepcopy(duplicate['ownedProcesses'][phase])
+        duplicate['ownedTerminations'][host.PHASES[1]]=termination(duplicate['ownedProcesses'][phase])
+        duplicate['captureTimings'][host.PHASES[1]]={'startedAtUtc':owned['launchStartedAtUtc']}
+        with self.assertRaises(RuntimeError):host.validate_capture_ownership(duplicate)
+        CHECKS+=1
+        completion={'schema':'kade.puppet-completion-capture.v2','source':initial,'passed':True,'compiledAfterVerified':True,
+                    'compiledRunner':compiled,'device':{'identifier':owned['identifier']},'ownedProcess':owned,
+                    'ownedTermination':termination(owned,15),'terminationVerified':True,'elapsedSeconds':299,
+                    'startedAtUtc':owned['launchStartedAtUtc'],'finishedAtUtc':termination(owned,15)['finishedAtUtc']}
+        self.assertIs(audit.validate_capture_ownership(completion),completion);CHECKS+=1
+        for key,value in [('schema','old'),('compiledAfterVerified',False),('ownedProcess',None),('ownedTermination',None),
+                          ('terminationVerified',False),('elapsedSeconds',301.001)]:
+            changed=copy.deepcopy(completion);changed[key]=value
+            with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
+            CHECKS+=1
+        changed=copy.deepcopy(completion);changed['ownedTermination']['timeoutSeconds']=15.001
+        with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
+        CHECKS+=1
+        for key,value in [('startedAtUtc',owned['capturedAtUtc']),('finishedAtUtc',owned['capturedAtUtc'])]:
+            changed=copy.deepcopy(completion);changed[key]=value
+            with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
+            CHECKS+=1
     def test_distinct_boot_order_and_unchanged_proof_budgets(self):
         global CHECKS
         regression={"finishedAtUtc":"2026-10-11T05:00:00+00:00"}

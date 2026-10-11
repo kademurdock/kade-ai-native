@@ -6,7 +6,9 @@ No server, signing, app package, account transcript, artifact storage or release
 """
 import argparse
 import base64
+import ctypes
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 from io import BytesIO
 import json
@@ -544,8 +546,9 @@ def validate_app_preflight(report,identifier,initial):
     required={'schema','source','device','identifier','phase','timeoutSeconds','noScreenshot','passed',
               'compiledBeforeVerified','compiledAfterVerified','freshReadiness','readyValidated','terminated',
               'operationSeconds','status','startedAtUtc','finishedAtUtc','elapsedSeconds'}
-    optional={'compiledRunner','readySha256','errorType','error','cleanupErrorType','cleanupError','commandOperations'}
-    require(isinstance(report,dict) and report.get('schema')=='kade.della-host-app-preflight.v1'
+    optional={'compiledRunner','readySha256','errorType','error','cleanupErrorType','cleanupError','commandOperations',
+              'ownedProcess','ownedTermination','compiledAfterErrorType','compiledAfterError'}
+    require(isinstance(report,dict) and report.get('schema')=='kade.della-host-app-preflight.v2'
             and required<=set(report)<=required|optional
             and report.get('source')==initial and report.get('device')=='large'
             and isinstance(identifier,str) and re.fullmatch(
@@ -559,18 +562,19 @@ def validate_app_preflight(report,identifier,initial):
             'Unbounded offline app preflight elapsed time')
     require(report.get('status') in ('preparing','installing','launching','waitingForReadiness','failed','completed')
             and all(isinstance(report[field],str) and 0<len(report[field])<=320
-                    for field in ('errorType','error','cleanupErrorType','cleanupError') if field in report),
+                    for field in ('errorType','error','cleanupErrorType','cleanupError','compiledAfterErrorType','compiledAfterError') if field in report),
             'Invalid offline app preflight bounded diagnostic')
     started=datetime.fromisoformat(report['startedAtUtc']);finished=datetime.fromisoformat(report['finishedAtUtc'])
     require(started.tzinfo is not None and finished.tzinfo is not None and started<=finished
             and (finished-started).total_seconds()<=BOOT_SECONDS+1,'Invalid offline app preflight timestamp order')
     durations=report.get('operationSeconds')
     bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':PREFLIGHT_CONTAINER_SECONDS,
-            'launch':PREFLIGHT_LAUNCH_SECONDS,'readiness':READY_SECONDS,'terminate':30,'compiledAfter':BOOT_SECONDS}
+            'launch':PREFLIGHT_LAUNCH_SECONDS,'readiness':READY_SECONDS,'ownedProcess':BOOT_SECONDS,
+            'ownedTermination':30,'compiledAfter':BOOT_SECONDS}
     grace=2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS
     require(isinstance(durations,dict) and set(durations)<=set(bounds)
             and all(number(value) and 0<=value<=bounds[key]+(grace if key in
-                    ('install','appearance','container','launch','terminate') else 0)+1
+                    ('install','appearance','container','launch') else 0)+1
                     for key,value in durations.items()),
             'Unbounded offline app preflight operation timing')
     require(sum(durations.values())<=report['elapsedSeconds']+1,
@@ -579,15 +583,27 @@ def validate_app_preflight(report,identifier,initial):
     if 'readySha256' in report:require(re.fullmatch(r'[a-f0-9]{64}',report['readySha256']),
                                      'Invalid offline app preflight readiness hash')
     commands=report.get('commandOperations',{})
-    expected={'install':'install','appearance':'ui','container':'get_app_container','launch':'launch','terminate':'terminate'}
+    expected={'install':'install','appearance':'ui','container':'get_app_container','launch':'launch'}
     require(isinstance(commands,dict) and set(commands)<=set(expected),'Unknown offline app preflight command')
     for key,command in commands.items():
         validate_preflight_command(command,expected[key],bounds[key])
+    owned=report.get('ownedProcess')
+    if owned is not None:
+        validate_owned_process(owned,identifier,report.get('compiledRunner'))
+        require(started<=datetime.fromisoformat(owned['launchStartedAtUtc'])<=
+                datetime.fromisoformat(owned['capturedAtUtc'])<=finished,
+                'Owned process observation is outside this exact preflight launch')
+    if 'ownedTermination' in report:
+        validate_owned_termination(report['ownedTermination'],owned)
+        require(report['terminated']==report['ownedTermination']['passed'],
+                'Preflight termination flag contradicts the observed owned process exit')
     if report['passed']:
         require(all(report[field] for field in flags) and set(durations)==set(bounds)
                 and 'compiledRunner' in report and 'readySha256' in report
                 and set(commands)==set(expected) and all(command['passed'] for command in commands.values())
-                and report.get('status')=='completed' and 'errorType' not in report and 'cleanupErrorType' not in report,
+                and owned is not None and report.get('ownedTermination',{}).get('passed') is True
+                and report.get('status')=='completed' and not any(key in report for key in
+                    ('errorType','cleanupErrorType','compiledAfterErrorType')),
                 'Incomplete offline app preflight retained success')
     return report
 
@@ -700,10 +716,246 @@ def preflight_sim(*args,timeout,deadline,record,env=None):
                 for line in buffers[name].decode('utf-8',errors='replace').splitlines() if line][-6:]
 
 
+class DarwinBSDInfo(ctypes.Structure):
+    # Apple proc_info.h: PROC_PIDTBSDINFO, including kernel birth microseconds.
+    _fields_=[(name,ctypes.c_uint32) for name in
+        ('flags','status','xstatus','pid','ppid','uid','gid','ruid','rgid','svuid','svgid','reserved')]+[
+        ('comm',ctypes.c_char*16),('name',ctypes.c_char*32)]+[
+        (name,ctypes.c_uint32) for name in ('nfiles','pgid','pjobc','tdev','tpgid')]+[
+        ('nice',ctypes.c_int32),('birthSeconds',ctypes.c_uint64),('birthMicroseconds',ctypes.c_uint64)]
+
+
+def launch_pid(output):
+    require(isinstance(output,str) and re.fullmatch(re.escape(BUNDLE_ID)+r': [1-9][0-9]{0,9}',output),
+            'Offline launch did not return exactly one owned positive PID')
+    pid=int(output.split(': ')[1])
+    require(1<pid<2**31,'Offline launch PID is outside the positive native process range')
+    return pid
+
+
+def native_bsd_identity(pid,include_zombies=False):
+    require(sys.platform=='darwin' and type(pid) is int and 1<pid<2**31,'Owned process inspection requires Darwin and one positive PID')
+    require(ctypes.sizeof(DarwinBSDInfo)==136 and DarwinBSDInfo.birthSeconds.offset==120,
+            'Darwin process identity ABI differs from the inspected Apple contract')
+    library=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+    library.proc_pidinfo.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_int]
+    library.proc_pidinfo.restype=ctypes.c_int
+    info=DarwinBSDInfo();ctypes.set_errno(0)
+    count=library.proc_pidinfo(pid,3,1 if include_zombies else 0,ctypes.byref(info),ctypes.sizeof(info))
+    if count==0 and ctypes.get_errno()==errno.ESRCH:return None,library
+    require(count==ctypes.sizeof(info) and info.pid==pid,'Native process identity is unavailable or incomplete')
+    return {key:getattr(info,key) for key in ('pid','uid','birthSeconds','birthMicroseconds')},library
+
+
+def native_process_birth(pid):
+    # Post-signal BSD lookup includes zombies; absent BSD data is not exit proof.
+    return native_bsd_identity(pid,include_zombies=True)[0]
+
+
+def native_process_snapshot(pid):
+    info,library=native_bsd_identity(pid)
+    if info is None:return None
+    library.proc_pidpath.argtypes=[ctypes.c_int,ctypes.c_void_p,ctypes.c_uint32]
+    library.proc_pidpath.restype=ctypes.c_int
+    buffer=ctypes.create_string_buffer(4096);ctypes.set_errno(0)
+    length=library.proc_pidpath(pid,buffer,len(buffer))
+    if length==0 and ctypes.get_errno()==errno.ESRCH:return None
+    require(0<length<len(buffer) and length==len(buffer.value) and buffer.value.startswith(b'/'),
+            'Native executable identity is unavailable or incomplete')
+    return {**info,'path':buffer.value.decode('utf-8',errors='strict')}
+
+
+def validate_owned_process(data,identifier,compiled):
+    fields={'schema','pid','uid','birthSeconds','birthMicroseconds','identifier','bundleInstance','bundleId',
+            'executable','executablePathSha256','infoPlistSha256','executableSha256',
+            'launchStartedAtUtc','launchFinishedAtUtc','capturedAtUtc'}
+    require(isinstance(data,dict) and set(data)==fields and data['schema']=='kade.della-host-owned-process.v1'
+            and data['identifier']==identifier and data['bundleId']==BUNDLE_ID and data['executable']=='KadeAI'
+            and type(data['pid']) is int and 1<data['pid']<2**31
+            and type(data['uid']) is int and 0<=data['uid']<2**32
+            and type(data['birthSeconds']) is int and 0<data['birthSeconds']<10**11
+            and type(data['birthMicroseconds']) is int and 0<=data['birthMicroseconds']<10**6
+            and isinstance(data['bundleInstance'],str) and re.fullmatch(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',data['bundleInstance'])
+            and all(isinstance(data[key],str) and re.fullmatch(r'[a-f0-9]{64}',data[key]) for key in
+                    ('executablePathSha256','infoPlistSha256','executableSha256')),
+            'Owned process identity schema, PID, birth or installed simulator scope mismatch')
+    require(isinstance(compiled,dict) and data['infoPlistSha256']==compiled['artifacts']['app']['infoPlistSha256']
+            and data['executableSha256']==compiled['artifacts']['app']['executableSha256'],
+            'Owned process differs from the exact compiled app artifact')
+    captured=datetime.fromisoformat(data['capturedAtUtc'])
+    launched=datetime.fromisoformat(data['launchStartedAtUtc'])
+    launch_finished=datetime.fromisoformat(data['launchFinishedAtUtc'])
+    birth=data['birthSeconds']+data['birthMicroseconds']/10**6
+    require(captured.tzinfo is not None and launched.tzinfo is not None and launch_finished.tzinfo is not None
+            and launched.timestamp()<=birth<=launch_finished.timestamp()<=captured.timestamp(),
+            'Owned process was not born during this fresh native launch')
+    return data
+
+
+def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launch_finished):
+    require(time.monotonic()<deadline,'Owned process inspection exhausted the existing deadline')
+    first=native_process_snapshot(pid)
+    require(first is not None and first['pid']==pid and first['uid']==os.getuid(),
+            'Launched process is absent or belongs to a different native UID/PID')
+    base=Path.home()/'Library/Developer/CoreSimulator/Devices'/identifier/'data/Containers/Bundle/Application'
+    match=re.fullmatch(re.escape(str(base))+r'/([A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12})/KadeAI\.app/KadeAI',first['path'])
+    require(match is not None,'Launched executable is outside the exact simulator installed app')
+    executable=Path(first['path']);plist=executable.parent/'Info.plist'
+    for item in (executable,plist):
+        require(item.resolve(strict=True)==item and not item.is_symlink(),'Owned app leaf or parent uses an unexpected alias')
+    def read_owned(path,maximum):
+        require(path.is_file() and 0<path.stat().st_size<=maximum,'Owned installed artifact is missing or oversized')
+        chunks=[];total=0
+        with path.open('rb') as stream:
+            while chunk:=stream.read(1024*1024):
+                require(time.monotonic()<deadline,'Owned installed-artifact hashing exhausted the existing deadline')
+                total+=len(chunk);require(total<=maximum,'Owned installed artifact exceeded its fixed byte bound')
+                chunks.append(chunk)
+        return b''.join(chunks)
+    plist_bytes=read_owned(plist,1024*1024);info=plistlib.loads(plist_bytes)
+    require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleExecutable')=='KadeAI',
+            'Owned installed app plist has a different bundle or executable')
+    executable_bytes=read_owned(executable,256*1024*1024)
+    plist_hash=hashlib.sha256(plist_bytes).hexdigest();executable_hash=hashlib.sha256(executable_bytes).hexdigest()
+    require(time.monotonic()<deadline and native_process_snapshot(pid)==first,
+            'Native PID identity changed while checking installed artifact bytes')
+    record={'schema':'kade.della-host-owned-process.v1',**{key:first[key] for key in
+            ('pid','uid','birthSeconds','birthMicroseconds')},'identifier':identifier,'bundleInstance':match[1],
+            'bundleId':BUNDLE_ID,'executable':'KadeAI','executablePathSha256':hashlib.sha256(first['path'].encode()).hexdigest(),
+            'infoPlistSha256':plist_hash,'executableSha256':executable_hash,
+            'launchStartedAtUtc':launch_started,'launchFinishedAtUtc':launch_finished,'capturedAtUtc':now()}
+    return validate_owned_process(record,identifier,compiled)
+
+
+def owned_identity_digest(owned):
+    return hashlib.sha256(json.dumps(owned,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def validate_owned_termination(data,owned):
+    fields={'schema','pid','identitySha256','timeoutSeconds','signal','signalSubmitted','identityVerified',
+            'observedExit','passed','timedOut','exitCode','pollCount','startedAtUtc','finishedAtUtc','elapsedSeconds'}
+    require(isinstance(data,dict) and fields<=set(data)<=fields|{'errorType','error'}
+            and data['schema']=='kade.della-host-owned-exit.v1' and data['signal']=='SIGTERM' and data['exitCode'] is None
+            and number(data['timeoutSeconds']) and 0<=data['timeoutSeconds']<=30
+            and number(data['elapsedSeconds']) and 0<=data['elapsedSeconds']<=data['timeoutSeconds']+1
+            and all(type(data[key]) is bool for key in ('signalSubmitted','identityVerified','observedExit','passed','timedOut'))
+            and type(data['pollCount']) is int and 0<=data['pollCount']<=301,
+            'Owned exit diagnostic fabricated a child status or exceeded its strict bounds')
+    require(data['pid'] is None and owned is None and data['identitySha256'] is None
+            or owned is not None and type(data['pid']) is int and data['pid']==owned['pid']
+                and data['identitySha256']==owned_identity_digest(owned),
+            'Owned exit is not tied to the exact launch identity')
+    require(all(isinstance(data[key],str) and 0<len(data[key])<=320 and sanitize_ui_line(data[key])==data[key]
+                for key in ('errorType','error') if key in data)
+            and (not data['signalSubmitted'] or data['identityVerified'])
+            and (not data['observedExit'] or data['signalSubmitted']),
+            'Owned process exit diagnostics contradict the verified signal or contain unsafe text')
+    start=datetime.fromisoformat(data['startedAtUtc']);finish=datetime.fromisoformat(data['finishedAtUtc'])
+    require(start.tzinfo is not None and finish.tzinfo is not None and start<=finish
+            and (finish-start).total_seconds()<=31,'Owned exit timestamp envelope is invalid')
+    if owned is not None:require(datetime.fromisoformat(owned['capturedAtUtc'])<=start,
+                                'Owned process exit precedes the actual launch identity observation')
+    if data['passed']:require(owned is not None and all(data[key] for key in ('identityVerified','signalSubmitted','observedExit'))
+            and data['timeoutSeconds']>0 and data['pollCount']>0 and not data['timedOut'] and 'errorType' not in data,
+            'Unobserved or failed owned process exit retained native success')
+    return data
+
+
+def terminate_owned_process(owned,identifier,compiled,deadline,record,bound=30):
+    require(number(bound) and 0<bound<=30,'Owned exit requires the unchanged finite cleanup bound')
+    started=time.monotonic();limit=min(deadline,started+bound)
+    record.update(schema='kade.della-host-owned-exit.v1',pid=owned['pid'] if owned else None,
+                  identitySha256=owned_identity_digest(owned) if owned else None,timeoutSeconds=max(0,limit-started),
+                  signal='SIGTERM',signalSubmitted=False,identityVerified=False,observedExit=False,passed=False,
+                  timedOut=False,exitCode=None,pollCount=0,startedAtUtc=now())
+    try:
+        require(owned is not None,'Offline launch has no verified native PID; no signal was sent')
+        fresh=owned_process_identity(owned['pid'],identifier,compiled,limit,
+                                     owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'])
+        require({key:value for key,value in fresh.items() if key!='capturedAtUtc'}==
+                {key:value for key,value in owned.items() if key!='capturedAtUtc'},
+                'Owned launch PID was reused or its installed identity changed; no signal was sent')
+        require(time.monotonic()<limit,'Owned process signal has no remaining cleanup deadline')
+        immediate=native_process_snapshot(owned['pid'])
+        require(immediate is not None and all(immediate[key]==owned[key] for key in
+                ('pid','uid','birthSeconds','birthMicroseconds'))
+                and hashlib.sha256(immediate['path'].encode()).hexdigest()==owned['executablePathSha256'],
+                'Native ownership changed immediately before the one signal; no signal was sent')
+        record['identityVerified']=True
+        require(time.monotonic()<limit,'Native ownership verification exhausted the existing signal deadline')
+        os.kill(owned['pid'],signal.SIGTERM);record['signalSubmitted']=True
+        while time.monotonic()<limit:
+            record['pollCount']+=1
+            try:os.kill(owned['pid'],0)
+            except ProcessLookupError:
+                require(time.monotonic()<=limit,'Owned process absence arrived after the strict cleanup deadline')
+                record['observedExit']=True;record['passed']=True
+                return record
+            current=native_process_birth(owned['pid'])
+            if current is not None:
+                require(all(current[key]==owned[key] for key in ('pid','uid','birthSeconds','birthMicroseconds')),
+                        'Owned PID changed before actual exit; no second signal was sent')
+            time.sleep(min(.1,max(0,limit-time.monotonic())))
+        record['timedOut']=True
+        raise RuntimeError('Owned app process did not exit within its existing cleanup bound')
+    except Exception as error:
+        record.update(passed=False,errorType=type(error).__name__,error=sanitize_ui_line(str(error))
+                      if isinstance(error,RuntimeError) else 'Owned process signal or native observation failed')
+        raise
+    finally:
+        record['elapsedSeconds']=round(time.monotonic()-started,3);record['finishedAtUtc']=now()
+        record['passed']=record['passed'] and record['elapsedSeconds']<=record['timeoutSeconds']+1
+
+
+def compiled_unchanged(expected,saved,deadline):
+    global _OPERATION_DEADLINE
+    require(time.monotonic()<deadline,'Compiled rehash has no remaining native operation deadline')
+    previous=_OPERATION_DEADLINE
+    _OPERATION_DEADLINE=min(previous or float('inf'),time.time()+deadline-time.monotonic())
+    try:
+        require(compiled_tests(expected,emit_inventory=False)==saved,'Compiled app/runner/test bundle changed during native operation')
+        require(time.monotonic()<deadline,'Compiled rehash exhausted the native operation deadline')
+        return saved
+    finally:_OPERATION_DEADLINE=previous
+
+
+def validate_capture_ownership(report):
+    require(report.get('schema')=='kade.della-host-capture.v2' and type(report.get('compiledAfterVerified')) is bool,
+            'Host capture owned-process schema or compiled-after status mismatch')
+    processes=report.get('ownedProcesses');terminations=report.get('ownedTerminations')
+    require(isinstance(processes,dict) and isinstance(terminations,dict)
+            and set(processes)<=required_phases() and set(terminations)<=required_phases(),
+            'Host capture contains unknown owned-process phases')
+    compiled=report.get('compiledRunner')
+    if compiled is not None:validate_compiled_record(compiled,report['source'])
+    for phase,owned in processes.items():
+        identifier=report['simulators'][case_device(phase)]['identifier']
+        validate_owned_process(owned,identifier,compiled)
+        require(datetime.fromisoformat(report['captureTimings'][phase]['startedAtUtc'])<=
+                datetime.fromisoformat(owned['launchStartedAtUtc']), 'Owned host launch precedes its actual phase')
+    for phase,termination in terminations.items():
+        validate_owned_termination(termination,processes.get(phase))
+        if 'finishedAtUtc' in report:
+            require(datetime.fromisoformat(termination['finishedAtUtc'])<=datetime.fromisoformat(report['finishedAtUtc']),
+                    'Owned host exit follows the final native capture receipt')
+        timing=report['captureTimings'][phase]
+        if 'elapsedSeconds' in timing:
+            require(datetime.fromisoformat(termination['finishedAtUtc']).timestamp()<=
+                    datetime.fromisoformat(timing['startedAtUtc']).timestamp()+timing['elapsedSeconds']+1,
+                    'Owned host exit falls outside its bounded native phase')
+    if report.get('passed'):
+        require(report['compiledAfterVerified'] and set(processes)==set(terminations)==required_phases()
+                and all(record['passed'] for record in terminations.values())
+                and len({(record['identifier'],record['pid'],record['birthSeconds'],record['birthMicroseconds'])
+                         for record in processes.values()})==len(processes),
+                'Successful host capture lacks all verified native exits or unchanged compiled artifacts')
+    return report
+
+
 def app_preflight(expected,identifier,initial,device,deadline,report):
     """Verify a cold offline app launch inside the existing UI boot envelope."""
     started=time.monotonic()
-    report.update(schema='kade.della-host-app-preflight.v1',source=initial,device='large',identifier=identifier,
+    report.update(schema='kade.della-host-app-preflight.v2',source=initial,device='large',identifier=identifier,
                   phase='call-a11y-dark',timeoutSeconds=BOOT_SECONDS,noScreenshot=True,passed=False,
                   compiledBeforeVerified=False,compiledAfterVerified=False,freshReadiness=False,
                   readyValidated=False,terminated=False,operationSeconds={},commandOperations={},status='preparing',startedAtUtc=now())
@@ -723,18 +975,13 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
         record={};report['commandOperations'][name]=record
         return timed(name,lambda:preflight_sim(*args,timeout=allowance,
                      deadline=deadline if cleanup else work_deadline,record=record,env=env))
-    def unchanged():
-        global _OPERATION_DEADLINE
-        allowance=remaining(BOOT_SECONDS)
+    def unchanged(cleanup=False):
+        allowance=remaining(BOOT_SECONDS,cleanup=cleanup)
         path=OUT/'compiled-tests.json'
         require(path.is_file() and 0<path.stat().st_size<=64*1024,'Saved exact compiled test record missing or oversized')
         saved=validate_compiled_record(json.loads(path.read_text()),initial)
-        previous=_OPERATION_DEADLINE
-        _OPERATION_DEADLINE=min(previous or float('inf'),time.time()+allowance)
-        try:require(compiled_tests(expected,emit_inventory=False)==saved,
-                    'Compiled app/runner/test bundle changed before or after offline app preflight')
-        finally:_OPERATION_DEADLINE=previous
-        remaining(1)
+        compiled_unchanged(expected,saved,time.monotonic()+allowance)
+        remaining(1,cleanup=cleanup)
         return saved
     try:
         report['compiledRunner']=timed('compiledBefore',unchanged);report['compiledBeforeVerified']=True
@@ -756,7 +1003,11 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
                  SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',
                  SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_TOUR='0')
         remaining(1);attempted=True
-        command('launch','launch',identifier,BUNDLE_ID,env=env,bound=PREFLIGHT_LAUNCH_SECONDS)
+        launch_started=now()
+        launched=command('launch','launch',identifier,BUNDLE_ID,env=env,bound=PREFLIGHT_LAUNCH_SECONDS)
+        launch_finished=now()
+        report['ownedProcess']=timed('ownedProcess',lambda:owned_process_identity(
+            launch_pid(launched),identifier,report['compiledRunner'],work_deadline,launch_started,launch_finished))
         report['status']='waitingForReadiness'
         def readiness():
             ready_deadline=time.monotonic()+remaining(READY_SECONDS)
@@ -773,20 +1024,28 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
                       if isinstance(error,RuntimeError) else 'Offline app preflight operation failed')
         raise
     finally:
+        cleanup_failure=None
         try:
             if attempted:
-                command('terminate','terminate',identifier,BUNDLE_ID,bound=30,cleanup=True)
-                report['terminated']=True
+                report['ownedTermination']={}
+                timed('ownedTermination',lambda:terminate_owned_process(report.get('ownedProcess'),identifier,
+                    report['compiledRunner'],deadline,report['ownedTermination']))
+                report['terminated']=report['ownedTermination']['passed']
+        except Exception as error:
+            cleanup_failure=error
+        try:
             if report['compiledBeforeVerified']:
-                # Recheck after termination, quietly, even if native readiness failed.
-                remaining(1,cleanup=True)
-                tick=time.monotonic()
-                try:
-                    require(compiled_tests(expected,emit_inventory=False)==report['compiledRunner'],
-                            'Compiled app/runner/test bundle changed during offline app preflight')
-                    remaining(1,cleanup=True)
-                    report['compiledAfterVerified']=True
-                finally:report['operationSeconds']['compiledAfter']=round(time.monotonic()-tick,3)
+                # Always attempt the quiet rehash under the remaining cleanup
+                # deadline, even when the owned process did not exit successfully.
+                require(timed('compiledAfter',lambda:unchanged(cleanup=True))==report['compiledRunner'],
+                        'Compiled app/runner/test bundle changed during offline app preflight')
+                report['compiledAfterVerified']=True
+        except Exception as error:
+            report.update(compiledAfterErrorType=type(error).__name__,compiledAfterError=sanitize_ui_line(str(error))
+                          if isinstance(error,RuntimeError) else 'Offline app preflight compiled-after verification failed')
+            if cleanup_failure is None:cleanup_failure=error
+        try:
+            if cleanup_failure is not None:raise cleanup_failure
         except Exception as error:
             diagnostic=sanitize_ui_line(str(error)) if isinstance(error,RuntimeError) else 'Offline app preflight cleanup failed'
             if 'errorType' in report:
@@ -1325,7 +1584,8 @@ def capture(expected):
     require(source(expected,require_staged=True)['inputs']==initial['inputs'],'Staged source changed')
     require(sys.platform=='darwin','Native host capture requires standard macOS')
     records=simulator_record(expected)['devices']
-    receipt={'source':initial,'simulators':records,'captures':{},'captureTimings':{},'nativeReady':{},
+    receipt={'schema':'kade.della-host-capture.v2','source':initial,'simulators':records,'captures':{},'captureTimings':{},'nativeReady':{},
+             'ownedProcesses':{},'ownedTerminations':{},'compiledAfterVerified':False,
              'nativeChecks':sorted(NATIVE_CHECKS),'passed':False,'nativeRenderingVerified':False,
              'nativeHostLayoutVerified':False,'physicalPhoneVerified':False,'voiceOverVerified':False,
              'batteryMeasured':False,'cameraStarted':False,'audioStarted':False,'microphoneStarted':False,
@@ -1336,7 +1596,12 @@ def capture(expected):
     aggregate_finished=None
     active_phase=None
     active_device=None
+    compiled=None
+    aggregate_deadline=None
     try:
+        compiled=compiled_tests(expected,emit_inventory=False);receipt['compiledRunner']=compiled
+        require(all(group['launch']['compiledRunner']==compiled for group in ui['deviceResults'].values()),
+                'Host capture app differs from both exact tested compiled runners')
         require(APP.is_dir(),'Unsigned Debug host app missing')
         info=plistlib.loads((APP/'Info.plist').read_bytes())
         require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.13'
@@ -1389,13 +1654,12 @@ def capture(expected):
                 active_phase=phase
                 phase_started=time.monotonic()
                 timing={'startedAtUtc':now()}; receipt['captureTimings'][phase]=timing
-                def remaining(bound):
-                    seconds=deadline-time.monotonic()
+                owned=None;phase_failure=None
+                def remaining(bound,cleanup=False):
+                    seconds=(deadline if cleanup else deadline-30)-time.monotonic()
                     require(seconds>0,'Host capture watchdog expired during '+phase)
                     return min(bound,seconds)
                 try:
-                    if index:
-                        sim('terminate',identifier,BUNDLE_ID,timeout=remaining(30))
                     ready=documents/'della-host-ready.json'
                     ready.unlink(missing_ok=True)
                     # Configure the actual ephemeral device appearance as well
@@ -1410,11 +1674,15 @@ def capture(expected):
                              SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',
                              SIMCTL_CHILD_KADE_TOUR='0')
                     launch_started=time.monotonic()
-                    sim('launch','--stdout='+str(OUT/(phase+'.stdout')),'--stderr='+str(OUT/(phase+'.stderr')),
+                    launch_at=now()
+                    launched=sim('launch','--stdout='+str(OUT/(phase+'.stdout')),'--stderr='+str(OUT/(phase+'.stderr')),
                         identifier,BUNDLE_ID,env=env,timeout=remaining(45))
+                    launch_finished=now()
                     timing['launchSeconds']=round(time.monotonic()-launch_started,3)
+                    owned=owned_process_identity(launch_pid(launched),identifier,compiled,deadline-30,launch_at,launch_finished)
+                    receipt['ownedProcesses'][phase]=owned
                     ready_started=time.monotonic()
-                    ready_deadline=min(deadline,ready_started+READY_SECONDS)
+                    ready_deadline=min(deadline-30,ready_started+READY_SECONDS)
                     while not ready.exists() and time.monotonic()<ready_deadline:
                         time.sleep(min(.15,max(0,ready_deadline-time.monotonic())))
                     require(ready.exists() and time.monotonic()<=ready_deadline,
@@ -1438,9 +1706,17 @@ def capture(expected):
                             'Real portrait screenshot pixels and native window points differ')
                     receipt['captures'][phase]=metadata
                     remaining(1)
+                except Exception as error:
+                    phase_failure=error
+                    raise
                 finally:
-                    timing['elapsedSeconds']=round(time.monotonic()-phase_started,3)
-                    timing['captureElapsedSeconds']=round(time.monotonic()-aggregate_started,3)
+                    termination={};receipt['ownedTerminations'][phase]=termination
+                    try:terminate_owned_process(owned,identifier,compiled,deadline,termination,bound=30)
+                    except Exception as error:
+                        if phase_failure is None:raise
+                    finally:
+                        timing['elapsedSeconds']=round(time.monotonic()-phase_started,3)
+                        timing['captureElapsedSeconds']=round(time.monotonic()-aggregate_started,3)
             device['captureSeconds']=round(time.monotonic()-device_started,3)
             require(device['captureSeconds']<CAPTURE_SECONDS,'Per-device host capture exceeded480-second cap')
             if key=='large':
@@ -1449,6 +1725,9 @@ def capture(expected):
         aggregate_finished=time.monotonic()
         require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,'Aggregate capture exceeded960-second cap')
         require(set(receipt['captures'])==set(receipt['nativeReady'])==required_phases(),'Twenty-eight actual host cases incomplete')
+        require(set(receipt['ownedProcesses'])==set(receipt['ownedTerminations'])==required_phases()
+                and all(record['passed'] for record in receipt['ownedTerminations'].values()),
+                'Every host phase requires its own verified native process exit')
         require(source(expected,require_staged=True)['inputs']==initial['inputs'],'Source changed during host capture')
         receipt.update(passed=True,nativeRenderingVerified=True,nativeHostLayoutVerified=True)
     except Exception as error:
@@ -1466,13 +1745,23 @@ def capture(expected):
                 receipt['timeoutSeconds']=error.timeout
         raise
     finally:
+        if compiled is not None:
+            try:
+                limit=aggregate_deadline or time.monotonic()+operation_remaining(30)
+                compiled_unchanged(expected,compiled,limit);receipt['compiledAfterVerified']=True
+            except Exception as error:
+                receipt.update(passed=False,nativeRenderingVerified=False,nativeHostLayoutVerified=False,
+                               compiledAfterErrorType=type(error).__name__,compiledAfterError=sanitize_ui_line(str(error))
+                               if isinstance(error,RuntimeError) else 'Host capture compiled-after rehash failed')
         if aggregate_started is not None:
             receipt['aggregateCaptureElapsedSeconds']=round((aggregate_finished or time.monotonic())-aggregate_started,3)
         receipt['finishedAtUtc']=now()
+        validate_capture_ownership(receipt)
         save('receipt.json',receipt)
         for device in records.values():
             try: sim('shutdown',device['identifier'],timeout=30)
             except Exception: pass
+    require(receipt['passed'] and receipt['compiledAfterVerified'],'Host capture did not retain exact compiled artifacts and owned exits')
     return {'passed':True,'screenshots':len(receipt['captures']),'source':expected,
             'nativeHostLayoutVerified':True,'physicalPhoneVerified':False}
 
@@ -1575,6 +1864,7 @@ def emit(expected):
     if (OUT/'receipt.json').exists():
         receipt=json.loads((OUT/'receipt.json').read_text())
         require(receipt.get('source')==initial,'Host capture source receipt drift')
+        validate_capture_ownership(receipt)
         files['receipt.json']=(OUT/'receipt.json').read_bytes()
         for phase,metadata in receipt.get('captures',{}).items():
             require(phase in required_phases() and metadata['file']=='della-host-'+phase+'.png','Unsafe host screenshot name')
