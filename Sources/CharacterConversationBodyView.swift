@@ -47,6 +47,19 @@ struct CharacterConversationBodyView<Head: View>: View {
                                 startPoint: .top, endPoint: .bottom))
                             .offset(x: -side * 0.04, y: -side * 0.04)
                     }
+                } else if artwork.kind == .lilly {
+                    // The atlas neck is intact through y≈289. Blend the small
+                    // remaining collar edge into the original bodyplate hood,
+                    // before the extended cut becomes a second oval garment.
+                    // Cats remain separate original foreground overlays.
+                    head.mask(alignment: .topLeading) {
+                        LinearGradient(stops: [.init(color: .white, location: 0),
+                            .init(color: .white, location: 0.675),
+                            .init(color: .clear, location: 0.714),
+                            .init(color: .clear, location: 1)],
+                            startPoint: .top, endPoint: .bottom)
+                            .frame(width: side, height: side)
+                    }
                 } else { head }
             }
                 .frame(width: side, height: side)
@@ -410,7 +423,7 @@ private enum CharacterConversationDrawing {
     /// Smooth single sleeve outline, including a rounded shoulder and elbow.
     /// Adjacent segment normals meet at the same joint, never as floating parts.
     static func sleeve(_ arm: CharacterConversationArm, upperRadius: Double,
-                       lowerRadius: Double) -> Path {
+                       lowerRadius: Double, roundedShoulder: Bool = false) -> Path {
         let s = arm.shoulder, e = arm.elbow, w = arm.wrist
         let upper = e - s, lower = w - e
         let n1 = normal(upper), n2 = normal(lower)
@@ -435,7 +448,19 @@ private enum CharacterConversationDrawing {
             control2: cg(ei + curve))
         p.addCurve(to: cg(si), control1: cg(ei - curve),
             control2: cg(si + times(upper, 0.35)))
-        p.addQuadCurve(to: cg(so), control: cg(s - times(upper, 0.25)))
+        if roundedShoulder {
+            // Two quarter-circle cubics meet both sleeve edges along the upper
+            // bone. Lilly's soft hoodie cap has no diagonal corner at its join.
+            let direction = times(upper, 1 / max(0.000001, upper.length))
+            let apex = s - times(direction, upperRadius)
+            let tangentRadius = upperRadius * 0.5522847498307936
+            p.addCurve(to: cg(apex), control1: cg(si - times(direction, tangentRadius)),
+                control2: cg(apex - times(n1, tangentRadius)))
+            p.addCurve(to: cg(so), control1: cg(apex + times(n1, tangentRadius)),
+                control2: cg(so - times(direction, tangentRadius)))
+        } else {
+            p.addQuadCurve(to: cg(so), control: cg(s - times(upper, 0.25)))
+        }
         p.closeSubpath()
         return p
     }
@@ -459,7 +484,8 @@ private enum CharacterConversationDrawing {
                 endPoint: cg(pose.wrist + Point(x: 0.05, y: 0))))
             material(context: &context, path: bare, patch: artwork.skin, tiled: false, opacity: 0.55)
         }
-        let cloth = sleeve(sleevePose, upperRadius: radius, lowerRadius: registration.lowerRadius)
+        let cloth = sleeve(sleevePose, upperRadius: radius, lowerRadius: registration.lowerRadius,
+                           roundedShoulder: kind == .lilly)
         context.fill(cloth, with: .linearGradient(Gradient(colors:
             [colors.clothDark, colors.clothLight, colors.cloth, colors.clothDark]),
             startPoint: cg(pose.shoulder + Point(x: -radius, y: 0)),
