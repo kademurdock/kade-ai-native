@@ -242,29 +242,96 @@ def sim(*args, timeout=45, env=None):
         raise
 
 
+def png_framebuffer(idat,width,height,header):
+    depth,color,compression,filter_method,interlace=header
+    require(depth==8 and color in (2,6) and compression==filter_method==interlace==0,
+            'Unsupported simulator PNG framebuffer format')
+    channels=3 if color==2 else 4
+    row_bytes=width*channels;stride=row_bytes+1;expected=stride*height
+    require(expected<=72_006_000,'Oversized decoded PNG framebuffer')
+    try:
+        stream=zlib.decompressobj()
+        raw=stream.decompress(idat,expected+1)
+    except zlib.error:
+        raise RuntimeError('Invalid PNG framebuffer compression') from None
+    require(len(raw)==expected and stream.eof and not stream.unused_data and not stream.unconsumed_tail,
+            'Incomplete, extra or oversized decoded PNG framebuffer')
+    require(all(raw[offset]<=4 for offset in range(0,expected,stride)),
+            'Invalid PNG framebuffer row filter')
+    # A uniform framebuffer has a known filtered encoding. Compare in native
+    # bytes operations so an entirely black image never needs a pixel loop.
+    pixel=raw[1:1+channels];zeros=b'\0'*row_bytes
+    repeat=pixel*width;sub=pixel+zeros[channels:]
+    half=bytes((value+1)//2 for value in pixel)
+    first=(repeat,sub,repeat,pixel+half*(width-1),sub)
+    later=(repeat,sub,zeros,half+zeros[channels:],zeros)
+    uniform=True
+    for y,offset in enumerate(range(0,expected,stride)):
+        patterns=first if y==0 else later
+        if raw[offset+1:offset+stride]!=patterns[raw[offset]]:
+            uniform=False;break
+    require(not uniform,'Uniform PNG framebuffer contains no visible app content')
+    previous=bytearray(row_bytes);first_visible=None
+    for offset in range(0,expected,stride):
+        kind=raw[offset];row=bytearray(raw[offset+1:offset+stride])
+        if kind:
+            for index in range(row_bytes):
+                left=row[index-channels] if index>=channels else 0
+                up=previous[index];upper_left=previous[index-channels] if index>=channels else 0
+                if kind==1:predictor=left
+                elif kind==2:predictor=up
+                elif kind==3:predictor=(left+up)//2
+                else:
+                    estimate=left+up-upper_left
+                    distances=(abs(estimate-left),abs(estimate-up),abs(estimate-upper_left))
+                    predictor=(left if distances[0]<=distances[1] and distances[0]<=distances[2]
+                               else up if distances[1]<=distances[2] else upper_left)
+                row[index]=(row[index]+predictor)&255
+        for index in range(0,row_bytes,channels):
+            if channels==4 and row[index+3]==0:continue
+            visible=bytes(row[index:index+3])
+            if first_visible is None:first_visible=visible
+            elif visible!=first_visible:return
+        previous=row
+    require(False,'PNG framebuffer contains no varying visible app content')
+
+
 def png(path):
     data=path.read_bytes()
     require(33<=len(data)<=MAX_SCREENSHOT and data[:8]==b'\x89PNG\r\n\x1a\n'
             and data[8:16]==b'\x00\x00\x00\x0dIHDR','Missing/oversized/invalid PNG capture')
-    width,height=struct.unpack('>II',data[16:24])
+    width,height,*header=struct.unpack('>IIBBBBB',data[16:29])
     require(320<=width<=3000 and 600<=height<=6000,'Unexpected simulator PNG dimensions')
     cursor=8
-    kinds=[]
+    kinds=[];idat=[];idat_closed=False
     while cursor<len(data):
         require(cursor+12<=len(data),'Truncated PNG chunk')
         length=struct.unpack('>I',data[cursor:cursor+4])[0]
         kind=data[cursor+4:cursor+8]
+        require(all(65<=value<=90 or 97<=value<=122 for value in kind) and not kind[2]&32,
+                'Invalid PNG chunk type')
+        require(kind[0]&32 or kind in (b'IHDR',b'PLTE',b'IDAT',b'IEND'),
+                'Unsupported critical PNG framebuffer chunk')
+        require(kind!=b'tRNS','Unsupported PNG framebuffer transparency chunk')
         end=cursor+12+length
         require(end<=len(data),'Truncated PNG payload')
         payload=data[cursor+8:cursor+8+length]
         expected_crc=struct.unpack('>I',data[cursor+8+length:end])[0]
         require(zlib.crc32(kind+payload)&0xffffffff==expected_crc,'Corrupt PNG chunk CRC')
+        if kind==b'PLTE':require(3<=length<=768 and length%3==0 and not idat and kind not in kinds,
+                                 'Invalid PNG palette chunk')
+        if kind==b'IDAT':
+            require(not idat_closed,'Noncontiguous PNG framebuffer data')
+            idat.append(payload)
+        elif idat:idat_closed=True
+        if kind==b'IEND':require(length==0,'Invalid PNG end chunk')
         kinds.append(kind)
         cursor=end
         if kind==b'IEND':
             break
-    require(kinds and kinds[0]==b'IHDR' and kinds[-1]==b'IEND' and b'IDAT' in kinds
+    require(kinds and kinds[0]==b'IHDR' and kinds.count(b'IHDR')==1 and kinds[-1]==b'IEND' and b'IDAT' in kinds
             and cursor==len(data),'Incomplete PNG image stream')
+    png_framebuffer(b''.join(idat),width,height,header)
     return {'file':path.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
             'pixels':[width,height]}
 

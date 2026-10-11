@@ -53,12 +53,23 @@ struct CharacterConversationBodyView<Head: View>: View {
                     // before the extended cut becomes a second oval garment.
                     // Cats remain separate original foreground overlays.
                     head.mask(alignment: .topLeading) {
-                        LinearGradient(stops: [.init(color: .white, location: 0),
-                            .init(color: .white, location: 0.675),
-                            .init(color: .clear, location: 0.714),
-                            .init(color: .clear, location: 1)],
-                            startPoint: .top, endPoint: .bottom)
-                            .frame(width: side, height: side)
+                        ZStack(alignment: .topLeading) {
+                            LinearGradient(stops: [.init(color: .white, location: 0),
+                                .init(color: .white, location: 0.675),
+                                .init(color: .clear, location: 0.714),
+                                .init(color: .clear, location: 1)],
+                                startPoint: .top, endPoint: .bottom)
+                            // The original right hair tail reaches below the
+                            // neckline. Keep only that contour over the hood;
+                            // the central garment still uses the same fade.
+                            CharacterConversationLillyHairTailCut(artwork: bust)
+                                .fill(.white)
+                                .overlay {
+                                    CharacterConversationLillyHairTailCut(artwork: bust)
+                                        .stroke(.white.opacity(0.45),
+                                            lineWidth: side * bust.panelSide / bust.cropSide / 414 * 2)
+                                }
+                        }.frame(width: side, height: side)
                     }
                 } else { head }
             }
@@ -162,6 +173,39 @@ private struct CharacterConversationKianaLowerCut: Shape {
         let unit = rect.width / 1.08
         return path.applying(CGAffineTransform(a: unit, b: 0, c: 0, d: unit,
             tx: unit * 0.04, ty: unit * 0.04))
+    }
+}
+
+/// Original atlas hair only, with a one-pixel outer feather supplied by the mask.
+/// The central hood, face and separate cats are outside this lower-tail contour.
+private struct CharacterConversationLillyHairTailCut: Shape {
+    let artwork: CharacterBustArtwork
+    private static let atlasPath: Path = {
+        var p = Path()
+        p.move(to: CGPoint(x: 242, y: 283))
+        p.addCurve(to: CGPoint(x: 304, y: 282),
+            control1: CGPoint(x: 260, y: 280), control2: CGPoint(x: 290, y: 278))
+        p.addCurve(to: CGPoint(x: 295, y: 315),
+            control1: CGPoint(x: 302, y: 293), control2: CGPoint(x: 300, y: 306))
+        p.addCurve(to: CGPoint(x: 281, y: 330),
+            control1: CGPoint(x: 293, y: 321), control2: CGPoint(x: 286, y: 325))
+        p.addCurve(to: CGPoint(x: 274, y: 324),
+            control1: CGPoint(x: 278, y: 329), control2: CGPoint(x: 276, y: 327))
+        p.addCurve(to: CGPoint(x: 259, y: 313),
+            control1: CGPoint(x: 269, y: 317), control2: CGPoint(x: 263, y: 315))
+        p.addCurve(to: CGPoint(x: 243, y: 298),
+            control1: CGPoint(x: 249, y: 307), control2: CGPoint(x: 244, y: 306))
+        p.addCurve(to: CGPoint(x: 242, y: 283),
+            control1: CGPoint(x: 242, y: 292), control2: CGPoint(x: 242, y: 287))
+        p.closeSubpath()
+        return p
+    }()
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / CGFloat(artwork.cropSide)
+        let scale = unit * CGFloat(artwork.panelSide) / 414
+        return Self.atlasPath.applying(CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+            tx: CGFloat(artwork.panelX - artwork.cropX) * unit,
+            ty: CGFloat(artwork.panelY - artwork.cropY) * unit))
     }
 }
 

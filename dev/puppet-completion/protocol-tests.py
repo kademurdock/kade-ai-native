@@ -18,9 +18,11 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import struct
 import sys
 import unittest
 from unittest.mock import patch
+import zlib
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -165,7 +167,163 @@ def fixture(person, pose):
     }
 
 
+def synthetic_png_chunk(kind, payload):
+    """Construct a synthetic PNG chunk; this never opens an image or file."""
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+
+
+def synthetic_png(raw, width=320, height=600, depth=8, color=6, compression=0, filtering=0, interlace=0, chunks=None):
+    header = struct.pack(">IIBBBBB", width, height, depth, color, compression, filtering, interlace)
+    body = [(b"IHDR", header), (b"IDAT", zlib.compress(raw)), (b"IEND", b"")] if chunks is None else chunks
+    return b"\x89PNG\r\n\x1a\n" + b"".join(synthetic_png_chunk(kind, payload) for kind, payload in body)
+
+
+def synthetic_pixel_rows(color=6, uniform=None, transparent=False):
+    """Invent local pixels, not native/visual proof or copied screenshots."""
+    channels = 4 if color == 6 else 3
+    if uniform is not None:
+        return [uniform * 320] * 600
+    rows = []
+    for y in range(600):
+        pixels = bytearray()
+        for x in range(320):
+            pixels.extend(((x * 13 + y) % 256, (x + y * 7) % 256, (x * 3 + y * 11) % 256))
+            if channels == 4:
+                pixels.append(0 if transparent else 255)
+        rows.append(bytes(pixels))
+    return rows
+
+
+def synthetic_filtered_scanlines(rows, channels, filters):
+    """Encode independent PNG predictor fixtures, including preceding-row input."""
+    result = bytearray()
+    previous = bytes(len(rows[0]))
+    encoded_rows = {}
+    for y, row in enumerate(rows):
+        kind = filters[y % len(filters)]
+        result.append(kind)
+        key = (row, previous, kind)
+        if key in encoded_rows:
+            result.extend(encoded_rows[key])
+            previous = row
+            continue
+        encoded = bytearray()
+        for index, value in enumerate(row):
+            left = row[index - channels] if index >= channels else 0
+            up = previous[index]
+            upper_left = previous[index - channels] if index >= channels else 0
+            if kind == 0:
+                predictor = 0
+            elif kind == 1:
+                predictor = left
+            elif kind == 2:
+                predictor = up
+            elif kind == 3:
+                predictor = (left + up) // 2
+            else:
+                estimate = left + up - upper_left
+                distances = (abs(estimate - left), abs(estimate - up), abs(estimate - upper_left))
+                predictor = (left, up, upper_left)[distances.index(min(distances))]
+            encoded.append((value - predictor) & 255)
+        encoded_rows[key] = bytes(encoded)
+        result.extend(encoded)
+        previous = row
+    return bytes(result)
+
+
 class ProtocolChecks(unittest.TestCase):
+    def png_memory_path(self, content):
+        class MemoryPNG:
+            name = "synthetic-frame.png"
+            def read_bytes(self):
+                return content
+        return MemoryPNG()
+
+    def png_rejected(self, content):
+        global CHECKS
+        with self.assertRaises((RuntimeError, ValueError, zlib.error)):
+            audit.host.png(self.png_memory_path(content))
+        CHECKS += 1
+
+    def test_reconstructed_blank_pngs_cannot_be_rendering_proof(self):
+        # Valid CRC/zlib/filter bytes cannot make a black or empty framebuffer
+        # useful evidence. Filters can make encoded black bytes non-uniform.
+        for color, channels in ((2, 3), (6, 4)):
+            for rgb in (b"\0\0\0", b"\xff\xff\xff", b"\x7f\x7f\x7f"):
+                pixel = rgb + (b"\xff" if channels == 4 else b"")
+                for filtering in range(5):
+                    raw = synthetic_filtered_scanlines(synthetic_pixel_rows(color, pixel), channels, [filtering])
+                    self.png_rejected(synthetic_png(raw, color=color))
+        raw = synthetic_filtered_scanlines(synthetic_pixel_rows(6, b"\0\0\0\0"), 4, [0, 1, 2, 3, 4])
+        self.png_rejected(synthetic_png(raw))
+        # Invisible RGB variation must not disguise an entirely transparent image.
+        raw = synthetic_filtered_scanlines(synthetic_pixel_rows(transparent=True), 4, [4, 3, 2, 1, 0])
+        self.png_rejected(synthetic_png(raw))
+        # One visible color plus changing hidden RGB/alpha still has no visible
+        # app structure, despite nonuniform reconstructed RGBA bytes.
+        for pixels in (b"\x7f\x7f\x7f\xff\x7f\x7f\x7f\x40",
+                       b"\x7f\x7f\x7f\xff\x01\x02\x03\0"):
+            raw = synthetic_filtered_scanlines([pixels * 160] * 600, 4, [0, 1, 2, 3, 4])
+            self.png_rejected(synthetic_png(raw))
+
+    def test_real_pixel_png_filters_keep_exact_public_metadata(self):
+        global CHECKS
+        for color, channels in ((2, 3), (6, 4)):
+            raw = synthetic_filtered_scanlines(synthetic_pixel_rows(color), channels, [0, 1, 2, 3, 4])
+            content = synthetic_png(raw, color=color)
+            self.assertEqual(audit.host.png(self.png_memory_path(content)), {
+                "file": "synthetic-frame.png", "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+                "pixels": [320, 600]})
+            CHECKS += 1
+            # Consecutive split IDAT and native ancillary chunks retain the exact
+            # original bytes/hash rather than a recompressed image proxy.
+            header = struct.pack(">IIBBBBB", 320, 600, 8, color, 0, 0, 0)
+            compressed = zlib.compress(raw); middle = len(compressed) // 2
+            content = synthetic_png(raw, chunks=[(b"IHDR", header), (b"sRGB", b"\0"), (b"PLTE", b"\0\0\0\xff\xff\xff"),
+                (b"IDAT", compressed[:middle]), (b"IDAT", compressed[middle:]), (b"IEND", b"")])
+            self.assertEqual(audit.host.png(self.png_memory_path(content))["sha256"], hashlib.sha256(content).hexdigest())
+            CHECKS += 1
+            # tRNS changes RGB visibility and is outside the narrowly supported
+            # native RGB/RGBA screenshot contract. Never ignore its semantics.
+            self.png_rejected(synthetic_png(raw, color=color, chunks=[(b"IHDR", header),
+                (b"tRNS", b"\0" * 6), (b"IDAT", compressed), (b"IEND", b"")]))
+
+    def test_png_decode_is_bounded_exact_and_fail_closed(self):
+        raw = synthetic_filtered_scanlines(synthetic_pixel_rows(), 4, [0])
+        header = struct.pack(">IIBBBBB", 320, 600, 8, 6, 0, 0, 0)
+        compressed = zlib.compress(raw)
+        for options in ({"depth": 16}, {"depth": 1}, {"color": 3}, {"color": 0}, {"color": 4},
+                        {"compression": 1}, {"filtering": 1}, {"interlace": 1}, {"width": 319}, {"height": 599}):
+            self.png_rejected(synthetic_png(raw, **options))
+        last_row = len(raw) - (320 * 4 + 1)
+        for malformed in (raw[:-1], raw + b"\0", raw + b"\0" * len(raw), b"\5" + raw[1:],
+                          raw[:last_row] + b"\5" + raw[last_row + 1:]):
+            self.png_rejected(synthetic_png(malformed))
+        for chunks in (
+            [(b"IHDR", header), (b"IDAT", compressed[:-1]), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IDAT", compressed + b"trailing"), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IDAT", compressed + zlib.compress(raw)), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IDAT", b"not-zlib"), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IHDR", header), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IDAT", compressed), (b"IEND", b"unexpected")],
+            [(b"IHDR", header), (b"IDAT", compressed[:1]), (b"tEXt", b"fixture"), (b"IDAT", compressed[1:]), (b"IEND", b"")],
+            [(b"IHDR", header), (b"ABCD", b"unknown critical"), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"ABC1", b"invalid type"), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"tExt", b"reserved bit"), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"PLTE", b""), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"PLTE", b"\0\0"), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"PLTE", b"\0" * 771), (b"IDAT", compressed), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IEND", b"")],
+            [(b"IHDR", header), (b"IDAT", compressed)],
+        ):
+            self.png_rejected(synthetic_png(raw, chunks=chunks))
+        content = synthetic_png(raw)
+        self.png_rejected(content[:-1])
+        self.png_rejected(content + b"trailing")
+        corrupted = bytearray(content); corrupted[-13] ^= 1
+        self.png_rejected(bytes(corrupted))
+        self.png_rejected(content[:33] + struct.pack(">I", 0xffffffff) + content[37:])
+
     def owned_fixture(self):
         identifier='12345678-1234-1234-1234-123456789ABC'
         path='/Users/runner/Library/Developer/CoreSimulator/Devices/'+identifier+'/data/Containers/Bundle/Application/ABCDEFAB-1234-1234-1234-123456789ABC/KadeAI.app/KadeAI'

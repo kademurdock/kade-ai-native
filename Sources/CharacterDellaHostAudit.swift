@@ -145,7 +145,9 @@ enum CharacterDellaHostAuditRecorder {
         guard !Task.isCancelled, !portraitVisible || stage != nil else { return }
         let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows).first(where: \.isKeyWindow)
-        guard let window else { return }
+        guard let window, UIApplication.shared.applicationState == .active,
+              window.windowScene?.activationState == .foregroundActive,
+              !window.isHidden, window.alpha > 0 else { return }
         geometry["window"] = window.bounds
         if !portraitVisible {
             stage = nil
