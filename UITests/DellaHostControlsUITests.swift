@@ -280,53 +280,128 @@ final class DellaHostControlsUITests: XCTestCase {
             try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name
                         + " [editor=" + rectangle(fieldFrame) + " control=" + rectangle(control.frame) + "]")
         }
+        var attachmentStatusFrame: CGRect?
         if attachment {
             controls.append(try button(app, label: "Remove attachment"))
-            try require(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: ")).count == 1,
+            let status = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: "))
+            try require(status.count == 1,
                         "attachment status remains a separate readable element")
+            attachmentStatusFrame = try visibleFrame(status.element(boundBy: 0), in: app,
+                                                     name: "attachment status")
         }
         try disjoint(controls)
-        let viewport = try transcriptFrame(app)
-        try require(viewport.height >= 44, "real transcript retains at least 44pt of scrolling room [scroll="
-                    + rectangle(viewport) + "]")
         if keyboard {
             let keyboardFrame = app.keyboards.firstMatch.frame
             try require(valid(keyboardFrame), "software keyboard has a nonempty native frame")
             try require(fieldFrame.maxY <= keyboardFrame.minY + 0.5,
                         "composer stays above the keyboard [editor=" + rectangle(fieldFrame)
                             + " keyboard=" + rectangle(keyboardFrame) + "]")
-            try require(viewport.maxY <= keyboardFrame.minY + 0.5,
-                        "transcript stays above the keyboard [scroll=" + rectangle(viewport)
-                            + " keyboard=" + rectangle(keyboardFrame) + "]")
             for control in controls {
                 try require(control.frame.maxY <= keyboardFrame.minY + 0.5,
                             control.name + " stays above the keyboard [control=" + rectangle(control.frame)
                                 + " keyboard=" + rectangle(keyboardFrame) + "]")
             }
+            if let attachmentStatusFrame {
+                try require(attachmentStatusFrame.maxY <= keyboardFrame.minY + 0.5,
+                            "attachment status stays above the keyboard [status=" + rectangle(attachmentStatusFrame)
+                                + " keyboard=" + rectangle(keyboardFrame) + "]")
+            }
+        }
+        let composerFrames = [fieldFrame] + controls.map(\.frame)
+            + (attachmentStatusFrame.map { [$0] } ?? [])
+        let region = try transcriptInteractionRegion(app, composerFrames: composerFrames)
+        try require(region.height >= 44, "real transcript retains at least 44pt of interaction room [region="
+                    + rectangle(region) + "]")
+        if keyboard {
+            // This checks the derived gesture bounds. The independent complete
+            // editor/control/status bounds above already checked keyboard avoidance.
+            let keyboardFrame = app.keyboards.firstMatch.frame
+            try require(region.maxY <= keyboardFrame.minY + 0.5,
+                        "transcript interaction region stays above the keyboard [region=" + rectangle(region)
+                            + " keyboard=" + rectangle(keyboardFrame) + "]")
         }
         return ChatCore(fieldFrame: fieldFrame, controls: controls)
     }
 
-    private func transcriptFrame(_ app: XCUIApplication) throws -> CGRect {
+    private func transcriptInteractionRegion(_ app: XCUIApplication,
+                                             composerFrames: [CGRect]? = nil) throws -> CGRect {
         let matches = app.scrollViews.matching(identifier: "della-host.chat.transcript-scroll")
         try require(matches.count == 1, "one real native transcript ScrollView [" + matchContext(matches) + "]")
-        return try visibleFrame(matches.element(boundBy: 0), in: app, name: "transcript viewport")
+        let container = try visibleFrame(matches.element(boundBy: 0), in: app, name: "transcript ScrollView")
+        let navigationBars = app.navigationBars
+        try require(navigationBars.count == 1, "one real native chat navigation bar")
+        let navigation = try visibleFrame(navigationBars.element(boundBy: 0), in: app, name: "chat navigation bar")
+
+        let pinnedFrames: [CGRect]
+        if let composerFrames {
+            pinnedFrames = composerFrames
+        } else {
+            let identifiers = ["della-host.chat.composer-field", "della-host.chat.send",
+                               "della-host.chat.attach", "della-host.chat.mic", "della-host.chat.thinking"]
+            var frames = try identifiers.map { identifier in
+                let elements = app.descendants(matching: .any).matching(identifier: identifier)
+                try require(elements.count == 1, "one native composer boundary for " + identifier)
+                return try visibleFrame(elements.element(boundBy: 0), in: app, name: identifier)
+            }
+            let remove = app.buttons.matching(NSPredicate(format: "label == %@", "Remove attachment"))
+            let status = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: "))
+            try require(remove.count <= 1 && status.count <= 1, "attachment boundaries remain separate native elements")
+            if remove.count == 1 {
+                frames.append(try visibleFrame(remove.element(boundBy: 0), in: app, name: "Remove attachment"))
+            }
+            if status.count == 1 {
+                frames.append(try visibleFrame(status.element(boundBy: 0), in: app, name: "attachment status"))
+            }
+            pinnedFrames = frames
+        }
+        try require(!pinnedFrames.isEmpty && pinnedFrames.allSatisfy(valid),
+                    "native composer boundaries have usable screen geometry")
+        let composerTop = pinnedFrames.map(\.minY).min()!
+        var bottom = min(container.maxY, composerTop)
+        if app.keyboards.count > 0 {
+            try require(app.keyboards.count == 1, "one real software keyboard bounds the drag")
+            bottom = min(bottom, try visibleFrame(app.keyboards.firstMatch, in: app, name: "software keyboard").minY)
+        }
+        let top = max(container.minY, navigation.maxY)
+        // CGRect accessors standardize a negative stored height. Reject a
+        // reversed or short directed interval before constructing a rectangle.
+        try require(top.isFinite && bottom.isFinite && bottom - top >= 56,
+                    "native transcript has a directed 56pt interaction gap [top="
+                        + String(format: "%.6f", Double(top)) + " bottom="
+                        + String(format: "%.6f", Double(bottom)) + " container=" + rectangle(container)
+                        + " navigation=" + rectangle(navigation) + "]")
+        let region = CGRect(x: container.minX, y: top, width: container.width, height: bottom - top)
+        // SwiftUI safeAreaInset / UIKit adjustedContentInset can leave the AX
+        // ScrollView frame equal to the entire window. This native interaction
+        // region excludes observed chrome, composer leaves and keyboard. It is
+        // not a measurement of content insets: the separate capture gate checks
+        // the true transcript viewport, including AX-hidden portrait and padding.
+        try require(valid(region) && region.height >= 56,
+                    "native transcript retains at least 56pt for an interior drag [region=" + rectangle(region)
+                        + " container=" + rectangle(container) + " navigation=" + rectangle(navigation)
+                        + " composerTop=" + String(format: "%.6f", Double(composerTop)) + "]")
+        return region
     }
 
     private func controlsInsideTranscript(_ controls: [Control], in app: XCUIApplication) throws {
-        let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
+        let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
         for control in controls {
-            try require(viewport.contains(control.frame), control.name + " fits inside the actual transcript viewport [control="
-                        + rectangle(control.frame) + " scroll=" + rectangle(viewport) + "]")
+            try require(region.contains(control.frame), control.name + " fits inside the native transcript interaction region [control="
+                        + rectangle(control.frame) + " region=" + rectangle(region) + "]")
         }
     }
 
     private func dragTranscript(_ app: XCUIApplication) throws {
-        let viewport = try transcriptFrame(app)
-        try require(viewport.height >= 44, "viewport has enough room for a native drag")
-        let scroll = app.scrollViews.matching(identifier: "della-host.chat.transcript-scroll").firstMatch
-        let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
-        let finish = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+        let region = try transcriptInteractionRegion(app)
+        try require(region.height >= 44, "transcript interaction region has enough room for a native drag")
+        // Use actual screen points inside the region. Normalizing the raw AX
+        // container would start at y=533.6, inside the SE keyboard at y=451.
+        let window = app.frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: region.midX - window.minX,
+                                              dy: region.minY + region.height * 0.8 - window.minY))
+        let finish = origin.withOffset(CGVector(dx: region.midX - window.minX,
+                                               dy: region.minY + region.height * 0.2 - window.minY))
         start.press(forDuration: 0.05, thenDragTo: finish)
     }
 
@@ -339,15 +414,15 @@ final class DellaHostControlsUITests: XCTestCase {
             return app.buttons.matching(identifier: identifier).firstMatch
         }
         for _ in 0..<8 {
-            let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
-            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && viewport.contains($0.frame) }) {
+            let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
+            if targets.allSatisfy({ $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) }) {
                 return
             }
             try dragTranscript(app)
         }
-        let viewport = try transcriptFrame(app).insetBy(dx: -0.5, dy: -0.5)
-        try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && viewport.contains($0.frame) },
-                    "bounded real viewport drags make every requested target reachable")
+        let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
+        try require(targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) },
+                    "bounded real transcript drags make every requested target reachable")
     }
 
     private func checkCall(_ requestedPhase: String, secondaryControlsVisible: Bool) throws {

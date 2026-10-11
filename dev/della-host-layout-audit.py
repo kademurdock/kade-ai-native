@@ -146,6 +146,10 @@ SCREENSHOT_SECONDS=75
 READY_SECONDS=30
 BOOT_SECONDS=420
 INSTALL_SECONDS=180
+PREFLIGHT_CONTAINER_SECONDS=90
+PREFLIGHT_STOP_SECONDS=5
+PREFLIGHT_DRAIN_SECONDS=2
+PREFLIGHT_OUTPUT_BYTES=64*1024
 UI_SECONDS={'large':600,'small':480}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
@@ -525,7 +529,7 @@ def validate_app_preflight(report,identifier,initial):
     required={'schema','source','device','identifier','phase','timeoutSeconds','noScreenshot','passed',
               'compiledBeforeVerified','compiledAfterVerified','freshReadiness','readyValidated','terminated',
               'operationSeconds','status','startedAtUtc','finishedAtUtc','elapsedSeconds'}
-    optional={'compiledRunner','readySha256','errorType','error','cleanupErrorType','cleanupError'}
+    optional={'compiledRunner','readySha256','errorType','error','cleanupErrorType','cleanupError','commandOperations'}
     require(isinstance(report,dict) and report.get('schema')=='kade.della-host-app-preflight.v1'
             and required<=set(report)<=required|optional
             and report.get('source')==initial and report.get('device')=='large'
@@ -546,22 +550,139 @@ def validate_app_preflight(report,identifier,initial):
     require(started.tzinfo is not None and finished.tzinfo is not None and started<=finished
             and (finished-started).total_seconds()<=BOOT_SECONDS+1,'Invalid offline app preflight timestamp order')
     durations=report.get('operationSeconds')
-    bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':45,
+    bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':PREFLIGHT_CONTAINER_SECONDS,
             'launch':45,'readiness':READY_SECONDS,'terminate':30,'compiledAfter':BOOT_SECONDS}
+    grace=2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS
     require(isinstance(durations,dict) and set(durations)<=set(bounds)
-            and all(number(value) and 0<=value<=bounds[key]+1 for key,value in durations.items()),
+            and all(number(value) and 0<=value<=bounds[key]+(grace if key in
+                    ('install','appearance','container','launch','terminate') else 0)+1
+                    for key,value in durations.items()),
             'Unbounded offline app preflight operation timing')
     require(sum(durations.values())<=report['elapsedSeconds']+1,
             'Offline app preflight operations exceed its elapsed time')
     if 'compiledRunner' in report:validate_compiled_record(report['compiledRunner'],initial)
     if 'readySha256' in report:require(re.fullmatch(r'[a-f0-9]{64}',report['readySha256']),
                                      'Invalid offline app preflight readiness hash')
+    commands=report.get('commandOperations',{})
+    expected={'install':'install','appearance':'ui','container':'get_app_container','launch':'launch','terminate':'terminate'}
+    require(isinstance(commands,dict) and set(commands)<=set(expected),'Unknown offline app preflight command')
+    for key,command in commands.items():
+        validate_preflight_command(command,expected[key],bounds[key])
     if report['passed']:
         require(all(report[field] for field in flags) and set(durations)==set(bounds)
                 and 'compiledRunner' in report and 'readySha256' in report
+                and set(commands)==set(expected) and all(command['passed'] for command in commands.values())
                 and report.get('status')=='completed' and 'errorType' not in report and 'cleanupErrorType' not in report,
                 'Incomplete offline app preflight retained success')
     return report
+
+
+def validate_preflight_command(report,operation,bound):
+    required={'operation','timeoutSeconds','stopTimeoutSeconds','killTimeoutSeconds','drainTimeoutSeconds',
+              'outputLimitBytes','capturedOutputBytes','passed','timedOut','outputLimitExceeded',
+              'stopRequested','killRequested','drainTimedOut','exitCode','elapsedSeconds'}
+    require(isinstance(report,dict) and required<=set(report)<=required|{'failureLines'}
+            and report.get('operation')==operation and number(report.get('timeoutSeconds'))
+            and 0<=report['timeoutSeconds']<=bound and report.get('stopTimeoutSeconds')==PREFLIGHT_STOP_SECONDS
+            and report.get('killTimeoutSeconds')==PREFLIGHT_STOP_SECONDS
+            and report.get('drainTimeoutSeconds')==PREFLIGHT_DRAIN_SECONDS
+            and report.get('outputLimitBytes')==PREFLIGHT_OUTPUT_BYTES,
+            'Invalid bounded offline app preflight transport record')
+    require(all(type(report.get(key)) is bool for key in
+                ('passed','timedOut','outputLimitExceeded','stopRequested','killRequested','drainTimedOut'))
+            and type(report.get('capturedOutputBytes')) is int and 0<=report['capturedOutputBytes']<=PREFLIGHT_OUTPUT_BYTES
+            and (report.get('exitCode') is None or type(report['exitCode']) is int)
+            and number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=report['timeoutSeconds']+
+                2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS+1,'Unbounded offline app preflight transport timing/status')
+    lines=report.get('failureLines',[])
+    require(isinstance(lines,list) and len(lines)<=6 and all(isinstance(line,str) and sanitize_ui_line(line)==line
+            for line in lines),'Unsafe offline app preflight transport diagnostics')
+    if report['passed']:require(report['exitCode']==0 and report['timeoutSeconds']>0
+        and not any(report[key] for key in ('timedOut','outputLimitExceeded','stopRequested','killRequested','drainTimedOut'))
+        and report['elapsedSeconds']<=report['timeoutSeconds']+1,'Failed offline preflight command retained success')
+    return report
+
+
+def preflight_sim(*args,timeout,deadline,record,env=None):
+    """Preflight-only simctl with finite process-group stop and bounded pipes."""
+    started=time.monotonic();process=None;buffers={'stdout':bytearray(),'stderr':bytearray()}
+    hard_deadline=deadline;budget=0
+    grace=2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS
+    record.update(operation=args[0],timeoutSeconds=budget,stopTimeoutSeconds=PREFLIGHT_STOP_SECONDS,
+                  killTimeoutSeconds=PREFLIGHT_STOP_SECONDS,drainTimeoutSeconds=PREFLIGHT_DRAIN_SECONDS,
+                  outputLimitBytes=PREFLIGHT_OUTPUT_BYTES,capturedOutputBytes=0,passed=False,timedOut=False,
+                  outputLimitExceeded=False,stopRequested=False,killRequested=False,drainTimedOut=False,exitCode=None)
+    def stop(force=False):
+        record['stopRequested']=True
+        try:os.killpg(process.pid,signal.SIGTERM)
+        except ProcessLookupError:pass
+        allowance=min(PREFLIGHT_STOP_SECONDS,max(0,hard_deadline-time.monotonic()))
+        try:
+            if allowance<=0:raise subprocess.TimeoutExpired(['simctl',args[0]],0)
+            process.wait(timeout=allowance)
+            if force:raise subprocess.TimeoutExpired(['simctl',args[0]],allowance)
+        except subprocess.TimeoutExpired:
+            record['killRequested']=True
+            try:os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+            allowance=min(PREFLIGHT_STOP_SECONDS,max(0,hard_deadline-time.monotonic()))
+            if allowance>0:process.wait(timeout=allowance)
+    try:
+        hard_deadline=min(deadline,started+operation_remaining(max(.001,deadline-started)))
+        budget=max(0,min(timeout,hard_deadline-started-grace))
+        hard_deadline=min(hard_deadline,started+budget+grace)
+        record['timeoutSeconds']=budget
+        require(budget>0,'Offline app preflight transport has no remaining bounded stop allowance')
+        process=subprocess.Popen(['xcrun','simctl',*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 start_new_session=True,bufsize=0,env=env)
+        operation_deadline=started+budget;drain_deadline=None
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout,selectors.EVENT_READ,'stdout')
+            selector.register(process.stderr,selectors.EVENT_READ,'stderr')
+            while selector.get_map():
+                tick=time.monotonic()
+                if tick>=operation_deadline and process.poll() is None and not record['stopRequested']:
+                    record['timedOut']=True;stop()
+                if process.poll() is not None and drain_deadline is None:
+                    drain_deadline=min(hard_deadline,time.monotonic()+PREFLIGHT_DRAIN_SECONDS)
+                if tick>=hard_deadline or drain_deadline is not None and tick>=drain_deadline:
+                    record['drainTimedOut']=True
+                    stop(force=True)
+                    break
+                for selected,_ in selector.select(.05):
+                    chunk=os.read(selected.fileobj.fileno(),8192)
+                    if not chunk:selector.unregister(selected.fileobj);continue
+                    room=PREFLIGHT_OUTPUT_BYTES-record['capturedOutputBytes']
+                    buffers[selected.data].extend(chunk[:room]);record['capturedOutputBytes']+=min(room,len(chunk))
+                    if len(chunk)>room:
+                        record['outputLimitExceeded']=True
+                        if not record['stopRequested']:stop()
+        # Pipes may close just before the child becomes waitable. Reap within
+        # the active command budget instead of treating that exit race as failure.
+        if process.poll() is None and not record['stopRequested']:
+            allowance=min(operation_deadline,hard_deadline)-time.monotonic()
+            try:
+                if allowance<=0:raise subprocess.TimeoutExpired(['simctl',args[0]],0)
+                process.wait(timeout=allowance)
+            except subprocess.TimeoutExpired:
+                record['timedOut']=True;stop()
+        record['exitCode']=process.poll()
+        record['passed']=record['exitCode']==0 and not any(record[key] for key in
+            ('timedOut','outputLimitExceeded','stopRequested','killRequested','drainTimedOut'))
+        require(record['passed'],'Bounded offline app preflight simctl failed: '+args[0])
+        return buffers['stdout'].decode('utf-8',errors='replace').strip()
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try:stop()
+                except Exception:record['passed']=False
+            record['exitCode']=process.poll()
+            for stream in (process.stdout,process.stderr):stream.close()
+        record['elapsedSeconds']=round(time.monotonic()-started,3)
+        record['passed']=record['passed'] and record['elapsedSeconds']<=budget+1
+        if not record['passed']:
+            record['failureLines']=[sanitize_ui_line(line) for name in ('stderr','stdout')
+                for line in buffers[name].decode('utf-8',errors='replace').splitlines() if line][-6:]
 
 
 def app_preflight(expected,identifier,initial,device,deadline,report):
@@ -570,7 +691,7 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
     report.update(schema='kade.della-host-app-preflight.v1',source=initial,device='large',identifier=identifier,
                   phase='call-a11y-dark',timeoutSeconds=BOOT_SECONDS,noScreenshot=True,passed=False,
                   compiledBeforeVerified=False,compiledAfterVerified=False,freshReadiness=False,
-                  readyValidated=False,terminated=False,operationSeconds={},status='preparing',startedAtUtc=now())
+                  readyValidated=False,terminated=False,operationSeconds={},commandOperations={},status='preparing',startedAtUtc=now())
     # Work leaves30 seconds of the same boot/shared/action deadline for termination.
     work_deadline=deadline-30
     attempted=False
@@ -582,6 +703,11 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
         tick=time.monotonic()
         try:return action()
         finally:report['operationSeconds'][name]=round(time.monotonic()-tick,3)
+    def command(name,*args,bound,cleanup=False,env=None):
+        allowance=remaining(bound,cleanup=cleanup)
+        record={};report['commandOperations'][name]=record
+        return timed(name,lambda:preflight_sim(*args,timeout=allowance,
+                     deadline=deadline if cleanup else work_deadline,record=record,env=env))
     def unchanged():
         global _OPERATION_DEADLINE
         allowance=remaining(BOOT_SECONDS)
@@ -598,9 +724,9 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
     try:
         report['compiledRunner']=timed('compiledBefore',unchanged);report['compiledBeforeVerified']=True
         report['status']='installing'
-        timed('install',lambda:sim('install',identifier,str(APP),timeout=remaining(INSTALL_SECONDS)))
-        timed('appearance',lambda:sim('ui',identifier,'appearance','dark',timeout=remaining(30)))
-        container=timed('container',lambda:sim('get_app_container',identifier,BUNDLE_ID,'data',timeout=remaining(45)))
+        command('install','install',identifier,str(APP),bound=INSTALL_SECONDS)
+        command('appearance','ui',identifier,'appearance','dark',bound=30)
+        container=command('container','get_app_container',identifier,BUNDLE_ID,'data',bound=PREFLIGHT_CONTAINER_SECONDS)
         require(isinstance(container,str) and 0<len(container)<=2048 and re.fullmatch(
             r'/.+/CoreSimulator/Devices/'+re.escape(identifier)+
             r'/data/Containers/Data/Application/[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',container),
@@ -615,7 +741,7 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
                  SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',
                  SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_TOUR='0')
         remaining(1);attempted=True
-        timed('launch',lambda:sim('launch',identifier,BUNDLE_ID,env=env,timeout=remaining(45)))
+        command('launch','launch',identifier,BUNDLE_ID,env=env,bound=45)
         report['status']='waitingForReadiness'
         def readiness():
             ready_deadline=time.monotonic()+remaining(READY_SECONDS)
@@ -634,7 +760,7 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
     finally:
         try:
             if attempted:
-                timed('terminate',lambda:sim('terminate',identifier,BUNDLE_ID,timeout=remaining(30,cleanup=True)))
+                command('terminate','terminate',identifier,BUNDLE_ID,bound=30,cleanup=True)
                 report['terminated']=True
             if report['compiledBeforeVerified']:
                 # Recheck after termination, quietly, even if native readiness failed.
@@ -655,10 +781,13 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
                 raise
         finally:
             report['passed']=all(report[field] for field in ('compiledBeforeVerified','compiledAfterVerified',
-                                  'freshReadiness','readyValidated','terminated')) and 'errorType' not in report
+                                  'freshReadiness','readyValidated','terminated')) and 'errorType' not in report \
+                                  and all(command.get('passed') is True for command in report['commandOperations'].values())
             if report['passed']:report['status']='completed'
             report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
-    return validate_app_preflight(report,identifier,initial)
+    validate_app_preflight(report,identifier,initial)
+    require(report['passed'],'Offline app preflight did not complete successfully')
+    return report
 
 
 def boot_ui(expected,key):
@@ -669,7 +798,8 @@ def boot_ui(expected,key):
         require(sys.platform=='darwin','Explicit UI simulator boot requires standard macOS')
         records=simulator_record(expected)['devices']
         identifier=records[key]['identifier'];report['identifier']=identifier
-        deadline=started+operation_remaining(BOOT_SECONDS)
+        tick=time.monotonic()
+        deadline=min(started+BOOT_SECONDS,tick+operation_remaining(BOOT_SECONDS))
         def remaining(bound):
             seconds=deadline-time.monotonic()
             require(seconds>0,'Explicit UI simulator boot watchdog expired')
@@ -692,6 +822,13 @@ def boot_ui(expected,key):
     finally:
         report['elapsedSeconds']=round(time.monotonic()-started,3);report['finishedAtUtc']=now()
         save('ui-boot-'+key+'.json',report)
+        if 'appPreflight' in report:
+            compact={field:value for field,value in report['appPreflight'].items()
+                     if field not in ('source','compiledRunner')}
+            compact['source']=initial['sha']
+            encoded=json.dumps(compact,separators=(',',':'))
+            require(len(encoded.encode())<=64*1024,'Oversized bounded early preflight diagnostic')
+            print('KADE_DELLA_HOST_APP_PREFLIGHT '+encoded,flush=True)
     return report
 
 
