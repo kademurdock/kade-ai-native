@@ -525,6 +525,219 @@ class ProtocolChecks(unittest.TestCase):
                     with self.assertRaises(RuntimeError):NATIVE_BIRTH(owned['pid'])
             CHECKS+=1
 
+    def diagnostic_native_library(self,owned,path,status=2,birth_delta=0,count=136,number=0):
+        host=audit.host;calls=[]
+        class NativeFunction:
+            def __init__(self,action):self.action=action
+            def __call__(self,*args):return self.action(*args)
+        def info(pid,kind,zombies,buffer,size):
+            calls.append(('bsd',pid,kind,zombies))
+            target=ctypes.cast(buffer,ctypes.POINTER(host.DarwinBSDInfo)).contents
+            target.pid=pid;target.uid=501;target.status=status
+            target.birthSeconds=owned['birthSeconds'];target.birthMicroseconds=owned['birthMicroseconds']+birth_delta
+            ctypes.set_errno(number);return count
+        def executable(pid,buffer,size):
+            calls.append(('path',pid))
+            buffer.value=path.encode();return len(buffer.value)
+        library=type('MemoryDiagnosticLibrary',(),{})()
+        library.proc_pidinfo=NativeFunction(info);library.proc_pidpath=NativeFunction(executable)
+        return library,calls
+
+    def test_status_sidechannel_preserves_native_snapshot_and_birth_objects(self):
+        global CHECKS
+        host=audit.host;owned,_,kernel=self.owned_fixture()
+        for status in (0,2,5,2**32-1):
+            library,calls=self.diagnostic_native_library(owned,kernel['path'],status=status)
+            sink={}
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library):
+                plain=NATIVE_SNAPSHOT(owned['pid']);observed=NATIVE_SNAPSHOT(owned['pid'],status_sink=sink)
+                birth=NATIVE_BIRTH(owned['pid'])
+            self.assertEqual(plain,kernel);self.assertEqual(observed,plain)
+            self.assertEqual(sink,{'status':status})
+            self.assertEqual(birth,{key:owned[key] for key in ('pid','uid','birthSeconds','birthMicroseconds')})
+            self.assertEqual(calls,[('bsd',2468,3,0),('path',2468),('bsd',2468,3,0),('path',2468),('bsd',2468,3,1)])
+            self.assertNotIn('status',observed);CHECKS+=6
+        for count,number in ((0,errno.ESRCH),(0,errno.EPERM),(134,0)):
+            library,calls=self.diagnostic_native_library(owned,kernel['path'],count=count,number=number)
+            sink={}
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library):
+                if number==errno.ESRCH:self.assertIsNone(NATIVE_SNAPSHOT(owned['pid'],status_sink=sink))
+                else:
+                    with self.assertRaises(RuntimeError):NATIVE_SNAPSHOT(owned['pid'],status_sink=sink)
+            self.assertEqual(sink,{})
+            self.assertEqual(calls,[('bsd',2468,3,0)]);CHECKS+=3
+
+    def test_offscope_revalidation_retains_metadata_before_the_unchanged_guard(self):
+        global CHECKS
+        host=audit.host;owned,compiled,kernel=self.owned_fixture()
+        class MemoryBase:
+            def __init__(self,value):self.value=str(value)
+            def __str__(self):return self.value
+            def __truediv__(self,value):return MemoryBase(self.value+'/'+value)
+            @classmethod
+            def home(cls):return cls('/Users/runner')
+            # An off-scope snapshot must fail before alias/artifact operations.
+            def resolve(self,*args,**kwargs):return forbidden()
+            def open(self,*args,**kwargs):return forbidden()
+        other_id='00000000-1234-1234-1234-123456789ABC'
+        cases=((kernel['path'].replace('/KadeAI.app/KadeAI','/KadeAI.app/KadeAI.debug.dylib'),'sameSimulatorOtherPath',0),
+               (kernel['path'].replace(owned['identifier'],other_id),'anotherSimulatorApp',0),
+               (kernel['path'].replace(owned['identifier'],other_id.lower()),'anotherSimulatorApp',0),
+               ('/private/var/memory/KadeAI.app/KadeAI','sameAppSuffixElsewhere',0),
+               ('/usr/lib/dyld','otherAbsolutePath',0),
+               ('/usr/lib/dyld','otherAbsolutePath',1),
+               (kernel['path'].replace(owned['identifier'],owned['identifier'].lower()),'sameSimulatorOtherPath',0))
+        for path,category,birth_delta in cases:
+            library,calls=self.diagnostic_native_library(owned,path,birth_delta=birth_delta)
+            record={};signals=[]
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library),\
+                 patch.object(host,'Path',MemoryBase),patch.object(host.os,'getuid',return_value=501,create=True),\
+                 patch.object(host,'native_process_snapshot',side_effect=NATIVE_SNAPSHOT),\
+                 patch.object(host,'owned_process_identity',side_effect=OWNED_IDENTITY),\
+                 patch.object(host.os,'kill',side_effect=lambda *args:signals.append(args)),\
+                 patch.object(host.time,'monotonic',return_value=0),patch.object(host,'now',return_value=owned['capturedAtUtc']):
+                with self.assertRaisesRegex(RuntimeError,'outside the exact simulator installed app'):
+                    host.terminate_owned_process(owned,owned['identifier'],compiled,100,record)
+            diagnostic=record['revalidationDiagnostic']
+            self.assertEqual(diagnostic['pathCategory'],category)
+            self.assertFalse(diagnostic['exactSimulatorAppScope'])
+            self.assertEqual(diagnostic['executablePathSha256'],hashlib.sha256(path.encode()).hexdigest())
+            self.assertEqual(diagnostic['matchesOriginal'],{'pid':True,'uid':True,'birth':birth_delta==0,'path':False})
+            self.assertEqual((diagnostic['status'],diagnostic['birthMicroseconds']),(2,123456+birth_delta))
+            self.assertEqual(signals,[])
+            self.assertEqual(calls,[('bsd',2468,3,0),('path',2468)])
+            self.assertFalse(record['passed'] or record['identityVerified'] or record['signalSubmitted'] or record['observedExit'])
+            self.assertEqual(record['pollCount'],0)
+            self.assertIs(host.validate_owned_termination(record,owned),record)
+            encoded=json.dumps(record)
+            self.assertNotIn(path,encoded);self.assertNotIn('/Users/runner',encoded)
+            CHECKS+=12
+        # A vanished or incomplete kernel observation cannot fabricate metadata.
+        for count,number in ((0,errno.ESRCH),(134,0)):
+            library,calls=self.diagnostic_native_library(owned,kernel['path'],count=count,number=number)
+            record={};signals=[]
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library),\
+                 patch.object(host,'native_process_snapshot',side_effect=NATIVE_SNAPSHOT),\
+                 patch.object(host,'owned_process_identity',side_effect=OWNED_IDENTITY),\
+                 patch.object(host.os,'kill',side_effect=lambda *args:signals.append(args)),\
+                 patch.object(host.time,'monotonic',return_value=0),patch.object(host,'now',return_value=owned['capturedAtUtc']):
+                with self.assertRaises(RuntimeError):host.terminate_owned_process(owned,owned['identifier'],compiled,100,record)
+            self.assertNotIn('revalidationDiagnostic',record)
+            self.assertEqual(signals,[]);self.assertEqual(calls,[('bsd',2468,3,0)])
+            self.assertIs(host.validate_owned_termination(record,owned),record);CHECKS+=5
+
+    def test_revalidation_diagnostic_is_typed_consistent_and_never_exit_proof(self):
+        global CHECKS
+        host=audit.host;owned,_,kernel=self.owned_fixture()
+        base=kernel['path'].rsplit('/',3)[0]
+        data=host.owned_revalidation_diagnostic(kernel,2,base,owned['identifier'],True,owned)
+        self.assertEqual(data['pathCategory'],'expectedSimulatorApp')
+        self.assertTrue(data['exactSimulatorAppScope'] and all(data['matchesOriginal'].values()))
+        self.assertIs(host.validate_owned_revalidation_diagnostic(data,owned),data);CHECKS+=3
+        bad=(('schema','wrong'),('pid',True),('pid',2469),('uid',True),('uid',-1),('uid',2**32),
+             ('birthSeconds',True),('birthSeconds',0),('birthSeconds',10**11),
+             ('birthMicroseconds',True),('birthMicroseconds',-1),('birthMicroseconds',10**6),
+             ('status',True),('status',-1),('status',2**32),('status',2.0),
+             ('executablePathSha256','raw private path'),('exactSimulatorAppScope',1),
+             ('pathCategory','unreviewed category'),('pathCategory',True),('pathCategory',None),
+             ('pathCategory','otherAbsolutePath'),('matchesOriginal',None),
+             ('matchesOriginal',{'pid':True,'uid':True,'birth':True,'path':1}),
+             ('matchesOriginal',{'pid':True,'uid':True,'birth':True,'path':False}))
+        for key,value in bad:
+            changed=copy.deepcopy(data);changed[key]=value
+            with self.assertRaises(RuntimeError):host.validate_owned_revalidation_diagnostic(changed,owned)
+            CHECKS+=1
+        for changed in (None,{},dict(data,rawPath=kernel['path']),dict(data,extra=True)):
+            with self.assertRaises(RuntimeError):host.validate_owned_revalidation_diagnostic(changed,owned)
+            CHECKS+=1
+        changed=copy.deepcopy(data);changed['uid']=502;changed['matchesOriginal']['uid']=False
+        self.assertIs(host.validate_owned_revalidation_diagnostic(changed,owned),changed);CHECKS+=1
+        stopped={'schema':'kade.della-host-owned-exit.v1','pid':owned['pid'],'identitySha256':host.owned_identity_digest(owned),
+                 'timeoutSeconds':30,'signal':'SIGTERM','signalSubmitted':False,'identityVerified':False,
+                 'observedExit':False,'passed':False,'timedOut':False,'exitCode':None,'pollCount':0,
+                 'startedAtUtc':owned['capturedAtUtc'],'finishedAtUtc':owned['capturedAtUtc'],'elapsedSeconds':0}
+        self.assertIs(host.validate_owned_termination(stopped,owned),stopped);CHECKS+=1
+        stopped['revalidationDiagnostic']=data
+        self.assertIs(host.validate_owned_termination(stopped,owned),stopped)
+        self.assertFalse(stopped['passed'] or stopped['identityVerified'] or stopped['signalSubmitted'] or stopped['observedExit']);CHECKS+=2
+        for key,value in (('passed',True),('signalSubmitted',True),('observedExit',True),('revalidationDiagnostic',None)):
+            changed=copy.deepcopy(stopped);changed[key]=value
+            with self.assertRaises(RuntimeError):host.validate_owned_termination(changed,owned)
+            CHECKS+=1
+        changed=copy.deepcopy(stopped);changed.update(identityVerified=True,signalSubmitted=True,observedExit=True,passed=True,pollCount=1)
+        changed['revalidationDiagnostic']['pathCategory']='otherAbsolutePath'
+        changed['revalidationDiagnostic']['exactSimulatorAppScope']=False
+        with self.assertRaises(RuntimeError):host.validate_owned_termination(changed,owned)
+        CHECKS+=1
+
+    def test_expected_scope_diagnostic_keeps_owned_record_and_single_real_signal_contract(self):
+        global CHECKS
+        host=audit.host;owned,_,kernel=self.owned_fixture()
+        binary=b'synthetic unchanged compiled app, never native proof'
+        plist_bytes=host.plistlib.dumps({'CFBundleIdentifier':host.BUNDLE_ID,'CFBundleExecutable':'KadeAI'})
+        files={kernel['path']:binary,kernel['path'].rsplit('/',1)[0]+'/Info.plist':plist_bytes}
+        owned['executableSha256']=hashlib.sha256(binary).hexdigest()
+        owned['infoPlistSha256']=hashlib.sha256(plist_bytes).hexdigest()
+        compiled={'artifacts':{'app':{key:owned[key] for key in ('infoPlistSha256','executableSha256')}}}
+        reads=[]
+        class MemoryPath:
+            def __init__(self,value):self.value=str(value)
+            def __str__(self):return self.value
+            def __eq__(self,other):return isinstance(other,MemoryPath) and self.value==other.value
+            def __truediv__(self,value):return MemoryPath(self.value+'/'+value)
+            @classmethod
+            def home(cls):return cls('/Users/runner')
+            @property
+            def parent(self):return MemoryPath(self.value.rsplit('/',1)[0])
+            def resolve(self,strict=False):return self
+            def is_symlink(self):return False
+            def is_file(self):return self.value in files
+            def stat(self):return type('MemoryStat',(),{'st_size':len(files[self.value])})()
+            def open(self,mode):reads.append(self.value);return BytesIO(files[self.value])
+        library,calls=self.diagnostic_native_library(owned,kernel['path'])
+        original_info=library.proc_pidinfo.action
+        def changing_status(*args):
+            result=original_info(*args)
+            target=ctypes.cast(args[3],ctypes.POINTER(host.DarwinBSDInfo)).contents
+            target.status=2 if len([call for call in calls if call[0]=='bsd'])==1 else 5
+            return result
+        library.proc_pidinfo.action=changing_status
+        signals=[]
+        def kill(pid,signum):
+            if signum==host.signal.SIGTERM:signals.append((pid,signum))
+            else:
+                self.assertEqual((pid,signum),(2468,0))
+                raise ProcessLookupError(errno.ESRCH,'synthetic observed absence')
+        with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library),\
+             patch.object(host,'Path',MemoryPath),patch.object(host.os,'getuid',return_value=501,create=True),\
+             patch.object(host,'native_process_snapshot',side_effect=NATIVE_SNAPSHOT),\
+             patch.object(host,'owned_process_identity',side_effect=OWNED_IDENTITY),\
+             patch.object(host.os,'kill',side_effect=kill),patch.object(host.time,'monotonic',return_value=0),\
+             patch.object(host,'now',return_value=owned['capturedAtUtc']):
+            plain=OWNED_IDENTITY(owned['pid'],owned['identifier'],compiled,100,
+                                 owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'])
+            calls.clear();reads.clear();diagnostic_record={}
+            observed=OWNED_IDENTITY(owned['pid'],owned['identifier'],compiled,100,
+                                    owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'],
+                                    revalidation_record=diagnostic_record,original_owned=owned)
+            self.assertEqual(observed,plain);self.assertEqual(observed,owned)
+            self.assertNotIn('revalidationDiagnostic',observed);self.assertNotIn('status',observed)
+            self.assertEqual(len(calls),4);self.assertEqual(len(reads),2)
+            self.assertEqual(diagnostic_record['revalidationDiagnostic']['status'],2)
+            self.assertEqual(diagnostic_record['revalidationDiagnostic']['pathCategory'],'expectedSimulatorApp')
+            CHECKS+=8
+            calls.clear();reads.clear();record={}
+            host.terminate_owned_process(owned,owned['identifier'],compiled,100,record)
+        self.assertEqual(signals,[(2468,host.signal.SIGTERM)])
+        self.assertEqual(calls,[('bsd',2468,3,0),('path',2468)]*3)
+        self.assertEqual(len(reads),2)
+        self.assertTrue(record['passed'] and record['identityVerified'] and record['signalSubmitted'] and record['observedExit'])
+        self.assertEqual(record['pollCount'],1);self.assertIsNone(record['exitCode'])
+        self.assertEqual(record['revalidationDiagnostic']['status'],2)
+        self.assertTrue(record['revalidationDiagnostic']['exactSimulatorAppScope'])
+        self.assertTrue(all(record['revalidationDiagnostic']['matchesOriginal'].values()))
+        self.assertIs(host.validate_owned_termination(record,owned),record);CHECKS+=10
+
     def test_owned_installed_bundle_hashes_aliases_uid_and_birth(self):
         global CHECKS
         host=audit.host;owned,_,kernel=self.owned_fixture()

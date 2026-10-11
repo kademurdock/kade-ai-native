@@ -803,7 +803,7 @@ def launch_pid(output):
     return pid
 
 
-def native_bsd_identity(pid,include_zombies=False):
+def native_bsd_identity(pid,include_zombies=False,status_sink=None):
     require(sys.platform=='darwin' and type(pid) is int and 1<pid<2**31,'Owned process inspection requires Darwin and one positive PID')
     require(ctypes.sizeof(DarwinBSDInfo)==136 and DarwinBSDInfo.birthSeconds.offset==120,
             'Darwin process identity ABI differs from the inspected Apple contract')
@@ -814,6 +814,7 @@ def native_bsd_identity(pid,include_zombies=False):
     count=library.proc_pidinfo(pid,3,1 if include_zombies else 0,ctypes.byref(info),ctypes.sizeof(info))
     if count==0 and ctypes.get_errno()==errno.ESRCH:return None,library
     require(count==ctypes.sizeof(info) and info.pid==pid,'Native process identity is unavailable or incomplete')
+    if status_sink is not None:status_sink['status']=info.status
     return {key:getattr(info,key) for key in ('pid','uid','birthSeconds','birthMicroseconds')},library
 
 
@@ -822,8 +823,8 @@ def native_process_birth(pid):
     return native_bsd_identity(pid,include_zombies=True)[0]
 
 
-def native_process_snapshot(pid):
-    info,library=native_bsd_identity(pid)
+def native_process_snapshot(pid,status_sink=None):
+    info,library=native_bsd_identity(pid,status_sink=status_sink)
     if info is None:return None
     library.proc_pidpath.argtypes=[ctypes.c_int,ctypes.c_void_p,ctypes.c_uint32]
     library.proc_pidpath.restype=ctypes.c_int
@@ -862,13 +863,19 @@ def validate_owned_process(data,identifier,compiled):
     return data
 
 
-def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launch_finished):
+def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launch_finished,
+                           revalidation_record=None,original_owned=None):
     require(time.monotonic()<deadline,'Owned process inspection exhausted the existing deadline')
-    first=native_process_snapshot(pid)
+    status_sink={} if revalidation_record is not None else None
+    first=(native_process_snapshot(pid,status_sink=status_sink) if status_sink is not None
+           else native_process_snapshot(pid))
     require(first is not None and first['pid']==pid and first['uid']==os.getuid(),
             'Launched process is absent or belongs to a different native UID/PID')
     base=Path.home()/'Library/Developer/CoreSimulator/Devices'/identifier/'data/Containers/Bundle/Application'
     match=re.fullmatch(re.escape(str(base))+r'/([A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12})/KadeAI\.app/KadeAI',first['path'])
+    if revalidation_record is not None:
+        revalidation_record['revalidationDiagnostic']=owned_revalidation_diagnostic(
+            first,status_sink['status'],base,identifier,match,original_owned)
     require(match is not None,'Launched executable is outside the exact simulator installed app')
     executable=Path(first['path']);plist=executable.parent/'Info.plist'
     for item in (executable,plist):
@@ -897,6 +904,57 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
     return validate_owned_process(record,identifier,compiled)
 
 
+def owned_revalidation_diagnostic(first,status,base,identifier,match,owned):
+    # Classify only the already-observed kernel path. No alias resolution,
+    # installed-artifact read or further native lookup enters this diagnostic.
+    path=first['path'];device_root=str(base).removesuffix('/data/Containers/Bundle/Application')
+    family=device_root.rsplit('/',1)[0]
+    uuid=r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}'
+    family_device=re.match(re.escape(family)+r'/('+uuid+r')/',path)
+    same_device=(path.startswith(device_root+'/') or family_device is not None
+                 and family_device[1].casefold()==identifier.casefold())
+    other=re.fullmatch(re.escape(family)+r'/('+uuid+r')/data/Containers/Bundle/Application/'+uuid+r'/KadeAI\.app/KadeAI',path)
+    category=('expectedSimulatorApp' if match is not None else 'sameSimulatorOtherPath'
+              if same_device else 'anotherSimulatorApp'
+              if other is not None and other[1].casefold()!=identifier.casefold() else 'sameAppSuffixElsewhere'
+              if path.endswith('/KadeAI.app/KadeAI') else 'otherAbsolutePath')
+    digest=hashlib.sha256(path.encode()).hexdigest()
+    return {'schema':'kade.della-host-revalidation-diagnostic.v1',
+            **{key:first[key] for key in ('pid','uid','birthSeconds','birthMicroseconds')},
+            'status':status,'executablePathSha256':digest,'exactSimulatorAppScope':match is not None,
+            'pathCategory':category,'matchesOriginal':{
+                'pid':first['pid']==owned['pid'],'uid':first['uid']==owned['uid'],
+                'birth':all(first[key]==owned[key] for key in ('birthSeconds','birthMicroseconds')),
+                'path':digest==owned['executablePathSha256']}}
+
+
+def validate_owned_revalidation_diagnostic(data,owned):
+    fields={'schema','pid','uid','birthSeconds','birthMicroseconds','status',
+            'executablePathSha256','exactSimulatorAppScope','pathCategory','matchesOriginal'}
+    require(isinstance(data,dict) and set(data)==fields and owned is not None
+            and data['schema']=='kade.della-host-revalidation-diagnostic.v1'
+            and type(data['pid']) is int and data['pid']==owned['pid'] and 1<data['pid']<2**31
+            and type(data['uid']) is int and 0<=data['uid']<2**32
+            and type(data['birthSeconds']) is int and 0<data['birthSeconds']<10**11
+            and type(data['birthMicroseconds']) is int and 0<=data['birthMicroseconds']<10**6
+            and type(data['status']) is int and 0<=data['status']<2**32
+            and isinstance(data['executablePathSha256'],str) and re.fullmatch(r'[a-f0-9]{64}',data['executablePathSha256'])
+            and type(data['exactSimulatorAppScope']) is bool
+            and isinstance(data['pathCategory'],str)
+            and data['pathCategory'] in ('expectedSimulatorApp','sameSimulatorOtherPath','anotherSimulatorApp',
+                                         'sameAppSuffixElsewhere','otherAbsolutePath')
+            and data['exactSimulatorAppScope']==(data['pathCategory']=='expectedSimulatorApp'),
+            'Owned revalidation diagnostic schema, kernel fields or path category is invalid')
+    matches=data['matchesOriginal']
+    require(isinstance(matches,dict) and set(matches)=={'pid','uid','birth','path'}
+            and all(type(value) is bool for value in matches.values())
+            and matches=={'pid':data['pid']==owned['pid'],'uid':data['uid']==owned['uid'],
+                          'birth':all(data[key]==owned[key] for key in ('birthSeconds','birthMicroseconds')),
+                          'path':data['executablePathSha256']==owned['executablePathSha256']},
+            'Owned revalidation diagnostic contradicts the original identity')
+    return data
+
+
 def owned_identity_digest(owned):
     return hashlib.sha256(json.dumps(owned,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
@@ -904,7 +962,7 @@ def owned_identity_digest(owned):
 def validate_owned_termination(data,owned):
     fields={'schema','pid','identitySha256','timeoutSeconds','signal','signalSubmitted','identityVerified',
             'observedExit','passed','timedOut','exitCode','pollCount','startedAtUtc','finishedAtUtc','elapsedSeconds'}
-    require(isinstance(data,dict) and fields<=set(data)<=fields|{'errorType','error'}
+    require(isinstance(data,dict) and fields<=set(data)<=fields|{'errorType','error','revalidationDiagnostic'}
             and data['schema']=='kade.della-host-owned-exit.v1' and data['signal']=='SIGTERM' and data['exitCode'] is None
             and number(data['timeoutSeconds']) and 0<=data['timeoutSeconds']<=30
             and number(data['elapsedSeconds']) and 0<=data['elapsedSeconds']<=data['timeoutSeconds']+1
@@ -920,6 +978,11 @@ def validate_owned_termination(data,owned):
             and (not data['signalSubmitted'] or data['identityVerified'])
             and (not data['observedExit'] or data['signalSubmitted']),
             'Owned process exit diagnostics contradict the verified signal or contain unsafe text')
+    if 'revalidationDiagnostic' in data:
+        diagnostic=validate_owned_revalidation_diagnostic(data['revalidationDiagnostic'],owned)
+        require(not data['identityVerified'] or diagnostic['exactSimulatorAppScope']
+                and all(diagnostic['matchesOriginal'].values()),
+                'Owned revalidation diagnostic contradicts verified native ownership')
     start=datetime.fromisoformat(data['startedAtUtc']);finish=datetime.fromisoformat(data['finishedAtUtc'])
     require(start.tzinfo is not None and finish.tzinfo is not None and start<=finish
             and (finish-start).total_seconds()<=31,'Owned exit timestamp envelope is invalid')
@@ -941,7 +1004,8 @@ def terminate_owned_process(owned,identifier,compiled,deadline,record,bound=30):
     try:
         require(owned is not None,'Offline launch has no verified native PID; no signal was sent')
         fresh=owned_process_identity(owned['pid'],identifier,compiled,limit,
-                                     owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'])
+                                     owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'],
+                                     revalidation_record=record,original_owned=owned)
         require({key:value for key,value in fresh.items() if key!='capturedAtUtc'}==
                 {key:value for key,value in owned.items() if key!='capturedAtUtc'},
                 'Owned launch PID was reused or its installed identity changed; no signal was sent')
