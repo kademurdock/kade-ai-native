@@ -2145,11 +2145,7 @@ struct DescribedVideoView: View {
     private func applyRememberedNarration(_ fetched: DVConfig?) {
         let saved = UserDefaults.standard.dictionary(forKey: Self.settingsKey) ?? [:]
         let voices = fetched?.voices ?? []
-        if let preferred = prefs.defaultVoice, voices.contains(preferred) {
-            voice = preferred
-        } else {
-            voice = voices.first ?? prefs.defaultVoice ?? ""
-        }
+        voice = NarrationVoiceChoice.retaining(prefs.defaultVoice, fallback: nil, choices: voices)
         // Her account's speeds first (the same on the website), then this
         // phone's memory, then the usual ones.
         let usual = Self.nearestSpeed(prefs.speeds?.rate ?? (saved["rate"] as? Double) ?? 1.5)
@@ -2267,7 +2263,7 @@ struct DescribedVideoView: View {
         guard fetched.favorites != nil, fetched.myDefaultVoice == nil, !store.bool(forKey: Self.carriedKey) else { return }
         let saved = store.dictionary(forKey: Self.settingsKey) ?? [:]
         guard let old = saved["voice"] as? String, old != Self.oldFallbackVoice,
-              (fetched.voices ?? []).contains(old) else { return }
+              NarrationVoiceChoice.isKnown(old, choices: fetched.voices ?? [], retained: fetched.retained ?? []) else { return }
         guard let answer = try? await service.setDefaultVoice(old) else { return }
         prefs = answer
         store.set(true, forKey: Self.carriedKey)
@@ -2291,7 +2287,7 @@ struct DescribedVideoView: View {
             applyRememberedNarration(config)
             return cleared
         }
-        if let name = settings.voice, (config?.voices ?? []).contains(name) { voice = name }
+        voice = NarrationVoiceChoice.retaining(settings.voice, fallback: voice, choices: config?.voices ?? [])
         if let value = settings.rate { rate = Self.nearestSpeed(value) }
         if let value = settings.maxRate { maxRate = max(rate, Self.nearestSpeed(value)) }
         if let value = settings.mode, Self.modeOptions.contains(where: { $0.value == value }) { mode = value }

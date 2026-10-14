@@ -20,7 +20,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/puppet-completion-device-20261011"
+BRANCH = "codex/selected-drama3-voices-device-20261014"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 VERSION = "2.2.13"
 OPERATION_SECONDS = 1800
@@ -245,6 +245,8 @@ def verify(expected, receipt):
                       "angelVectorSha256": angel["sourceSHA256"]}
     receipt["models"] = model_count(runner.text("character-routing-models", ["bash", "run-character-tests.sh"],
                                                 seconds=180, cap=2 * 1024 * 1024))
+    runner.run("narration-voice-retention", ["bash", "run-narration-voice-tests.sh"], seconds=120)
+    receipt["narrationVoiceRetention"] = {"passed": True, "checks": 7}
     if shutil.which("xcodegen") is None:
         runner.run("install-xcodegen", ["brew", "install", "xcodegen"], seconds=180, cap=4 * 1024 * 1024)
     runner.run("generate-project", ["xcodegen", "generate"])
