@@ -3,23 +3,7 @@ name: Della full host layout unsigned review
 'on':
   push:
     branches: [codex/puppet-idle-host-20261014]
-    paths:
-      - '.github/workflows/della-host-layout-review.yml'
-      - 'dev/della-host-layout-audit.py'
-      - 'dev/puppet-completion-audit.py'
-      - 'dev/puppet-completion/**'
-      - 'dev/prepare-puppet-review.py'
-      - 'dev/prepare-della-articulated-review.py'
-      - 'dev/della-articulated-review/**'
-      - 'dev/puppet-review-assets/**'
-      - 'dev/validate-angel-vector.py'
-      - 'Sources/**'
-      - 'CharacterMotionTests/**'
-      - 'FreshAgentChatTests/**'
-      - 'UITests/**'
-      - 'run-character-tests.sh'
-      - 'run-fresh-agent-chat-tests.sh'
-      - 'project.yml'
+    # Dedicated proof branch: verify every push, including branch creation.
 
 permissions:
   contents: read
