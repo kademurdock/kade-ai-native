@@ -1,0 +1,45 @@
+name: Bounded synthetic log transport diagnostic
+
+'on':
+  push:
+    branches: [codex/native-log-transport-diagnostic-20261014]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-log-transport-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  transport:
+    if: >-
+      github.event_name == 'push' &&
+      github.event.repository.private == false &&
+      toJSON(github.event.repository.private) == 'false' &&
+      github.repository == 'kademurdock/kade-ai-native' &&
+      github.ref == 'refs/heads/codex/native-log-transport-diagnostic-20261014' &&
+      toJSON(github.event.deleted) == 'false'
+    runs-on: macos-26
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        chunk: [16384, 65536]
+    env:
+      DIAGNOSTIC_CHUNK: ${{ matrix.chunk }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out exact diagnostic source
+        timeout-minutes: 2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Emit synthetic bytes within the unchanged one-minute limit
+        timeout-minutes: 1
+        run: python3 -B dev/log-transport-diagnostic.py
+        # No app compilation, simulator, artifacts, signing or upload.
+        # Complete log round-trip is required to interpret this diagnostic.
