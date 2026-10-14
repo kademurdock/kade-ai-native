@@ -741,7 +741,6 @@ struct VoicePickerView: View {
     private func load() async {
         isLoading = true
         loadFailed = false
-        async let catalogTask = VoiceCatalog.shared.snapshot()
         let list: [String]
         if let voiceList, !voiceList.isEmpty {
             list = voiceList
@@ -750,7 +749,7 @@ struct VoicePickerView: View {
         }
         voices = list
         loadFailed = list.isEmpty
-        catalog = await catalogTask
+        catalog = await VoiceCatalog.shared.snapshot(matching: list)
         // Seed the wheels from the stored pick, silently.
         seeding = true
         delivery = VoiceService.delivery(forAgent: deliveryAgentId) ?? ""

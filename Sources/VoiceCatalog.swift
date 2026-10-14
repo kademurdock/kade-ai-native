@@ -26,12 +26,12 @@ import Foundation
 actor VoiceCatalog {
     static let shared = VoiceCatalog()
 
-    struct Category: Hashable {
+    struct Category: Hashable, Sendable {
         let name: String
         let voices: [String]
     }
 
-    struct Snapshot {
+    struct Snapshot: Sendable {
         let categories: [Category]
         let renames: [String: String]
         let describe: [String: String]
@@ -49,18 +49,33 @@ actor VoiceCatalog {
 
     private var cached: Snapshot?
     private var inflight: Task<Snapshot, Never>?
+    private let fetchSnapshot: @Sendable () async -> Snapshot
+
+    init(fetchSnapshot: @escaping @Sendable () async -> Snapshot = { await VoiceCatalog.fetch() }) {
+        self.fetchSnapshot = fetchSnapshot
+    }
 
     /// The catalog, fetched at most once per launch (a failed fetch is NOT
     /// cached, so a picker opened later on a working connection gets it).
     func snapshot() async -> Snapshot {
         if let cached { return cached }
         if let inflight { return await inflight.value }
-        let task = Task { await Self.fetch() }
+        let fetch = fetchSnapshot
+        let task = Task { await fetch() }
         inflight = task
         let snap = await task.value
         inflight = nil
         if !snap.isEmpty { cached = snap }
         return snap
+    }
+
+    /// A catalog replacement can leave a session's cached headings referring
+    /// to entirely different voices. Refresh once before showing a flat list.
+    func snapshot(matching voices: [String]) async -> Snapshot {
+        let snap = await snapshot()
+        guard !voices.isEmpty, !snap.hasCategories(matching: voices) else { return snap }
+        cached = nil
+        return await snapshot()
     }
 
     private static func fetch() async -> Snapshot {
@@ -74,7 +89,7 @@ actor VoiceCatalog {
             let describe: [String: String]?
             let tags: [String: String]?
         }
-        var req = URLRequest(url: catalogURL)
+        var req = URLRequest(url: catalogURL, cachePolicy: .reloadIgnoringLocalCacheData)
         req.timeoutInterval = 8
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -91,6 +106,11 @@ actor VoiceCatalog {
 }
 
 extension VoiceCatalog.Snapshot {
+    func hasCategories(matching voices: [String]) -> Bool {
+        let visible = Set(voices)
+        return categories.contains { category in category.voices.contains { visible.contains($0) } }
+    }
+
     /// Map a STORED value onto the served list, the same way the web does
     /// (`normalizeVoiceLabel`):
     ///   - already in the list -> itself

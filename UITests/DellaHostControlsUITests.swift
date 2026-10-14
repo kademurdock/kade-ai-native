@@ -7,6 +7,7 @@ import XCTest
 final class DellaHostControlsUITests: XCTestCase {
     private struct Control {
         let element: XCUIElement
+        let observation: any XCUIElementSnapshot
         let name: String
         let frame: CGRect
     }
@@ -184,8 +185,9 @@ final class DellaHostControlsUITests: XCTestCase {
         defer { app.terminate() }
         let expected = requestedPhase.contains("-small-")
             ? CGSize(width: 375, height: 667) : CGSize(width: 440, height: 956)
-        try require(abs(app.frame.width - expected.width) <= 1
-                    && abs(app.frame.height - expected.height) <= 1,
+        let window = app.frame
+        try require(abs(window.width - expected.width) <= 1
+                    && abs(window.height - expected.height) <= 1,
                     "test uses the requested real phone window")
         var core = try checkChatCore(app, attachment: attachment, keyboard: keyboard)
         if dismissKeyboardByDragging {
@@ -207,7 +209,7 @@ final class DellaHostControlsUITests: XCTestCase {
         let speed = try button(app, identifier: "della-host.chat.speed", label: "Voice speed",
                                reachable: optionalControlsVisible)
         let optionalControls = [agent, voice, hearReplies, speed]
-        try require(nonemptyValue(speed.element), "Voice speed exposes its separate rate value")
+        try require(nonemptyValue(speed.observation), "Voice speed exposes its separate rate value")
         if optionalControlsVisible {
             try disjoint(optionalControls + core.controls)
             for control in optionalControls {
@@ -261,24 +263,26 @@ final class DellaHostControlsUITests: XCTestCase {
             .matching(identifier: "della-host.chat.composer-field")
         try require(fieldMatches.count == 1, "one native composer field [" + matchContext(fieldMatches) + "]")
         let field = fieldMatches.element(boundBy: 0)
-        try require(field.elementType == .textField || field.elementType == .textView,
-                    "composer retains its native text control [type=" + nativeType(field) + "]")
-        try require(field.label == "Message", "composer label is Message")
-        try require(field.isEnabled && field.isHittable, "composer is enabled and reachable")
-        let fieldFrame = try visibleFrame(field, in: app, name: "composer")
+        let fieldObservation = try field.snapshot()
+        try require(fieldObservation.elementType == .textField || fieldObservation.elementType == .textView,
+                    "composer retains its native text control [type=" + nativeType(fieldObservation) + "]")
+        try require(fieldObservation.label == "Message", "composer label is Message")
+        try require(fieldObservation.isEnabled && field.isHittable, "composer is enabled and reachable")
+        let window = app.frame
+        let fieldFrame = try visibleFrame(fieldObservation, window: window, name: "composer")
         if phase.contains("-a11y-") {
-            try require(fieldFrame.width >= app.frame.width - 64,
+            try require(fieldFrame.width >= window.width - 64,
                         "accessibility composer uses the full-width editor row [editor=" + rectangle(fieldFrame)
-                            + " window=" + rectangle(app.frame) + "]")
+                            + " window=" + rectangle(window) + "]")
         }
         let send = try button(app, identifier: "della-host.chat.send", label: "Send message")
         let attach = try button(app, identifier: "della-host.chat.attach",
                                 label: attachment ? "Attachment added" : "Attach a photo or file",
                                 enabled: !attachment, reachable: !attachment)
-        _ = try visibleFrame(attach.element, in: app, name: "Attach")
+        _ = try visibleFrame(attach.observation, window: window, name: "Attach")
         let mic = try button(app, identifier: "della-host.chat.mic", label: "Record a voice message")
         let thinking = try button(app, identifier: "della-host.chat.thinking", label: "Thinking")
-        try require(nonemptyValue(thinking.element), "Thinking exposes its separate state value")
+        try require(nonemptyValue(thinking.observation), "Thinking exposes its separate state value")
         var controls = [send, attach, mic, thinking]
         for control in controls {
             try require(!overlaps(fieldFrame, control.frame), "composer does not cover " + control.name
@@ -349,11 +353,13 @@ final class DellaHostControlsUITests: XCTestCase {
             }
             let remove = app.buttons.matching(NSPredicate(format: "label == %@", "Remove attachment"))
             let status = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Attached: "))
-            try require(remove.count <= 1 && status.count <= 1, "attachment boundaries remain separate native elements")
-            if remove.count == 1 {
+            let removeCount = remove.count
+            let statusCount = status.count
+            try require(removeCount <= 1 && statusCount <= 1, "attachment boundaries remain separate native elements")
+            if removeCount == 1 {
                 frames.append(try visibleFrame(remove.element(boundBy: 0), in: app, name: "Remove attachment"))
             }
-            if status.count == 1 {
+            if statusCount == 1 {
                 frames.append(try visibleFrame(status.element(boundBy: 0), in: app, name: "attachment status"))
             }
             pinnedFrames = frames
@@ -362,8 +368,9 @@ final class DellaHostControlsUITests: XCTestCase {
                     "native composer boundaries have usable screen geometry")
         let composerTop = pinnedFrames.map(\.minY).min()!
         var bottom = min(container.maxY, composerTop)
-        if app.keyboards.count > 0 {
-            try require(app.keyboards.count == 1, "one real software keyboard bounds the drag")
+        let keyboardCount = app.keyboards.count
+        if keyboardCount > 0 {
+            try require(keyboardCount == 1, "one real software keyboard bounds the drag")
             bottom = min(bottom, try visibleFrame(app.keyboards.firstMatch, in: app, name: "software keyboard").minY)
         }
         let top = max(container.minY, navigation.maxY)
@@ -491,7 +498,11 @@ final class DellaHostControlsUITests: XCTestCase {
         let region = try transcriptInteractionRegion(app).insetBy(dx: -0.5, dy: -0.5)
         try require(app.keyboards.count == 0,
                     "software keyboard stays absent after target search [" + state.lastContext + "]")
-        let reachable = targets.allSatisfy { $0.exists && $0.isHittable && valid($0.frame) && region.contains($0.frame) }
+        let reachable = targets.allSatisfy { target in
+            guard target.exists && target.isHittable else { return false }
+            let frame = target.frame
+            return valid(frame) && region.contains(frame)
+        }
         if !reachable {
             // These are fresh observations after the failed predicate. They
             // explain its native boundaries without changing any gesture or
@@ -545,7 +556,7 @@ final class DellaHostControlsUITests: XCTestCase {
         defer { app.terminate() }
         let mute = try button(app, identifier: "della-host.call.mute", label: "Mute microphone")
         let hangUp = try button(app, identifier: "della-host.call.hang-up", label: "Hang Up")
-        try require(nonemptyValue(mute.element), "Mute exposes its microphone state")
+        try require(nonemptyValue(mute.observation), "Mute exposes its microphone state")
         try disjoint([mute, hangUp])
 
         // All secondary controls must retain independent native buttons, even
@@ -559,7 +570,7 @@ final class DellaHostControlsUITests: XCTestCase {
         let stopTalking = try button(app, identifier: "della-host.call.stop-talking", label: "Stop talking",
                                      reachable: requestedPhase.contains("scrolled"))
         for control in [camera, spotter, deepThink] {
-            try require(nonemptyValue(control.element), control.name + " exposes its separate state value")
+            try require(nonemptyValue(control.observation), control.name + " exposes its separate state value")
         }
         if secondaryControlsVisible {
             let visible = [mute, hangUp, camera, spotter, deepThink]
@@ -592,11 +603,12 @@ final class DellaHostControlsUITests: XCTestCase {
         let matches = app.descendants(matching: .any).matching(identifier: "della-host.chat.hear-replies")
         try require(matches.count == 1, "one separate native Hear replies toggle [" + matchContext(matches) + "]")
         let element = matches.element(boundBy: 0)
-        try require(element.elementType == .switch || element.elementType == .button,
-                    "Hear replies retains its native interactive toggle type [type=" + nativeType(element) + "]")
-        let value = element.value as? String
-        try require(value == "Off" || (element.elementType == .switch && value == "0"),
-                    "Hear replies exposes the exact Off state [type=" + nativeType(element)
+        let observation = try element.snapshot()
+        try require(observation.elementType == .switch || observation.elementType == .button,
+                    "Hear replies retains its native interactive toggle type [type=" + nativeType(observation) + "]")
+        let value = observation.value as? String
+        try require(value == "Off" || (observation.elementType == .switch && value == "0"),
+                    "Hear replies exposes the exact Off state [type=" + nativeType(observation)
                         + " value=" + String((value ?? "nil").prefix(40)) + "]")
         return element
     }
@@ -608,23 +620,31 @@ final class DellaHostControlsUITests: XCTestCase {
 
     private func checkedControl(_ element: XCUIElement, in app: XCUIApplication, label: String,
                                 enabled: Bool, reachable: Bool, minimumTarget: Bool) throws -> Control {
-        try require(element.label == label, "expected button label for " + label)
-        try require(element.isEnabled == enabled, "expected enabled state for " + label)
+        // One native AX observation supplies attributes for this control check.
+        // Hittability is still queried live; it is not an AX snapshot attribute.
+        // No observation survives a gesture: callers re-enter these checks after
+        // each keyboard/scroll transition, retaining the original assertions.
+        let observation = try element.snapshot()
+        try require(observation.label == label, "expected button label for " + label)
+        try require(observation.isEnabled == enabled, "expected enabled state for " + label)
         if reachable { try require(element.isHittable, label + " is reachable") }
-        let frame = element.frame
+        let frame = observation.frame
         try require(valid(frame), label + " has a finite, nonempty frame")
         if minimumTarget {
             try require(frame.width >= 44 && frame.height >= 44,
-                        label + " has a 44pt target [type=" + nativeType(element) + " rect=" + rectangle(frame) + "]")
+                        label + " has a 44pt target [type=" + nativeType(observation) + " rect=" + rectangle(frame) + "]")
         }
-        if reachable { _ = try visibleFrame(element, in: app, name: label) }
-        return Control(element: element, name: label, frame: frame)
+        if reachable { _ = try visibleFrame(observation, window: app.frame, name: label) }
+        return Control(element: element, observation: observation, name: label, frame: frame)
     }
 
     private func visibleFrame(_ element: XCUIElement, in app: XCUIApplication, name: String) throws -> CGRect {
-        let frame = element.frame
-        let window = app.frame
-        try require(valid(frame) && valid(window), name + " has usable screen geometry [type=" + nativeType(element)
+        try visibleFrame(element, window: app.frame, name: name)
+    }
+
+    private func visibleFrame(_ observation: any XCUIElementAttributes, window: CGRect, name: String) throws -> CGRect {
+        let frame = observation.frame
+        try require(valid(frame) && valid(window), name + " has usable screen geometry [type=" + nativeType(observation)
                     + " rect=" + rectangle(frame) + " window=" + rectangle(window) + "]")
         try require(window.insetBy(dx: -0.5, dy: -0.5).contains(frame), name + " fits entirely on screen [rect="
                     + rectangle(frame) + " window=" + rectangle(window) + "]")
@@ -651,7 +671,7 @@ final class DellaHostControlsUITests: XCTestCase {
         }
     }
 
-    private func nonemptyValue(_ element: XCUIElement) -> Bool {
+    private func nonemptyValue(_ element: any XCUIElementAttributes) -> Bool {
         guard let value = element.value as? String else { return false }
         return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -662,7 +682,7 @@ final class DellaHostControlsUITests: XCTestCase {
         return String(description.prefix(120))
     }
 
-    private func nativeType(_ element: XCUIElement) -> String {
+    private func nativeType(_ element: any XCUIElementAttributes) -> String {
         String(String(describing: element.elementType).prefix(40))
     }
 

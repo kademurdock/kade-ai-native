@@ -354,6 +354,8 @@ struct DVConfig: Decodable {
     let defaultVoice: String?
     let voicesAvailable: Bool?
     let voices: [String]?
+    /// Saved bindings that remain usable but are excluded from the picker.
+    let retained: [String]?
     let describe: [String: String]?
     let categories: [VoiceCategory]?
     /// True when dialogue timing is included, like narration (the server's
@@ -388,7 +390,7 @@ struct DVConfig: Decodable {
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
         case remainingUSD, perMinuteUSD, extrasPerMinuteUSD, setAside, previewSeconds, library
-        case defaultLibraryPath, defaultVoice, voicesAvailable, voices, describe, categories
+        case defaultLibraryPath, defaultVoice, voicesAvailable, voices, retained, describe, categories
         case dialogueIncluded
         case myDefaultVoice, houseVoice, favorites, recent, maxFavorites, suggested, fish, fishNote, curate
         case speeds
@@ -469,6 +471,7 @@ extension DVConfig {
         defaultVoice = c.dvString(.defaultVoice)
         voicesAvailable = c.dvBool(.voicesAvailable)
         voices = c.dvValue(.voices)
+        retained = c.dvValue(.retained)
         describe = c.dvValue(.describe)
         categories = c.dvValue(.categories)
         dialogueIncluded = c.dvBool(.dialogueIncluded)

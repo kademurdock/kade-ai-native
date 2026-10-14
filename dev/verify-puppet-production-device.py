@@ -20,9 +20,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/puppet-completion-device-20261011"
+BRANCH = "codex/selected-drama3-voices-device-20261014"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
-VERSION = "2.2.13"
+VERSION = "2.2.14"
 OPERATION_SECONDS = 1800
 EXPECTED_MODEL_CHECKS = 169760
 MODEL_GROUPS = {"Character motion", "Call meter and expression", "Character reactions and playback ownership",
@@ -245,6 +245,12 @@ def verify(expected, receipt):
                       "angelVectorSha256": angel["sourceSHA256"]}
     receipt["models"] = model_count(runner.text("character-routing-models", ["bash", "run-character-tests.sh"],
                                                 seconds=180, cap=2 * 1024 * 1024))
+    voice_checks = runner.text("narration-voice-retention", ["bash", "run-narration-voice-tests.sh"], seconds=120)
+    require("Narration voice retention: 7 checks passed" in voice_checks
+            and "Voice catalog replacement and recovery: 12 checks passed" in voice_checks,
+            "Voice retention and catalog refresh checks must both complete")
+    receipt["narrationVoiceRetention"] = {"passed": True, "checks": 7}
+    receipt["voiceCatalogRefresh"] = {"passed": True, "checks": 12}
     if shutil.which("xcodegen") is None:
         runner.run("install-xcodegen", ["brew", "install", "xcodegen"], seconds=180, cap=4 * 1024 * 1024)
     runner.run("generate-project", ["xcodegen", "generate"])

@@ -30,7 +30,7 @@ sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/della-host-layout-audit'
 REPOSITORY='kademurdock/kade-ai-native'
-BRANCH='codex/puppet-completion-host-20261011'
+BRANCH='codex/selected-drama3-voices-host-20261014'
 BUNDLE_ID='com.kademurdock.kadeai'
 APP=ROOT/'build/della-host-layout-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
 MASTER_SHA='285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2'
@@ -557,7 +557,7 @@ def compiled_tests(expected,emit_inventory=True):
             require(all(not (path/name).exists() and not (path/name).is_symlink()
                         for name in ('KadeAI.debug.dylib','__preview.dylib')),
                     'Compiled app code is split from the fingerprinted main executable')
-            require(info.get('CFBundleShortVersionString')=='2.2.13' and str(info.get('CFBundleVersion'))=='100'
+            require(info.get('CFBundleShortVersionString')=='2.2.14' and str(info.get('CFBundleVersion'))=='100'
                     and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                     'Compiled app version/orientation drift')
         artifacts[role]={'path':str(path.relative_to(ROOT)),'bundleId':identities[role],
@@ -1738,14 +1738,14 @@ def capture(expected):
                 'Host capture app differs from both exact tested compiled runners')
         require(APP.is_dir(),'Unsigned Debug host app missing')
         info=plistlib.loads((APP/'Info.plist').read_bytes())
-        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.13'
+        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.14'
                 and str(info.get('CFBundleVersion'))=='100','Built app identity/version drift')
         require(info.get('DTPlatformName')=='iphonesimulator'
                 or 'iPhoneSimulator' in info.get('CFBundleSupportedPlatforms',[]),'App is not the simulator target')
         require(info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                 'Host review must retain the actual phone portrait-only app declaration')
         require(not (APP/'_CodeSignature').exists(),'Signed app appeared in unsigned host review')
-        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.13','buildVersion':'100',
+        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.14','buildVersion':'100',
                              'platform':'iphonesimulator','infoPlistSha256':sha(APP/'Info.plist'),
                              'developerSigningIdentityUsed':False}
         for key,device in records.items():
@@ -2026,7 +2026,7 @@ def emit(expected):
     encoded=base64.b64encode(archive).decode('ascii')
     require(len(encoded)<=MAX_ENCODED,'Host encoding exceeds44MiB; refuse transport')
     digest=hashlib.sha256(archive).hexdigest()
-    chunks=[encoded[index:index+16384] for index in range(0,len(encoded),16384)]
+    chunks=[encoded[index:index+65536] for index in range(0,len(encoded),65536)]
     header={'schema':'kade.della-host-log-evidence.v1','sha':expected,'archiveSha256':digest,
             'archiveBytes':len(archive),'encodedBytes':len(encoded),'chunks':len(chunks),'files':len(files),
             'encoding':'base64','artifactStorageUsed':False}
