@@ -396,7 +396,7 @@ def emit(expected):
         for name,data in sorted(files.items()):archive.writestr(name,data)
     archive=buffer.getvalue();require(len(archive)<=host.MAX_ARCHIVE,'Completion archive exceeds32MiB')
     encoded=base64.b64encode(archive).decode();require(len(encoded)<=host.MAX_ENCODED,'Completion transport exceeds44MiB')
-    digest=hashlib.sha256(archive).hexdigest();chunks=[encoded[index:index+16384] for index in range(0,len(encoded),16384)]
+    digest=hashlib.sha256(archive).hexdigest();chunks=[encoded[index:index+65536] for index in range(0,len(encoded),65536)]
     header={'schema':'kade.puppet-completion-log-evidence.v1','sha':expected,'archiveSha256':digest,
         'archiveBytes':len(archive),'encodedBytes':len(encoded),'chunks':len(chunks),'files':len(files),
         'encoding':'base64','artifactStorageUsed':False}
