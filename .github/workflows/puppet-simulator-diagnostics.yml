@@ -1,0 +1,47 @@
+name: Bounded simulator startup diagnostics
+
+'on':
+  push:
+    branches: [codex/puppet-simulator-diagnostics-20261014]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: puppet-simulator-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    if: >-
+      github.event_name == 'push' &&
+      github.event.repository.private == false &&
+      toJSON(github.event.repository.private) == 'false' &&
+      github.repository == 'kademurdock/kade-ai-native' &&
+      github.ref == 'refs/heads/codex/puppet-simulator-diagnostics-20261014' &&
+      toJSON(github.event.deleted) == 'false'
+    runs-on: macos-26
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        order: [runtimes-first, types-first]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      DIAGNOSTIC_ORDER: ${{ matrix.order }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - name: Check out exact diagnostic source
+        timeout-minutes: 2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Observe two read-only inventory commands with unchanged limits
+        timeout-minutes: 3
+        run: python3 -B dev/inspect-simulator-startup.py
+        # No simulator creation/boot, app compile, signing, artifact or upload.
+        # This is diagnostic data and cannot satisfy either native proof gate.
