@@ -245,8 +245,12 @@ def verify(expected, receipt):
                       "angelVectorSha256": angel["sourceSHA256"]}
     receipt["models"] = model_count(runner.text("character-routing-models", ["bash", "run-character-tests.sh"],
                                                 seconds=180, cap=2 * 1024 * 1024))
-    runner.run("narration-voice-retention", ["bash", "run-narration-voice-tests.sh"], seconds=120)
+    voice_checks = runner.text("narration-voice-retention", ["bash", "run-narration-voice-tests.sh"], seconds=120)
+    require("Narration voice retention: 7 checks passed" in voice_checks
+            and "Voice catalog replacement and recovery: 12 checks passed" in voice_checks,
+            "Voice retention and catalog refresh checks must both complete")
     receipt["narrationVoiceRetention"] = {"passed": True, "checks": 7}
+    receipt["voiceCatalogRefresh"] = {"passed": True, "checks": 12}
     if shutil.which("xcodegen") is None:
         runner.run("install-xcodegen", ["brew", "install", "xcodegen"], seconds=180, cap=4 * 1024 * 1024)
     runner.run("generate-project", ["xcodegen", "generate"])
