@@ -2026,7 +2026,7 @@ def emit(expected):
     encoded=base64.b64encode(archive).decode('ascii')
     require(len(encoded)<=MAX_ENCODED,'Host encoding exceeds44MiB; refuse transport')
     digest=hashlib.sha256(archive).hexdigest()
-    chunks=[encoded[index:index+16384] for index in range(0,len(encoded),16384)]
+    chunks=[encoded[index:index+65536] for index in range(0,len(encoded),65536)]
     header={'schema':'kade.della-host-log-evidence.v1','sha':expected,'archiveSha256':digest,
             'archiveBytes':len(archive),'encodedBytes':len(encoded),'chunks':len(chunks),'files':len(files),
             'encoding':'base64','artifactStorageUsed':False}
