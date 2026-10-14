@@ -123,7 +123,13 @@ final class CharacterBodyPerformanceClock {
             if sampledActivity != presentation.activity {
                 activityElapsed = 0
                 attentionVariant = Int(seed % 3)
-            } else { activityElapsed = min(120, activityElapsed + wallDelta) }
+            } else {
+                // Ambient breathing and head motion must keep progressing
+                // during a long visible rest. Only finite speech gestures use
+                // the 120-second ceiling; the active timeline still owns all
+                // wakeups and its policy stop resets this clock immediately.
+                activityElapsed = min(time, activityElapsed + wallDelta)
+            }
             sampledActivity = presentation.activity
             sampledPhase = .stopped
             sourceElapsed = nil

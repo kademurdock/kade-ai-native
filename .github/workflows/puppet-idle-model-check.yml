@@ -1,0 +1,60 @@
+name: Puppet idle clock model checks
+
+'on':
+  push:
+    branches: [codex/puppet-idle-motion-20261014]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: puppet-idle-model-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  model-checks:
+    if: >-
+      github.event_name == 'push' &&
+      github.event.repository.private == false &&
+      toJSON(github.event.repository.private) == 'false' &&
+      github.repository == 'kademurdock/kade-ai-native' &&
+      github.ref == 'refs/heads/codex/puppet-idle-motion-20261014' &&
+      toJSON(github.event.deleted) == 'false'
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Run all existing motion, accessibility-budget and new long-idle models
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          bash run-character-tests.sh
+          git diff --exit-code
+      - name: Prove that the old freeze is detected, then restore exact source
+        timeout-minutes: 4
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          path=pathlib.Path('Sources/CharacterFigureMotion.swift')
+          original=path.read_bytes()
+          before=b'activityElapsed = min(time, activityElapsed + wallDelta)'
+          after=b'activityElapsed = min(120, activityElapsed + wallDelta)'
+          assert original.count(before)==1
+          try:
+              path.write_bytes(original.replace(before,after,1))
+              result=subprocess.run(['bash','run-character-tests.sh'],capture_output=True,timeout=210)
+              assert result.returncode != 0, 'Old freeze unexpectedly passed'
+              assert b'Ambient clock keeps advancing after two idle minutes' in result.stdout+result.stderr
+              print('Old 120-second freeze detected by the long-idle regression')
+          finally:
+              path.write_bytes(original)
+          subprocess.run(['git','diff','--exit-code'],check=True)
+          PY
+      # Model proof only. No app archive, signing, upload, artifacts or GPU.

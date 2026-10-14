@@ -37,6 +37,47 @@ func runCharacterBodyPerformanceChecks(_ check: (Bool, String) -> Void) {
 
     let identities = [CharacterMotion.harleyID, CharacterMotion.dellaID, CharacterMotion.kianaID,
         CharacterMotion.lillyID, CharacterMotion.witherspoonID, CharacterMotion.angelID]
+    // Exercise the same shared sample passed to both face and body, rather
+    // than calling either pose directly with a wall clock that hides the bug.
+    for identity in CharacterMotion.animatedIDs {
+        for activity in [CharacterActivity.idle, .listening, .thinking] {
+            let resting = CharacterBodyPerformanceClock()
+            let state = CharacterPresentation(activity: activity)
+            var value = CharacterBodyPerformanceSample.still
+            var bodyPositions = Set<Double>()
+            var facePositions = Set<Double>()
+            for frame in 0...(180 * 8) {
+                let time = Double(frame) / 8
+                value = resting.sample(identity: identity, time: time, level: 0,
+                    active: true, presentation: state)
+                if time >= 170 {
+                    let body = CharacterFigureMotion.pose(id: identity, time: time, level: 0,
+                        active: true, presentation: state, performance: value)
+                    let face = CharacterMotion.pose(id: identity, time: time, level: 0,
+                        active: true, presentation: state, performance: value)
+                    bodyPositions.insert(body.headAngle)
+                    facePositions.insert(face.tilt)
+                    check(body.farArmAngle == 0 && body.nearArmAngle == 0 && face.mouth == 0,
+                        "Long quiet attention cannot invent speech or arm gestures")
+                }
+            }
+            check(close(value.activityElapsed, 180), "Ambient clock keeps advancing after two idle minutes")
+            check(bodyPositions.count > 40 && facePositions.count > 40,
+                "Every visible idle/listening/thinking rig retains face and body motion after two minutes")
+            check(value.energy == 0 && value.accentScale == 0,
+                "Continued resting motion spends no speaking energy or gesture budget")
+            check(resting.sample(identity: identity, time: 181, level: 0,
+                active: false, presentation: state) == .still,
+                "Motion policy stops a long resting sample immediately")
+            let resumed = resting.sample(identity: identity, time: 182, level: 0,
+                active: true, presentation: state)
+            check(resumed.activityElapsed == 0, "Reactivation resets instead of accumulating hidden motion")
+            _ = resting.sample(identity: identity, time: 183, level: 0, active: true, presentation: state)
+            check(resting.sample(identity: identity, time: 100, level: 0,
+                active: true, presentation: state).activityElapsed == 0,
+                "A backward clock safely resets long-running attention")
+        }
+    }
     func values(_ pose: CharacterFigurePose) -> [Double] {
         [pose.headAngle, pose.headNod, pose.torsoAngle, pose.torsoLift, pose.farArmAngle, pose.nearArmAngle]
     }
