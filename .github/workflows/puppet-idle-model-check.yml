@@ -37,7 +37,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           bash run-character-tests.sh
           git diff --exit-code
-      - name: Prove that the old freeze is detected, then restore exact source
+      - name: Prove that the old freeze and phase reset are detected, then restore exact source
         timeout-minutes: 4
         run: |
           python3 - <<'PY'
@@ -55,6 +55,22 @@ jobs:
               print('Old 120-second freeze detected by the long-idle regression')
           finally:
               path.write_bytes(original)
+          subprocess.run(['git','diff','--exit-code'],check=True)
+          paths=[pathlib.Path('Sources/CharacterMotion.swift'),path]
+          originals={p:p.read_bytes() for p in paths}
+          old=b'let motionTime = performance?.activityElapsed ?? time'
+          wrapped=b'let motionTime = (performance?.activityElapsed ?? time).truncatingRemainder(dividingBy: 120 * .pi)'
+          try:
+              for p,data in originals.items():
+                  assert data.count(old)==1
+                  p.write_bytes(data.replace(old,wrapped,1))
+              result=subprocess.run(['bash','run-character-tests.sh'],capture_output=True,timeout=210)
+              assert result.returncode != 0, 'Old phase reset unexpectedly passed'
+              assert b'Ambient face/body loops remain continuous across the old six-minute reset' in result.stdout+result.stderr
+              print('Old six-minute phase reset detected by the continuity regression')
+          finally:
+              for p,data in originals.items():
+                  p.write_bytes(data)
           subprocess.run(['git','diff','--exit-code'],check=True)
           PY
       # Model proof only. No app archive, signing, upload, artifacts or GPU.

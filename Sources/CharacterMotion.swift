@@ -64,6 +64,17 @@ enum CharacterMotion {
         if strength < 0.55 { return r < 0.45 ? 2 : (r < 0.75 ? 5 : 4) }
         return r < 0.4 ? 3 : (r < 0.75 ? 8 : 2)
     }
+    /// Wrap each oscillator at its own natural period, before multiplying.
+    /// A shared arbitrary time wrap makes unrelated breathing/head loops jump
+    /// together after a long conversation. Huge finite clocks still stay safe.
+    static func cycle(time: Double, rate: Double, period: Double, offset: Double = 0) -> Double {
+        guard rate.isFinite, rate > 0, period.isFinite, period > 0, offset.isFinite else { return 0 }
+        let seconds = period / rate
+        guard seconds.isFinite, seconds > 0 else { return 0 }
+        let clock = time.isFinite && time >= 0 ? time : 0
+        return (clock.truncatingRemainder(dividingBy: seconds) * rate + offset)
+            .truncatingRemainder(dividingBy: period)
+    }
     static func pose(id: String, time: Double, level: Double, active: Bool,
                      presentation: CharacterPresentation = .idle,
                      performance: CharacterBodyPerformanceSample? = nil) -> CharacterPose {
@@ -82,15 +93,17 @@ enum CharacterMotion {
         let rig = rigID(id)
         let tempo = rig == dellaID ? 0.72 : (rig == harleyID ? 0.83 : (rig == lillyID ? 1.18 : 1.0))
         let motionTime = performance?.activityElapsed ?? time
-        let t = (motionTime.isFinite && motionTime >= 0 ? motionTime : 0)
-            .truncatingRemainder(dividingBy: 120 * .pi) + phase * period
+        let offset = phase * period
+        func oscillation(_ frequency: Double) -> Double {
+            sin(cycle(time: motionTime, rate: frequency, period: 2 * .pi, offset: offset * frequency))
+        }
         let bodyEnergy = min(1, max(0, performance?.energy ?? mouth))
-        var tilt = sin(t * 0.3 * tempo) * 0.28 + sin(t * 0.7 * tempo) * 0.32
-        var lift = sin(t * 1.1 * tempo) * (0.18 + bodyEnergy * 0.4)
+        var tilt = oscillation(0.3 * tempo) * 0.28 + oscillation(0.7 * tempo) * 0.32
+        var lift = oscillation(1.1 * tempo) * (0.18 + bodyEnergy * 0.4)
         if presentation.activity == .listening {
             let attention = Double(performance?.attentionVariant ?? 0)
             let period = performance == nil ? 7.3 : 11.2 + attention * 1.8
-            let nod = t.truncatingRemainder(dividingBy: period)
+            let nod = cycle(time: motionTime, rate: 1, period: period, offset: offset)
             let start = performance == nil ? 6.4 : 3.0 + attention * 1.4
             lift += CharacterFigureMotion.pulse(nod, start: start, rise: 0.24, hold: 0.10, fall: 0.72) * 0.75
             tilt *= 1.3
@@ -112,18 +125,18 @@ enum CharacterMotion {
         lift += old.lift + (next.lift - old.lift) * mix
         let energy = rig == dellaID ? 0.72 : (rig == harleyID ? 0.82 : (rig == lillyID ? 1.15 : 1.0))
         let quiet: Double = [.sad, .tired, .serious, .concerned, .afraid].contains(presentation.expression) ? 0.45 : 1
-        let beat = (t * tempo).truncatingRemainder(dividingBy: 8.6)
+        let beat = cycle(time: motionTime, rate: tempo, period: 8.6, offset: offset * tempo)
         let nod = beat > 6.7 ? pow(sin((beat - 6.7) / 1.9 * .pi), 2) : 0
         if animatedIDs.contains(id) {
-            tilt += (sin(t * tempo * 0.43) * 0.75 + sin(t * tempo * 0.19) * 0.45) * energy * quiet
-            lift += (nod * 1.5 + sin(t * tempo * 1.25) * bodyEnergy * 0.65) * energy * quiet
+            tilt += (oscillation(tempo * 0.43) * 0.75 + oscillation(tempo * 0.19) * 0.45) * energy * quiet
+            lift += (nod * 1.5 + oscillation(tempo * 1.25) * bodyEnergy * 0.65) * energy * quiet
         }
         tilt = max(-2.8, min(2.8, tilt))
         lift = max(-3.2, min(3.2, lift))
         return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
-            brow: presentation.expression == .neutral ? bodyEnergy * (0.35 + 0.25 * sin(t * 0.65 * tempo)) + max(0, sin(t * 0.43 * tempo)) * 0.12 * (1 - bodyEnergy) : 0,
+            brow: presentation.expression == .neutral ? bodyEnergy * (0.35 + 0.25 * oscillation(0.65 * tempo)) + max(0, oscillation(0.43 * tempo)) * 0.12 * (1 - bodyEnergy) : 0,
             viseme: viseme(time: time, strength: mouth, seed: seed),
-            scale: animatedIDs.contains(id) ? 1.012 + sin(t * tempo * 0.85) * 0.004 + bodyEnergy * 0.012 * quiet : 1)
+            scale: animatedIDs.contains(id) ? 1.012 + oscillation(tempo * 0.85) * 0.004 + bodyEnergy * 0.012 * quiet : 1)
     }
 }
 

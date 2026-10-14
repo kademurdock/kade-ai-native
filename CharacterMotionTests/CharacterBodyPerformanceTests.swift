@@ -78,6 +78,46 @@ func runCharacterBodyPerformanceChecks(_ check: (Bool, String) -> Void) {
                 "A backward clock safely resets long-running attention")
         }
     }
+    // The old shared 120*pi time wrap was not a period of any of these
+    // oscillators. Use the actual shared clock around repeated old seams.
+    for identity in CharacterMotion.animatedIDs {
+        for activity in [CharacterActivity.idle, .listening, .thinking] {
+            for boundary in [120 * Double.pi, 240 * Double.pi, 3600] {
+                let resting = CharacterBodyPerformanceClock()
+                let state = CharacterPresentation(activity: activity)
+                for time in stride(from: 0.0, to: boundary - 0.001, by: 60) {
+                    _ = resting.sample(identity: identity, time: time, level: 0, active: true, presentation: state)
+                }
+                let before = resting.sample(identity: identity, time: boundary - 0.001, level: 0,
+                    active: true, presentation: state)
+                let after = resting.sample(identity: identity, time: boundary + 0.001, level: 0,
+                    active: true, presentation: state)
+                let a = CharacterFigureMotion.pose(id: identity, time: boundary - 0.001, level: 0,
+                    active: true, presentation: state, performance: before)
+                let b = CharacterFigureMotion.pose(id: identity, time: boundary + 0.001, level: 0,
+                    active: true, presentation: state, performance: after)
+                let x = CharacterMotion.pose(id: identity, time: boundary - 0.001, level: 0,
+                    active: true, presentation: state, performance: before)
+                let y = CharacterMotion.pose(id: identity, time: boundary + 0.001, level: 0,
+                    active: true, presentation: state, performance: after)
+                check(abs(a.headAngle - b.headAngle) < 0.03 && abs(a.headNod - b.headNod) < 0.0003
+                    && abs(a.torsoAngle - b.torsoAngle) < 0.01 && abs(a.torsoLift - b.torsoLift) < 0.0001
+                    && abs(x.tilt - y.tilt) < 0.03 && abs(x.lift - y.lift) < 0.03
+                    && abs(x.brow - y.brow) < 0.002 && abs(x.scale - y.scale) < 0.0001,
+                    "Ambient face/body loops remain continuous across the old six-minute reset")
+            }
+        }
+    }
+    for rate in [0.19, 0.31, 0.72, 0.82, 1.18, 2.4] {
+        for time in [0, 120, 360, 3600, 86400] {
+            let value = CharacterMotion.cycle(time: Double(time), rate: rate, period: 2 * .pi, offset: 1.7)
+            check(abs(sin(value) - sin(Double(time) * rate + 1.7)) < 0.00000001,
+                "Natural-period reduction preserves the authored oscillator")
+        }
+        let extreme = CharacterMotion.cycle(time: .greatestFiniteMagnitude, rate: rate, period: 2 * .pi, offset: 1.7)
+        check(extreme.isFinite && extreme >= 0 && extreme < 2 * .pi,
+            "Natural-period reduction keeps huge finite clocks bounded")
+    }
     func values(_ pose: CharacterFigurePose) -> [Double] {
         [pose.headAngle, pose.headNod, pose.torsoAngle, pose.torsoLift, pose.farArmAngle, pose.nearArmAngle]
     }
