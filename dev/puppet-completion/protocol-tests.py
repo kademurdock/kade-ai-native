@@ -256,7 +256,7 @@ class ProtocolChecks(unittest.TestCase):
             (bundle, "KadeAIUITests", "com.kademurdock.kadeai.uitests")):
             info = {"CFBundleIdentifier": identifier, "CFBundleExecutable": executable, "DTPlatformName": "iphonesimulator"}
             if path == app:
-                info.update(CFBundleShortVersionString="2.2.13", CFBundleVersion="100",
+                info.update(CFBundleShortVersionString="2.2.14", CFBundleVersion="100",
                             UISupportedInterfaceOrientations=["UIInterfaceOrientationPortrait"])
             files[path + "/Info.plist"] = plistlib.dumps(info)
             files[path + "/" + executable] = main if path == app else ("synthetic-" + executable).encode()
@@ -326,7 +326,7 @@ class ProtocolChecks(unittest.TestCase):
         global CHECKS
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
-        original_project_sha = "82d122d7f1000c82042e8d8fc2a56cf41917aa520f884b47c6c33d04cc8b450c"
+        original_project_sha = "a74a49f90313513ba42a4d7d784113fefb94635297b99be894606293eddad892"
         original_command_sha = "56b05a2951094043904a347a37fce0fc3c556e766915c47a741fb0ea15a531d7"
         snippet = '      configs:\n        Debug:\n          ENABLE_DEBUG_DYLIB: "NO"\n'
         def coherent_project(value):
@@ -344,7 +344,7 @@ class ProtocolChecks(unittest.TestCase):
         coherent_project(project); command_expression(helper); CHECKS += 2
         for changed in (project.replace('ENABLE_DEBUG_DYLIB: "NO"', 'ENABLE_DEBUG_DYLIB: false', 1), project.replace("        Debug:\n", "        Release:\n", 1),
                         project.replace(snippet, ""), project + snippet, project.replace("  KadeAI:\n", "  AnotherApp:\n", 1),
-                        project.replace("MARKETING_VERSION: \"2.2.13\"", "MARKETING_VERSION: \"2.2.14\"", 1)):
+                        project.replace("MARKETING_VERSION: \"2.2.14\"", "MARKETING_VERSION: \"2.2.15\"", 1)):
             with self.assertRaises(ValueError): coherent_project(changed)
             CHECKS += 1
         with self.assertRaises(ValueError): command_expression(helper.replace("'-configuration','Debug'", "'-configuration','Release'", 1))
