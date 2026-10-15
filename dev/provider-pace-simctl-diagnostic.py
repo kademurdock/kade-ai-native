@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import plistlib
 import selectors
 import signal
 import subprocess
@@ -77,22 +78,6 @@ def command(args, bound, cleanup=False):
     return bytes(output).decode('utf-8').strip()
 
 
-
-def resource_snapshot(phase):
-    snapshot = {'phase': phase, 'utc': datetime.now(timezone.utc).isoformat(), 'passed': False}
-    RECEIPT.setdefault('resourceSnapshots', []).append(snapshot)
-    try:
-        # Apple's own top(1) documents these flags/stat keys; two one-second
-        # samples,15 processes, names only (no argv, environment or accounts).
-        top = command(['top', '-l', '2', '-s', '1', '-n', '15', '-o', 'cpu',
-                       '-stats', 'pid,command,cpu,th,pstate,time'], 10)
-        memory = command(['vm_stat'], 10)
-        assert len(top.encode()) <= 8192 and len(memory.encode()) <= 4096
-        snapshot.update(top=top, vmStat=memory, passed=True)
-    except Exception as error:
-        snapshot.update(errorType=type(error).__name__, error=str(error)[:160])
-
-
 def main():
     assert sys.platform == 'darwin' and os.environ.get('RUNNER_OS') == 'macOS'
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
@@ -109,7 +94,6 @@ def main():
     assert version.splitlines()[0] == 'Xcode 26.4.1'
     RECEIPT['xcodeVersion'] = version
     RECEIPT['memory'] = command(['sysctl', '-n', 'hw.memsize'], 10)
-    resource_snapshot('baseline')
     # Pin the exact failed host's registered type/runtime. create fails if absent;
     # no broad inventory output, downloads, substitute runtime, or app install.
     kind = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
@@ -121,8 +105,16 @@ def main():
         identifier = created
         RECEIPT.update(ownedSimulator=identifier, runtime=runtime)
         command(['xcrun', 'simctl', 'boot', identifier], 45)
+        # Isolated startup hypothesis only: fixed Xcode frontend and owned UUID.
+        frontend = Path('/Applications/Xcode_26.4.1.app/Contents/Developer/Applications/Simulator.app')
+        assert frontend.is_dir()
+        info = plistlib.loads((frontend / 'Contents/Info.plist').read_bytes())
+        assert info['CFBundleIdentifier'] == 'com.apple.iphonesimulator'
+        RECEIPT.update(appUnderTest='KadeAI-not-installed', simulatorFrontendPath=str(frontend),
+                       simulatorFrontendBundleId=info['CFBundleIdentifier'])
+        command(['open', '-n', '-a', str(frontend), '--args', '-CurrentDeviceUDID', identifier], 30)
+        RECEIPT['simulatorFrontendOpenCommandPassed'] = True
         command(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], 420)
-        resource_snapshot('afterBoot')
         # Same failing operation and unchanged30-second bound, before any app install.
         initial = command(['xcrun', 'simctl', 'ui', identifier, 'appearance'], 30)
         RECEIPT['initialAppearance'] = initial
@@ -133,9 +125,6 @@ def main():
         RECEIPT['appearanceRoundTripPassed'] = True
     finally:
         if identifier:
-            resource_snapshot('beforeCleanup')
-            # Only this run's created UUID. Attempt each cleanup independently
-            # without masking the original command failure or enlarging bounds.
             cleaned = True
             for action in ('shutdown', 'delete'):
                 try:
@@ -146,8 +135,6 @@ def main():
                         {'action': action, 'errorType': type(error).__name__, 'error': str(error)[:160]})
             RECEIPT['ownedSimulatorCleanupVerified'] = cleaned
     assert RECEIPT.get('ownedSimulatorCleanupVerified') is True
-    assert len(RECEIPT.get('resourceSnapshots', [])) == 3 and all(
-        s['passed'] for s in RECEIPT['resourceSnapshots'])
     RECEIPT['passed'] = True
 
 
