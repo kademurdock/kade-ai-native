@@ -34,6 +34,7 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
     /// delegate callbacks land on a background queue; the main actor reads.
     private let lock = NSLock()
     private var pending = Data()
+    private var replay = StreamAudioReplay()
     private var finished = false
     private var httpOK: Bool?
     private var waiter: CheckedContinuation<Void, Never>?
@@ -149,8 +150,18 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
         t?.cancel()
     }
 
+    /// Drain only this existing response. No request, retry or new synthesis.
+    func completedReplay() async -> Data? {
+        while await next() != nil {}
+        lock.lock()
+        let data = replay.completeAudio
+        lock.unlock()
+        return data.flatMap(StreamingWavParser.completedWAV)
+    }
+
     private func finish(ok: Bool, alreadyLocked: Bool = false) {
         if !alreadyLocked { lock.lock() }
+        if !finished { replay.finish(success: ok && httpOK == true) }
         finished = true
         if httpOK == nil { httpOK = ok }
         let w = waiter
@@ -175,7 +186,9 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
+        guard !finished else { lock.unlock(); return }
         pending.append(data)
+        replay.append(data)
         let w = waiter
         waiter = nil
         lock.unlock()
@@ -212,6 +225,8 @@ final class StreamingClipPlayer {
     private var activeFetch: StreamingClipFetch?
     private var playbackDone: CheckedContinuation<Void, Never>?
     private var stopped = false
+    private var playbackGeneration: UInt64 = 0
+    private var completedBuffers = 0
 
     /// How much audio must be banked before playback starts. Starting on the
     /// very first chunk risks an immediate underrun stutter on a bursty
@@ -244,16 +259,28 @@ final class StreamingClipPlayer {
         timePitch.rate = max(0.25, min(4.0, rate))
     }
 
-    /// Play one streamed clip to its end. Returns true when any audio
-    /// actually played, false when the clip produced no sound (the pump
-    /// counts that as a failed piece). A stop() mid-clip resumes the await
-    /// and still returns true — something was heard.
+    /// Reports observed renderer progress, not physical audibility. A stop
+    /// resumes the await and reports only progress already observed.
     func play(fetch: StreamingClipFetch, rate: Float, onPlaybackStarted: @MainActor () -> Void) async -> Bool {
+        playbackGeneration &+= 1
+        let generation = playbackGeneration
+        // The last clip's node clock must not count as this clip starting.
+        if graphBuilt { node.stop() }
+        outstandingBuffers = 0
+        draining = false
+        completedBuffers = 0
         stopped = false
         characterEnvelope.reset()
         characterEnd = 0
         activeFetch = fetch
-        defer { activeFetch = nil }
+        defer {
+            if generation == playbackGeneration {
+                playbackGeneration &+= 1
+                if graphBuilt { node.stop() }
+                outstandingBuffers = 0
+                activeFetch = nil
+            }
+        }
 
         // Header first: accumulate until parseable. The proxy's first flush
         // is the 44-byte header plus the opening PCM, so one chunk normally
@@ -262,7 +289,7 @@ final class StreamingClipPlayer {
         var format: StreamingWavFormat?
         var pcmTail = Data()
         while format == nil {
-            guard !stopped, let chunk = await fetch.next() else { return false }
+            guard !stopped, generation == playbackGeneration, let chunk = await fetch.next() else { return false }
             headerData.append(chunk)
             if let parsed = StreamingWavParser.parseHeader(headerData) {
                 format = parsed.format
@@ -320,6 +347,42 @@ final class StreamingClipPlayer {
         var started = false
         var scheduledAnything = false
 
+        func startPlayback() async -> Bool {
+            var probe = StreamPlaybackStart(now: ProcessInfo.processInfo.systemUptime)
+            node.play()
+            while true {
+                let action = probe.observe(now: ProcessInfo.processInfo.systemUptime,
+                    renderedSeconds: characterTime(), completedBuffers: completedBuffers,
+                    current: !stopped && generation == playbackGeneration)
+                switch action {
+                case .started:
+                    onPlaybackStarted()
+                    return true
+                case .recover:
+                    // Preserve the scheduled samples, like a manual pause/resume.
+                    // One attempt only, bounded by the same half-second probe.
+                    KadeBreadcrumbs.drop("tts-stream: start clock stalled; recovering queued audio rate=\(rate) engine=\(engine.isRunning) route=\(session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ","))")
+                    do {
+                        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                        try session.setActive(true)
+                        if !engine.isRunning { try engine.start() }
+                        node.pause()
+                        node.play()
+                    } catch {
+                        KadeBreadcrumbs.drop("tts-stream: start recovery failed (\(error.localizedDescription))")
+                        return false
+                    }
+                case .failed:
+                    KadeBreadcrumbs.drop("tts-stream: no rendered frames after bounded start recovery")
+                    return false
+                case .cancelled:
+                    return false
+                case .wait:
+                    try? await Task.sleep(for: .milliseconds(25))
+                }
+            }
+        }
+
         func schedule(_ samples: [Float]) {
             guard !samples.isEmpty,
                   let buffer = AVAudioPCMBuffer(pcmFormat: avFormat, frameCapacity: AVAudioFrameCount(samples.count))
@@ -333,7 +396,7 @@ final class StreamingClipPlayer {
             characterEnd = start + Double(samples.count) / fmt.sampleRate
             outstandingBuffers += 1
             node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.bufferPlayedBack() }
+                Task { @MainActor [weak self] in self?.bufferPlayedBack(generation: generation) }
             }
             scheduledAnything = true
             bankedSeconds += Double(samples.count) / fmt.sampleRate
@@ -344,25 +407,23 @@ final class StreamingClipPlayer {
         // Feed until the stream ends, starting playback once the primer is
         // banked. The completion continuation parks AFTER feeding finishes,
         // so a fast network can outrun playback with no special case.
-        while !stopped {
+        while !stopped && generation == playbackGeneration {
             if !started && (bankedSeconds >= Self.primerSeconds) {
-                node.play()
-                started = true
-                onPlaybackStarted()
+                started = await startPlayback()
+                guard started else { return false }
             }
             guard let chunk = await fetch.next() else { break }
             schedule(accumulator.append(chunk))
         }
-        if stopped { return started || scheduledAnything }
+        if stopped || generation != playbackGeneration { return started }
         if !scheduledAnything {
             // Stream ended having produced a header and no audible PCM.
             return false
         }
         if !started {
             // Whole (short) clip arrived under the primer: play it now.
-            node.play()
-            started = true
-            onPlaybackStarted()
+            started = await startPlayback()
+            guard started else { return false }
         }
 
         // Everything is scheduled; wait for the LAST buffer to be heard.
@@ -395,9 +456,11 @@ final class StreamingClipPlayer {
     /// when idle. The parked play() continuation resumes so the pump can
     /// run its cancel check — never a stranded await (the playAudio lesson).
     func stop() {
+        playbackGeneration &+= 1
         stopped = true
         characterEnvelope.reset()
         activeFetch?.cancel()
+        activeFetch = nil
         if graphBuilt { node.stop() }
         outstandingBuffers = 0
         draining = false
@@ -412,7 +475,9 @@ final class StreamingClipPlayer {
     private var outstandingBuffers = 0
     private var draining = false
 
-    private func bufferPlayedBack() {
+    private func bufferPlayedBack(generation: UInt64) {
+        guard generation == playbackGeneration, !stopped else { return }
+        completedBuffers += 1
         if outstandingBuffers > 0 { outstandingBuffers -= 1 }
         if draining, outstandingBuffers == 0, let c = playbackDone {
             draining = false

@@ -105,7 +105,7 @@ final class VoiceService: NSObject, ObservableObject {
     }
 
     private var currentPlayer: AVAudioPlayer?
-    private var playbackContinuation: CheckedContinuation<Void, Never>?
+    private var playbackContinuation: CheckedContinuation<Bool, Never>?
     /// Session 35 part 3 (the Debate Room's voices): items may carry an
     /// EXPLICIT voice/rate (the room's cast snapshot already knows who
     /// sounds like what — no per-line agent resolve needed) and an optional
@@ -690,7 +690,7 @@ final class VoiceService: NSObject, ObservableObject {
         playingCharacterCue = .neutral
         characterCueState.reset()
         pausedCharacterElapsed = 0
-        playbackContinuation?.resume()
+        playbackContinuation?.resume(returning: false)
         playbackContinuation = nil
     }
 
@@ -746,7 +746,7 @@ final class VoiceService: NSObject, ObservableObject {
         // play() await resumes so the pump can run its cancel check.
         streamingPlayer.stop()
         streamedClipActive = false
-        playbackContinuation?.resume()
+        playbackContinuation?.resume(returning: false)
         playbackContinuation = nil
         isSpeaking = false
         isClipPlaying = false
@@ -992,9 +992,10 @@ final class VoiceService: NSObject, ObservableObject {
                     // `?? streamedTurnKey` covers the pieces that were prefetched
                     // BEFORE the reload handed us an id — they are already out of
                     // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                    await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
-                        cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
-                    playedAnything = true
+                    if await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                        cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey)) {
+                        playedAnything = true
+                    } else { failedPieces += 1 }
                 } else {
                     // Session 23's boop lives on below, at the END of the pump and
                     // only if nothing at all was spoken. See the note up top.
@@ -1059,29 +1060,34 @@ final class VoiceService: NSObject, ObservableObject {
                 if streamedOK {
                     playedAnything = true
                 } else {
-                    // The fallback. `synthesize()` brings its own retry ladder,
-                    // and playAudio is the path every build through 249 used.
+                    // A local player failure must reuse the existing response,
+                    // rather than charging for the same synthesis again. A fetch
+                    // that delivered no audio keeps its existing retry ladder.
+                    let data: Data?
                     if hasAudio {
-                        KadeBreadcrumbs.drop("tts-stream: bytes arrived but playback failed, falling back to buffered")
+                        KadeBreadcrumbs.drop("tts-stream: player failed; buffering the existing response for replay")
+                        data = await fetch.completedReplay()
+                    } else {
+                        data = await synthesize(
+                            text: current.item.text,
+                            agentId: current.item.agentId,
+                            agentName: current.item.agentName,
+                            explicitVoice: current.item.explicitVoice,
+                            explicitRate: current.item.explicitRate
+                        )
                     }
-                    let data = await synthesize(
-                        text: current.item.text,
-                        agentId: current.item.agentId,
-                        agentName: current.item.agentName,
-                        explicitVoice: current.item.explicitVoice,
-                        explicitRate: current.item.explicitRate
-                    )
                     if generation != cancelGeneration {
                         bailCancelled(current)
                         return
                     }
                     if let data {
-                        await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
-                            cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
-                        playedAnything = true
+                        if await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                            cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey)) {
+                            playedAnything = true
+                        } else { failedPieces += 1 }
                     } else {
                         failedPieces += 1
-                        KadeBreadcrumbs.drop("tts: piece would not synthesise, skipped silently (\(failedPieces) this run)")
+                        KadeBreadcrumbs.drop("tts: piece had no usable audio, skipped (\(failedPieces) this run)")
                     }
                 }
             }
@@ -1264,7 +1270,8 @@ final class VoiceService: NSObject, ObservableObject {
         try? session.setActive(true)
     }
 
-    private func playAudio(_ data: Data, key: String? = nil, agentID: String? = nil, cue: CharacterCue = .neutral) async {
+    @discardableResult
+    private func playAudio(_ data: Data, key: String? = nil, agentID: String? = nil, cue: CharacterCue = .neutral) async -> Bool {
         #if DEBUG && targetEnvironment(simulator)
         CharacterAuditCheckpoint.mark("Preparing voice audio session")
         #endif
@@ -1272,7 +1279,7 @@ final class VoiceService: NSObject, ObservableObject {
         #if DEBUG && targetEnvironment(simulator)
         CharacterAuditCheckpoint.mark("Voice audio session prepared")
         #endif
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             do {
                 /* Belt and braces for the same class of fault: if a
                  * continuation is somehow still parked here, resume it before
@@ -1282,7 +1289,7 @@ final class VoiceService: NSObject, ObservableObject {
                 if let stranded = playbackContinuation {
                     playbackContinuation = nil
                     currentPlayer?.stop()
-                    stranded.resume()
+                    stranded.resume(returning: false)
                 }
                 let player = try AVAudioPlayer(data: data)
                 #if DEBUG && targetEnvironment(simulator)
@@ -1300,24 +1307,60 @@ final class VoiceService: NSObject, ObservableObject {
                 CharacterAuditCheckpoint.mark("Starting voice player")
                 #endif
                 if !player.play() {
+                    currentPlayer = nil
                     playbackContinuation = nil
-                    continuation.resume()
+                    continuation.resume(returning: false)
                 } else {
-                    isClipPlaying = true
-                    // Known bug #2: only after play() really started, so the
-                    // bar never says "Paused for" a clip that never played.
-                    LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
-                    isPaused = false
-                    nowPlayingKey = key
-                    nowPlayingAgentID = agentID
-                    playingCharacterCue = cue
-                    pausedCharacterElapsed = 0
-                    #if DEBUG && targetEnvironment(simulator)
-                    CharacterAuditCheckpoint.mark("Voice player started")
-                    #endif
+                    let generation = cancelGeneration
+                    Task { @MainActor [weak self, weak player] in
+                        guard let self, let player else { return }
+                        await self.confirmBufferedStart(player, generation: generation, key: key, agentID: agentID, cue: cue)
+                    }
                 }
             } catch {
-                continuation.resume()
+                continuation.resume(returning: false)
+            }
+        }
+    }
+
+    /// The Actions rotor and listening feedback follow a progressing playhead,
+    /// not AVAudioPlayer accepting a command. Recover the same clip once.
+    private func confirmBufferedStart(_ player: AVAudioPlayer, generation: Int, key: String?, agentID: String?, cue: CharacterCue) async {
+        var probe = StreamPlaybackStart(now: ProcessInfo.processInfo.systemUptime)
+        while true {
+            switch probe.observe(now: ProcessInfo.processInfo.systemUptime,
+                renderedSeconds: player.currentTime, completedBuffers: 0,
+                current: generation == cancelGeneration && currentPlayer === player) {
+            case .started:
+                isClipPlaying = true
+                LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
+                isPaused = false
+                nowPlayingKey = key
+                nowPlayingAgentID = agentID
+                playingCharacterCue = cue
+                pausedCharacterElapsed = 0
+                #if DEBUG && targetEnvironment(simulator)
+                CharacterAuditCheckpoint.mark("Voice player started")
+                #endif
+                return
+            case .recover:
+                KadeBreadcrumbs.drop("tts-buffered: start clock stalled; recovering same clip rate=\(player.rate) route=\(AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ","))")
+                prepareOutputSession()
+                player.pause()
+                if player.play() { continue }
+                fallthrough
+            case .failed:
+                KadeBreadcrumbs.drop("tts-buffered: no rendered frames after bounded start recovery")
+                player.stop()
+                currentPlayer = nil
+                isClipPlaying = false
+                playbackContinuation?.resume(returning: false)
+                playbackContinuation = nil
+                return
+            case .cancelled:
+                return
+            case .wait:
+                try? await Task.sleep(for: .milliseconds(25))
             }
         }
     }
@@ -1550,9 +1593,10 @@ extension VoiceService: AVAudioPlayerDelegate {
     // lot with no local compiler to verify a riskier assumption.
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
+            guard self.currentPlayer === player else { return }
             self.currentPlayer = nil
             self.isClipPlaying = false
-            self.playbackContinuation?.resume()
+            self.playbackContinuation?.resume(returning: flag)
             self.playbackContinuation = nil
         }
     }

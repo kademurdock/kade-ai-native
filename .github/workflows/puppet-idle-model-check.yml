@@ -1,8 +1,8 @@
-name: Puppet idle clock model checks
+name: Voice playback start and preserved motion checks
 
 'on':
   push:
-    branches: [codex/puppet-idle-motion-20261014]
+    branches: [codex/voice-playback-start-20261015]
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
       github.event.repository.private == false &&
       toJSON(github.event.repository.private) == 'false' &&
       github.repository == 'kademurdock/kade-ai-native' &&
-      github.ref == 'refs/heads/codex/puppet-idle-motion-20261014' &&
+      github.ref == 'refs/heads/codex/voice-playback-start-20261015' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
     timeout-minutes: 10
@@ -37,6 +37,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           python3 -B dev/puppet-completion/protocol-tests.py
           bash run-character-tests.sh
+          bash run-speech-tests.sh
+          python3 -B dev/test-playback-start-mutants.py
           git diff --exit-code
       - name: Prove that the old freeze and phase reset are detected, then restore exact source
         timeout-minutes: 4
