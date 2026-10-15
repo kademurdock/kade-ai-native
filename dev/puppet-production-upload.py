@@ -29,8 +29,8 @@ import zipfile
 
 TOOLS = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-PRODUCTION = "codex/puppet-idle-device-20261014"
-HOST_BRANCH = "codex/puppet-idle-host-20261014"
+PRODUCTION = "codex/voice-playback-device-20261015"
+HOST_BRANCH = "codex/voice-playback-host-20261015"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 TEAM = "JQPWZ2RL9P"
 VERSION = "2.2.14"
