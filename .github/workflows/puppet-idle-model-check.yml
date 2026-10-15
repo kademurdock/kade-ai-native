@@ -35,6 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 --version
           python3 -B dev/puppet-completion/protocol-tests.py
           bash run-character-tests.sh
           bash run-speech-tests.sh

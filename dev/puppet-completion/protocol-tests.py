@@ -327,7 +327,9 @@ class ProtocolChecks(unittest.TestCase):
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
         original_project_sha = "a74a49f90313513ba42a4d7d784113fefb94635297b99be894606293eddad892"
-        original_command_sha = "56b05a2951094043904a347a37fce0fc3c556e766915c47a741fb0ea15a531d7"
+        # Bind the exact original command expression bytes. ast.dump is a
+        # Python-version-dependent representation, not the build arguments.
+        original_command_sha = "bf5b25c7e5fd0070363cb4d18c44c755902d21c1a1dbccfa0dda2f8999293999"
         snippet = '      configs:\n        Debug:\n          ENABLE_DEBUG_DYLIB: "NO"\n'
         def coherent_project(value):
             section = re.search(r"^  KadeAI:\n(.*?)(?=^  [A-Za-z][A-Za-z0-9]*:|\Z)", value, re.M | re.S)
@@ -339,7 +341,7 @@ class ProtocolChecks(unittest.TestCase):
             if len(builds) != 1: raise ValueError("Missing unique build_tests function")
             commands = [node.value for node in ast.walk(builds[0]) if isinstance(node, ast.Assign)
                         and any(isinstance(target, ast.Name) and target.id == "command" for target in node.targets)]
-            if len(commands) != 1 or hashlib.sha256(ast.dump(commands[0], include_attributes=False).encode()).hexdigest() != original_command_sha:
+            if len(commands) != 1 or hashlib.sha256(ast.get_source_segment(value, commands[0]).encode()).hexdigest() != original_command_sha:
                 raise ValueError("The single unsigned Debug host build argument list changed")
         coherent_project(project); command_expression(helper); CHECKS += 2
         for changed in (project.replace('ENABLE_DEBUG_DYLIB: "NO"', 'ENABLE_DEBUG_DYLIB: false', 1), project.replace("        Debug:\n", "        Release:\n", 1),
