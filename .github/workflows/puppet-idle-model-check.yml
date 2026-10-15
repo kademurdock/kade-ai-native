@@ -35,6 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 -B dev/puppet-completion/protocol-tests.py
           bash run-character-tests.sh
           git diff --exit-code
       - name: Prove that the old freeze and phase reset are detected, then restore exact source

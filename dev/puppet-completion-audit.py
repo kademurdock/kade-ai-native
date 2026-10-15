@@ -266,7 +266,7 @@ def capture(expected):
     compiled=host.compiled_tests(expected)
     require(compiled==proof['launch']['compiledRunner'],'Completion screenshot app differs from tested compiled runner')
     device=host.simulator_record(expected)['devices']['large'];identifier=device['identifier']
-    report={'schema':'kade.puppet-completion-capture.v2','source':initial,'passed':False,'captures':{},'nativeReady':{},
+    report={'schema':'kade.puppet-completion-capture.v2','source':initial,'passed':False,'captures':{},'captureEncodings':{},'nativeReady':{},
         'ownedProcess':None,'ownedTermination':None,'compiledAfterVerified':False,
         'compiledRunner':compiled,'device':device,'syntheticOutput':True,'audioStarted':False,'microphoneStarted':False,
         'cameraStarted':False,'networkStarted':False,'physicalPhoneVerified':False,'batteryMeasured':False,'voiceOverVerified':False,
@@ -301,10 +301,12 @@ def capture(expected):
             require(data is not None,'Native completion readiness missing: '+phase)
             name='puppet-completion-'+phase+'.png';path=OUT/name
             require(not path.exists(),'Refusing to overwrite native completion media')
-            host.sim('io',identifier,'screenshot',str(path),timeout=remaining(75))
-            metadata=host.png(path)
+            original=host.original_capture_path(path)
+            host.sim('io',identifier,'screenshot',str(original),timeout=remaining(75))
+            metadata,encoding=host.publish_capture_copy(path,original)
             require(metadata['pixels']==[1320,2868],'Completion PNG differs from actual Pro Max portrait pixels')
             report['nativeReady'][phase]=data;report['captures'][phase]=metadata
+            report['captureEncodings'][phase]=encoding
             save('receipt.json',report)
             ack.write_text(phase,encoding='utf-8')
         require(host.source(expected)['inputs']==initial['inputs'],'Completion source drifted during native capture')
@@ -381,10 +383,11 @@ def emit(expected):
             files[name]=path.read_bytes()
             if name=='receipt.json':
                 validate_capture_ownership(record)
+                host.validate_capture_encoding_inventory(record,PHASES,'puppet-completion-')
                 for phase,metadata in record.get('captures',{}).items():
                     require(phase in PHASES and metadata['file']=='puppet-completion-'+phase+'.png','Unsafe completion image name')
-                    path=OUT/metadata['file'];require(host.png(path)==metadata,'Completion image changed after capture')
-                    files[path.name]=path.read_bytes()
+                    path=OUT/metadata['file']
+                    files[path.name]=host.verified_capture_bytes(path,metadata,record['captureEncodings'][phase])
     require(len(files)+1<=MAX_FILES and sum(map(len,files.values()))<=host.MAX_RAW,'Completion evidence exceeds fixed bounds')
     manifest={'schema':'kade.puppet-completion-log-evidence.v1','sha':expected,
         'files':{name:{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()} for name,data in files.items()},

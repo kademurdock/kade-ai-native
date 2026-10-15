@@ -55,7 +55,7 @@ audit.host.os.kill=forbidden
 audit.host.native_process_snapshot=forbidden
 audit.host.native_process_birth=forbidden
 audit.host.owned_process_identity=forbidden
-for entry in ("source", "initial_source", "sim", "boot_ui", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit"):
+for entry in ("source", "initial_source", "sim", "boot_ui", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit", "original_capture_path", "publish_capture_copy", "verified_capture_bytes"):
     setattr(audit.host, entry, forbidden)
 for entry in ("save", "ui", "capture", "emit", "main"):
     setattr(audit, entry, forbidden)
@@ -443,6 +443,110 @@ class ProtocolChecks(unittest.TestCase):
         corrupted = bytearray(content); corrupted[-13] ^= 1
         self.png_rejected(bytes(corrupted))
         self.png_rejected(content[:33] + struct.pack(">I", 0xffffffff) + content[37:])
+
+
+    def lossless_fixture(self,color=6):
+        channels=3 if color==2 else 4
+        raw=synthetic_filtered_scanlines(synthetic_pixel_rows(color),channels,[0,1,2,3,4])
+        header=struct.pack('>IIBBBBB',320,600,8,color,0,0,0)
+        compressed=zlib.compress(raw,0);middle=len(compressed)//2
+        chunks=[(b'IHDR',header),(b'sRGB',b'\0'),(b'pHYs',struct.pack('>IIB',3780,3780,1)),
+                (b'IDAT',compressed[:middle]),(b'IDAT',compressed[middle:]),(b'tEXt',b'fixture\0native bytes retained'),(b'IEND',b'')]
+        return synthetic_png(raw,chunks=chunks),raw
+
+    def test_lossless_capture_copy_retains_original_crc_chunks_and_all_scanlines(self):
+        global CHECKS
+        for color in (2,6):
+            original,scanlines=self.lossless_fixture(color)
+            encoded,record=audit.host.encode_capture_png(original,'synthetic-frame.png')
+            self.assertLess(len(encoded),len(original));self.assertEqual(record['method'],'zlib9')
+            metadata=audit.host.verify_capture_encoding(original,encoded,record,'synthetic-frame.png')
+            self.assertEqual(record['originalSha256'],hashlib.sha256(original).hexdigest())
+            self.assertEqual(record['encodedSha256'],hashlib.sha256(encoded).hexdigest())
+            self.assertEqual(record['inflatedSha256'],hashlib.sha256(scanlines).hexdigest())
+            self.assertEqual(metadata,audit.host.png(self.png_memory_path(encoded)))
+            before=audit.host._capture_png_parts(original,'synthetic-frame.png')
+            after=audit.host._capture_png_parts(encoded,'synthetic-frame.png')
+            self.assertEqual(before[2],after[2]);self.assertEqual(before[2],scanlines)
+            self.assertEqual([c for k,c in before[1] if k!=b'IDAT'],[c for k,c in after[1] if k!=b'IDAT'])
+            CHECKS+=10
+
+    def test_lossless_capture_identity_never_publishes_a_larger_copy(self):
+        global CHECKS
+        original,_=self.lossless_fixture()
+        first,record=audit.host.encode_capture_png(original,'synthetic-frame.png')
+        second,identity=audit.host.encode_capture_png(first,'synthetic-frame.png')
+        self.assertEqual(second,first);self.assertEqual(identity['method'],'identity')
+        self.assertEqual(identity['originalSha256'],identity['encodedSha256'])
+        self.assertEqual(identity['originalBytes'],identity['encodedBytes']);CHECKS+=4
+
+    def test_lossless_capture_receipt_binds_both_original_and_published_bytes(self):
+        global CHECKS
+        original,raw=self.lossless_fixture();encoded,record=audit.host.encode_capture_png(original,'synthetic-frame.png')
+        changed_raw=bytearray(raw);changed_raw[5]^=1
+        original_parts=audit.host._capture_png_parts(encoded,'synthetic-frame.png')
+        changed=b'\x89PNG\r\n\x1a\n'+b''.join(synthetic_png_chunk(b'IDAT',zlib.compress(bytes(changed_raw),9)) if kind==b'IDAT' else chunk for kind,chunk in original_parts[1])
+        for before,after in ((changed,encoded),(encoded,encoded),(original,changed),(original,encoded[:-1]),(original,encoded+b'extra')):
+            with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(before,after,record,'synthetic-frame.png')
+            CHECKS+=1
+        # Updating the published file hash alone cannot hide altered pixels.
+        forged=dict(record,encodedSha256=hashlib.sha256(changed).hexdigest(),encodedBytes=len(changed))
+        with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(original,changed,forged,'synthetic-frame.png')
+        CHECKS+=1
+        before=audit.host._capture_png_parts(encoded,'synthetic-frame.png')
+        changed_chunks=b'\x89PNG\r\n\x1a\n'+b''.join(synthetic_png_chunk(b'pHYs',struct.pack('>IIB',1000,1000,1)) if kind==b'pHYs' else chunk for kind,chunk in before[1])
+        forged=dict(record,encodedSha256=hashlib.sha256(changed_chunks).hexdigest(),encodedBytes=len(changed_chunks))
+        with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(original,changed_chunks,forged,'synthetic-frame.png')
+        CHECKS+=1
+
+    def test_lossless_capture_rejects_malformed_and_forged_encoding_records(self):
+        global CHECKS
+        original,_=self.lossless_fixture();encoded,record=audit.host.encode_capture_png(original,'synthetic-frame.png')
+        for key in record:
+            changed=dict(record);del changed[key]
+            with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(original,encoded,changed,'synthetic-frame.png')
+            CHECKS+=1
+        changes=[('schema','wrong'),('method','lossy'),('originalFile','../native.png'),('originalFile','native-originals/other.png'),
+                 ('originalBytes',True),('originalBytes',0),('encodedBytes',True),('encodedBytes',len(encoded)+1),
+                 ('inflatedBytes',False),('inflatedBytes',72_006_001),('inflatedBytes',1),('inflatedSha256','0'*64),
+                 ('nonIdatSha256','0'*64),('originalSha256','0'*64),('encodedSha256','0'*64)]
+        for key,value in changes:
+            with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(original,encoded,dict(record,**{key:value}),'synthetic-frame.png')
+            CHECKS+=1
+        with self.assertRaises(RuntimeError):audit.host.verify_capture_encoding(original,encoded,dict(record,extra=True),'synthetic-frame.png')
+        CHECKS+=1
+        for name in ('../native.png','sub/native.png','sub'+chr(92)+'native.png','not-a-png'):
+            with self.assertRaises(RuntimeError):audit.host.encode_capture_png(original,name)
+            CHECKS+=1
+
+    def test_lossless_capture_inventory_requires_every_original_receipt(self):
+        global CHECKS
+        original,_=self.lossless_fixture();name='della-host-test.png'
+        encoded,record=audit.host.encode_capture_png(original,name)
+        metadata=audit.host.verify_capture_encoding(original,encoded,record,name)
+        report={'passed':True,'captures':{'test':metadata},'captureEncodings':{'test':record}}
+        audit.host.validate_capture_encoding_inventory(report,{'test'},'della-host-');CHECKS+=1
+        variants=[dict(report,captureEncodings={}),dict(report,captures={}),dict(report,captureEncodings=None),
+                  dict(report,captureEncodings={'test':record,'extra':record}),dict(report,captures={'extra':metadata})]
+        for changed in variants:
+            with self.assertRaises(RuntimeError):audit.host.validate_capture_encoding_inventory(changed,{'test'},'della-host-')
+            CHECKS+=1
+        with self.assertRaises(RuntimeError):audit.host.validate_capture_encoding_inventory(report,{'test','missing'},'della-host-')
+        CHECKS+=1
+        bad=copy.deepcopy(report);bad['captures']['test']['sha256']='0'*64
+        with self.assertRaises(RuntimeError):audit.host.validate_capture_encoding_inventory(bad,{'test'},'della-host-')
+        CHECKS+=1
+
+    def test_lossless_capture_keeps_existing_png_validation_fail_closed(self):
+        global CHECKS
+        original,raw=self.lossless_fixture()
+        for invalid in (original[:-1],original+b'junk',synthetic_png(raw,interlace=1),synthetic_png(raw,depth=16),
+                        synthetic_png(raw[:-1]),synthetic_png(raw+b'junk')):
+            with self.assertRaises(RuntimeError):audit.host.encode_capture_png(invalid,'synthetic-frame.png')
+            CHECKS+=1
+        blank=synthetic_filtered_scanlines(synthetic_pixel_rows(6,b'\0\0\0\xff'),4,[0,1,2,3,4])
+        with self.assertRaises(RuntimeError):audit.host.encode_capture_png(synthetic_png(blank),'synthetic-frame.png')
+        CHECKS+=1
 
     def owned_fixture(self):
         identifier='12345678-1234-1234-1234-123456789ABC'
