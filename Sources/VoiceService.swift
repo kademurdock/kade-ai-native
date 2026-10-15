@@ -185,56 +185,21 @@ final class VoiceService: NSObject, ObservableObject {
      * queued, and — via this property — everything the pump has in flight. */
     private var streamedTurnKey: String?
 
-    /// Playback rate for spoken replies. 1.0 is the voice's own natural
-    /// pace; the picker offers 0.75x through 2x. Applied via
-    /// `AVAudioPlayer.rate` (which needs `enableRate` set BEFORE `play()`),
-    /// not by asking the TTS service for a different speed -- that would
-    /// re-synthesize and re-bill every clip, and would change the voice's
-    /// prosody rather than just how fast it plays back. Persisted in
-    /// UserDefaults: this is exactly the lightweight, non-sensitive
-    /// preference that belongs there rather than in the Keychain.
+    /// Generation preferences apply to the next request; they never stretch playing audio.
     @Published var playbackRate: Float = VoiceService.loadPlaybackRate() {
-        didSet {
-            UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey)
-            // Applies mid-clip, so a rate change while a long reply is
-            // playing takes effect immediately instead of at the next one.
-            // Part 119.3: the playing clip was already synthesized at some
-            // API speed, so only the remainder rides the player.
-            let live = playbackRate / synthSpeedFactor
-            currentPlayer?.rate = live
-            // Part 98: the streamed player honors the same live change.
-            streamingPlayer.setRate(live)
-        }
+        didSet { UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey) }
     }
-
+    @Published var fishPace: String = UserDefaults.standard.string(forKey: "kade.voiceMessage.fishPace") ?? "character" {
+        didSet { UserDefaults.standard.set(fishPace, forKey: "kade.voiceMessage.fishPace") }
+    }
     private static let playbackRateKey = "kade.voiceMessage.playbackRate"
 
-    /* Part 119.3 (Sep 2 2026), her ask: the player's time-stretch "does sound
-     * like it's been slowed down or sped up based on the sampling quality...
-     * changing the speed through the api instead." So the speed preference now
-     * rides the synthesis request (`speed`, which the proxy hands to Inworld
-     * as speakingRate / fish as prosody.speed) and the player only makes up
-     * what the API cannot: the API's hard range is 0.5-1.5, the picker offers
-     * up to 2x, so 2x = synth at 1.5 and play at 1.33. The agent's own
-     * configured rate multiplies in first. `synthSpeedFactor` remembers what
-     * the clip in flight was synthesized at so a live rate change and the
-     * player's rate stay consistent. */
-    private var synthSpeedFactor: Float = 1.0
-
-    /// (speed to send, residual player rate) for an agent's base rate and
-    /// the user's playback preference. `speed` is nil when nothing is asked
-    /// (base nil, rate 1.0) so the payload matches the pre-119.3 shape.
-    nonisolated static func apiSpeed(base: Double?, playbackRate: Float) -> (speed: Double?, factor: Float) {
-        let effective = (base ?? 1.0) * Double(playbackRate)
-        if base == nil, abs(playbackRate - 1.0) < 0.001 { return (nil, 1.0) }
-        let clamped = min(1.5, max(0.5, effective))
-        return (clamped, Float(clamped / (base ?? 1.0)))
-    }
-
-    /// The residual the PLAYER applies after the API took its share.
-    nonisolated static func residualRate(playbackRate: Float, factor: Float) -> Float {
-        let r = playbackRate / max(0.01, factor)
-        return min(2.0, max(0.5, (abs(r - 1.0) < 0.01) ? 1.0 : r))
+    private func synthesisSpeed(voice: String?, base: Double?, preference: Float, pace: String) async -> Double {
+        let catalog = await VoiceCatalog.shared.snapshot()
+        if VoicePacePolicy.isFish(voice: voice, providers: catalog.providers) {
+            return VoicePacePolicy.fishRate(pace, base: base)
+        }
+        return VoicePacePolicy.rate(base: base, preference: preference == 1 ? nil : Double(preference))
     }
 
     // MARK: Delivery (Part 119.3)
@@ -265,7 +230,7 @@ final class VoiceService: NSObject, ObservableObject {
     /// The speeds offered in the picker. Deliberately a short, opinionated
     /// list rather than a slider: a slider is fiddly with VoiceOver and
     /// nobody actually wants 1.37x.
-    static let availableRates: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    static let availableRates: [Float] = [0.5, 0.75, 1.0, 1.2, 1.25, 1.5]
 
     /// Compact form for the on-screen chip ("1x", "1.5x").
     nonisolated static func rateLabel(_ rate: Float) -> String {
@@ -289,7 +254,7 @@ final class VoiceService: NSObject, ObservableObject {
         let stored = UserDefaults.standard.float(forKey: playbackRateKey)
         // `float(forKey:)` returns 0 for "never set" -- which is also an
         // invalid rate, so one check covers both.
-        return (stored >= 0.5 && stored <= 2.0) ? stored : 1.0
+        return stored >= 0.5 && stored.isFinite ? min(1.5, stored) : 1.0
     }
 
     /// Session 17 (Kade: "a native way to access settings like speech and
@@ -836,7 +801,6 @@ final class VoiceService: NSObject, ObservableObject {
         if let delivery { fields.append(("delivery", delivery)) }
         if let speed { fields.append(("speed", String(min(1.5, max(0.5, speed))))) }
         // Previews play at the picker's own pace, whatever the reply speed is.
-        synthSpeedFactor = playbackRate
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { return }
         await playAudio(data)
@@ -1034,7 +998,7 @@ final class VoiceService: NSObject, ObservableObject {
                 var streamedOK = false
                 if hasAudio {
                     streamedClipActive = true
-                    streamedOK = await streamingPlayer.play(fetch: fetch, rate: Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor), onPlaybackStarted: { [weak self] in
+                    streamedOK = await streamingPlayer.play(fetch: fetch, rate: 1.0, onPlaybackStarted: { [weak self] in
                         guard let self, generation == self.cancelGeneration else { return }
                         self.isClipPlaying = true
                         // Known bug #2: pause a running book the moment this
@@ -1146,10 +1110,9 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", text)]
         if let voice { fields.append(("voice", voice)) }
-        // Part 119.3: the speed preference rides the API; the player gets the rest.
-        let tuned = Self.apiSpeed(base: speed, playbackRate: playbackRate)
-        if let s = tuned.speed { fields.append(("speed", String(s))) }
-        synthSpeedFactor = tuned.factor
+        // The proxy interprets Fish pace as instructions and Classic pace as an API rate.
+        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
         /* ⭐ PART 94 — ONE RETRY, BECAUSE THE FAILURE CLASS HERE IS LATENCY.
@@ -1233,9 +1196,8 @@ final class VoiceService: NSObject, ObservableObject {
         }
         var fields: [(String, String)] = [("input", item.text), ("stream", "1")]
         if let voice { fields.append(("voice", voice)) }
-        let tuned = Self.apiSpeed(base: speed, playbackRate: playbackRate) // Part 119.3
-        if let s = tuned.speed { fields.append(("speed", String(s))) }
-        synthSpeedFactor = tuned.factor
+        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: item.agentId) { fields.append(("delivery", delivery)) }
         return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
     }
@@ -1300,7 +1262,7 @@ final class VoiceService: NSObject, ObservableObject {
                 // afterwards silently does nothing, which is the kind of
                 // thing that looks fine in review and is dead on device.
                 player.enableRate = true
-                player.rate = Self.residualRate(playbackRate: playbackRate, factor: synthSpeedFactor) // Part 119.3
+                player.rate = 1.0
                 currentPlayer = player
                 playbackContinuation = continuation
                 #if DEBUG && targetEnvironment(simulator)
@@ -1389,7 +1351,8 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", trimmed)]
         if let voice { fields.append(("voice", voice)) }
-        if let s = Self.apiSpeed(base: speed, playbackRate: playbackRate).speed { fields.append(("speed", String(s))) } // Part 119.3
+        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)

@@ -38,6 +38,7 @@ actor VoiceCatalog {
         /// label -> its one-word tag ("flurry"). Part 119.3: the wheel shows
         /// this as the voice's NAME, her word ("just say the name of the voice").
         let tags: [String: String]
+        var providers: [String: String] = [:]
         static let empty = Snapshot(categories: [], renames: [:], describe: [:], tags: [:])
         var isEmpty: Bool { categories.isEmpty && renames.isEmpty && describe.isEmpty }
     }
@@ -88,6 +89,7 @@ actor VoiceCatalog {
             let renames: [String: String]?
             let describe: [String: String]?
             let tags: [String: String]?
+            let providers: [String: String]?
         }
         var req = URLRequest(url: catalogURL, cachePolicy: .reloadIgnoringLocalCacheData)
         req.timeoutInterval = 8
@@ -100,7 +102,8 @@ actor VoiceCatalog {
             categories: (dto.categories ?? []).map { Category(name: $0.name, voices: $0.voices) },
             renames: dto.renames ?? [:],
             describe: dto.describe ?? [:],
-            tags: dto.tags ?? [:]
+            tags: dto.tags ?? [:],
+            providers: dto.providers ?? [:]
         )
     }
 }

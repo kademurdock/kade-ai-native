@@ -944,6 +944,26 @@ do {
     check("torn last sample cannot be replayed as complete", StreamingWavParser.completedWAV(streaming + Data([1])) == nil)
     check("unrecognized data cannot be replayed as WAV", StreamingWavParser.completedWAV(Data([1, 2, 3])) == nil)
 }
+// Provider pacing is generation-only. Keep the old playback-start checks above.
+checkEqual("Inworld clamps rates above its API range", VoicePacePolicy.rate(base: nil, preference: 2), 1.5)
+checkEqual("Inworld clamps rates below its API range", VoicePacePolicy.rate(base: nil, preference: 0.1), 0.5)
+checkEqual("Inworld keeps a supported rate exact", VoicePacePolicy.rate(base: 1.4, preference: 1.2), 1.2)
+checkEqual("Inworld retains a character rate without a listener override", VoicePacePolicy.rate(base: 1.25, preference: nil), 1.25)
+checkEqual("Invalid rate never reaches the provider", VoicePacePolicy.rate(base: nil, preference: .nan), 1)
+checkEqual("Fish unhurried selects an instruction value", VoicePacePolicy.fishRate("unhurried", base: 1.2), 0.75)
+checkEqual("Fish easygoing selects an instruction value", VoicePacePolicy.fishRate("easygoing", base: nil), 0.9)
+checkEqual("Fish natural overrides a fast character", VoicePacePolicy.fishRate("natural", base: 1.5), 1)
+checkEqual("Fish brisk selects an instruction value", VoicePacePolicy.fishRate("brisk", base: 0.75), 1.2)
+checkEqual("Fish quick selects an instruction value", VoicePacePolicy.fishRate("quick", base: nil), 1.5)
+checkEqual("Fish character pace retains the saved setting", VoicePacePolicy.fishRate("character", base: 1.2), 1.2)
+checkEqual("Unknown saved Fish pace safely uses the character setting", VoicePacePolicy.fishRate("unknown", base: nil), 1)
+check("Classic metadata wins over Fish-looking names", !VoicePacePolicy.isFish(voice: "fish:old-alias", providers: ["fish:old-alias": "inworld"]))
+check("Saved Inworld aliases use provider metadata", !VoicePacePolicy.isFish(voice: "Miss-A", providers: ["Miss-A": "inworld"]))
+check("New personal Fish voices retain their provider", VoicePacePolicy.isFish(voice: "Miss-A (Amber A)", providers: ["Miss-A (Amber A)": "fish"]))
+check("Classic fallback is safe while metadata is unavailable", !VoicePacePolicy.isFish(voice: "Cedar (Classic)", providers: [:]))
+checkEqual("Fish pace labels make no numerical speed promise", VoicePacePolicy.fishName("brisk"), "Brisk")
+checkEqual("Unknown Fish label is a safe character default", VoicePacePolicy.fishName("unknown"), "Character setting")
+
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")

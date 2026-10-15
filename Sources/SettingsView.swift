@@ -247,16 +247,22 @@ struct SettingsView: View {
             ShareSheet(item: item)
         }
         .confirmationDialog(
-            "Voice speed",
+            "Voice delivery pace",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
+            ForEach(VoicePacePolicy.fishOptions, id: \.value) { pace in
+                Button("Fish: \(pace.label)") {
+                    voiceService.fishPace = pace.value
+                    UIAccessibility.post(notification: .announcement, argument: "Fish delivery pace \(pace.label). Applies to the next message.")
+                }
+            }
             ForEach(VoiceService.availableRates, id: \.self) { rate in
-                Button(VoiceService.rateSpokenLabel(rate)) {
+                Button("Classic Inworld: \(VoiceService.rateSpokenLabel(rate))") {
                     voiceService.playbackRate = rate
                     UIAccessibility.post(
                         notification: .announcement,
-                        argument: "Voice speed \(VoiceService.rateSpokenLabel(rate))."
+                        argument: "Classic Inworld \(VoiceService.rateSpokenLabel(rate)). Applies to the next message."
                     )
                 }
             }
@@ -305,7 +311,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("Voice speed applies to every conversation and call from here on -- you can still change it from any single conversation too, and it remembers your last pick.")
+            Text("Fish pace requests an acting delivery. Classic Inworld uses its supported API speaking rate. Changes apply to future voice messages; playing audio keeps its original speed.")
         }
     }
 
@@ -842,7 +848,7 @@ struct SettingsView: View {
                 tileLabel("Voice speed", systemImage: "speedometer", tint: SectionTint.voice)
                     .foregroundStyle(Color.primary)
                 Spacer()
-                Text(VoiceService.rateLabel(voiceService.playbackRate))
+                Text("\(voiceService.fishPace == "character" ? "Auto" : VoicePacePolicy.fishName(voiceService.fishPace)) / \(VoiceService.rateLabel(voiceService.playbackRate))")
                     .foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
@@ -852,8 +858,8 @@ struct SettingsView: View {
         // children:.ignore on a Button — this was the exact construction
         // that killed Amber's conversation rows. Label/value/hint stay.
         .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice speed") : "Voice speed")
-        .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
-        .accessibilityHint("Double-tap to change how fast voice messages and Spotter calls play back.")
+        .accessibilityValue("Fish: \(VoicePacePolicy.fishName(voiceService.fishPace)). Classic Inworld: \(VoiceService.rateSpokenLabel(voiceService.playbackRate)).")
+        .accessibilityHint("Choose Fish delivery instructions or Classic Inworld API speed for the next voice message. Current audio keeps its original speed.")
     }
 
     private func pronunciationRow(searchStyle: Bool) -> some View {
