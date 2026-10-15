@@ -8,6 +8,7 @@ Run with Python -B so this test does not create bytecode or copy artifacts.
 import ast
 import cmath
 import copy
+from contextlib import ExitStack
 import ctypes
 from datetime import datetime, timezone
 import errno
@@ -51,11 +52,13 @@ NATIVE_SNAPSHOT=audit.host.native_process_snapshot
 NATIVE_BIRTH=audit.host.native_process_birth
 OWNED_IDENTITY=audit.host.owned_process_identity
 COMPILED_TESTS=audit.host.compiled_tests
+START_SIMULATOR_FRONTEND=audit.host.start_simulator_frontend
+BOOT_UI=audit.host.boot_ui
 audit.host.os.kill=forbidden
 audit.host.native_process_snapshot=forbidden
 audit.host.native_process_birth=forbidden
 audit.host.owned_process_identity=forbidden
-for entry in ("source", "initial_source", "sim", "boot_ui", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit", "original_capture_path", "publish_capture_copy", "verified_capture_bytes"):
+for entry in ("source", "initial_source", "sim", "boot_ui", "start_simulator_frontend", "run_ui", "compiled_tests", "simulator_record", "operation_remaining", "emit", "original_capture_path", "publish_capture_copy", "verified_capture_bytes"):
     setattr(audit.host, entry, forbidden)
 for entry in ("save", "ui", "capture", "emit", "main"):
     setattr(audit, entry, forbidden)
@@ -1064,6 +1067,114 @@ class ProtocolChecks(unittest.TestCase):
             changed=copy.deepcopy(completion);changed[key]=value
             with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
             CHECKS+=1
+    def frontend_memory(self,stack,raw=None):
+        """Invent only Apple metadata; no installed frontend or process is used."""
+        content=plistlib.dumps({'CFBundleIdentifier':'com.apple.iphonesimulator'}) if raw is None else raw
+        class MemoryPath:
+            def __init__(self,value):self.value=str(value)
+            def __str__(self):return self.value
+            def __truediv__(self,other):return MemoryPath(self.value+'/'+str(other))
+            def is_dir(self):return self.value.endswith('/Simulator.app')
+            def is_file(self):return self.value.endswith('/Contents/Info.plist')
+            def is_symlink(self):return False
+            def stat(self):return type('MemoryStat',(),{'st_size':len(content)})()
+            def read_bytes(self):return content
+        stack.enter_context(patch.object(audit.host,'Path',MemoryPath))
+        stack.enter_context(patch.dict(audit.host.os.environ,DEVELOPER_DIR='/Applications/Xcode_26.4.1.app/Contents/Developer'))
+        return '01234567-89AB-CDEF-0123-456789ABCDEF'
+
+    def test_frontend_uses_pinned_apple_bundle_exact_uuid_and_clipped_deadline(self):
+        global CHECKS
+        with ExitStack() as stack:
+            identifier=self.frontend_memory(stack)
+            process=stack.enter_context(patch.object(audit.host.subprocess,'run',return_value=type('Exit',(),{'returncode':0})()))
+            stack.enter_context(patch.object(audit.host.time,'monotonic',side_effect=[100,100.5]))
+            record={}
+            self.assertIs(START_SIMULATOR_FRONTEND(identifier,lambda bound:min(bound,12),record),record);CHECKS+=1
+            process.assert_called_once_with(['open','-n','-a','/Applications/Xcode_26.4.1.app/Contents/Developer/Applications/Simulator.app',
+                '--args','-CurrentDeviceUDID',identifier],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=12,check=False);CHECKS+=1
+            self.assertEqual(record['elapsedSeconds'],.5);CHECKS+=1
+            self.assertEqual(record['timeoutSeconds'],12);CHECKS+=1
+            self.assertNotIn('appReady',record);CHECKS+=1
+
+    def test_frontend_fails_closed_for_foreign_scope_budget_bundle_and_process_failure(self):
+        global CHECKS
+        for problem in ('uuid','xcode','bundle','budget','exit','timeout'):
+            with self.subTest(problem=problem),ExitStack() as stack:
+                raw=plistlib.dumps({'CFBundleIdentifier':'com.example.other'}) if problem=='bundle' else None
+                identifier=self.frontend_memory(stack,raw)
+                process=stack.enter_context(patch.object(audit.host.subprocess,'run',return_value=type('Exit',(),{'returncode':1})()))
+                if problem=='uuid':identifier='booted'
+                if problem=='xcode':stack.enter_context(patch.dict(audit.host.os.environ,DEVELOPER_DIR='/Applications/Other.app'))
+                if problem=='timeout':process.side_effect=subprocess.TimeoutExpired('open',12)
+                record={}
+                with self.assertRaises((RuntimeError,subprocess.TimeoutExpired)):
+                    START_SIMULATOR_FRONTEND(identifier,lambda bound:0 if problem=='budget' else 12,record)
+                CHECKS+=1
+                if problem in ('uuid','xcode','bundle','budget'):
+                    process.assert_not_called();CHECKS+=1
+                else:
+                    self.assertFalse(record['passed']);CHECKS+=1
+                    self.assertEqual(record['timedOut'],problem=='timeout');CHECKS+=1
+
+    def test_frontend_receipt_cannot_replace_boot_or_claim_failed_command_success(self):
+        global CHECKS
+        identifier='01234567-89AB-CDEF-0123-456789ABCDEF'
+        record={'identifier':identifier,'applicationPath':'/Applications/Xcode_26.4.1.app/Contents/Developer/Applications/Simulator.app',
+            'bundleId':'com.apple.iphonesimulator','infoPlistSha256':'a'*64,'timeoutSeconds':12,'elapsedSeconds':.5,
+            'passed':True,'exitCode':0,'timedOut':False}
+        self.assertIs(audit.host.validate_simulator_frontend(record,identifier),record);CHECKS+=1
+        for field,value in (('identifier','other'),('applicationPath','/tmp/Simulator.app'),('bundleId','other'),
+                            ('infoPlistSha256','bad'),('timeoutSeconds',31),('timeoutSeconds',0),('timeoutSeconds',True),
+                            ('elapsedSeconds',14),('passed',False),('exitCode',True),('exitCode',1),('timedOut',True)):
+            changed=dict(record);changed[field]=value
+            with self.assertRaises(RuntimeError):audit.host.validate_simulator_frontend(changed,identifier)
+            CHECKS+=1
+        for changed in (None,{},dict(record,appReady=True)):
+            with self.assertRaises(RuntimeError):audit.host.validate_simulator_frontend(changed,identifier)
+            CHECKS+=1
+        initial={'sha':SOURCE}
+        boot={'source':initial,'device':'small','passed':True,'timeoutSeconds':420,'identifier':identifier,
+              'alreadyBooted':False,'elapsedSeconds':2,'simulatorFrontend':record}
+        self.assertIs(audit.host.validate_ui_boot(boot,'small',initial),boot);CHECKS+=1
+        del boot['simulatorFrontend']
+        with self.assertRaises(RuntimeError):audit.host.validate_ui_boot(boot,'small',initial)
+        CHECKS+=1
+
+    def test_all_boot_paths_open_frontend_before_unchanged_readiness_and_app_checks(self):
+        global CHECKS
+        for key,completion in (('large',False),('small',False),('large',True)):
+            with self.subTest(key=key,completion=completion),ExitStack() as stack:
+                identifier=self.frontend_memory(stack)
+                other='11234567-89AB-CDEF-0123-456789ABCDEF'
+                records={key:{'identifier':identifier},'small' if key=='large' else 'large':{'identifier':other}}
+                events=[];saved=[]
+                def sim(*args,**kwargs):
+                    events.append(args[0])
+                    if args[0]=='list':return json.dumps({'devices':{'runtime':[{'udid':identifier,'state':'Shutdown'},{'udid':other,'state':'Booted'}]}})
+                    self.assertEqual(args[1],other if args[0]=='shutdown' else identifier)
+                    return ''
+                def start(device,remaining,record):
+                    events.append('frontend')
+                    return START_SIMULATOR_FRONTEND(device,remaining,record)
+                def app(*args):
+                    events.append('appPreflight');args[-1].update(elapsedSeconds=0,passed=True)
+                stack.enter_context(patch.object(audit.host.sys,'platform','darwin'))
+                stack.enter_context(patch.object(audit.host,'initial_source',return_value={'sha':SOURCE}))
+                stack.enter_context(patch.object(audit.host,'simulator_record',return_value={'devices':records}))
+                stack.enter_context(patch.object(audit.host,'operation_remaining',side_effect=lambda bound:bound))
+                stack.enter_context(patch.object(audit.host,'sim',side_effect=sim))
+                stack.enter_context(patch.object(audit.host,'start_simulator_frontend',side_effect=start))
+                stack.enter_context(patch.object(audit.host,'app_preflight',side_effect=app))
+                stack.enter_context(patch.object(audit.host,'save',side_effect=lambda name,record:saved.append((name,record))))
+                stack.enter_context(patch.object(audit.host.subprocess,'run',return_value=type('Exit',(),{'returncode':0})()))
+                report=BOOT_UI(SOURCE,key,completion)
+                self.assertEqual(events,['list','shutdown','boot','frontend','bootstatus']+(['appPreflight'] if key=='large' else []));CHECKS+=1
+                self.assertTrue(report['passed']);CHECKS+=1
+                self.assertTrue(report['simulatorFrontend']['passed']);CHECKS+=1
+                self.assertLessEqual(report['simulatorFrontend']['timeoutSeconds'],30);CHECKS+=1
+                self.assertEqual(saved[0][0],'ui-boot-completion.json' if completion else 'ui-boot-'+key+'.json');CHECKS+=1
+
     def test_distinct_boot_order_and_unchanged_proof_budgets(self):
         global CHECKS
         regression={"finishedAtUtc":"2026-10-11T05:00:00+00:00"}
