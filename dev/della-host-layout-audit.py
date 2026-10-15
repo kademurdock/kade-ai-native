@@ -30,7 +30,7 @@ sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/della-host-layout-audit'
 REPOSITORY='kademurdock/kade-ai-native'
-BRANCH='codex/selected-drama3-voices-host-20261014'
+BRANCH='codex/puppet-idle-host-20261014'
 BUNDLE_ID='com.kademurdock.kadeai'
 APP=ROOT/'build/della-host-layout-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
 MASTER_SHA='285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2'
@@ -170,7 +170,7 @@ PREFLIGHT_OUTPUT_BYTES=64*1024
 UI_SECONDS={'large':600,'small':480}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
-EXPECTED_MODEL_CHECKS=169760
+EXPECTED_MODEL_CHECKS=171686
 JOB_SECONDS=55*60
 OPERATION_SECONDS=52*60
 FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS
@@ -334,6 +334,125 @@ def png(path):
     png_framebuffer(b''.join(idat),width,height,header)
     return {'file':path.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
             'pixels':[width,height]}
+
+
+def _capture_png_parts(data,name):
+    # Reuse every existing dimension/CRC/framebuffer/visible-content guard.
+    class MemoryPNG:
+        def read_bytes(self):return data
+    image=MemoryPNG();image.name=name;metadata=png(image)
+    chunks=[];idat=[];cursor=8
+    while cursor<len(data):
+        length=struct.unpack('>I',data[cursor:cursor+4])[0]
+        kind=data[cursor+4:cursor+8];end=cursor+length+12
+        chunks.append((kind,data[cursor:end]))
+        if kind==b'IDAT':idat.append(data[cursor+8:end-4])
+        cursor=end
+    # png() already bounded and completely validated this exact stream.
+    filtered=zlib.decompress(b''.join(idat))
+    return metadata,chunks,filtered
+
+
+def _validate_capture_encoding(metadata,record):
+    fields={'schema','originalFile','originalBytes','originalSha256','encodedBytes',
+            'encodedSha256','inflatedBytes','inflatedSha256','nonIdatSha256','method'}
+    require(isinstance(record,dict) and set(record)==fields
+            and record['schema']=='kade.lossless-native-png.v1','Missing/unknown native PNG encoding receipt')
+    name=metadata.get('file')
+    require(isinstance(name,str) and 0<len(name)<=200 and name.endswith('.png')
+            and '/' not in name and chr(92) not in name and name not in ('.','..')
+            and record['originalFile']=='native-originals/'+name,'Unsafe native original PNG name')
+    require(all(type(record[key]) is int for key in ('originalBytes','encodedBytes','inflatedBytes'))
+            and 33<=record['encodedBytes']<=record['originalBytes']<=MAX_SCREENSHOT
+            and 0<record['inflatedBytes']<=72_006_000,'Invalid native PNG encoding sizes')
+    require(all(isinstance(record[key],str) and re.fullmatch('[0-9a-f]{64}',record[key])
+                for key in ('originalSha256','encodedSha256','inflatedSha256','nonIdatSha256')),
+            'Invalid native PNG encoding hashes')
+    require(metadata.get('bytes')==record['encodedBytes'] and metadata.get('sha256')==record['encodedSha256'],
+            'Native encoded PNG differs from its capture receipt')
+    require(record['method'] in ('identity','zlib9'),'Unknown native PNG encoding method')
+    if record['method']=='identity':
+        require(record['originalBytes']==record['encodedBytes']
+                and record['originalSha256']==record['encodedSha256'],'Identity PNG changed original bytes')
+    else:
+        require(record['encodedBytes']<record['originalBytes']
+                and record['encodedSha256']!=record['originalSha256'],'Lossless PNG copy did not get smaller')
+    return record
+
+
+def verify_capture_encoding(original,encoded,record,name):
+    before,before_chunks,before_scanlines=_capture_png_parts(original,name)
+    after,after_chunks,after_scanlines=_capture_png_parts(encoded,name)
+    _validate_capture_encoding(after,record)
+    require(before['bytes']==record['originalBytes'] and before['sha256']==record['originalSha256'],
+            'Native original PNG changed after capture')
+    before_other=[chunk for kind,chunk in before_chunks if kind!=b'IDAT']
+    after_other=[chunk for kind,chunk in after_chunks if kind!=b'IDAT']
+    require(before_other==after_other and before_scanlines==after_scanlines,
+            'Native PNG encoding changed header/chunks/pixels')
+    require(len(before_scanlines)==record['inflatedBytes']
+            and hashlib.sha256(before_scanlines).hexdigest()==record['inflatedSha256']
+            and hashlib.sha256(b''.join(before_other)).hexdigest()==record['nonIdatSha256'],
+            'Native PNG encoding pixel/chunk receipt drift')
+    return after
+
+
+def encode_capture_png(original,name):
+    before,chunks,scanlines=_capture_png_parts(original,name)
+    compressed=zlib.compress(scanlines,9)
+    idat=struct.pack('>I',len(compressed))+b'IDAT'+compressed+struct.pack('>I',zlib.crc32(b'IDAT'+compressed)&0xffffffff)
+    parts=[b'\x89PNG\r\n\x1a\n'];inserted=False
+    for kind,chunk in chunks:
+        if kind==b'IDAT':
+            if not inserted:parts.append(idat);inserted=True
+        else:parts.append(chunk)
+    candidate=b''.join(parts);encoded=candidate if len(candidate)<len(original) else original
+    record={'schema':'kade.lossless-native-png.v1','originalFile':'native-originals/'+name,
+            'originalBytes':len(original),'originalSha256':before['sha256'],
+            'encodedBytes':len(encoded),'encodedSha256':hashlib.sha256(encoded).hexdigest(),
+            'inflatedBytes':len(scanlines),'inflatedSha256':hashlib.sha256(scanlines).hexdigest(),
+            'nonIdatSha256':hashlib.sha256(b''.join(chunk for kind,chunk in chunks if kind!=b'IDAT')).hexdigest(),
+            'method':'zlib9' if encoded!=original else 'identity'}
+    verify_capture_encoding(original,encoded,record,name)
+    return encoded,record
+
+
+def original_capture_path(path):
+    require(not path.exists() and not path.is_symlink(),'Refusing to overwrite encoded capture')
+    folder=path.parent/'native-originals';folder.mkdir(exist_ok=True)
+    require(not folder.is_symlink() and folder.resolve().parent==path.parent.resolve(),'Native original directory escaped capture root')
+    original=folder/path.name
+    require(not original.exists() and not original.is_symlink(),'Refusing to overwrite native original capture')
+    return original
+
+
+def publish_capture_copy(path,original_path):
+    require(original_path==path.parent/'native-originals'/path.name and not original_path.is_symlink()
+            and 33<=original_path.stat().st_size<=MAX_SCREENSHOT,'Invalid native original capture path/size')
+    original=original_path.read_bytes();encoded,record=encode_capture_png(original,path.name)
+    with path.open('xb') as target:target.write(encoded)
+    # Both files remain untouched after this point and are checked before export.
+    metadata=verify_capture_encoding(original_path.read_bytes(),path.read_bytes(),record,path.name)
+    return metadata,record
+
+
+def validate_capture_encoding_inventory(report,phases,prefix):
+    captures=report.get('captures');encodings=report.get('captureEncodings')
+    require(isinstance(captures,dict) and isinstance(encodings,dict) and set(captures)==set(encodings)
+            and set(captures)<=set(phases),'Missing/extra native capture encoding receipt')
+    for phase,metadata in captures.items():
+        require(isinstance(metadata,dict) and metadata.get('file')==prefix+phase+'.png','Unsafe encoded capture inventory name')
+        _validate_capture_encoding(metadata,encodings[phase])
+    if report.get('passed'):require(set(captures)==set(phases),'Successful native capture encoding inventory incomplete')
+
+
+def verified_capture_bytes(path,metadata,record):
+    original=path.parent/'native-originals'/path.name
+    require(not original.is_symlink() and not original.parent.is_symlink()
+            and 33<=original.stat().st_size<=MAX_SCREENSHOT,'Native original missing/oversized before packaging')
+    data=path.read_bytes();actual=verify_capture_encoding(original.read_bytes(),data,record,path.name)
+    require(actual==metadata,'Captured PNG changed before packaging')
+    return data
 
 
 def required_phases():
@@ -1718,7 +1837,7 @@ def capture(expected):
     require(source(expected,require_staged=True)['inputs']==initial['inputs'],'Staged source changed')
     require(sys.platform=='darwin','Native host capture requires standard macOS')
     records=simulator_record(expected)['devices']
-    receipt={'schema':'kade.della-host-capture.v2','source':initial,'simulators':records,'captures':{},'captureTimings':{},'nativeReady':{},
+    receipt={'schema':'kade.della-host-capture.v2','source':initial,'simulators':records,'captures':{},'captureEncodings':{},'captureTimings':{},'nativeReady':{},
              'ownedProcesses':{},'ownedTerminations':{},'compiledAfterVerified':False,
              'nativeChecks':sorted(NATIVE_CHECKS),'passed':False,'nativeRenderingVerified':False,
              'nativeHostLayoutVerified':False,'physicalPhoneVerified':False,'voiceOverVerified':False,
@@ -1833,12 +1952,14 @@ def capture(expected):
                     timing['readyValidatedAtUtc']=now()
                     screenshot_started=time.monotonic()
                     path=OUT/('della-host-'+phase+'.png')
-                    sim('io',identifier,'screenshot',str(path),timeout=remaining(SCREENSHOT_SECONDS))
+                    original=original_capture_path(path)
+                    sim('io',identifier,'screenshot',str(original),timeout=remaining(SCREENSHOT_SECONDS))
                     timing['screenshotSeconds']=round(time.monotonic()-screenshot_started,3)
-                    metadata=png(path)
+                    metadata,encoding=publish_capture_copy(path,original)
                     require(all(abs(pixel-point*device['scale'])<=2 for pixel,point in zip(metadata['pixels'],data['windowPoints'])),
                             'Real portrait screenshot pixels and native window points differ')
                     receipt['captures'][phase]=metadata
+                    receipt['captureEncodings'][phase]=encoding
                     remaining(1)
                 except Exception as error:
                     phase_failure=error
@@ -1999,12 +2120,12 @@ def emit(expected):
         receipt=json.loads((OUT/'receipt.json').read_text())
         require(receipt.get('source')==initial,'Host capture source receipt drift')
         validate_capture_ownership(receipt)
+        validate_capture_encoding_inventory(receipt,required_phases(),'della-host-')
         files['receipt.json']=(OUT/'receipt.json').read_bytes()
         for phase,metadata in receipt.get('captures',{}).items():
             require(phase in required_phases() and metadata['file']=='della-host-'+phase+'.png','Unsafe host screenshot name')
             path=OUT/metadata['file']
-            require(png(path)==metadata,'Captured host PNG changed before packaging')
-            files[path.name]=path.read_bytes()
+            files[path.name]=verified_capture_bytes(path,metadata,receipt['captureEncodings'][phase])
     if (OUT/'ui-tests.json').exists():
         report=json.loads((OUT/'ui-tests.json').read_text())
         require(report.get('source')==initial,'UI result source receipt drift')

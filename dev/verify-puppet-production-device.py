@@ -20,11 +20,11 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/selected-drama3-voices-device-20261014"
+BRANCH = "codex/puppet-idle-device-20261014"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 VERSION = "2.2.14"
 OPERATION_SECONDS = 1800
-EXPECTED_MODEL_CHECKS = 169760
+EXPECTED_MODEL_CHECKS = 171686
 MODEL_GROUPS = {"Character motion", "Call meter and expression", "Character reactions and playback ownership",
                 "Authored facial selection", "Isolated hand study", "Layered figure motion",
                 "Character bust review and transforms", "Production puppet identity and safety",

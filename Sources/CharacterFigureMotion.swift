@@ -123,7 +123,13 @@ final class CharacterBodyPerformanceClock {
             if sampledActivity != presentation.activity {
                 activityElapsed = 0
                 attentionVariant = Int(seed % 3)
-            } else { activityElapsed = min(120, activityElapsed + wallDelta) }
+            } else {
+                // Ambient breathing and head motion must keep progressing
+                // during a long visible rest. Only finite speech gestures use
+                // the 120-second ceiling; the active timeline still owns all
+                // wakeups and its policy stop resets this clock immediately.
+                activityElapsed = min(time, activityElapsed + wallDelta)
+            }
             sampledActivity = presentation.activity
             sampledPhase = .stopped
             sourceElapsed = nil
@@ -324,12 +330,13 @@ enum CharacterFigureMotion {
         let rigID = CharacterMotion.rigID(id) ?? id
         let seed = rigID.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
         let phase = Double(seed % 1000) / 1000 * 2 * Double.pi
-        // Reduce before multiplication: even huge finite clocks remain safe.
         let motionTime = performance?.activityElapsed ?? time
-        let t = (motionTime.isFinite && motionTime >= 0 ? motionTime : 0)
-            .truncatingRemainder(dividingBy: 120 * .pi) * personality.tempo
-        let breath = sin(t * 0.82 + phase)
-        let drift = sin(t * 0.31 + phase)
+        func oscillation(_ frequency: Double) -> Double {
+            sin(CharacterMotion.cycle(time: motionTime, rate: personality.tempo * frequency,
+                period: 2 * .pi, offset: phase))
+        }
+        let breath = oscillation(0.82)
+        let drift = oscillation(0.31)
         let audio = presentation.activity == .speaking
             ? min(1, max(0, performance?.energy ?? (level.isFinite ? (level - 0.008) * 5 : 0))) : 0
         let elapsed = performanceElapsed ?? presentation.elapsed
@@ -349,7 +356,7 @@ enum CharacterFigureMotion {
             // An occasional finite acknowledgement, with a long still hold.
             let variant = Double(performance?.attentionVariant ?? 0)
             let period = performance == nil ? 8.8 : 11.2 + variant * 1.8
-            let cycle = (t + phase).truncatingRemainder(dividingBy: period)
+            let cycle = CharacterMotion.cycle(time: motionTime, rate: personality.tempo, period: period, offset: phase)
             let acknowledgement = pulse(cycle, start: performance == nil ? 7.2 : 3.0 + variant * 1.4,
                 rise: 0.30, hold: 0.12, fall: 0.90)
             let lean = performance == nil ? 1.05 : [-0.85, 0.65, 1.15][min(2, max(0, performance!.attentionVariant))]
@@ -405,7 +412,7 @@ enum CharacterFigureMotion {
             let enter = pulse(min(validElapsed, 0.42), start: 0, rise: 0.42, hold: 1, fall: 1)
             let posture = enter * (0.36 + gesture * 0.64) * personality.energy
             let accent = gesture * audio * personality.energy
-            head += recipe.0 * posture + audio * sin(t * 2.4 + phase) * 0.55
+            head += recipe.0 * posture + audio * oscillation(2.4) * 0.55
             nod += recipe.1 * posture + audio * 0.0016
             torso += recipe.2 * posture
             lift += recipe.3 * accent
