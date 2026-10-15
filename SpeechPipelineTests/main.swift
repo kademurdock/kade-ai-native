@@ -898,6 +898,52 @@ do {
     check("mid-piece change retains opening carry", middle.first?.hasPrefix("%%%warm%%%") == true)
     check("mid-piece change replaces earlier carry", next.first?.hasPrefix("%%%wry%%%") == true, "got \(next)")
 }
+// A node.play() command alone must never switch the Actions rotor to Pause.
+do {
+    var start = StreamPlaybackStart(now: 10)
+    check("unadvanced node clock is not playback", start.observe(now: 10.1, renderedSeconds: 0, completedBuffers: 0, current: true) == .wait)
+    check("missing clock waits within the bound", start.observe(now: 10.4, renderedSeconds: nil, completedBuffers: 0, current: true) == .wait)
+    check("a stalled start gets exactly one recovery", start.observe(now: 10.5, renderedSeconds: nil, completedBuffers: 0, current: true) == .recover)
+    check("recovery keeps a bounded grace", start.observe(now: 10.8, renderedSeconds: 0, completedBuffers: 0, current: true) == .wait)
+    check("second stall fails instead of claiming playback", start.observe(now: 11, renderedSeconds: 0, completedBuffers: 0, current: true) == .failed)
+    check("repeated polls never grant another recovery", start.observe(now: 12, renderedSeconds: nil, completedBuffers: 0, current: true) == .failed)
+}
+for value in [Double.nan, Double.infinity, -0.1, 0] {
+    var start = StreamPlaybackStart(now: 0)
+    check("invalid or unadvanced render clock cannot announce playback", start.observe(now: 0.1, renderedSeconds: value, completedBuffers: 0, current: true) == .wait)
+}
+do {
+    var start = StreamPlaybackStart(now: 0)
+    check("first rendered frames announce playback", start.observe(now: 0.025, renderedSeconds: 0.001, completedBuffers: 0, current: true) == .started)
+    check("a short completed buffer also proves start", start.observe(now: 0.025, renderedSeconds: nil, completedBuffers: 1, current: true) == .started)
+    check("cancel beats even a positive renderer clock", start.observe(now: 0.025, renderedSeconds: 1, completedBuffers: 1, current: false) == .cancelled)
+}
+do {
+    var body = StreamAudioReplay(limit: 6)
+    body.append(Data([1, 2, 3]))
+    check("an unfinished response is not reusable audio", body.completeAudio == nil)
+    body.append(Data([4, 5, 6]))
+    body.finish(success: true)
+    check("one complete response retains exactly its original bytes", body.completeAudio == Data([1, 2, 3, 4, 5, 6]))
+    var failed = StreamAudioReplay(limit: 6)
+    failed.append(Data([1, 2])); failed.finish(success: false)
+    check("transport failure cannot replay partial audio", failed.completeAudio == nil)
+    var oversized = StreamAudioReplay(limit: 6)
+    oversized.append(Data([1, 2, 3, 4])); oversized.append(Data([5, 6, 7])); oversized.finish(success: true)
+    check("replay memory stays bounded and rejects overflow", oversized.completeAudio == nil)
+    var empty = StreamAudioReplay(); empty.finish(success: true)
+    check("empty successful response is not audio", empty.completeAudio == nil)
+}
+do {
+    let pcm = pcmBytes([0, 100, -100, Int16.max, Int16.min])
+    let streaming = makeWavHeader(dataLen: 0xffffffff) + pcm
+    let expected = makeWavHeader(dataLen: UInt32(pcm.count)) + pcm
+    check("completed replay replaces streaming lengths without changing PCM", StreamingWavParser.completedWAV(streaming) == expected)
+    check("already buffered Fish WAV remains byte-identical", StreamingWavParser.completedWAV(expected) == expected)
+    check("header-only response is not a replayable voice", StreamingWavParser.completedWAV(makeWavHeader(dataLen: 0xffffffff)) == nil)
+    check("torn last sample cannot be replayed as complete", StreamingWavParser.completedWAV(streaming + Data([1])) == nil)
+    check("unrecognized data cannot be replayed as WAV", StreamingWavParser.completedWAV(Data([1, 2, 3])) == nil)
+}
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")

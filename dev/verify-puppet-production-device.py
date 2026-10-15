@@ -20,7 +20,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/puppet-idle-device-20261014"
+BRANCH = "codex/voice-playback-device-20261015"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 VERSION = "2.2.14"
 OPERATION_SECONDS = 1800
@@ -245,6 +245,10 @@ def verify(expected, receipt):
                       "angelVectorSha256": angel["sourceSHA256"]}
     receipt["models"] = model_count(runner.text("character-routing-models", ["bash", "run-character-tests.sh"],
                                                 seconds=180, cap=2 * 1024 * 1024))
+    speech = runner.text("speech-playback-policies", ["bash", "run-speech-tests.sh"], seconds=90)
+    speech_counts = re.findall(r"Speech pipeline — (\d+) checks", speech)
+    require(len(speech_counts) == 1 and "all green" in speech, "Speech playback policies must complete")
+    receipt["speechPlaybackPolicies"] = {"passed": True, "checks": int(speech_counts[0])}
     voice_checks = runner.text("narration-voice-retention", ["bash", "run-narration-voice-tests.sh"], seconds=120)
     require("Narration voice retention: 7 checks passed" in voice_checks
             and "Voice catalog replacement and recovery: 12 checks passed" in voice_checks,

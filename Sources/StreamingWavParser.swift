@@ -23,6 +23,20 @@ struct StreamingWavFormat: Equatable {
 }
 
 enum StreamingWavParser {
+    /// AVAudioPlayer needs real sizes when replaying a completed streaming WAV.
+    /// Change the two length fields only; retain every original PCM sample.
+    static func completedWAV(_ data: Data) -> Data? {
+        guard let parsed = parseHeader(data), parsed.format.bitsPerSample == 16,
+              parsed.format.numChannels == 1, data.count > parsed.pcmStart,
+              (data.count - parsed.pcmStart) % 2 == 0,
+              data.count - 8 <= Int(UInt32.max) else { return nil }
+        var out = data
+        for (offset, value) in [(4, UInt32(data.count - 8)), (parsed.pcmStart - 4, UInt32(data.count - parsed.pcmStart))] {
+            for byte in 0..<4 { out[out.startIndex + offset + byte] = UInt8(truncatingIfNeeded: value >> (byte * 8)) }
+        }
+        return out
+    }
+
     static func pcmDuration(_ data: Data) -> Double? {
         guard let parsed = parseHeader(data), parsed.format.bitsPerSample == 16 else { return nil }
         return Double(data.count - parsed.pcmStart) / (parsed.format.sampleRate * Double(parsed.format.numChannels) * 2)
