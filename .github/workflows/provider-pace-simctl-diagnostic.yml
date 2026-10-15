@@ -16,7 +16,7 @@ jobs:
       github.repository == 'kademurdock/kade-ai-native' &&
       github.ref == 'refs/heads/codex/provider-pace-simctl-diagnostic-20261015' &&
       toJSON(github.event.deleted) == 'false'
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 10
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 3
+          fetch-depth: 4
           persist-credentials: false
       - name: Measure pre-app simulator appearance and resource timing only
         timeout-minutes: 9
