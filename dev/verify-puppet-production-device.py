@@ -20,7 +20,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "kademurdock/kade-ai-native"
-BRANCH = "codex/voice-playback-device-20261015"
+BRANCH = "codex/provider-pace-device-20261015"
 XCODE = "/Applications/Xcode_26.4.1.app/Contents/Developer"
 VERSION = "2.2.14"
 OPERATION_SECONDS = 1800
