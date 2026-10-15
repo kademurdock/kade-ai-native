@@ -20,6 +20,12 @@ enum VoicePacePolicy {
         if let provider = providers[voice] { return provider == "fish" }
         return !voice.hasSuffix("(Classic)")
     }
+    static func legacyFishPace(_ rate: Double?) -> String {
+        guard let rate, rate.isFinite, abs(rate - 1) > 0.001 else { return "character" }
+        return fishOptions.filter { $0.rate != nil }.min {
+            abs(($0.rate ?? 1) - rate) < abs(($1.rate ?? 1) - rate)
+        }?.value ?? "character"
+    }
     static func fishName(_ pace: String) -> String {
         fishOptions.first { $0.value == pace }?.label ?? "Character setting"
     }

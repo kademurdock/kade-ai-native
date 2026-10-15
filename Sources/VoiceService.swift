@@ -189,10 +189,19 @@ final class VoiceService: NSObject, ObservableObject {
     @Published var playbackRate: Float = VoiceService.loadPlaybackRate() {
         didSet { UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey) }
     }
-    @Published var fishPace: String = UserDefaults.standard.string(forKey: "kade.voiceMessage.fishPace") ?? "character" {
+    @Published var fishPace: String = VoiceService.loadFishPace() {
         didSet { UserDefaults.standard.set(fishPace, forKey: "kade.voiceMessage.fishPace") }
     }
     private static let playbackRateKey = "kade.voiceMessage.playbackRate"
+    private static func loadFishPace() -> String {
+        if let kept = UserDefaults.standard.string(forKey: "kade.voiceMessage.fishPace"),
+           VoicePacePolicy.fishOptions.contains(where: { $0.value == kept }) { return kept }
+        let stored = UserDefaults.standard.object(forKey: playbackRateKey) as? NSNumber
+        let pace = VoicePacePolicy.legacyFishPace(stored?.doubleValue)
+        UserDefaults.standard.set(pace, forKey: "kade.voiceMessage.fishPace")
+        return pace
+    }
+
 
     private func synthesisSpeed(voice: String?, base: Double?, preference: Float, pace: String) async -> Double {
         let catalog = await VoiceCatalog.shared.snapshot()

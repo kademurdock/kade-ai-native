@@ -964,6 +964,13 @@ check("Classic fallback is safe while metadata is unavailable", !VoicePacePolicy
 checkEqual("Fish pace labels make no numerical speed promise", VoicePacePolicy.fishName("brisk"), "Brisk")
 checkEqual("Unknown Fish label is a safe character default", VoicePacePolicy.fishName("unknown"), "Character setting")
 
+checkEqual("No old speed keeps the character default", VoicePacePolicy.legacyFishPace(nil), "character")
+checkEqual("Old normal speed keeps the character default", VoicePacePolicy.legacyFishPace(1), "character")
+checkEqual("Saved 1.2 becomes Brisk rather than silently resetting", VoicePacePolicy.legacyFishPace(1.2), "brisk")
+checkEqual("Saved slow speed becomes Unhurried", VoicePacePolicy.legacyFishPace(0.75), "unhurried")
+checkEqual("Saved 2x becomes Quick without residual stretching", VoicePacePolicy.legacyFishPace(2), "quick")
+checkEqual("Invalid stored speed has a safe default", VoicePacePolicy.legacyFishPace(.nan), "character")
+
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")
