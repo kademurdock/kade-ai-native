@@ -93,21 +93,14 @@ def main():
     assert version.splitlines()[0] == 'Xcode 26.4.1'
     RECEIPT['xcodeVersion'] = version
     RECEIPT['memory'] = command(['sysctl', '-n', 'hw.memsize'], 10)
-    types = json.loads(command(['xcrun', 'simctl', 'list', 'devicetypes', '--json'], 45))['devicetypes']
+    # Pin the exact failed host's registered type/runtime. create fails if absent;
+    # no broad inventory output, downloads, substitute runtime, or app install.
     kind = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
-    assert any(d['identifier'] == kind for d in types)
-    runtimes = json.loads(command(['xcrun', 'simctl', 'list', 'runtimes', '--json'], 45))['runtimes']
-    matches = [r for r in runtimes if r.get('isAvailable') and '.iOS-' in r['identifier']
-               and re.fullmatch(r'26\.4(?:\.[0-9]+)?', str(r.get('version', '')))]
-    assert matches, 'Existing iOS26.4 runtime required; never download another'
-    runtime = matches[-1]['identifier']
-    devices = json.loads(command(['xcrun', 'simctl', 'list', 'devices', '--json'], 45))['devices']
-    existing = {d['udid'] for rows in devices.values() for d in rows}
+    runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4'
     identifier = None
     try:
         created = command(['xcrun', 'simctl', 'create', 'Kade pre-app diagnostic large', kind, runtime], 30)
         assert re.fullmatch(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}', created)
-        assert created not in existing
         identifier = created
         RECEIPT.update(ownedSimulator=identifier, runtime=runtime)
         command(['xcrun', 'simctl', 'boot', identifier], 45)
