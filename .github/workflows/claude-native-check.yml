@@ -1,0 +1,79 @@
+name: Native compile, model tests and puppet gallery
+
+# Fast feedback for work-in-progress branches (claude/native-*). Never signs,
+# archives, uploads or touches the release proof branches.
+'on':
+  push:
+    branches: ['claude/native-**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-native-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.repository == 'kademurdock/kade-ai-native' && github.event.repository.private == false
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # official v4
+        with:
+          persist-credentials: false
+
+      - name: Character, speech and puppet model tests
+        id: models
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          bash run-character-tests.sh 2>&1 | tail -n 80
+          bash run-speech-tests.sh 2>&1 | tail -n 40
+          if [ -f run-puppet-tests.sh ]; then bash run-puppet-tests.sh 2>&1 | tail -n 120; fi
+
+      - name: Generate the simulator project
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python3 dev/prepare-della-articulated-review.py --prepare
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+
+      - name: Compile the app for the simulator, unsigned
+        id: compile
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          xcodebuild -jobs 3 -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/check CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= build > build.log 2>&1
+          status=$?
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -n 200 || true
+          exit $status
+
+      - name: Puppet gallery screenshots
+        id: gallery
+        if: ${{ steps.compile.outcome == 'success' && hashFiles('dev/puppet-gallery.sh') != '' }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: bash dev/puppet-gallery.sh build/check
+
+      - name: Keep the gallery for review
+        if: ${{ always() && hashFiles('build/gallery/*.png') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: puppet-gallery
+          path: build/gallery/*.png
+          retention-days: 5
+
+      - name: Fail when the model tests failed
+        if: ${{ steps.models.outcome == 'failure' }}
+        run: exit 1
