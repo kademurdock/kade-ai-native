@@ -149,7 +149,7 @@ def fixture(person, pose):
                       nearArmAngle=.40 if peak else 0, farArmAngle=.40 if peak else 0)
     height = 208 if person == "angel" else 208 * 620 / 414
     time = 1000 + PEOPLE.index(person) * 100 + (-.05 if pose == "neutral" else .65 if peak else 14.25)
-    fps = 8 if pose == "neutral" else 24
+    fps = 12 if pose == "neutral" else 24
     return {
         "schema": "kade.puppet-completion-ready.v1", "source": SOURCE,
         "phase": person + "-" + pose, "character": person, "avatarPath": "/images/" + audit.IDS[person][1],
@@ -1252,6 +1252,23 @@ class ProtocolChecks(unittest.TestCase):
         for person in (*REST, "lilly-private"):
             for field in ("headDegrees", "bodyDegrees", "headLift", "bodyLift"):
                 self.mutate(person, "gesturePeak", ("render", "values", field), .05 if "Lift" in field else 4)
+
+    def test_resting_life_rate_and_reviewed_crop_limits(self):
+        # Oct 16 2026: the resting stage runs at 12 fps, never the old 8, and
+        # the wider crop-checked turns are accepted while larger ones are not.
+        for person in PEOPLE:
+            self.mutate(person, "neutral", ("render", "framesPerSecond"), 8)
+            self.mutate(person, "neutral", ("samples", "maximumFPS"), 8)
+        for person, degrees, allowed in (("kiana", 1.05, True), ("kiana", 1.2, False),
+                                         ("witherspoon", -1.25, True), ("witherspoon", 1.4, False),
+                                         ("witherspoon", .3, True), ("witherspoon", .5, False),
+                                         ("harley", 1.9, True), ("harley", 2.1, False)):
+            data = fixture(person, "gesturePeak")
+            data["render"]["values"].update(headDegrees=degrees, headAngle=degrees)
+            if allowed:
+                self.accepted(data)
+            else:
+                self.rejected(data)
 
     def test_rest_and_settled_mean_all_arm_controls_settle(self):
         for person in (*REST, "lilly-private"):

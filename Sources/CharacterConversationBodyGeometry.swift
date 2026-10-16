@@ -34,6 +34,10 @@ struct CharacterConversationBodyPose: Equatable {
     let bodyLift: Double
     let headDegrees: Double
     let headLift: Double
+    /// Oct 16 2026: the breath's shoulder rise, a fraction of the square
+    /// width (0...breathLift). The body rises from the stage's lower edge and
+    /// carries the head; it is not part of the recorded joint evidence.
+    var breathLift: Double = 0
 
     /// Fixed order is shared with native evidence. Points precede angles and
     /// describe actual articulated joints, before the common torso transform.
@@ -56,6 +60,9 @@ struct CharacterConversationBodyPose: Equatable {
 }
 
 enum CharacterConversationBodyGeometry {
+    /// A full breath raises the shoulders about 0.7 pt on the 208 pt stage.
+    static let breathLift = 0.0034
+
     struct Registration {
         let leftShoulder: CharacterConversationPoint
         let rightShoulder: CharacterConversationPoint
@@ -120,6 +127,24 @@ enum CharacterConversationBodyGeometry {
         func bound(_ value: Double, _ limit: Double) -> Double {
             value.isFinite ? min(limit, max(-limit, value)) : 0
         }
+        /// Listening and thinking hands, from that activity's own clock.
+        func attention(_ activity: CharacterActivity, _ t: Double)
+            -> (left: (Double, Double, Double), right: (Double, Double, Double), open: Double) {
+            switch activity {
+            case .listening:
+                let variant = Double((performance?.attentionVariant ?? 0) % 3)
+                let acknowledgement = CharacterFigureMotion.pulse((t + variant * 2.4)
+                    .truncatingRemainder(dividingBy: 18), start: 13, rise: 0.9, hold: 0.5, fall: 1.5)
+                return ((-0.5 * acknowledgement, -3 * acknowledgement, -2 * acknowledgement),
+                        (0.8 * acknowledgement, 4 * acknowledgement, 2 * acknowledgement), 0.08 * acknowledgement)
+            case .thinking:
+                let enter = CharacterFigureMotion.pulse(min(max(0, t), 1.2),
+                    start: 0, rise: 1.2, hold: 120, fall: 1)
+                return ((0, -4 * enter, -2 * enter), (0.6 * enter, 8 * enter, 3 * enter), 0.03 * enter)
+            case .idle, .speaking:
+                return ((0, 0, 0), (0, 0, 0), 0)
+            }
+        }
         var left = (0.0, 0.0, 0.0), right = (0.0, 0.0, 0.0)
         var openness = 0.12
         let valid = active && elapsed.isFinite && elapsed >= 0
@@ -181,20 +206,22 @@ enum CharacterConversationBodyGeometry {
                 right = (-shoulder * amount * following, -elbow * amount * following,
                          -wrist * amount * following)
                 openness += open * amount
-            case .listening:
-                let attention = Double((performance?.attentionVariant ?? 0) % 3)
-                let acknowledgement = CharacterFigureMotion.pulse((t + attention * 2.4)
-                    .truncatingRemainder(dividingBy: 18), start: 13, rise: 0.9, hold: 0.5, fall: 1.5)
-                left = (-0.5 * acknowledgement, -3 * acknowledgement, -2 * acknowledgement)
-                right = (0.8 * acknowledgement, 4 * acknowledgement, 2 * acknowledgement)
-                openness += 0.08 * acknowledgement
-            case .thinking:
-                let enter = CharacterFigureMotion.pulse(min(max(0, t), 1.2),
-                    start: 0, rise: 1.2, hold: 120, fall: 1)
-                left = (0, -4 * enter, -2 * enter)
-                right = (0.6 * enter, 8 * enter, 3 * enter)
-                openness += 0.03 * enter
+            case .listening, .thinking:
+                let held = attention(presentation.activity, t)
+                left = held.left; right = held.right; openness += held.open
             case .idle: break
+            }
+            // An activity that just ended lowers its hands across the blend
+            // instead of dropping them in one frame.
+            let blend = performance.map { $0.activityBlend.isFinite ? min(1, max(0, $0.activityBlend)) : 1 } ?? 1
+            if let performance, blend < 1, performance.previousActivity != presentation.activity {
+                let ended = attention(performance.previousActivity, performance.previousActivityElapsed.isFinite
+                    && performance.previousActivityElapsed >= 0
+                    ? performance.previousActivityElapsed.truncatingRemainder(dividingBy: 120) : 0)
+                let release = 1 - blend
+                left = (left.0 + ended.left.0 * release, left.1 + ended.left.1 * release, left.2 + ended.left.2 * release)
+                right = (right.0 + ended.right.0 * release, right.1 + ended.right.1 * release, right.2 + ended.right.2 * release)
+                openness += ended.open * release
             }
         }
         let l = arm(shoulder: r.leftShoulder, elbow: r.leftElbow, wrist: r.leftWrist,
@@ -207,8 +234,9 @@ enum CharacterConversationBodyGeometry {
         return CharacterConversationBodyPose(viewerLeft: l, viewerRight: rr,
             bodyDegrees: valid ? bound(figurePose.torsoAngle / 3 * r.bodyLimit, r.bodyLimit) : 0,
             bodyLift: valid ? bound(figurePose.torsoLift * 0.30, 0.0024) : 0,
-            headDegrees: valid ? bound(figurePose.headAngle / 7 * limits.headDegrees, limits.headDegrees) : 0,
+            headDegrees: valid ? bound(limits.turnDegrees(figure: figurePose.headAngle), limits.headDegrees) : 0,
             headLift: valid ? bound(figurePose.headNod / 0.018 * limits.headOffsetPixels
-                / artwork.existingBust.cropSide, limits.headOffsetPixels / artwork.existingBust.cropSide) : 0)
+                / artwork.existingBust.cropSide, limits.headOffsetPixels / artwork.existingBust.cropSide) : 0,
+            breathLift: valid && figurePose.breath.isFinite ? min(1, max(0, figurePose.breath)) * breathLift : 0)
     }
 }

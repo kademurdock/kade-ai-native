@@ -42,7 +42,8 @@ def main():
             assert paint == "none" or paint.startswith("#") or paint in art["gradients"]
     outside = set()
     hull = [1024.0, 1024.0, 0.0, 0.0]
-    cases = itertools.product([-0.4, 0, 0.4], [-1.8, 0, 1.8], [-1.8, 0, 1.8], [-1.5, 0, 1.5])
+    # Body offsets: a 1.5 lift plus a full 3.5-unit breath (Oct 16 2026), or a 1.5 drop.
+    cases = itertools.product([-0.4, 0, 0.4], [-1.8, 0, 1.8], [-1.8, 0, 1.8], [-5, 0, 1.5])
     for body_angle, head_angle, wing_angle, offset in cases:
         for shape in art["shapes"]:
             margin = shape.get("strokeWidth", 0) / 2

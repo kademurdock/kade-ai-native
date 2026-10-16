@@ -150,7 +150,8 @@ def validate_ready(data, phase, source):
             and host.number(render['time']) and abs(render['time']-expected_time)<1e-6
             and abs(geometry['portrait'][2]-248)<1 and abs(geometry['portrait'][3]-(height+40))<1,
             'Native renderer and measured portrait dimensions disagree')
-    expected_fps=8 if pose=='neutral' else 24
+    # Oct 16 2026: the resting stage samples its breathing and drift at 12 fps.
+    expected_fps=12 if pose=='neutral' else 24
     require(render['framesPerSecond']==expected_fps and type(render['framesPerSecond']) in (int,float)
             and type(render['face']) is int and render['face']==(0 if pose=='neutral' else 1)
             and integer(render['viseme'],0,8) and ((render['viseme']>0) if pose=='gesturePeak' else render['viseme']==0),
@@ -170,9 +171,12 @@ def validate_ready(data, phase, source):
     if person in REGISTRATION or person=='lilly-private':
         validate_joints(values,person)
         kind='lilly' if person=='lilly-private' else person
-        head_limit,body_limit,crop,head_offset={'harley':(2,.75,540,3),'kiana':(.6,.55,620,.6),
-                                  'lilly':(1.95,.65,700,1.7),'witherspoon':(1,.42,620,.6)}[kind]
+        # Oct 16 2026: Kiana's crop allows 1.1 degrees and 0.9 px of nod;
+        # Witherspoon turns up to 1.3 degrees the crown-safe way (0.35 clockwise).
+        head_limit,body_limit,crop,head_offset={'harley':(2,.75,540,3),'kiana':(1.1,.55,620,.9),
+                                  'lilly':(1.95,.65,700,1.7),'witherspoon':(1.3,.42,620,.6)}[kind]
         require(abs(values['headDegrees'])<=head_limit and abs(values['bodyDegrees'])<=body_limit
+                and (kind!='witherspoon' or values['headDegrees']<=.35+1e-9)
                 and abs(values['bodyLift'])<=.0024 and abs(values['headLift']*crop)<=head_offset
                 and abs(values['headAngle']-values['headDegrees'])<1e-6
                 and abs(values['bodyAngle']-values['bodyDegrees'])<1e-6

@@ -48,6 +48,9 @@ struct CharacterPortraitView: View {
     @State private var onScreen = true
     @State private var bodyClock = CharacterBodyPerformanceClock()
     @State private var angelFaceClock = AngelVectorFaceClock()
+    /// Blinks and expression cross-fades; its queued blinks also raise the
+    /// frame schedule briefly (CharacterAnimationSchedule).
+    @State private var faceClock = CharacterFaceClock()
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
@@ -91,8 +94,8 @@ struct CharacterPortraitView: View {
             let budget = CharacterAnimationBudget(active: active,
                 activity: samplingActivity, thermal: $motionAllowed)
             let viewportBounds = viewport ?? UIScreen.main.bounds
-            TimelineView(.animation(minimumInterval: budget.minimumInterval,
-                paused: budget.paused || completionCaptureFrozen)) { timeline in
+            TimelineView(CharacterAnimationSchedule(budget: budget,
+                paused: budget.paused || completionCaptureFrozen, faces: faceClock)) { timeline in
                 let offeredPerformance = resolvedPresentation()
                 let ownsOutput = offeredPerformance.outputPhase == .unspecified
                     || offeredPerformance.outputPhase == .stopped
@@ -114,9 +117,11 @@ struct CharacterPortraitView: View {
                     time: time, level: outputLevel, active: active,
                     presentation: performance, performanceElapsed: performanceElapsed,
                     performance: bodyPerformance)
+                let facial = prepared ? faceClock.sample(identity: (agentID ?? "unknown") + "|" + (path ?? ""),
+                    time: time, face: face, glance: bodyPose.glance, active: active) : .still
                 let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
                     time: time, level: outputLevel, active: active, presentation: performance,
-                    performance: bodyPerformance))
+                    performance: bodyPerformance, facial: facial))
                 let angelFacial = angelArtwork.map { _ in
                     angelFaceClock.pose(face: face, blink: pose.blink,
                         time: time, active: active, activity: performance.activity)
@@ -201,9 +206,9 @@ struct CharacterPortraitView: View {
                 return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
             }) { onScreen = $0 }
             .onAppear { visible = true }
-            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset() }
+            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset() }
             .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
-                bodyClock.reset(); angelFaceClock.reset()
+                bodyClock.reset(); angelFaceClock.reset(); faceClock.reset()
             }
             .task { await agents.loadIfNeeded() }
         }
@@ -337,7 +342,8 @@ struct CharacterPortraitView: View {
         if active, blinkAuditAmount != nil || angelMouthAudit != nil {
             return CharacterPose(mouth: angelMouthAudit == nil ? pose.mouth : 1,
                 blink: blinkAuditAmount ?? pose.blink, tilt: pose.tilt,
-                lift: pose.lift, brow: pose.brow, viseme: angelMouthAudit ?? pose.viseme, scale: pose.scale)
+                lift: pose.lift, brow: pose.brow, viseme: angelMouthAudit ?? pose.viseme, scale: pose.scale,
+                priorFace: pose.priorFace, faceBlend: pose.faceBlend)
         }
         #endif
         return pose
@@ -470,16 +476,19 @@ struct CharacterPortraitView: View {
                         y: (artwork.bodyY - artwork.cropY) * unit)
                 .frame(width: side, height: side, alignment: .topLeading)
                 .mask(alignment: .topLeading) {
+                    // The plate continues past the crop's sides and lower edge:
+                    // a lift, sway or breath shows more of it instead of
+                    // opening the mask's own edge inside the stage.
                     Rectangle().fill(.white)
-                        .frame(width: side, height: side - bodyVisibleStart(artwork, unit: unit))
-                        .offset(y: bodyVisibleStart(artwork, unit: unit))
+                        .frame(width: side * 1.5, height: side * 1.25 - bodyVisibleStart(artwork, unit: unit))
+                        .offset(x: -side * 0.25, y: bodyVisibleStart(artwork, unit: unit))
                 }
                 .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
-                .offset(y: motion.bodyOffsetY * unit)
+                .offset(y: (motion.bodyOffsetY + (artwork.breathMovesBody ? motion.breathOffsetY : 0)) * unit)
             if let sheet {
                 ForEach(artwork.accessoryOutlines, id: \.self) { outline in
-                    // Companions keep their exact original RGB and stay still;
-                    // speaking, blink and head transforms never reach them.
+                    // Companions keep their exact original RGB; speaking, blink
+                    // and head transforms never reach them, only the breath.
                     panel(sheet.faces, CharacterFace.neutral.rawValue)
                         .frame(width: side, height: side)
                         .scaleEffect(artwork.panelSide / artwork.cropSide, anchor: .topLeading)
@@ -487,12 +496,13 @@ struct CharacterPortraitView: View {
                                 y: (artwork.panelY - artwork.cropY) * unit)
                         .frame(width: side, height: side, alignment: .topLeading)
                         .clipShape(CharacterBustCut(artwork: artwork, outline: outline))
+                        .offset(y: motion.breathOffsetY * unit)
                 }
             }
             maskedBustHead(artwork, pose: pose, face: face, unit: unit)
                 .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
                 .rotationEffect(.degrees(motion.headAngle), anchor: neck)
-                .offset(y: motion.headOffsetY * unit)
+                .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -527,6 +537,8 @@ struct CharacterPortraitView: View {
                                 y: (bust.panelY - bust.cropY) * unit)
                         .frame(width: side, height: side, alignment: .topLeading)
                         .clipShape(CharacterBustCut(artwork: bust, outline: outline))
+                        // The cats sit at her shoulders and rise with her breath.
+                        .offset(y: -max(0, min(1, body.breath)) * CharacterConversationBodyGeometry.breathLift * side)
                 }
             }
         }
@@ -561,13 +573,15 @@ struct CharacterPortraitView: View {
             }
             .frame(width: side, height: height, alignment: .topLeading)
             .rotationEffect(.degrees(motion.bodyAngle), anchor: waist)
-            .offset(y: motion.bodyOffsetY * unit)
+            // Her cut layers run 56 px below the stage, so a breath never
+            // opens their lower edge; the head rides with the same lift.
+            .offset(y: (motion.bodyOffsetY + motion.breathOffsetY) * unit)
             // The original atlas and generated alpha-only mask remain at their
             // accepted destinations. Tall framing never stretches the head.
             maskedBustHead(artwork, pose: pose, face: face, unit: unit)
                 .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
                 .rotationEffect(.degrees(motion.headAngle), anchor: neck)
-                .offset(y: motion.headOffsetY * unit)
+                .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
         }
         .frame(width: side, height: height, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -638,27 +652,43 @@ struct CharacterPortraitView: View {
     private func faceDetails(_ pose: CharacterPose, face: CharacterFace, sheet: Sheet) -> some View {
         let basicOnly = agentID == CharacterMotion.witherspoonID
         let shownFace = basicOnly ? face.basicSheetFace : face
+        // Oct 16 2026: a new expression dissolves in over 0.2 s on top of the
+        // one it replaces (CharacterFaceClock), instead of snapping.
+        let priorFace = basicOnly ? pose.priorFace.basicSheetFace : pose.priorFace
+        let fading = pose.faceBlend < 1 && priorFace != shownFace
+        let blinkOpacity = CharacterFacialPolicy.blinkOpacity(amount: pose.blink,
+            face: shownFace, agentID: agentID)
         return ZStack(alignment: .topLeading) {
-            // One authored expression owns the face. Spatial feathering keeps
-            // its edge soft without dissolving two sets of brows or lips.
+            // One authored expression owns the face once its short dissolve
+            // ends. Spatial feathering keeps each patch's edge soft.
+            if fading && priorFace != .neutral && priorFace != .closed {
+                expressionPatch(priorFace, sheet: sheet)
+                    .opacity(shownFace == .neutral ? 1 - pose.faceBlend : 1)
+            }
             if shownFace != .neutral && shownFace != .closed {
-                let index = shownFace.rawValue
-                feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8), region: sheet.face, inner: 0.72)
+                expressionPatch(shownFace, sheet: sheet)
+                    .opacity(fading ? pose.faceBlend : 1)
             }
             // A laugh keeps its own open mouth; every other face uses shapes.
             if pose.viseme > 0 && pose.viseme < 9 && shownFace != .laugh {
                 feathered(panel(sheet.mouths, pose.viseme), region: sheet.mouth, inner: 0.5)
             }
-            // Only open and closed eyes are authored. A short closed-eye hold
-            // follows the existing blink wave without inventing ghost eyelids.
-            if CharacterFacialPolicy.shouldBlink(amount: pose.blink,
-                    face: shownFace, agentID: agentID) {
+            // Only open and closed eyes are authored. The closed-eye patch
+            // fades with the eyelid, so a blink closes, holds and opens.
+            if blinkOpacity > 0 {
                 feathered(panel(sheet.faces, CharacterFace.closed.rawValue), region: sheet.eyes,
                     inner: CharacterFacialPolicy.blinkInnerRadius(agentID: agentID))
+                    .opacity(blinkOpacity)
             }
         }
         .frame(width: side, height: side)
         .transaction { $0.animation = nil; $0.disablesAnimations = true }
+    }
+
+    private func expressionPatch(_ face: CharacterFace, sheet: Sheet) -> some View {
+        let index = face.rawValue
+        return feathered(panel(index < 9 ? sheet.faces : nuanceAsset, index < 9 ? index : index - 8),
+            region: sheet.face, inner: 0.72)
     }
 
     private func figureLayer(_ image: String) -> some View {

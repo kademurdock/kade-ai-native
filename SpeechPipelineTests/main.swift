@@ -963,6 +963,12 @@ check("New personal Fish voices retain their provider", VoicePacePolicy.isFish(v
 check("Classic fallback is safe while metadata is unavailable", !VoicePacePolicy.isFish(voice: "Cedar (Classic)", providers: [:]))
 checkEqual("Fish pace labels make no numerical speed promise", VoicePacePolicy.fishName("brisk"), "Brisk")
 checkEqual("Unknown Fish label is a safe character default", VoicePacePolicy.fishName("unknown"), "Character setting")
+checkEqual("Classic speed labels keep two decimals", VoicePacePolicy.classicRates.map { VoicePacePolicy.rateLabel($0) },
+    ["0.5x", "0.75x", "1x", "1.2x", "1.25x", "1.5x"])
+check("Every classic speed button has its own label",
+    Set(VoicePacePolicy.classicRates.map { VoicePacePolicy.rateLabel($0) }).count == VoicePacePolicy.classicRates.count)
+check("Float-widened picker speeds keep their labels",
+    VoicePacePolicy.classicRates.allSatisfy { VoicePacePolicy.rateLabel(Double(Float($0))) == VoicePacePolicy.rateLabel($0) })
 
 checkEqual("No old speed keeps the character default", VoicePacePolicy.legacyFishPace(nil), "character")
 checkEqual("Old normal speed keeps the character default", VoicePacePolicy.legacyFishPace(1), "character")
