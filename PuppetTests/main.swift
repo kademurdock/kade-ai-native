@@ -232,7 +232,7 @@ check(PuppetFrameBudget.activity(CharacterPresentation(activity: .speaking, outp
 // MARK: validator (the web's scene-check.mjs rules)
 
 func decodeScene(_ json: String) -> PuppetScene? { try? JSONDecoder().decode(PuppetScene.self, from: Data(json.utf8)) }
-let minimal = #"{"schema":"kade-puppet-scene/1","size":[1000,1000],"view":[0,0,1000,1000],"gradients":{"g":{"kind":"linear","start":[0,0],"end":[0,10],"stops":[{"at":0,"color":"#000000"},{"at":1,"color":"#FFFFFF","opacity":0.5}]}},"groups":[{"id":"root","parent":null,"pivot":[500,500]},{"id":"head","parent":"root","pivot":[500,400],"r":[["head.roll",0.1]]}],"shapes":[{"id":"a","g":"root","d":[{"op":"M","v":[0,0]},{"op":"L","v":[10,0]},{"op":"L","v":[0,10]},{"op":"Z","v":[]}],"fill":"g"},{"id":"b","g":"head","d":[{"op":"M","v":[0,0]},{"op":"C","v":[1,2,3,4,5,6]}],"stroke":"#123abc","sw":2,"clip":"a"}]}"#
+let minimal = ##"{"schema":"kade-puppet-scene/1","size":[1000,1000],"view":[0,0,1000,1000],"gradients":{"g":{"kind":"linear","start":[0,0],"end":[0,10],"stops":[{"at":0,"color":"#000000"},{"at":1,"color":"#FFFFFF","opacity":0.5}]}},"groups":[{"id":"root","parent":null,"pivot":[500,500]},{"id":"head","parent":"root","pivot":[500,400],"r":[["head.roll",0.1]]}],"shapes":[{"id":"a","g":"root","d":[{"op":"M","v":[0,0]},{"op":"L","v":[10,0]},{"op":"L","v":[0,10]},{"op":"Z","v":[]}],"fill":"g"},{"id":"b","g":"head","d":[{"op":"M","v":[0,0]},{"op":"C","v":[1,2,3,4,5,6]}],"stroke":"#123abc","sw":2,"clip":"a"}]}"##
 func problems(_ json: String) -> [String] { decodeScene(json)?.problems() ?? ["did not decode"] }
 check(problems(minimal) == [], "the minimal scene passes: \(problems(minimal))")
 check(decodeScene(minimal).flatMap(PuppetPreparedScene.init(scene:)) != nil, "the minimal scene prepares")
@@ -244,36 +244,36 @@ func rejects(_ old: String, _ new: String, _ expected: String) {
         check(PuppetPreparedScene(scene: scene) == nil, "a scene with '\(expected)' never prepares")
     }
 }
-rejects(#""schema":"kade-puppet-scene/1""#, #""schema":"kade-puppet-scene/2""#, "schema")
-rejects(#""size":[1000,1000]"#, #""size":[1000]"#, "size")
-rejects(#""view":[0,0,1000,1000]"#, #""view":[0,0,1000]"#, "view")
-rejects(#""stops":[{"at":0,"color":"#000000"},"#, #""stops":["#, "gradient g stops")
-rejects(#"{"at":0,"color":"#000000"}"#, #"{"at":0,"color":"#00000"}"#, "gradient g stop")
-rejects(#"{"at":0,"color":"#000000"}"#, #"{"at":1.5,"color":"#000000"}"#, "gradient g stop")
-rejects(#""kind":"linear","start":[0,0],"#, #""kind":"linear","#, "gradient g linear")
-rejects(#""kind":"linear""#, #""kind":"conic""#, "gradient g kind")
-rejects(#""kind":"linear","start":[0,0],"end":[0,10]"#, #""kind":"radial","center":[5,5],"radius":0"#, "gradient g radial")
-rejects(#""parent":"root""#, #""parent":"nobody""#, "group head parent nobody not earlier")
-rejects(#""pivot":[500,400]"#, #""pivot":[500]"#, "group head pivot")
-rejects(#"{"id":"head","parent":"root""#, #"{"id":"root","parent":"root""#, "group root duplicate")
-rejects(#""g":"head""#, #""g":"nowhere""#, "shape b group nowhere")
-rejects(#"{"op":"L","v":[10,0]}"#, #"{"op":"L","v":[10]}"#, "shape a path")
-rejects(#"{"op":"L","v":[10,0]}"#, #"{"op":"L","v":[1400,0]}"#, "shape a path")
-rejects(#"{"op":"L","v":[10,0]}"#, #"{"op":"T","v":[10,0]}"#, "shape a path")
-rejects(#""d":[{"op":"M","v":[0,0]},{"op":"L","v":[10,0]}"#, #""d":[{"op":"L","v":[0,0]},{"op":"L","v":[10,0]}"#, "shape a path")
-rejects(#""fill":"g""#, #""fill":"missing""#, "shape a paint")
-rejects(#""stroke":"#123abc""#, #""stroke":"#123abz""#, "shape b paint")
-rejects(#""clip":"a""#, #""clip":"b""#, "shape b clip b not earlier")
-rejects(#""sw":2,"#, #""sw":2,"op":1.5,"#, "shape b opacity")
-rejects(#""fill":"g"}"#, #""fill":"g","m":[{"c":"mouth.open","d":[{"op":"M","v":[1,1]},{"op":"L","v":[2,2]}]}]}"#, "shape a morph mouth.open")
-rejects(#""fill":"g"}"#, #""fill":"g","m":[{"c":"mouth.open","d":[{"op":"M","v":[1,1]},{"op":"Q","v":[2,2,3,3]},{"op":"L","v":[4,4]},{"op":"Z","v":[]}]}]}"#, "shape a morph mouth.open")
-rejects(#"{"id":"b","g":"head""#, #"{"id":"a","g":"head""#, "shape a duplicate")
+rejects(##""schema":"kade-puppet-scene/1""##, ##""schema":"kade-puppet-scene/2""##, "schema")
+rejects(##""size":[1000,1000]"##, ##""size":[1000]"##, "size")
+rejects(##""view":[0,0,1000,1000]"##, ##""view":[0,0,1000]"##, "view")
+rejects(##""stops":[{"at":0,"color":"#000000"},"##, ##""stops":["##, "gradient g stops")
+rejects(##"{"at":0,"color":"#000000"}"##, ##"{"at":0,"color":"#00000"}"##, "gradient g stop")
+rejects(##"{"at":0,"color":"#000000"}"##, ##"{"at":1.5,"color":"#000000"}"##, "gradient g stop")
+rejects(##""kind":"linear","start":[0,0],"##, ##""kind":"linear","##, "gradient g linear")
+rejects(##""kind":"linear""##, ##""kind":"conic""##, "gradient g kind")
+rejects(##""kind":"linear","start":[0,0],"end":[0,10]"##, ##""kind":"radial","center":[5,5],"radius":0"##, "gradient g radial")
+rejects(##""parent":"root""##, ##""parent":"nobody""##, "group head parent nobody not earlier")
+rejects(##""pivot":[500,400]"##, ##""pivot":[500]"##, "group head pivot")
+rejects(##"{"id":"head","parent":"root""##, ##"{"id":"root","parent":"root""##, "group root duplicate")
+rejects(##""g":"head""##, ##""g":"nowhere""##, "shape b group nowhere")
+rejects(##"{"op":"L","v":[10,0]}"##, ##"{"op":"L","v":[10]}"##, "shape a path")
+rejects(##"{"op":"L","v":[10,0]}"##, ##"{"op":"L","v":[1400,0]}"##, "shape a path")
+rejects(##"{"op":"L","v":[10,0]}"##, ##"{"op":"T","v":[10,0]}"##, "shape a path")
+rejects(##""d":[{"op":"M","v":[0,0]},{"op":"L","v":[10,0]}"##, ##""d":[{"op":"L","v":[0,0]},{"op":"L","v":[10,0]}"##, "shape a path")
+rejects(##""fill":"g""##, ##""fill":"missing""##, "shape a paint")
+rejects(##""stroke":"#123abc""##, ##""stroke":"#123abz""##, "shape b paint")
+rejects(##""clip":"a""##, ##""clip":"b""##, "shape b clip b not earlier")
+rejects(##""sw":2,"##, ##""sw":2,"op":1.5,"##, "shape b opacity")
+rejects(##""fill":"g"}"##, ##""fill":"g","m":[{"c":"mouth.open","d":[{"op":"M","v":[1,1]},{"op":"L","v":[2,2]}]}]}"##, "shape a morph mouth.open")
+rejects(##""fill":"g"}"##, ##""fill":"g","m":[{"c":"mouth.open","d":[{"op":"M","v":[1,1]},{"op":"Q","v":[2,2,3,3]},{"op":"L","v":[4,4]},{"op":"Z","v":[]}]}]}"##, "shape a morph mouth.open")
+rejects(##"{"id":"b","g":"head""##, ##"{"id":"a","g":"head""##, "shape a duplicate")
 check(decodeScene("not a scene") == nil, "garbage never decodes")
-check(problems(#"{"size":[1,1],"view":[0,0,1,1]}"#) == ["schema"], "a scene without a schema says so")
+check(problems(##"{"size":[1,1],"view":[0,0,1,1]}"##) == ["schema"], "a scene without a schema says so")
 do {
     var many: [String] = []
-    for i in 0..<901 { many.append(#"{"id":"s\#(i)","g":"root","d":[{"op":"M","v":[0,0]},{"op":"L","v":[1,1]}]}"#) }
-    let crowded = #"{"schema":"kade-puppet-scene/1","size":[1000,1000],"view":[0,0,1000,1000],"groups":[{"id":"root","pivot":[0,0]}],"shapes":["# + many.joined(separator: ",") + "]}"
+    for i in 0..<901 { many.append(##"{"id":"s\##(i)","g":"root","d":[{"op":"M","v":[0,0]},{"op":"L","v":[1,1]}]}"##) }
+    let crowded = ##"{"schema":"kade-puppet-scene/1","size":[1000,1000],"view":[0,0,1000,1000],"groups":[{"id":"root","pivot":[0,0]}],"shapes":["## + many.joined(separator: ",") + "]}"
     check(problems(crowded) == ["too many shapes"], "more than 900 shapes is too many: \(problems(crowded).prefix(3))")
 }
 for (index, item) in sceneGolden.cases.enumerated() {
