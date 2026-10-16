@@ -1842,10 +1842,14 @@ final class ClubPA: NSObject, AVAudioPlayerDelegate {
         pumping = true
         while !queue.isEmpty {
             let (text, voice) = queue.removeFirst()
-            let key = voice + "|" + text
+            // Oct 16 2026: room chatter is talk, so it follows the "Filler words and
+            // little sounds" switch (and a switch change never replays a cached clip).
+            let fillers = VoiceFillerPolicy.field(switchOn: VoiceService.fillersSwitchOn, speaker: .character)
+            let key = voice + "|" + text + "|" + (fillers ?? "")
             var clip = cache[key]
             if clip == nil {
-                let fields: [(String, String)] = [("input", text), ("voice", voice)]
+                var fields: [(String, String)] = [("input", text), ("voice", voice)]
+                if let fillers { fields.append(("fillers", fillers)) }
                 let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
                 if let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty {
                     clip = data

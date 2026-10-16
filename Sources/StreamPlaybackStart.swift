@@ -58,21 +58,22 @@ enum VoiceFillerPolicy {
         case character
         /// A book or anything else from the Library: never fillers.
         case libraryReading
-        /// No character (a picture description, a transcript read back).
+        /// No character (a picture description, a transcript read back, the
+        /// morning brief): read aloud, so never fillers. Kade, Oct 16 2026:
+        /// "Just not for descriptions and books."
         case noCharacter
     }
 
     /// Nothing saved yet = on.
     static func isOn(stored: Bool?) -> Bool { stored ?? true }
 
-    /// The `fillers` field for one request, or nil to leave it out. Off is
-    /// always sent, so no lane falls back to the server's default; a line
-    /// with no character keeps the server's default while the switch is on.
+    /// The `fillers` field for one request. It is always sent, so no lane
+    /// falls back to the server's default (which is on for chat speech).
+    /// Only a character's voice message follows the switch.
     static func field(switchOn: Bool, speaker: Speaker) -> String? {
         switch speaker {
-        case .libraryReading: return "false"
+        case .libraryReading, .noCharacter: return "false"
         case .character: return switchOn ? "true" : "false"
-        case .noCharacter: return switchOn ? nil : "false"
         }
     }
 }

@@ -996,9 +996,9 @@ checkEqual("Library reading never gets fillers, switch on",
     VoiceFillerPolicy.field(switchOn: true, speaker: .libraryReading), "false")
 checkEqual("Library reading never gets fillers, switch off",
     VoiceFillerPolicy.field(switchOn: false, speaker: .libraryReading), "false")
-check("A line with no character keeps the server's default while the switch is on",
-    VoiceFillerPolicy.field(switchOn: true, speaker: .noCharacter) == nil)
-checkEqual("A line with no character says no when the switch is off",
+checkEqual("A line with no character (a description, a transcript) never gets fillers, switch on",
+    VoiceFillerPolicy.field(switchOn: true, speaker: .noCharacter), "false")
+checkEqual("A line with no character never gets fillers, switch off",
     VoiceFillerPolicy.field(switchOn: false, speaker: .noCharacter), "false")
 checkEqual("The long audition is the sentinel the proxy matches",
     VoiceAudition.sample(long: true), "Hi there. This is how I sound.")

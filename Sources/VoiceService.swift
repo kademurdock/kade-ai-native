@@ -255,8 +255,8 @@ final class VoiceService: NSObject, ObservableObject {
     }
     /// The `fillers` field for a spoken line: a character's voice message
     /// (an agent, or the Debate Room's cast voice) follows the switch; Library
-    /// reading never gets them; a line with no character (a description, a
-    /// transcript) is told only when the switch is off.
+    /// reading never gets them, and neither does a line with no character (a
+    /// description, a transcript read back): those are read, not chatted.
     private static func fillersField(agentId: String?, explicitVoice: String? = nil) -> String? {
         let speaker: VoiceFillerPolicy.Speaker
         if isLibraryReading(agentId) {

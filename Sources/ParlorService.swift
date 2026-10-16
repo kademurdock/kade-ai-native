@@ -295,7 +295,12 @@ final class ParlorNarrator: NSObject, ObservableObject, AVAudioPlayerDelegate {
         pumping = true
         while !queue.isEmpty {
             let text = queue.removeFirst()
-            let fields: [(String, String)] = [("input", text), ("voice", voice)]
+            // Oct 16 2026: the house voice talks to the table, so it follows the
+            // "Filler words and little sounds" switch.
+            var fields: [(String, String)] = [("input", text), ("voice", voice)]
+            if let fillers = VoiceFillerPolicy.field(switchOn: VoiceService.fillersSwitchOn, speaker: .character) {
+                fields.append(("fillers", fillers))
+            }
             let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
             guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { continue }
             guard let p = try? AVAudioPlayer(data: data) else { continue }
