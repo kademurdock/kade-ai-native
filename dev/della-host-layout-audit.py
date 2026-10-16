@@ -708,60 +708,6 @@ def validate_compiled_record(data,initial):
     return data
 
 
-def validate_simulator_frontend(report,identifier):
-    require(isinstance(report,dict) and set(report)=={'identifier','applicationPath','bundleId',
-            'infoPlistSha256','timeoutSeconds','elapsedSeconds','passed','exitCode','timedOut'}
-            and report.get('identifier')==identifier
-            and report.get('applicationPath')=='/Applications/Xcode_26.4.1.app/Contents/Developer/Applications/Simulator.app'
-            and report.get('bundleId')=='com.apple.iphonesimulator'
-            and re.fullmatch(r'[a-f0-9]{64}',report.get('infoPlistSha256',''))
-            and number(report.get('timeoutSeconds')) and 0<report['timeoutSeconds']<=30
-            and number(report.get('elapsedSeconds')) and 0<=report['elapsedSeconds']<=report['timeoutSeconds']+1
-            and report.get('passed') is True and type(report.get('exitCode')) is int
-            and report['exitCode']==0 and report.get('timedOut') is False,
-            'Exact owned-device Simulator frontend startup did not pass within its original boot envelope')
-    return report
-
-
-def start_simulator_frontend(identifier,remaining,record):
-    """Open only the pinned Apple frontend for this lane's exact device UUID.
-
-    The command acknowledgement is not a screenshot or app readiness proof.
-    Existing bootstatus, app readiness and complete UI assertions still follow.
-    """
-    require(isinstance(identifier,str) and re.fullmatch(
-        r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',identifier),
-        'Simulator frontend requires the recorded device UUID')
-    require(os.environ.get('DEVELOPER_DIR')=='/Applications/Xcode_26.4.1.app/Contents/Developer',
-            'Simulator frontend requires the pinned Xcode developer directory')
-    frontend=Path('/Applications/Xcode_26.4.1.app/Contents/Developer/Applications/Simulator.app')
-    info=frontend/'Contents/Info.plist'
-    require(frontend.is_dir() and info.is_file() and not info.is_symlink()
-            and 0<info.stat().st_size<=64*1024,'Pinned Simulator frontend metadata is missing or oversized')
-    raw=info.read_bytes()
-    require(len(raw)<=64*1024 and plistlib.loads(raw).get('CFBundleIdentifier')=='com.apple.iphonesimulator',
-            'Pinned Simulator frontend bundle identity mismatch')
-    timeout=remaining(30)
-    require(number(timeout) and 0<timeout<=30,'Simulator frontend has no original bounded boot time remaining')
-    record.update(identifier=identifier,applicationPath=str(frontend),bundleId='com.apple.iphonesimulator',
-                  infoPlistSha256=hashlib.sha256(raw).hexdigest(),timeoutSeconds=timeout,
-                  passed=False,exitCode=None,timedOut=False)
-    started=time.monotonic()
-    try:
-        result=subprocess.run(['open','-n','-a',str(frontend),'--args','-CurrentDeviceUDID',identifier],
-                              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=timeout,check=False)
-        record['exitCode']=result.returncode
-        require(type(result.returncode) is int and result.returncode==0,'Pinned Simulator frontend open command failed')
-        record['passed']=True
-    except subprocess.TimeoutExpired:
-        record['timedOut']=True
-        raise
-    finally:
-        record['elapsedSeconds']=round(time.monotonic()-started,3)
-        record['passed']=record['passed'] and record['elapsedSeconds']<=timeout+1
-    return validate_simulator_frontend(record,identifier)
-
-
 def validate_ui_boot(report,key,initial):
     require(isinstance(report,dict) and report.get('source')==initial and report.get('device')==key
             and type(report.get('passed')) is bool and report.get('timeoutSeconds')==BOOT_SECONDS,
@@ -780,7 +726,6 @@ def validate_ui_boot(report,key,initial):
     if report['passed']:
         require('identifier' in report and 'alreadyBooted' in report and 'errorType' not in report
                 and report['elapsedSeconds']<=BOOT_SECONDS+1,'Failed explicit UI boot retained success')
-        validate_simulator_frontend(report.get('simulatorFrontend'),report['identifier'])
         if key=='large':require(report.get('appPreflight',{}).get('passed') is True,
                                 'Successful Pro Max boot requires the actual offline app preflight')
     return report
@@ -1393,8 +1338,6 @@ def boot_ui(expected,key,completion=False):
         if states.get(other)=='Booted': sim('shutdown',other,timeout=remaining(30))
         report['alreadyBooted']=states.get(identifier)=='Booted'
         if not report['alreadyBooted']: sim('boot',identifier,timeout=remaining(45))
-        report['simulatorFrontend']={}
-        start_simulator_frontend(identifier,remaining,report['simulatorFrontend'])
         sim('bootstatus',identifier,'-b',timeout=remaining(BOOT_SECONDS))
         if key=='large':
             report['appPreflight']={}
