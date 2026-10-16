@@ -29,6 +29,19 @@ enum VoicePacePolicy {
     static func fishName(_ pace: String) -> String {
         fishOptions.first { $0.value == pace }?.label ?? "Character setting"
     }
+    /// Classic Inworld speeds offered in the pickers, in order.
+    static let classicRates: [Double] = [0.5, 0.75, 1.0, 1.2, 1.25, 1.5]
+    /// Compact chip form ("1x", "1.25x"): up to two decimals, trailing zeros
+    /// dropped. Oct 16 2026: %.2g printed both 1.2 and 1.25 as "1.2x", so
+    /// VoiceOver read two identical speed buttons.
+    static func rateLabel(_ rate: Double) -> String {
+        guard rate.isFinite else { return "1x" }
+        if rate == rate.rounded() { return String(format: "%.0fx", rate) }
+        var text = String(format: "%.2f", rate)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text + "x"
+    }
 }
 
 /// A play command is not evidence that the renderer has advanced. One bounded

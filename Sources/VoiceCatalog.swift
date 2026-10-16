@@ -50,7 +50,12 @@ actor VoiceCatalog {
 
     private var cached: Snapshot?
     private var inflight: Task<Snapshot, Never>?
+    private var lastFailure: Date?
     private let fetchSnapshot: @Sendable () async -> Snapshot
+
+    /// Oct 16 2026: speech only asks in the background, at most once a minute
+    /// after a failed fetch, so a dead catalog never costs every sentence.
+    static let speechRetryInterval: TimeInterval = 60
 
     init(fetchSnapshot: @escaping @Sendable () async -> Snapshot = { await VoiceCatalog.fetch() }) {
         self.fetchSnapshot = fetchSnapshot
@@ -66,17 +71,35 @@ actor VoiceCatalog {
         inflight = task
         let snap = await task.value
         inflight = nil
-        if !snap.isEmpty { cached = snap }
+        if !snap.isEmpty { cached = snap; lastFailure = nil } else { lastFailure = Date() }
         return snap
+    }
+
+    /// For speech, which must never wait on the 1.5 MB catalog: the provider
+    /// map when it is already here, else nil (and the caller falls back).
+    func cachedProviders() -> [String: String]? { cached?.providers }
+
+    /// Start loading the catalog without waiting for it (launch, and speech
+    /// that found nothing cached). A recent failure waits out the retry interval.
+    func prefetch() {
+        guard cached == nil, inflight == nil else { return }
+        if let lastFailure, Date().timeIntervalSince(lastFailure) < Self.speechRetryInterval { return }
+        Task { _ = await self.snapshot() }
     }
 
     /// A catalog replacement can leave a session's cached headings referring
     /// to entirely different voices. Refresh once before showing a flat list.
+    /// A failed refresh keeps the catalog the session already had.
     func snapshot(matching voices: [String]) async -> Snapshot {
         let snap = await snapshot()
         guard !voices.isEmpty, !snap.hasCategories(matching: voices) else { return snap }
         cached = nil
-        return await snapshot()
+        let refreshed = await snapshot()
+        if refreshed.isEmpty, !snap.isEmpty {
+            cached = snap
+            return snap
+        }
+        return refreshed
     }
 
     private static func fetch() async -> Snapshot {
@@ -91,7 +114,8 @@ actor VoiceCatalog {
             let tags: [String: String]?
             let providers: [String: String]?
         }
-        var req = URLRequest(url: catalogURL, cachePolicy: .reloadIgnoringLocalCacheData)
+        // The protocol policy honours the proxy's max-age=300 for repeat opens.
+        var req = URLRequest(url: catalogURL)
         req.timeoutInterval = 8
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
