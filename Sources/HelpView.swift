@@ -361,7 +361,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Filler words and little sounds",
-                body: "Settings, Voice and Audio, Filler words and little sounds starts on. Characters sometimes say um or I mean, take a breath, or laugh a little, like a real voice message. It only changes what you hear; the written reply never changes, and books in the Library never get them. The last choice in a conversation's Voice speed list turns it on or off too. Voice auditions in the voice picker follow it, and play at that character's speed."
+                body: "Settings, Voice and Audio, Filler words and little sounds starts on. Characters sometimes say um or uh, take a breath, or laugh a little, like a real voice message. It only changes what you hear; the written reply never changes, and books in the Library and descriptions never get them. The last choice in a conversation's Voice speed list turns it on or off too. Voice auditions in the voice picker follow it, and play at that character's speed."
             ),
             HelpEntry(
                 title: "Saving one",

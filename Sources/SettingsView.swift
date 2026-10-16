@@ -868,7 +868,7 @@ struct SettingsView: View {
         Toggle(isOn: $voiceService.fillersOn) {
             tileLabel(searchStyle ? searchLabel(.fillers, "Filler words and little sounds") : "Filler words and little sounds", systemImage: "quote.bubble", tint: SectionTint.voice)
         }
-        .accessibilityHint("Characters sometimes say um or I mean, take a breath, or laugh a little, like a real voice message. Only in what you hear; the text never changes. Never in books.")
+        .accessibilityHint("Characters sometimes say um or uh, take a breath, or laugh a little, like a real voice message. Only in what you hear; the text never changes. Never in books.")
     }
 
     private func pronunciationRow(searchStyle: Bool) -> some View {

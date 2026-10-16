@@ -44,7 +44,7 @@ enum VoicePacePolicy {
     }
 }
 
-/// Filler words and little sounds (Oct 16 2026): the "um", "I mean", a
+/// Filler words and little sounds (Oct 16 2026): the "um" or "uh", a
 /// breath or a small laugh the proxy can add to what a character SAYS. The
 /// text never changes. Settings carries the switch, on by default.
 /// The request field is `fillers`: "true" on, "false" off, left out = the
