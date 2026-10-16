@@ -340,6 +340,18 @@ struct AgentEditorView: View {
                         } header: {
                             Text("Avatar")
                         }
+                        // Oct 16 2026: the puppet body is edited and saved on its
+                        // own screen; it never rides this editor's Save.
+                        if let existingId {
+                            Section {
+                                PuppetBodyLink(apiClient: apiClient, agentId: existingId,
+                                    agentName: name.isEmpty ? "This character" : name)
+                            } header: {
+                                Text("Body")
+                            } footer: {
+                                Text("A drawn body that moves while this character talks. It saves on its own screen, and the character is told how it looks.")
+                            }
+                        }
                         Section {
                             Button {
                                 showingKnowledge = true
