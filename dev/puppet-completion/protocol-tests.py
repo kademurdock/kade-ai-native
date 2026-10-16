@@ -326,7 +326,8 @@ class ProtocolChecks(unittest.TestCase):
         global CHECKS
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
-        original_project_sha = "a74a49f90313513ba42a4d7d784113fefb94635297b99be894606293eddad892"
+        # Oct 16 2026: repinned for the Release-only exclusion of the DEBUG puppet gallery samples.
+        original_project_sha = "14cf2e6d5ce6a8c943e3b73055ae9b566fa9c10047ef23a062e068d8759ab01c"
         # Bind the exact original command expression bytes. ast.dump is a
         # Python-version-dependent representation, not the build arguments.
         original_command_sha = "bf5b25c7e5fd0070363cb4d18c44c755902d21c1a1dbccfa0dda2f8999293999"
