@@ -13,6 +13,11 @@ import Foundation
 final class PuppetStore: ObservableObject {
     @Published private(set) var renderers: [String: PuppetRenderer] = [:]
     @Published private(set) var descriptions: [String: String] = [:]
+    /// Characters the server said have no body (the Body row says so).
+    @Published private(set) var bodiless = Set<String>()
+    /// The Body editor's unsaved work per character, kept in memory when the
+    /// person goes Back without saving, so opening it again brings it back.
+    var editorDrafts: [String: PuppetEditorDraft] = [:]
 
     private let client: KadeAPIClient
     private var etags: [String: String] = [:]
@@ -90,11 +95,40 @@ final class PuppetStore: ObservableObject {
         }
     }
 
+    /// The Body editor loaded or saved this body: the reply has the same shape
+    /// GET sends, so the chat stage and still faces change at once, and the
+    /// next stage refresh is a cheap If-None-Match.
+    func adopt(_ data: Data, agentId: String, etag: String?) async {
+        guard PuppetBodyFiles.isSafeID(agentId) else { return }
+        let started = generation
+        let outcome = await Task.detached(priority: .userInitiated, operation: {
+            PuppetBodyFiles.accept(data, agentId: agentId, etag: etag)
+        }).value
+        guard started == generation else { return }
+        checkedAt[agentId] = Date()
+        diskChecked.insert(agentId)
+        switch outcome {
+        case .body(let body): install(agentId, body)
+        case .noBody: forget(agentId)
+        case .unreadable: break
+        }
+    }
+
+    /// The Body editor removed this body: back to the portrait everywhere.
+    func removed(agentId: String) {
+        guard PuppetBodyFiles.isSafeID(agentId) else { return }
+        forget(agentId)
+        checkedAt[agentId] = Date()
+        Task.detached(priority: .utility) { PuppetBodyFiles.remove(agentId: agentId) }
+    }
+
     /// Sign-out: nothing of one account's characters stays for the next.
     func reset() {
         generation += 1
         renderers = [:]
         descriptions = [:]
+        bodiless = []
+        editorDrafts = [:]
         etags = [:]
         checkedAt = [:]
         diskChecked = []
@@ -104,6 +138,7 @@ final class PuppetStore: ObservableObject {
 
     private func install(_ agentId: String, _ body: PuppetBodyFiles.Loaded) {
         renderers[agentId] = body.renderer
+        if bodiless.contains(agentId) { bodiless.remove(agentId) }
         if let text = body.description?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             descriptions[agentId] = text
         } else {
@@ -125,7 +160,16 @@ final class PuppetStore: ObservableObject {
         descriptions[agentId] = nil
         etags[agentId] = nil
         recent.removeAll { $0 == agentId }
+        bodiless.insert(agentId)
     }
+}
+
+/// Unsaved Body editor work: the recipe, the revision it started from and how
+/// it was made (editor, words, picture or surprise).
+struct PuppetEditorDraft {
+    let recipe: PuppetJSON
+    let baseRev: Int
+    let source: String
 }
 
 /// The disk half: Caches/puppets/{agentId}.json holds the last good scene with
@@ -216,6 +260,10 @@ enum PuppetBodyFiles {
             }
         }
         return .body(loaded)
+    }
+
+    static func remove(agentId: String) {
+        if let url = file(agentId) { try? FileManager.default.removeItem(at: url) }
     }
 
     static func removeAll() {
