@@ -81,11 +81,14 @@ Gemini image generation, only with Kade's yes):
 
 ## The grid
 
-One tensor grid per character over the 414-pixel neutral panel, 57 columns by
-73 rows (4,161 points, 8,064 triangles). Rows are 2 px apart across the eyes,
-3 px across the lips, 4 to 6 px around them and 12 to 14 px elsewhere; columns
-are 4 px apart across the face and 15 px outside it. Small things that move
-(lids, irises, lip lines) therefore always sit on enough points.
+One tensor grid per character over the 414-pixel neutral panel, built from
+that face's own landmarks: rows 2 px apart across the lids (tilt included),
+3 px across the lips, 4 to 8 px around them and about 13 px elsewhere;
+columns 2 px apart across each eye, 4 px across the rest of the face and
+15 px outside it. No row or column is ever closer than 1.5 px to the next.
+Della's reviewed grid is 57 by 73 (4,161 points); the others are 80 to 84
+columns by 70 to 83 rows (5,600 to 7,000 points), still far inside 16-bit
+triangle indices.
 
 ## Channels to deformers
 
@@ -130,8 +133,10 @@ expression panels, the speaking mouth panels, the painted closed eyes.
   once per character and are shared by every view; only the grid's positions
   change per frame (33 KB).
 - `LivingPaintingView.swift`: the SwiftUI view (an `MTKView` that draws only
-  when the portrait's own clock hands it a new frame), the painted-face motion
-  clock and the DEBUG comparison gallery.
+  when the portrait's own clock hands it a new frame), the cast list and the
+  painted-face motion clock.
+- `LivingPaintingGalleryView.swift`: the DEBUG comparison gallery (19 pages,
+  every character; CI shoots them through `dev/puppet-gallery.sh`).
 - `LivingPainting<Name>.json`: the rig, built by
   `python dev/living-paintings/lp_rig.py della Sources/LivingPaintingDella.json`
   (needs `pip install opencv-python-headless numpy pillow` on the developer's
@@ -157,21 +162,45 @@ arithmetic, so the web port is the same grid drawn with WebGL: one
 fragment masks, driven by `motion.mjs`. Canvas 2D textured triangles were
 considered and rejected (seams between triangles, too slow at this density).
 
-## The rest of the cast and the web: plan and cost
+## The cast (October 16, 2026)
+
+Every painted main character is a living painting: Della, Kiana, Harley,
+Lilly (Skylee's Lilly wears the same paintings) and Mrs. Witherspoon. Angel is
+drawn by code and already moves that way. Each rig comes only from that
+character's own panels, and each head is cut exactly as its sliced portrait
+was: a matte picture and face oval (Della, Harley) and the bust's own outline
+(Lilly's tall stage keeps its extended neck-and-hood cut), composed once into
+one matte that cuts every layer. Heads sit in their panel's own square of the
+stage. On the square stage the painting also turns and bends the neck; on the
+tall stage the body already turns the head as one piece, so the painting
+warps only the face there.
+
+| Character | What was special |
+| --- | --- |
+| Della | the first, reviewed grid; matte picture and face oval |
+| Kiana | her painting is rolled, so each lid and lash line has its own slope; locs sway more and stop at the collar, so her sweater stays still; her face region is wide enough that her heart earrings move with her face |
+| Harley | narrow eyes (about 10 px of lid travel) under heavy brows, so the stretched lid skin stays 6 px tall; matte picture and face oval; his laughing and delighted panels are painted with closed eyes, so they never blink |
+| Lilly | big cartoon lids: 2 px mesh columns across the eyes, a taller lash line that slides down whole, closed lash lines with their own slopes, and the painted closed eyes fading in later, so her iris never shows through them; her tired face is painted half-shut and does not blink; her cats stay still beside her |
+| Mrs. Witherspoon | nine basic faces only (no nuance sheet); her glasses' rim sits just above her lids, so the stretched lid skin is 2 px tall and the frames never bend; her crown touches the stage's top edge, so the top rows hold still and only her body's own limited turn tilts her head |
+
+How well the motion matches each painting: the measured flow removes 25 to
+40% of the difference between the neutral face and each other panel
+(registration error over the face falls to 0.60 to 0.75 of the unmoved
+difference; mouth panels least, since lips part where flow cannot follow).
+Across 200 random realistic poses per character, the mesh folds over itself
+in a few, almost all while a lid is nearly shut and under the painted closed
+eyes; the folded area averages about 1 square panel pixel (worst 6 for Della,
+15 for Lilly, under 1.2 for the others).
+
+## Next: plan and cost
 
 Nothing below needs paid art. Every step runs on the developer's computer
 and the free GitHub macOS runners; a TestFlight build waits for Kade's word.
 
 | Step | What it takes | Time | Money |
 | --- | --- | --- | --- |
-| Renderer, once | head frames placed anywhere in the stage (Kiana, Lilly, Harley and Witherspoon's panels are not their crop); head cut from an outline path drawn into a matte at load (Kiana, Lilly, Witherspoon have no matte picture) | about 1 hour | none |
-| Kiana | landmarks, rig, gallery; locs swing more (hair reach) | 1.5 to 2 hours | none |
-| Lilly (and Skylee's Lilly, same art) | landmarks, rig; the cats stay still beside her as now; hood edge held like hair | about 2 hours | none |
-| Harley | landmarks, rig; his hat brim moves with his head as one piece instead of bending like a face | 2 to 3 hours | none |
-| Mrs. Witherspoon | landmarks, rig from her nine basic faces (she has no nuance sheet); her crown is cropped by the stage, so pitch stays small | about 1.5 hours | none |
-| Angel | not a painting: she is already drawn by code and moves that way | none | none |
 | Web | a WebGL copy of the runtime and renderer driven by `motion.mjs` (with the painted-face option mirrored), tested against the same golden file; the rig files served beside the characters' web pictures | 4 to 6 hours | none |
-| Real phone check | a TestFlight build with the setting on for Kade's family, plus a frame-time readout, to measure the oldest phone in use | one build | none |
+| Real phone check | the next TestFlight build, with a frame-time readout, to measure the oldest phone in use | one build | none |
 
 Optional extra pictures, only with Kade's yes (about $0.14 each with Gemini
 image generation): a back-hair plate for Kiana and one for Lilly, so long
