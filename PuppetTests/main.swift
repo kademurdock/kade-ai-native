@@ -314,7 +314,11 @@ for (index, prepared) in preparedFixtures.enumerated() {
     talking[PuppetChannel.mouthOpen.rawValue] = 1
     talking[PuppetChannel.eyeBlink.rawValue] = 1
     let moved = render(renderer, talking, backdrop: true)
-    let changed = stride(from: 0, to: moved.count, by: 4).filter { moved[$0] != filled[$0] || moved[$0 + 1] != filled[$0 + 1] }.count
+    var changed = 0
+    for pixel in stride(from: 0, to: moved.count, by: 4) {
+        let red: UInt8 = moved[pixel], green: UInt8 = moved[pixel + 1]
+        if red != filled[pixel] || green != filled[pixel + 1] { changed += 1 }
+    }
     check(changed > 30, "fixture \(index) an open mouth and closed eyes change the picture (\(changed) pixels)")
 }
 
