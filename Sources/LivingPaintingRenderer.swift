@@ -185,7 +185,8 @@ final class LivingPaintingResources {
         guard let image = UIImage(named: asset)?.cgImage else { return nil }
         let width = image.width, height = image.height
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                bytesPerRow: width, space: nil, bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return nil }
+                bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let bytes = context.data else { return nil }
         let data = Data(bytes: bytes, count: width * height)
