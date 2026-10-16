@@ -17,6 +17,7 @@ struct KadeCharacterFace: View {
     /// Drawn characters only: which face to show. `.neutral` is the resting one.
     var face: CharacterFace = .neutral
     @EnvironmentObject private var agents: AgentsService
+    @EnvironmentObject private var puppets: PuppetStore
 
     private var avatarPath: String? {
         guard let agentID else { return nil }
@@ -29,6 +30,13 @@ struct KadeCharacterFace: View {
         guard let sheet = KadeCharacterFaceSheet.forAgent(agentID) else { return nil }
         if let path = avatarPath, !CharacterMotion.prepared(id: agentID, path: path) { return nil }
         return sheet
+    }
+
+    /// Oct 16 2026: a saved puppet body, when no hand-made face applies. Rows
+    /// only read the cache; the face stage is what asks the server.
+    private var puppet: PuppetRenderer? {
+        guard drawn == nil, !CharacterMotion.prepared(id: agentID, path: avatarPath) else { return nil }
+        return puppets.scene(for: agentID)
     }
 
     private var avatarURL: URL? {
@@ -44,6 +52,9 @@ struct KadeCharacterFace: View {
         .clipShape(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
         .accessibilityHidden(true)
         .allowsHitTesting(false)
+        .task(id: agentID) {
+            if let agentID { await puppets.loadCached(agentId: agentID) }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -54,6 +65,11 @@ struct KadeCharacterFace: View {
                 ornaments: .still)
         } else if let drawn {
             drawn.panel(face, side: size)
+        } else if let puppet {
+            // One still, neutral frame, closer in on the face than the stage.
+            PuppetCanvas(renderer: puppet,
+                channels: PuppetMotion.stillChannels(expression: "neutral", options: puppet.prepared.motion),
+                crop: puppet.prepared.faceView)
         } else if let avatarURL {
             AsyncImage(url: avatarURL) { phase in
                 if let image = phase.image {

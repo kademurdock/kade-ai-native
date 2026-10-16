@@ -24,6 +24,9 @@ struct KadeAIApp: App {
     @StateObject private var messageSendingService: MessageSendingService
     @StateObject private var agentsService: AgentsService
     @StateObject private var voiceService: VoiceService
+    // Oct 16 2026: server-made puppet bodies for characters without a hand-made
+    // rig. Shares the one client (and its pacing clock) like every service.
+    @StateObject private var puppetStore: PuppetStore
     // Phase 6: no KadeAPIClient dependency (a different host, see its own
     // doc comment), so a plain default-initialized StateObject is enough.
     @StateObject private var pushService = PushService()
@@ -56,6 +59,7 @@ struct KadeAIApp: App {
         _messageSendingService = StateObject(wrappedValue: MessageSendingService(client: client))
         _agentsService = StateObject(wrappedValue: AgentsService(client: client))
         _voiceService = StateObject(wrappedValue: VoiceService(client: client))
+        _puppetStore = StateObject(wrappedValue: PuppetStore(client: client))
     }
 
     var body: some Scene {
@@ -88,6 +92,7 @@ struct KadeAIApp: App {
                 .environmentObject(messageSendingService)
                 .environmentObject(agentsService)
                 .environmentObject(voiceService)
+                .environmentObject(puppetStore)
                 .environmentObject(pushService)
                 .environmentObject(appearance)
                 .environmentObject(FeedbackPrefs.shared)

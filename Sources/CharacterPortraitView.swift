@@ -41,6 +41,7 @@ struct CharacterPortraitView: View {
     var completionAuditSample: CharacterPuppetCompletionSample? = nil
     #endif
     @EnvironmentObject private var agents: AgentsService
+    @EnvironmentObject private var puppets: PuppetStore
     @Environment(\.scenePhase) private var scenePhase
     @KadeMotionPolicy(permitsVoiceOver: true) private var motionAllowed: Bool
     @AppStorage("kadeVoicePortraits") private var enabled = true
@@ -51,6 +52,14 @@ struct CharacterPortraitView: View {
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
+    /// Oct 16 2026: a saved puppet body draws a character with no hand-made rig.
+    /// Every hand-made rig (sheets included) needs `prepared`, so it always wins.
+    private var puppetRenderer: PuppetRenderer? { prepared ? nil : puppets.scene(for: agentID) }
+    /// The puppet reads system motion policy itself, so Reduce Motion can keep
+    /// its expression; these are the host's own visibility gates.
+    private var puppetHostActive: Bool {
+        enabled && !motionPaused && visible && onScreen && (playing || listening || stage)
+    }
     private var angelArtwork: CharacterAngelVectorArt? {
         CharacterAngelArtwork.approved(agentID: agentID, avatarPath: path)
     }
@@ -91,8 +100,9 @@ struct CharacterPortraitView: View {
             let budget = CharacterAnimationBudget(active: active,
                 activity: samplingActivity, thermal: $motionAllowed)
             let viewportBounds = viewport ?? UIScreen.main.bounds
+            // A puppet runs its own faster clock; this one then only redraws on change.
             TimelineView(.animation(minimumInterval: budget.minimumInterval,
-                paused: budget.paused || completionCaptureFrozen)) { timeline in
+                paused: budget.paused || completionCaptureFrozen || puppetRenderer != nil)) { timeline in
                 let offeredPerformance = resolvedPresentation()
                 let ownsOutput = offeredPerformance.outputPhase == .unspecified
                     || offeredPerformance.outputPhase == .stopped
@@ -170,6 +180,12 @@ struct CharacterPortraitView: View {
                     } else if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: face,
                             body: bodyPose)
+                    } else if let renderer = puppetRenderer {
+                        PuppetStageView(renderer: renderer, agentID: agentID, playing: playing,
+                            level: { resolvedLevel() }, listening: listening,
+                            presentation: { resolvedPresentation() }, hostActive: puppetHostActive)
+                            .frame(width: side, height: side)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
                     } else {
                         portrait(pose, face: face)
                             .frame(width: side, height: side)
@@ -206,6 +222,11 @@ struct CharacterPortraitView: View {
                 bodyClock.reset(); angelFaceClock.reset()
             }
             .task { await agents.loadIfNeeded() }
+            .task(id: agentID) {
+                guard let agentID else { return }
+                await agents.loadIfNeeded()
+                if !prepared { await puppets.refreshIfNeeded(agentId: agentID) }
+            }
         }
     }
     private var completionCaptureFrozen: Bool {
