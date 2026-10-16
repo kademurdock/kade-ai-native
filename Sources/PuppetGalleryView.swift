@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Oct 16 2026: DEBUG simulator gallery of the bundled sample bodies, for CI
 /// screenshots (dev/puppet-gallery.sh). Launch with -KadePuppetGallery and
-/// optionally -KadePuppetGalleryPage 0 to 5 (3 to 5 are the Body editor,
+/// optionally -KadePuppetGalleryPage 0 to 7 (3 to 7 are the Body editor,
 /// offline). Never reachable in a release build, and the sample files are
 /// excluded from Release in project.yml.
 struct PuppetGalleryView: View {
@@ -12,7 +12,7 @@ struct PuppetGalleryView: View {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-KadePuppetGalleryPage"), index + 1 < arguments.count,
               let page = Int(arguments[index + 1]) else { return 0 }
-        return min(5, max(0, page))
+        return min(7, max(0, page))
     }
 
     /// The same states as the web reference sheet (gen-samples.mjs).
@@ -125,9 +125,10 @@ struct PuppetGalleryView: View {
     }
 }
 
-/// Pages 3 to 5: the Body editor on the bundled sample catalog and body
+/// Pages 3 to 7: the Body editor on the bundled sample catalog and body
 /// (PuppetBuilderSample.json, written by the kit): the editor's top, the hair
-/// colour list, and the editor at an accessibility text size.
+/// colour list, the editor at an accessibility text size, then scrolled to
+/// the quick looks and to the eye controls.
 private struct PuppetBuilderGallery: View {
     let page: Int
     @EnvironmentObject private var client: KadeAPIClient
@@ -162,7 +163,8 @@ private struct PuppetBuilderGalleryStack: View {
                 }
                 .task { await model.load() }
             } else {
-                PuppetBuilderView(model: model, agentId: model.agentId, agentName: "Sample")
+                PuppetBuilderView(model: model, agentId: model.agentId, agentName: "Sample",
+                    scrollTarget: page == 6 ? "actions" : page == 7 ? "eyes.color" : nil)
             }
         }
         .environment(\.dynamicTypeSize, page == 5 ? .accessibility2 : .large)

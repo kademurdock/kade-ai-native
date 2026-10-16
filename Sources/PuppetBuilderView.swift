@@ -393,6 +393,8 @@ struct PuppetBuilderView: View {
     @State private var onScreen = false
     @State private var showingWords = false
     @State private var confirmingRemove = false
+    /// DEBUG gallery only: the row the screen starts scrolled to.
+    private var scrollTarget: String? = nil
     static let stageSide: CGFloat = 200
 
     init(apiClient: KadeAPIClient, agentId: String, agentName: String) {
@@ -403,9 +405,11 @@ struct PuppetBuilderView: View {
 
     #if DEBUG && targetEnvironment(simulator)
     /// The DEBUG gallery's offline editor.
-    init(model: @autoclosure @escaping () -> PuppetBuilderModel, agentId: String, agentName: String) {
+    init(model: @autoclosure @escaping () -> PuppetBuilderModel, agentId: String, agentName: String,
+         scrollTarget: String? = nil) {
         self.agentId = agentId
         self.agentName = agentName
+        self.scrollTarget = scrollTarget
         _model = StateObject(wrappedValue: model())
     }
     #endif
@@ -416,34 +420,15 @@ struct PuppetBuilderView: View {
     private var handMade: Bool { CharacterMotion.prepared(id: agentId, path: agent?.avatar?.filepath) }
 
     var body: some View {
-        List {
-            lookSection
-            if let catalog = model.catalog {
-                actionSection
-                ForEach(catalog.sections) { section in
-                    let controls = section.controls.filter(\.isEditable)
-                    if !controls.isEmpty {
-                        Section {
-                            ForEach(controls) { control in controlRow(control) }
-                        } header: {
-                            Text(section.name).accessibilityAddTraits(.isHeader)
-                        }
+        ScrollViewReader { proxy in
+            controlList
+                .onChange(of: model.catalog != nil) { _, loaded in
+                    guard loaded, let scrollTarget else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        proxy.scrollTo(scrollTarget, anchor: .top)
                     }
                 }
-                if model.hasSaved { removeSection }
-            } else if let error = model.loadError {
-                Section {
-                    Text(error)
-                    Button("Try again") { Task { await model.load() } }
-                }
-            } else {
-                Section {
-                    HStack(spacing: 10) {
-                        ProgressView().accessibilityHidden(true)
-                        Text("Loading the body parts…")
-                    }
-                }
-            }
         }
         .navigationTitle("Puppet body")
         .navigationBarTitleDisplayMode(.inline)
@@ -478,6 +463,38 @@ struct PuppetBuilderView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("\(agentName) goes back to the portrait in chat and calls.")
+        }
+    }
+
+    private var controlList: some View {
+        List {
+            lookSection
+            if let catalog = model.catalog {
+                actionSection
+                ForEach(catalog.sections) { section in
+                    let controls = section.controls.filter(\.isEditable)
+                    if !controls.isEmpty {
+                        Section {
+                            ForEach(controls) { control in controlRow(control).id(control.id) }
+                        } header: {
+                            Text(section.name).accessibilityAddTraits(.isHeader)
+                        }
+                    }
+                }
+                if model.hasSaved { removeSection }
+            } else if let error = model.loadError {
+                Section {
+                    Text(error)
+                    Button("Try again") { Task { await model.load() } }
+                }
+            } else {
+                Section {
+                    HStack(spacing: 10) {
+                        ProgressView().accessibilityHidden(true)
+                        Text("Loading the body parts…")
+                    }
+                }
+            }
         }
     }
 
@@ -590,6 +607,7 @@ struct PuppetBuilderView: View {
                 hint: "Makes a random new look. Nothing is saved until you tap Save.") {
                 Task { await model.surprise() }
             }
+            .id("actions")
             actionButton("Describe it in words", icon: "text.bubble", kind: .words,
                 hint: "Type or dictate the look you want. A small paid design that changes only what your words mention.") {
                 showingWords = true

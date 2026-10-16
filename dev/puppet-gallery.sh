@@ -63,8 +63,8 @@ if ! limit 300 xcrun simctl install "$UDID" "$APP"; then note "install failed"; 
 sleep 75
 
 shots=0
-# Pages 3 to 5 are the Body editor, offline (sample catalog and body).
-for page in 0 1 2 3 4 5; do
+# Pages 3 to 7 are the Body editor, offline (sample catalog and body).
+for page in 0 1 2 3 4 5 6 7; do
   limit 60 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1
   if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadePuppetGallery -KadePuppetGalleryPage "$page"; then
     note "launch of page $page failed"; continue
