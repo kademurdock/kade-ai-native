@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Oct 16 2026: screenshots of the DEBUG puppet gallery (PuppetGalleryView) for
-# review. Usage: bash dev/puppet-gallery.sh build/check   (the derived data path
-# of an unsigned Debug simulator build). Writes build/gallery/*.png.
+# Oct 16 2026: screenshots of the DEBUG puppet gallery (PuppetGalleryView) and
+# the offline Body editor for review. Usage: bash dev/puppet-gallery.sh
+# build/check (the derived data path of an unsigned Debug simulator build).
+# Writes build/gallery/*.png.
 # Fail-soft by design: every problem is printed and the script exits 0, so the
 # compile check stays the gate and a slow simulator never fails a run.
 set -u
@@ -62,7 +63,8 @@ if ! limit 300 xcrun simctl install "$UDID" "$APP"; then note "install failed"; 
 sleep 75
 
 shots=0
-for page in 0 1 2; do
+# Pages 3 to 5 are the Body editor, offline (sample catalog and body).
+for page in 0 1 2 3 4 5; do
   limit 60 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1
   if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadePuppetGallery -KadePuppetGalleryPage "$page"; then
     note "launch of page $page failed"; continue
