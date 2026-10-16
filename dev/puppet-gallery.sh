@@ -78,8 +78,8 @@ for page in 0 1 2 3 4 5 6 7; do
   fi
 done
 # Oct 16 2026: living paintings, Della's old sliced portrait beside the
-# warped one (LivingPaintingGalleryView, seven pages).
-for page in 0 1 2 3 4 5 6; do
+# warped one, the whole painted cast (LivingPaintingGalleryView, 19 pages).
+for page in $(seq 0 18); do
   limit 60 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1
   if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadeLivingGallery -KadeLivingGalleryPage "$page"; then
     note "launch of living page $page failed"; continue

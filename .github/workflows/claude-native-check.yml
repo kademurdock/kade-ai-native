@@ -17,7 +17,7 @@ jobs:
   check:
     if: github.repository == 'kademurdock/kade-ai-native' && github.event.repository.private == false
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       HOMEBREW_NO_AUTO_UPDATE: '1'
@@ -65,7 +65,7 @@ jobs:
         id: gallery
         if: ${{ steps.compile.outcome == 'success' && hashFiles('dev/puppet-gallery.sh') != '' }}
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 45
         run: bash dev/puppet-gallery.sh build/check
 
       - name: Keep the gallery for review

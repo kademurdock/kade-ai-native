@@ -73,7 +73,7 @@ def render(rig, state, scale=2.0, body=True, out_size=None):
     d = rig.data
     canvas = np.zeros((size, size, 3), np.float32)
     canvas[:] = (0.16, 0.45, 0.48)
-    if body:
+    if body and d['id'] == 'della':
         plate = asset('CharacterDellaBustBody', True)
         side = 677.16 * scale
         pl = cv2.resize(plate, (int(round(side)), int(round(side))), interpolation=cv2.INTER_AREA)
@@ -83,13 +83,12 @@ def render(rig, state, scale=2.0, body=True, out_size=None):
         part = pl[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
         a = part[..., 3:4]
         canvas[y0:y1, x0:x1] = canvas[y0:y1, x0:x1] * (1 - a) + part[..., :3] * a
-    mask = asset(d['mask']['asset'], True)[..., 3]
     m = d['mask']
-    mscale = mask.shape[0] / m['side']
+    mask = asset(m['asset'], True)[..., 3] if m else None
+    mscale = mask.shape[0] / m['side'] if m else 1
     core = d['core']
     regions = d['regions']
-    sheets = {'faces': asset(d['sheets']['faces']), 'mouths': asset(d['sheets']['mouths']),
-              'nuance': asset(d['sheets']['nuance'])}
+    sheets = {k: asset(d['sheets'][k]) for k in ('faces', 'mouths', 'nuance') if d['sheets'].get(k)}
     pitch = d['sheets']['pitch']
     for sheet, idx, offs, alpha, region in rt.layers(rig, state):
         uv = S if offs is None else S + offs
@@ -99,15 +98,29 @@ def render(rig, state, scale=2.0, body=True, out_size=None):
         rgb = cv2.remap(sheets[sheet], ux.astype(np.float32), uy.astype(np.float32), cv2.INTER_LINEAR,
                         borderMode=cv2.BORDER_REPLICATE)
         if region == 'head':
-            mx = ((sx - m['x']) * mscale).astype(np.float32)
-            my = ((sy - m['y']) * mscale).astype(np.float32)
-            ma = cv2.remap(mask, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            inside = ((sx - core['x']) / core['rx']) ** 2 + ((sy - core['y']) / core['ry']) ** 2 <= 1
-            a = np.maximum(ma, inside.astype(np.float32))
+            if mask is None:
+                a = np.ones_like(sx, dtype=np.float32)
+            else:
+                mx = ((sx - m['x']) * mscale).astype(np.float32)
+                my = ((sy - m['y']) * mscale).astype(np.float32)
+                a = cv2.remap(mask, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                if core:
+                    inside = ((sx - core['x']) / core['rx']) ** 2 + ((sy - core['y']) / core['ry']) ** 2 <= 1
+                    a = np.maximum(a, inside.astype(np.float32))
         else:
             rx, ry, rw, rh, inner = regions[region]
             cx, cy = (rx + rw / 2) * 414, (ry + rh / 2) * 414
             a = rt.soft_ellipse(sx, sy, cx, cy, rw * 414 / 2, rh * 414 / 2, inner)
+            if mask is not None:
+                # Every layer is cut by the head matte, as the old portrait cut
+                # its whole face composite.
+                mx = ((sx - m['x']) * mscale).astype(np.float32)
+                my = ((sy - m['y']) * mscale).astype(np.float32)
+                cut = cv2.remap(mask, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                if core:
+                    inside = ((sx - core['x']) / core['rx']) ** 2 + ((sy - core['y']) / core['ry']) ** 2 <= 1
+                    cut = np.maximum(cut, inside.astype(np.float32))
+                a = a * cut
         a = (a * alpha * covered)[..., None].astype(np.float32)
         canvas = canvas * (1 - a) + rgb * a
     return canvas

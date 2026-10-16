@@ -74,8 +74,153 @@ CHARACTERS = {
             [0, 0, 0, 0], [0.3, 0, 0, 0], [0.6, 0.1, 0, 0], [0.7, 0, 0.7, 0], [0.25, 0, 1, 0],
             [0.35, 0.9, 0, 0], [0, 0, 0, 1], [0.15, 0.55, 0, 0.3], [1, 0.4, 0, 0],
         ],
+        # Della's grid was reviewed first; she keeps her own axes.
+        'legacyGrid': True,
     },
 }
+
+KEYFORMS = CHARACTERS['della']['keyforms']
+VISEMES = CHARACTERS['della']['visemes']
+
+# Oct 16 2026: the rest of the painted cast. Every sheet keeps the same panel
+# order (CharacterFace, CharacterMotion.viseme). Landmarks are panel pixels,
+# measured on gridded crops of each neutral and closed-eye panel; neck pivots
+# and mattes come from each CharacterBustArtwork (world -> panel pixels).
+# `tilt` is an eye's lash-line slope (her painting's head roll plus the
+# eye's own corner tilt); `pinTop` holds the top rows still where a crown
+# touches the stage's top edge; `rollChannel` scales the engine's own roll;
+# `noBlinkFaces` are panels whose eyes are already painted closed
+# (CharacterFacialPolicy.shouldBlink).
+CHARACTERS.update({
+    'kiana': {
+        'faces': 'CharacterKianaFaces', 'mouths': 'CharacterKianaMouths', 'nuance': 'CharacterKianaNuance',
+        'mask': None, 'core': None,
+        'regions': {
+            'face': [0.34, 0.17, 0.5, 0.56, 0.72],
+            'mouth': [0.43, 0.46, 0.31, 0.2, 0.5],
+            'eyes': [0.36, 0.27, 0.44, 0.15, 0.6],
+        },
+        'landmarks': {
+            # Wide enough that her earrings move with her face instead of
+            # doubling while an expression fades in.
+            'face': {'x': 243, 'y': 172, 'rx': 95, 'ry': 104},
+            'head': {'x': 240, 'y': 152, 'rx': 160, 'ry': 168, 'rz': 90},
+            'nose': {'x': 233, 'y': 186, 'r': 18, 'z': 16},
+            'eyes': [
+                {'x': 193, 'y': 156, 'w': 17, 'upper': 150, 'closed': 159, 'lower': 163, 'crease': 9, 'iris': 6,
+                 'tilt': 0.1, 'closedTilt': -0.07},
+                {'x': 270, 'y': 146, 'w': 20, 'upper': 140, 'closed': 150, 'lower': 153, 'crease': 9, 'iris': 7,
+                 'tilt': -0.3, 'closedTilt': -0.19},
+            ],
+            'brows': [
+                {'x': 190, 'y': 124, 'w': 25, 'h': 8, 'inner': 1},
+                {'x': 266, 'y': 113, 'w': 25, 'h': 9, 'inner': -1},
+            ],
+            'mouth': {'x': 242, 'y': 224, 'w': 36, 'h': 14},
+            'cheeks': [{'x': 192, 'y': 196, 'r': 24}, {'x': 286, 'y': 186, 'r': 24}],
+            'neck': {'x': 240, 'y': 291, 'chin': 268, 'collar': 330},
+            'hair': {'x': 240, 'y': 140, 'inner': 0.62, 'outer': 1.0, 'reach': 3.0},
+        },
+        'noBlinkFaces': ['faces.2'],
+    },
+    'harley': {
+        'faces': 'CharacterHarleyFaces', 'mouths': 'CharacterHarleyMouths', 'nuance': 'CharacterHarleyNuance',
+        'mask': {'asset': 'CharacterHarleyBustMask', 'x': 0, 'y': 0, 'side': 414},
+        'core': {'x': 220.1, 'y': 199.3, 'rx': 62.3, 'ry': 73.9},
+        'regions': {
+            'face': [0.28, 0.24, 0.52, 0.5, 0.72],
+            'mouth': [0.41, 0.47, 0.27, 0.22, 0.5],
+            'eyes': [0.34, 0.31, 0.42, 0.13, 0.6],
+        },
+        'landmarks': {
+            'face': {'x': 228, 'y': 182, 'rx': 78, 'ry': 105},
+            'head': {'x': 226, 'y': 165, 'rx': 135, 'ry': 160, 'rz': 88},
+            'nose': {'x': 226, 'y': 190, 'r': 18, 'z': 16},
+            'eyes': [
+                {'x': 190, 'y': 154, 'w': 17, 'upper': 149, 'closed': 158, 'lower': 159.5, 'crease': 6, 'iris': 6, 'tilt': 0},
+                {'x': 263, 'y': 154, 'w': 18, 'upper': 149, 'closed': 158, 'lower': 159.5, 'crease': 6, 'iris': 6, 'tilt': 0},
+            ],
+            'brows': [
+                {'x': 188, 'y': 141, 'w': 26, 'h': 7, 'inner': 1},
+                {'x': 262, 'y': 140, 'w': 26, 'h': 7, 'inner': -1},
+            ],
+            'mouth': {'x': 230, 'y': 224, 'w': 33, 'h': 12},
+            'cheeks': [{'x': 180, 'y': 196, 'r': 24}, {'x': 276, 'y': 196, 'r': 24}],
+            'neck': {'x': 207, 'y': 334.7, 'chin': 280, 'collar': 330},
+            'hair': {'x': 226, 'y': 100, 'inner': 0.62, 'outer': 1.0, 'reach': 1.0},
+        },
+        'noBlinkFaces': ['faces.2', 'nuance.8'],
+    },
+    'lilly': {
+        'faces': 'CharacterLillyFaces', 'mouths': 'CharacterLillyMouths', 'nuance': 'CharacterLillyNuance',
+        'mask': None, 'core': None,
+        'regions': {
+            'face': [0.38, 0.2, 0.46, 0.5, 0.72],
+            'mouth': [0.48, 0.48, 0.28, 0.2, 0.5],
+            'eyes': [0.4, 0.3, 0.42, 0.18, 0.9],
+        },
+        'landmarks': {
+            'face': {'x': 255, 'y': 175, 'rx': 76, 'ry': 100},
+            'head': {'x': 255, 'y': 150, 'rx': 150, 'ry': 165, 'rz': 85},
+            'nose': {'x': 262, 'y': 202, 'r': 16, 'z': 16},
+            'eyes': [
+                {'x': 219, 'y': 165, 'w': 23, 'upper': 152, 'closed': 176, 'lower': 178, 'crease': 9, 'iris': 12,
+                 'tilt': 0.2, 'closedTilt': 0.21, 'lash': 5},
+                {'x': 296, 'y': 178, 'w': 17, 'upper': 166, 'closed': 189, 'lower': 192, 'crease': 11, 'iris': 11,
+                 'tilt': -0.3, 'closedTilt': 0.14, 'lash': 5},
+            ],
+            'brows': [
+                {'x': 215, 'y': 140, 'w': 28, 'h': 8, 'inner': 1},
+                {'x': 300, 'y': 150, 'w': 22, 'h': 8, 'inner': -1},
+            ],
+            'mouth': {'x': 257, 'y': 230, 'w': 35, 'h': 10},
+            'cheeks': [{'x': 205, 'y': 198, 'r': 22}, {'x': 305, 'y': 205, 'r': 20}],
+            'neck': {'x': 242.4, 'y': 304.5, 'chin': 272, 'collar': 300},
+            'hair': {'x': 255, 'y': 140, 'inner': 0.62, 'outer': 1.0, 'reach': 2.5},
+        },
+        # Her tired face (nuance.6) already has half-shut cartoon lids.
+        'noBlinkFaces': ['faces.2', 'nuance.6'],
+        # Her big lids close fully before the painted closed eyes take over,
+        # so her iris never shows through them.
+        'closedFade': [0.5, 0.45],
+    },
+    'witherspoon': {
+        # Nine basic faces only (no nuance sheet); glasses sit right above the
+        # lids, so the lid skin stretch stays 2 px tall, under the rim; her
+        # crown touches the stage's top edge, so the top rows hold still and
+        # the engine's own roll is off (the body's limited turn still applies).
+        'faces': 'CharacterWitherspoonFaces', 'mouths': 'CharacterWitherspoonMouths', 'nuance': None,
+        'mask': None, 'core': None,
+        'regions': {
+            'face': [0.29, 0.23, 0.44, 0.49, 0.72],
+            'mouth': [0.38, 0.50, 0.26, 0.19, 0.5],
+            'eyes': [0.30, 0.32, 0.41, 0.15, 0.6],
+        },
+        'landmarks': {
+            'face': {'x': 212, 'y': 180, 'rx': 76, 'ry': 100},
+            'head': {'x': 212, 'y': 150, 'rx': 160, 'ry': 165, 'rz': 88},
+            'nose': {'x': 211, 'y': 198, 'r': 18, 'z': 16},
+            'eyes': [
+                {'x': 166, 'y': 158, 'w': 19, 'upper': 153, 'closed': 162, 'lower': 165, 'crease': 2, 'iris': 6, 'tilt': 0},
+                {'x': 246, 'y': 157, 'w': 19, 'upper': 152, 'closed': 162, 'lower': 164, 'crease': 2, 'iris': 6, 'tilt': 0},
+            ],
+            'brows': [
+                {'x': 165, 'y': 140, 'w': 24, 'h': 7, 'inner': 1},
+                {'x': 247, 'y': 139, 'w': 24, 'h': 7, 'inner': -1},
+            ],
+            'mouth': {'x': 211, 'y': 234, 'w': 30, 'h': 10},
+            'cheeks': [{'x': 165, 'y': 205, 'r': 22}, {'x': 258, 'y': 205, 'r': 22}],
+            'neck': {'x': 207, 'y': 300.5, 'chin': 272, 'collar': 300},
+            'hair': {'x': 212, 'y': 120, 'inner': 0.62, 'outer': 1.0, 'reach': 2.0},
+            'pinTop': 45, 'rollChannel': 0,
+        },
+        'noBlinkFaces': [],
+    },
+})
+for _name, _c in CHARACTERS.items():
+    _c.setdefault('keyforms', KEYFORMS)
+    _c.setdefault('visemes', VISEMES)
+    _c.setdefault('noBlinkFaces', [])
 
 
 def load_sheet(name):
@@ -88,14 +233,77 @@ def panel(sheet, i):
     return sheet[py:py + PANEL, px:px + PANEL]
 
 
-def grid_axes():
-    """Denser where small things move: lids and irises (y 128-166), lips (198-252),
-    the face's width (x 150-300). Same axes for every 414 panel character."""
+def legacy_axes():
+    """Della's reviewed grid: lids and irises (y 128-166), lips (198-252), the
+    face's width (x 150-300)."""
     ys = list(np.arange(0, 120, 12)) + list(np.arange(120, 134, 4)) + list(np.arange(134, 166, 2)) \
         + list(np.arange(166, 196, 6)) + list(np.arange(196, 256, 3)) + list(np.arange(256, 340, 8)) \
         + list(np.arange(340, 414, 14)) + [414]
     xs = list(np.arange(0, 150, 15)) + list(np.arange(150, 300, 4)) + list(np.arange(300, 414, 15)) + [414]
     return [float(v) for v in xs], [float(v) for v in ys]
+
+
+def axis(bands, coarse, lo=0.0, hi=float(PANEL)):
+    """One grid axis: each (start, end, step) band evenly divided, the gaps
+    between bands at about `coarse` pixels."""
+    points = []
+    cursor = lo
+    for a, b, step in sorted(bands):
+        a, b = max(a, cursor), min(b, hi)
+        if b <= a:
+            continue
+        if a > cursor:
+            n = max(1, int(np.ceil((a - cursor) / coarse)))
+            points += list(np.linspace(cursor, a, n + 1)[:-1])
+        n = max(1, int(np.ceil((b - a) / step)))
+        points += list(np.linspace(a, b, n + 1)[:-1])
+        cursor = b
+    n = max(1, int(np.ceil((hi - cursor) / coarse)))
+    points += list(np.linspace(cursor, hi, n + 1))
+    # No sliver rows or columns where two bands meet: a cell thinner than
+    # 1.5 px folds at the slightest stretch.
+    kept = []
+    for p in sorted(points):
+        if not kept or p - kept[-1] >= 1.5:
+            kept.append(p)
+    kept[-1] = hi
+    return [round(float(p), 3) for p in kept]
+
+
+def finest(bands):
+    """Overlapping (start, end, step) bands as one sorted, non-overlapping
+    list, each stretch taking the finest step that covers it."""
+    cuts = sorted({p for a, b, _ in bands for p in (a, b)})
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        steps = [s for x, y, s in bands if x <= a and b <= y]
+        if steps:
+            if out and out[-1][2] == min(steps) and abs(out[-1][1] - a) < 1e-9:
+                out[-1] = (out[-1][0], b, min(steps))
+            else:
+                out.append((a, b, min(steps)))
+    return out
+
+
+def grid_axes(c):
+    """Dense where this face's small things move: 2 px across the lids and
+    irises (tilt included), 3 px across the lips, 4 px across the face."""
+    if c.get('legacyGrid'):
+        return legacy_axes()
+    lm = c['landmarks']
+    eyes, mo, brows = lm['eyes'], lm['mouth'], lm['brows']
+    eye_top = min(e['upper'] - e['crease'] - abs(e.get('tilt', 0)) * e['w'] - 4 for e in eyes)
+    eye_bottom = max(e['lower'] + abs(e.get('tilt', 0)) * e['w'] + 10 for e in eyes)
+    brow_top = min(b['y'] - b['h'] - 10 for b in brows)
+    mouth_top, mouth_bottom = mo['y'] - mo['h'] - 12, mo['y'] + mo['h'] + 16
+    ys = axis([(brow_top, eye_top, 4), (eye_top, eye_bottom, 2), (eye_bottom, mouth_top, 6),
+               (mouth_top, mouth_bottom, 3), (mouth_bottom, lm['neck']['collar'] + 10, 8)], 13)
+    left = min(min(e['x'] - e['w'] - 18 for e in eyes), mo['x'] - mo['w'] - 16)
+    right = max(max(e['x'] + e['w'] + 18 for e in eyes), mo['x'] + mo['w'] + 16)
+    # 2 px columns across each eye: a closing lid shears its cells, and wide
+    # cells turn a lash line into a sawtooth.
+    xs = axis(finest([(left, right, 4)] + [(e['x'] - e['w'] - 6, e['x'] + e['w'] + 6, 2) for e in eyes]), 15)
+    return xs, ys
 
 
 def soft_ellipse(X, Y, x, y, rx, ry, inner=0.0):
@@ -119,7 +327,12 @@ def region_mask(lm, name, X, Y):
     elif name == 'eyes':
         m = sum(smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['w'] * 1.7, 15, 0.4)) for e in lm['eyes'])
     elif name == 'cheeks':
+        # Cheeks without the eye opening: some laughing panels close the eyes,
+        # which a cheek lift must not drag along.
         m = sum(smooth01(soft_ellipse(X, Y, c['x'], c['y'] - 10, c['r'] * 1.4, c['r'] * 1.8, 0.3)) for c in lm['cheeks'])
+        for e in lm['eyes']:
+            m = m * (1 - smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['w'] * 1.25,
+                                               (e['lower'] - e['upper']) / 2 + 4, 0.4)))
     elif name == 'smile':
         mo = lm['mouth']
         m = smooth01(soft_ellipse(X, Y, mo['x'], mo['y'] + 2, mo['w'] * 1.9, mo['h'] * 3.2, 0.3))
@@ -182,7 +395,7 @@ def at_grid(field, xs, ys):
     return out
 
 
-def repair_folds(g, xs, ys, quality=0.3, rounds=200):
+def repair_folds(g, xs, ys, quality=0.3, rounds=1500):
     """Relax a grid displacement field until no mesh cell shrinks below
     `quality` of its rest area or turns inside out. Painted panels are not
     perfectly registered and raw flow can fold; a fold would tear the face."""
@@ -205,6 +418,10 @@ def repair_folds(g, xs, ys, quality=0.3, rounds=200):
         pad = np.pad(g, ((1, 1), (1, 1), (0, 0)), mode='edge')
         mean = (pad[:-2, 1:-1] + pad[2:, 1:-1] + pad[1:-1, :-2] + pad[1:-1, 2:]) / 4
         g[bad] = 0.35 * g[bad] + 0.65 * mean[bad] * 0.97
+        if _ > 300:
+            # Still folding next to a big motion: shrink it there, which
+            # always ends (no motion cannot fold).
+            g[bad] *= 0.9
     return g
 
 
@@ -217,13 +434,15 @@ def pack(arr, scale=20):
 def build(name):
     c = CHARACTERS[name]
     lm = c['landmarks']
-    faces, mouths, nuance = load_sheet(c['faces']), load_sheet(c['mouths']), load_sheet(c['nuance'])
+    faces, mouths = load_sheet(c['faces']), load_sheet(c['mouths'])
+    nuance = load_sheet(c['nuance']) if c['nuance'] else None
     N = panel(faces, 0)
-    xs, ys = grid_axes()
+    xs, ys = grid_axes(c)
     Y, X = np.mgrid[0:PANEL, 0:PANEL].astype(np.float32)
     flows = {}
     report = {}
-    for sheet_name, sheet, count in [('faces', faces, 9), ('nuance', nuance, 9), ('mouths', mouths, 9)]:
+    sheets = [('faces', faces, 9), ('nuance', nuance, 9), ('mouths', mouths, 9)]
+    for sheet_name, sheet, count in [s for s in sheets if s[1] is not None]:
         for i in range(count):
             if sheet_name == 'faces' and i == 0:
                 continue
@@ -244,7 +463,8 @@ def build(name):
         'id': name, 'version': 1, 'panel': PANEL,
         'sheets': {'faces': c['faces'], 'mouths': c['mouths'], 'nuance': c['nuance'], 'pitch': PITCH},
         'mask': c['mask'], 'core': c['core'], 'regions': c['regions'],
-        'landmarks': lm, 'visemes': c['visemes'],
+        'landmarks': lm, 'visemes': c['visemes'], 'noBlinkFaces': c['noBlinkFaces'],
+        'closedFade': c.get('closedFade', [0.45, 0.45]),
         'gridX': xs, 'gridY': ys,
         'flowScale': 20,
         'flows': {k: pack(repair_folds(at_grid(v, xs, ys), xs, ys)) for k, v in flows.items()},

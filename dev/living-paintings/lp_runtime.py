@@ -65,12 +65,19 @@ class Rig:
         self.keyforms = {k: unpack(v, d['flowScale']).reshape(n, 2) for k, v in d['keyforms'].items()}
         lm = self.lm
         mo = lm['mouth']
-        # Where a speaking mouth takes over from an expression's own mouth shape.
-        self.mouth_weight = smooth01(soft_ellipse(self.X, self.Y, mo['x'], mo['y'] + 2, mo['w'] * 1.9, mo['h'] * 3.2, 0.3))
+        # Where a speaking mouth takes over from an expression's own mouth
+        # shape: wide and flat-topped, so even a cartoon's big smile hands its
+        # cheeks over gently (a tighter region tore Lilly's cheek).
+        self.mouth_weight = smooth01(soft_ellipse(self.X, self.Y, mo['x'], mo['y'] + 2, mo['w'] * 2.4, mo['h'] * 4.2, 0.5))
         f = lm['face']
         self.face_weight = smooth01(soft_ellipse(self.X, self.Y, f['x'], f['y'] + 14, f['rx'] * 1.1, f['ry'] * 1.12, 0.5))
         nk = lm['neck']
-        self.head_weight = 1 - smooth01((self.Y - nk['chin']) / (nk['collar'] - nk['chin']))
+        # A crown that touches the stage's top edge holds its top rows still.
+        pin_top = lm.get('pinTop', 0)
+        pin = smooth01(self.Y / pin_top) if pin_top > 0 else np.ones_like(self.Y)
+        self.head_weight = (1 - smooth01((self.Y - nk['chin']) / (nk['collar'] - nk['chin']))) * pin
+        self.roll_channel = lm.get('rollChannel', 1.0)
+        self.no_blink = set(d.get('noBlinkFaces', []))
         h = lm['head']
         r2 = ((self.X - h['x']) / h['rx']) ** 2 + ((self.Y - h['y']) / h['ry']) ** 2
         no = lm['nose']
@@ -79,7 +86,10 @@ class Rig:
         hr = lm['hair']
         rn = np.sqrt(r2)
         hang = np.clip((self.Y - hr['y'] + 40) / h['ry'], 0, 1.3)
-        self.hair_weight = smooth01((rn - hr['inner']) / (hr['outer'] - hr['inner'])) * (1 - self.face_weight) * hang * hr['reach']
+        # Hair below the collar lies on the shoulders and stays with them.
+        shoulders = 1 - smooth01((self.Y - nk['collar']) / 40)
+        self.hair_weight = smooth01((rn - hr['inner']) / (hr['outer'] - hr['inner'])) * (1 - self.face_weight) \
+            * hang * hr['reach'] * shoulders * pin
         self.triangles = self._triangles()
 
     def _triangles(self):
@@ -129,6 +139,9 @@ def vertices(rig, state):
     """Screen positions (panel pixels) of every grid vertex for one frame."""
     ch = {name: 0.0 for name in CHANNELS}
     ch.update(state.get('channels', {}))
+    if state.get('face') in rig.no_blink:
+        # This painted face already has its eyes closed.
+        ch['eye.blink'] = ch['eye.wink'] = 0.0
     lm = rig.lm
     X, Y = rig.X, rig.Y
     dx = np.zeros_like(X)
@@ -187,22 +200,32 @@ def vertices(rig, state):
             if abs(u) >= 1:
                 continue
             f = 1 - u * u
-            lid = yc - (yc - yu) * f
+            # A tilted eye's lid line rises or falls across its width; its
+            # painted closed lash line may slope its own way.
+            t = e.get('tilt', 0.0) * (rig.gx[c] - e['x'])
+            tc = e.get('closedTilt', e.get('tilt', 0.0)) * (rig.gx[c] - e['x'])
+            lid = yc - (yc - yu) * f + t
             col = dyg[:, c]
 
             def moved(y):
                 r, t = column_at(gy, y)
                 return y + col[r] * (1 - t) + col[r + 1] * t
-            lid_d, yc_d, ey_d, low_d = moved(lid), moved(yc), moved(e['y']), moved(low)
+            lid_d, yc_d, ey_d, low_d = moved(lid), moved(yc + tc), moved(e['y'] + t), moved(low + t)
             opening = max(yc_d - lid_d, 0.0)
             # 0.96: a closed lid keeps a sliver of height; no zero-area cells.
-            d = min(blink, 0.96) * opening
+            # A big cartoon lid travels part of the way (`travel`).
+            d = min(blink, 0.96) * opening * e.get('travel', 1.0)
             top = lid_d - e['crease']
+            # The lash line slides down whole; only the skin above it stretches.
+            lash = min(e.get('lash', 3.0), e['crease'] * 0.5)
+            band = lid_d - lash
             span = max(opening, 0.01)
             py = gy + col
-            ramp = (py >= top) & (py < lid_d)
+            ramp = (py >= top) & (py < band)
+            lashes = (py >= band) & (py < lid_d)
             squash = (py >= lid_d) & (py < yc_d)
-            py = py + np.where(ramp, d * (py - top) / e['crease'], 0.0) + np.where(squash, d * (yc_d - py) / span, 0.0)
+            py = py + np.where(ramp, d * (py - top) / (e['crease'] - lash), 0.0) + np.where(lashes, d, 0.0) \
+                + np.where(squash, d * (yc_d - py) / span, 0.0)
             rise = squint * 0.35 * max(low_d - lid_d, 0.0) * f
             reach = max(low_d - ey_d, 0.01)
             up = (py > ey_d) & (py <= low_d)
@@ -221,7 +244,7 @@ def vertices(rig, state):
     qx = qx + hw * ((X - h['x']) * (math.cos(phi) - 1) + rig.depth * math.sin(phi))
     qy = qy + hw * ((Y - h['y']) * (math.cos(theta) - 1) + rig.depth * math.sin(theta))
     # 4. roll about the neck; the neck bends instead of the head cutting
-    rho = math.radians(ch['head.roll'] * ROLL_DEGREES + state.get('rollDegrees', 0.0)) * hw
+    rho = math.radians(ch['head.roll'] * ROLL_DEGREES * rig.roll_channel + state.get('rollDegrees', 0.0)) * hw
     nk = lm['neck']
     cx, cy = qx - nk['x'], qy - nk['y']
     cs, sn = np.cos(rho), np.sin(rho)
@@ -237,6 +260,8 @@ def layers(rig, state):
     region name or 'head')."""
     ch = {name: 0.0 for name in CHANNELS}
     ch.update(state.get('channels', {}))
+    if state.get('face') in rig.no_blink:
+        ch['eye.blink'] = ch['eye.wink'] = 0.0
     out = [('faces', 0, None, 1.0, 'head')]
     blend = state.get('blend', 1.0)
     prior, shown = state.get('prior'), state.get('face')
@@ -253,7 +278,8 @@ def layers(rig, state):
         later -= w
         out.append(('mouths', j, rig.flows[f'mouths.{j}'], min(1.0, w / max(1e-6, 1 - later)), 'mouth'))
     b = ch['eye.blink']
-    closed = float(smooth01((b - 0.45) / 0.45))
+    start, width = rig.data.get('closedFade', [0.45, 0.45])
+    closed = float(smooth01((b - start) / width))
     if closed > 0.001:
         out.append(('faces', 8, None, closed, 'eyes'))
     return out
