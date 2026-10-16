@@ -40,7 +40,7 @@ PINS={
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'c72e9db282f1edf9f536e2e179dc428f7e85036eadecd7fd6a5fc41282b4fa74',
+    'Sources/CharacterPortraitView.swift':'e8effd1afbb41a7517fbfea19f70ac553b570b51988644e3a192bb79f9a91d6e',
     'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(

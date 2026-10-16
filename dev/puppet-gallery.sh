@@ -77,5 +77,19 @@ for page in 0 1 2 3 4 5 6 7; do
     note "screenshot of page $page failed"
   fi
 done
+# Oct 16 2026: living paintings, Della's old sliced portrait beside the
+# warped one (LivingPaintingGalleryView, seven pages).
+for page in 0 1 2 3 4 5 6; do
+  limit 60 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1
+  if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadeLivingGallery -KadeLivingGalleryPage "$page"; then
+    note "launch of living page $page failed"; continue
+  fi
+  sleep 10
+  if limit 120 xcrun simctl io "$UDID" screenshot "$OUT/living-page$page.png"; then
+    shots=$((shots + 1))
+  else
+    note "screenshot of living page $page failed"
+  fi
+done
 note "$shots screenshot(s) in $OUT"
 exit 0

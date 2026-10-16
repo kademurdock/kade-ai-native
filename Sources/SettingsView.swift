@@ -369,6 +369,7 @@ struct SettingsView: View {
             sensorySyncRow(searchStyle: false)
             reduceMotionRow(searchStyle: false)
             animatedCharactersRow(searchStyle: false)
+            livingPaintingsRow(searchStyle: false)
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
@@ -571,7 +572,7 @@ struct SettingsView: View {
         case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
         case highContrast, font, spacing, pictures, pictureWords
-        case soundEffects, haptics, sensorySync, reduceMotion, animatedCharacters
+        case soundEffects, haptics, sensorySync, reduceMotion, animatedCharacters, livingPaintings
         case keyboardPhrases, keyboardClean
         case location
         case usage, accountSecurity, export
@@ -609,6 +610,7 @@ struct SettingsView: View {
             case .simpleComposer: return "Simple composer"
             case .reduceMotion: return "Reduce motion"
             case .animatedCharacters: return "Animated characters"
+            case .livingPaintings: return "Living painted faces"
             case .keyboardPhrases: return "My Keyboard Phrases"
             case .keyboardClean: return "Clean up keyboard dictation"
             case .location: return "Share my location"
@@ -628,7 +630,7 @@ struct SettingsView: View {
             case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
             case .highContrast, .font, .spacing, .pictures, .pictureWords: return "Accessibility"
-            case .soundEffects, .haptics, .sensorySync, .reduceMotion, .animatedCharacters: return "Feedback & Sounds"
+            case .soundEffects, .haptics, .sensorySync, .reduceMotion, .animatedCharacters, .livingPaintings: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
             case .location: return "Location"
             case .usage, .accountSecurity, .export: return "Account"
@@ -669,6 +671,7 @@ struct SettingsView: View {
             case .simpleComposer: return "simple composer troubleshooting freeze message box debug"
             case .reduceMotion: return "motion animation reduce animations still"
             case .animatedCharacters: return "animated characters puppets moving face portrait avatar kiana harley lilly della librarian calls conversation voice messages"
+            case .livingPaintings: return "living painted faces painting paintings realistic della eyelids eyes blink brows mouth moving face portrait animation"
             case .keyboardPhrases: return "keyboard phrases quick kade keys buttons typing"
             case .keyboardClean: return "keyboard dictation clean cleanup transcribe filler grammar typing"
             case .location: return "location gps where directions maps share place"
@@ -748,6 +751,7 @@ struct SettingsView: View {
         case .simpleComposer: simpleComposerRow(searchStyle: true)
         case .reduceMotion: reduceMotionRow(searchStyle: true)
         case .animatedCharacters: animatedCharactersRow(searchStyle: true)
+        case .livingPaintings: livingPaintingsRow(searchStyle: true)
         case .keyboardPhrases: keyboardPhrasesRow(searchStyle: true)
         case .keyboardClean: keyboardCleanRow(searchStyle: true)
         case .location: locationRow(searchStyle: true)
@@ -1045,6 +1049,20 @@ struct SettingsView: View {
                 systemImage: "face.smiling", tint: SectionTint.feedback)
         }
         .accessibilityHint("Shows character puppets in conversations and calls. They blink while quiet and move their mouths with speech. Small views use the familiar portrait. Turning this off does not change audio or the transcript. Reduce motion is always honored.")
+    }
+    /* Oct 16 2026 (Kade: on by default, since most people never open
+     * Settings). The painted faces bend like living paintings instead of
+     * swapping pictures; this switch brings back the picture-swapping
+     * faces. It needs Animated characters, like Pulse with the visuals
+     * needs Haptics. */
+    @AppStorage(LivingPaintingSetting.key) private var livingPaintings = LivingPaintingSetting.defaultOn
+    private func livingPaintingsRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $livingPaintings) {
+            tileLabel(searchStyle ? searchLabel(.livingPaintings, "Living painted faces") : "Living painted faces",
+                systemImage: "paintpalette", tint: SectionTint.feedback)
+        }
+        .disabled(!voicePortraits)
+        .accessibilityHint("The hand-painted characters, Della so far, move like living paintings: eyelids close, eyes glance, brows lift and the mouth moves, instead of whole pictures fading in and out. Turn off for the picture-swapping faces. Animated characters must be on. Reduce motion, Low Power Mode and a hot phone still keep faces still.")
     }
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {

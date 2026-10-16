@@ -38,6 +38,7 @@ jobs:
           bash run-speech-tests.sh 2>&1 | tail -n 40
           bash run-narration-voice-tests.sh 2>&1 | tail -n 20
           if [ -f run-puppet-tests.sh ]; then bash run-puppet-tests.sh 2>&1 | tail -n 120; fi
+          if [ -f run-living-painting-tests.sh ]; then bash run-living-painting-tests.sh 2>&1 | tail -n 60; fi
 
       - name: Generate the simulator project
         timeout-minutes: 10
