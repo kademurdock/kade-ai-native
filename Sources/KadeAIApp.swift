@@ -39,7 +39,7 @@ struct KadeAIApp: App {
         #if DEBUG && targetEnvironment(simulator)
         return ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" ||
             (ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing) ||
-            PuppetGalleryView.isRequested
+            PuppetGalleryView.isRequested || LivingPaintingGalleryView.isRequested
         #else
         return false
         #endif
@@ -69,6 +69,8 @@ struct KadeAIApp: App {
                 #if DEBUG && targetEnvironment(simulator)
                 if PuppetGalleryView.isRequested {
                     PuppetGalleryView()
+                } else if LivingPaintingGalleryView.isRequested {
+                    LivingPaintingGalleryView()
                 } else if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
                     CharacterPuppetLabView()
                 } else if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {

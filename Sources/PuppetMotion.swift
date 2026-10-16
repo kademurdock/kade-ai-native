@@ -20,7 +20,17 @@ final class PuppetMotion {
         var expressiveness = 0.6
         var blink = "normal"
         var baseSmile = 0.12
+        /// A painted face (living paintings) draws each expression from its
+        /// own painted panel, so the expression no longer pushes the facial
+        /// channels; head, gaze, body and every moving layer stay.
+        var artFace = false
     }
+
+    /// The channels a painted expression panel already shows.
+    static let paintedChannels: Set<PuppetChannel> = [
+        .eyeBlink, .eyeSquint, .eyeWide, .browRaise, .browFurrow, .browSad, .browAsym,
+        .mouthOpen, .mouthWide, .mouthRound, .mouthSmile, .mouthPress, .cheekRaise, .cheekBlush,
+    ]
     struct Input {
         var speaking = false
         /// 0...1, already shaped like the mouth level (see `voiceLevel`).
@@ -139,6 +149,7 @@ final class PuppetMotion {
     private let expressiveness: Double
     private let blinkMean: Double
     private let baseSmile: Double
+    private let artFace: Bool
     private let nYaw: Noise, nPitch: Noise, nRoll: Noise, nSmile: Noise, nBrow: Noise
 
     private var t = 0.0
@@ -167,6 +178,7 @@ final class PuppetMotion {
         expressiveness = PuppetMotion.clamp(options.expressiveness, 0, 1)
         blinkMean = PuppetMotion.blinkMeans[options.blink] ?? 4.2
         baseSmile = options.baseSmile
+        artFace = options.artFace
         nYaw = Noise(r)
         nPitch = Noise(r)
         nRoll = Noise(r)
@@ -203,7 +215,7 @@ final class PuppetMotion {
         let e = Self.expressions[name] ?? []
         let k = Self.clamp(strength, 0, 1.2) * (0.55 + 0.6 * expressiveness)
         emoTarget = [Double](repeating: 0, count: PuppetChannel.count)
-        for (c, v) in e { emoTarget[c.rawValue] = v * k }
+        for (c, v) in e where !(artFace && Self.paintedChannels.contains(c)) { emoTarget[c.rawValue] = v * k }
         emoUntil = t + holdSeconds
         if name == "playful" { winkAt = t + 0.25 }
     }
@@ -380,7 +392,9 @@ extension PuppetMotion {
     static func stillChannels(expression: String, options: Options, listening: Bool = false) -> [Double] {
         let k = 0.55 + 0.6 * clamp(options.expressiveness, 0, 1)
         var e = [Double](repeating: 0, count: PuppetChannel.count)
-        for (c, v) in expressions[expression] ?? [] { e[c.rawValue] = v * k }
+        for (c, v) in expressions[expression] ?? [] where !(options.artFace && paintedChannels.contains(c)) {
+            e[c.rawValue] = v * k
+        }
         func E(_ c: PuppetChannel) -> Double { e[c.rawValue] }
         var out = [Double](repeating: 0, count: PuppetChannel.count)
         func set(_ c: PuppetChannel, _ value: Double) { out[c.rawValue] = value }

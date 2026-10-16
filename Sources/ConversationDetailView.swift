@@ -1098,8 +1098,16 @@ struct ConversationDetailView: View {
                 // fast reply never starts a loop after the fact.
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
-                    guard waitGeneration == speechWaitGeneration, !Task.isCancelled else { return }
-                    if case .sending = sendState, !voiceService.isClipPlaying, !spokenTurnStarted { Earcons.shared.startWaitingLoop() }
+                    guard waitGeneration == speechWaitGeneration, !Task.isCancelled else {
+                        KadeBreadcrumbs.drop("thinking loop: skipped, wait ended within 450ms")
+                        return
+                    }
+                    if case .sending = sendState, !voiceService.isClipPlaying, !spokenTurnStarted {
+                        Earcons.shared.startWaitingLoop()
+                    } else {
+                        // Oct 16 2026: say which guard skipped the bubbles.
+                        KadeBreadcrumbs.drop("thinking loop: skipped (sending \(isSending), clip \(voiceService.isClipPlaying), paused \(voiceService.isPaused), voice started \(spokenTurnStarted), queue \(voiceService.isSpeaking))")
+                    }
                 }
                 // Waiting belongs to this send, including when an older clip
                 // temporarily owns the speaker or read-aloud is disabled.
@@ -1142,7 +1150,8 @@ struct ConversationDetailView: View {
                  * before any fetch, so it means exactly "the voice has this
                  * one." If it does not, she gets her ding and is never left
                  * with a reply that arrived in total silence. */
-                if !readAloudEnabled || !voiceService.isSpeaking {
+                let receivedBloop = !readAloudEnabled || !voiceService.isSpeaking
+                if receivedBloop {
                     Earcons.shared.play(.messageReceived)
                 }
                 // Aug 6 2026 (her "haptics to match visuals" ask): the reply
@@ -1179,7 +1188,17 @@ struct ConversationDetailView: View {
                     // OVER the received bloop): duck it under the bloop,
                     // then ease back up for the TTS-fetch stretch. The
                     // stop is still owned by the watchers below.
-                    Earcons.shared.duckWaitingLoop(resume: true)
+                    //
+                    // Oct 16 2026 (her report: no bubbles while waiting in
+                    // 337): duck only when that bloop actually plays. With
+                    // the voice already queued (Part 98.5) there is no bloop,
+                    // and the 1.25 s dip plus 0.35 s fade silenced most of a
+                    // short wait once replies got fast (same night).
+                    if receivedBloop {
+                        Earcons.shared.duckWaitingLoop(resume: true)
+                    } else {
+                        KadeBreadcrumbs.drop("thinking loop: kept through reply landing (voice queued, no bloop)")
+                    }
                     speechWaitWatchdog?.cancel()
                     let waitGeneration = speechWaitGeneration
                     speechWaitWatchdog = Task { @MainActor in
@@ -1399,23 +1418,15 @@ struct ConversationDetailView: View {
         }
         // Sep 23 2026 redesign (B2): "Voice speed" (was "Voice message speed").
         .confirmationDialog(
-            "Voice delivery pace",
+            "Voice speed",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
-            ForEach(VoicePacePolicy.fishOptions, id: \.value) { pace in
-                Button("Fish: \(pace.label)") {
-                    voiceService.fishPace = pace.value
-                    UIAccessibility.post(notification: .announcement, argument: "Fish delivery pace \(pace.label). Applies to the next message.")
-                }
-            }
-            ForEach(VoiceService.availableRates, id: \.self) { rate in
-                Button("Classic Inworld: \(VoiceService.rateSpokenLabel(rate))") {
-                    voiceService.playbackRate = rate
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: "Classic Inworld \(VoiceService.rateSpokenLabel(rate)). Applies to the next message."
-                    )
+            // Oct 16 2026: one list for every voice, Fish and Classic alike.
+            ForEach(VoicePacePolicy.options, id: \.value) { pace in
+                Button(pace.label) {
+                    voiceService.voicePace = pace.value
+                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(pace.label). Applies to the next message.")
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -2862,7 +2873,7 @@ struct ConversationDetailView: View {
         Button {
             showingSpeedPicker = true
         } label: {
-            Text("\(voiceService.fishPace == "character" ? "Auto" : VoicePacePolicy.fishName(voiceService.fishPace)) / \(VoiceService.rateLabel(voiceService.playbackRate))")
+            Text(VoicePacePolicy.chipLabel(voiceService.voicePace))
                 .font(.footnote.monospacedDigit())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
@@ -2872,9 +2883,9 @@ struct ConversationDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Voice speed")
-        .accessibilityValue("Fish: \(VoicePacePolicy.fishName(voiceService.fishPace)). Classic Inworld: \(VoiceService.rateSpokenLabel(voiceService.playbackRate)).")
+        .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
         .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
-        .accessibilityHint("Choose Fish delivery instructions or Classic Inworld API speed for the next voice message. Current audio keeps its original speed.")
+        .accessibilityHint("Choose how fast every voice speaks, starting with the next message.")
     }
 
     // MARK: - Composer (Phase 3)

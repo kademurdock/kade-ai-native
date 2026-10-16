@@ -1,10 +1,13 @@
 import Foundation
 
-/// These values select generation instructions or Inworld's supported API rate.
-/// Audio players always use 1.0, including after a preference changes mid-clip.
+/// One voice speed for every voice (Oct 16 2026, Kade: separate Fish and
+/// Classic speed lists side by side were confusing). The chosen pace's value
+/// rides the next synthesis request as `speed`; the proxy turns it into each
+/// provider's own control. Audio players always use 1.0, including after a
+/// preference changes mid-clip.
 enum VoicePacePolicy {
-    static let fishOptions: [(value: String, label: String, rate: Double?)] = [
-        ("character", "Character setting", nil), ("unhurried", "Unhurried", 0.75),
+    static let options: [(value: String, label: String, rate: Double?)] = [
+        ("character", "Character's own speed", nil), ("unhurried", "Unhurried", 0.75),
         ("easygoing", "Easygoing", 0.9), ("natural", "Natural", 1),
         ("brisk", "Brisk", 1.2), ("quick", "Quick", 1.5),
     ]
@@ -12,35 +15,32 @@ enum VoicePacePolicy {
         let value = preference ?? base ?? 1
         return value.isFinite ? min(1.5, max(0.5, value)) : 1
     }
-    static func fishRate(_ pace: String, base: Double?) -> Double {
-        rate(base: base, preference: fishOptions.first { $0.value == pace }?.rate)
+    /// The `speed` sent for a saved pace; "character" keeps the character's own rate.
+    static func paceRate(_ pace: String, base: Double?) -> Double {
+        rate(base: base, preference: options.first { $0.value == pace }?.rate)
     }
-    static func isFish(voice: String?, providers: [String: String]) -> Bool {
-        guard let voice else { return true }
-        if let provider = providers[voice] { return provider == "fish" }
-        return !voice.hasSuffix("(Classic)")
-    }
-    static func legacyFishPace(_ rate: Double?) -> String {
+    /// The nearest named pace for an old numeric speed; normal or none keeps
+    /// the character's own speed.
+    static func legacyPace(_ rate: Double?) -> String {
         guard let rate, rate.isFinite, abs(rate - 1) > 0.001 else { return "character" }
-        return fishOptions.filter { $0.rate != nil }.min {
+        return options.filter { $0.rate != nil }.min {
             abs(($0.rate ?? 1) - rate) < abs(($1.rate ?? 1) - rate)
         }?.value ?? "character"
     }
-    static func fishName(_ pace: String) -> String {
-        fishOptions.first { $0.value == pace }?.label ?? "Character setting"
+    /// One pace from the two older preferences: a chosen Fish pace wins,
+    /// otherwise a non-normal Classic rate becomes its nearest pace.
+    static func unifiedPace(fishPace: String?, classicRate: Double?) -> String {
+        if let fishPace, fishPace != "character", options.contains(where: { $0.value == fishPace }) {
+            return fishPace
+        }
+        return legacyPace(classicRate)
     }
-    /// Classic Inworld speeds offered in the pickers, in order.
-    static let classicRates: [Double] = [0.5, 0.75, 1.0, 1.2, 1.25, 1.5]
-    /// Compact chip form ("1x", "1.25x"): up to two decimals, trailing zeros
-    /// dropped. Oct 16 2026: %.2g printed both 1.2 and 1.25 as "1.2x", so
-    /// VoiceOver read two identical speed buttons.
-    static func rateLabel(_ rate: Double) -> String {
-        guard rate.isFinite else { return "1x" }
-        if rate == rate.rounded() { return String(format: "%.0fx", rate) }
-        var text = String(format: "%.2f", rate)
-        while text.hasSuffix("0") { text.removeLast() }
-        if text.hasSuffix(".") { text.removeLast() }
-        return text + "x"
+    static func name(_ pace: String) -> String {
+        options.first { $0.value == pace }?.label ?? "Character's own speed"
+    }
+    /// Short on-screen form: "Auto" for the character's own speed.
+    static func chipLabel(_ pace: String) -> String {
+        pace != "character" && options.contains(where: { $0.value == pace }) ? name(pace) : "Auto"
     }
 }
 

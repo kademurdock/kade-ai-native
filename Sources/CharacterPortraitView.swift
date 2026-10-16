@@ -24,6 +24,9 @@ struct CharacterPortraitView: View {
     /// The resolved host layout selects the registered tall Della body.
     /// Compact hosts and ordinary portrait rows retain their square framing.
     var dellaArticulatedReview = false
+    /// Oct 16 2026: living paintings (docs/LIVING_PAINTINGS.md). nil follows
+    /// the "Living painted faces" setting, which is on by default.
+    var livingPainting: Bool? = nil
     #if DEBUG && targetEnvironment(simulator)
     /// Controlled audit samples only; never a production speech-turn trigger.
     var handPrototypeElapsed: Double? = nil
@@ -52,6 +55,8 @@ struct CharacterPortraitView: View {
     /// Blinks and expression cross-fades; its queued blinks also raise the
     /// frame schedule briefly (CharacterAnimationSchedule).
     @State private var faceClock = CharacterFaceClock()
+    @AppStorage(LivingPaintingSetting.key) private var livingPaintingsSetting = LivingPaintingSetting.defaultOn
+    @State private var livingClock = LivingPaintingClock()
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
@@ -62,6 +67,12 @@ struct CharacterPortraitView: View {
     /// its expression; these are the host's own visibility gates.
     private var puppetHostActive: Bool {
         enabled && !motionPaused && visible && onScreen && (playing || listening || stage)
+    }
+    /// The warped painting replaces the sliced head on the large stage only;
+    /// compact portraits keep the original pictures.
+    private var livingRigName: String? {
+        guard livingPainting ?? livingPaintingsSetting, stage, side.isFinite, side >= 160, prepared else { return nil }
+        return LivingPaintingCast.rigName(agentID: agentID)
     }
     private var angelArtwork: CharacterAngelVectorArt? {
         CharacterAngelArtwork.approved(agentID: agentID, avatarPath: path)
@@ -132,6 +143,10 @@ struct CharacterPortraitView: View {
                 let pose = reviewedPose(CharacterMotion.pose(id: agentID ?? "unknown",
                     time: time, level: outputLevel, active: active, presentation: performance,
                     performance: bodyPerformance, facial: facial))
+                let living = livingRigName.map { _ in
+                    livingChannels(time: time, performance: performance, speaking: speaking,
+                        level: outputLevel, blink: pose.blink)
+                }
                 let angelFacial = angelArtwork.map { _ in
                     angelFaceClock.pose(face: face, blink: pose.blink,
                         time: time, active: active, activity: performance.activity)
@@ -159,11 +174,11 @@ struct CharacterPortraitView: View {
                                 limits: CharacterDellaBustGeometry.artwork.motionLimits)),
                             arms: reviewedDellaArms(CharacterDellaArmMotion.pose(time: time, level: outputLevel,
                                 active: active, presentation: performance, performanceElapsed: performanceElapsed,
-                                performance: bodyPerformance)))
+                                performance: bodyPerformance)), living: living)
                     } else if let artwork = conversationBodyArtwork {
                         conversationBody(artwork, pose: pose, face: face, body: bodyPose,
                             presentation: performance, elapsed: performanceElapsed,
-                            outputLevel: outputLevel, performance: bodyPerformance)
+                            outputLevel: outputLevel, performance: bodyPerformance, living: living)
                     } else if let art = angelArtwork {
                         let facial = angelFacial ?? AngelVectorMotion.facial(face, blink: pose.blink, active: active)
                         CharacterAngelVectorView(art: art,
@@ -181,7 +196,7 @@ struct CharacterPortraitView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 22))
                     } else if let artwork = bustArtwork {
                         layeredBust(artwork, pose: pose, face: face,
-                            motion: CharacterBustMotion.pose(bodyPose, limits: artwork.motionLimits))
+                            motion: CharacterBustMotion.pose(bodyPose, limits: artwork.motionLimits), living: living)
                     } else if let artwork = figureArtwork, let sheet {
                         layeredFigure(artwork, sheet: sheet, pose: pose, face: face,
                             body: bodyPose)
@@ -222,9 +237,9 @@ struct CharacterPortraitView: View {
                 return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
             }) { onScreen = $0 }
             .onAppear { visible = true }
-            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset() }
+            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset() }
             .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
-                bodyClock.reset(); angelFaceClock.reset(); faceClock.reset()
+                bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
             }
             .task { await agents.loadIfNeeded() }
             .task(id: agentID) {
@@ -484,7 +499,7 @@ struct CharacterPortraitView: View {
     /// speaking and expression patches. Mask and cut path move with that whole
     /// composite, so a gesture cannot slide a mouth across an unmoving face.
     private func layeredBust(_ artwork: CharacterBustArtwork, pose: CharacterPose,
-                            face: CharacterFace, motion: CharacterBustPose) -> some View {
+                            face: CharacterFace, motion: CharacterBustPose, living: [Double]? = nil) -> some View {
         let unit = side / artwork.cropSide
         let neck = UnitPoint(x: CGFloat((artwork.neckX - artwork.cropX) / artwork.cropSide),
                              y: CGFloat((artwork.neckY - artwork.cropY) / artwork.cropSide))
@@ -520,13 +535,89 @@ struct CharacterPortraitView: View {
                         .offset(y: motion.breathOffsetY * unit)
                 }
             }
-            maskedBustHead(artwork, pose: pose, face: face, unit: unit)
-                .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
-                .rotationEffect(.degrees(motion.headAngle), anchor: neck)
-                .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
+            livingOrSlicedHead(artwork, pose: pose, face: face, motion: motion, living: living) {
+                maskedBustHead(artwork, pose: pose, face: face, unit: unit)
+                    .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
+                    .rotationEffect(.degrees(motion.headAngle), anchor: neck)
+                    .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
+            }
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+
+    /// Oct 16 2026: the living painting draws the same head on a bending
+    /// grid; its own turn and lift replace the rigid rotation. The sliced
+    /// head stays until the painting's pictures are loaded, and wherever the
+    /// painting is off or unavailable.
+    /// Which head cut a living head's matte copies: the bust's own outline,
+    /// or Lilly's extended neck-and-hood cut on the tall stage.
+    enum LivingCut: String { case bust, conversationLilly }
+
+    @ViewBuilder private func livingOrSlicedHead<Sliced: View>(_ artwork: CharacterBustArtwork,
+            pose: CharacterPose, face: CharacterFace, motion: CharacterBustPose, living: [Double]?,
+            carried: Bool = false, cut: LivingCut = .bust,
+            @ViewBuilder sliced: @escaping () -> Sliced) -> some View {
+        if let living, let rigName = livingRigName, artwork.cropSide > 0, artwork.panelSide > 0 {
+            // The painted panel's own square inside this side-by-side head frame.
+            let unit = side / artwork.cropSide
+            let placement = CGRect(x: (artwork.panelX - artwork.cropX) * unit, y: (artwork.panelY - artwork.cropY) * unit,
+                width: artwork.panelSide * unit, height: artwork.panelSide * unit)
+            LivingPaintingHead(rigName: rigName, cutKey: cut.rawValue,
+                outline: { cut == .conversationLilly ? CharacterBustOutlinePanel.conversationLilly(artwork)
+                    : CharacterBustOutlinePanel.bust(artwork) },
+                placement: placement,
+                state: livingState(living, pose: pose, face: face, motion: motion, artwork: artwork, carried: carried),
+                fallback: sliced)
+                .frame(width: side, height: side, alignment: .topLeading)
+        } else {
+            sliced()
+        }
+    }
+
+    /// The painted face's motion channels for this frame: the shared engine
+    /// with a painted face, the portrait's own blink (its frame schedule
+    /// samples every blink), still when the portrait is paused.
+    private func livingChannels(time: Double, performance: CharacterPresentation, speaking: Bool,
+                                level: Double, blink: Double) -> [Double] {
+        let expression = PuppetMotion.expressionName(for: performance)
+        var channels: [Double]
+        if active {
+            channels = livingClock.channels(identity: (agentID ?? "unknown") + "|" + (path ?? ""), time: time,
+                input: PuppetMotion.Input(speaking: speaking,
+                    level: speaking ? PuppetMotion.voiceLevel(level) : 0,
+                    listening: !speaking && (listening || performance.activity == .listening)),
+                expression: expression)
+        } else {
+            livingClock.pause()
+            channels = PuppetMotion.stillChannels(expression: expression, options: LivingPaintingClock.options)
+        }
+        if PuppetChannel.eyeBlink.rawValue < channels.count {
+            channels[PuppetChannel.eyeBlink.rawValue] = blink.isFinite ? min(1, max(0, blink)) : 0
+        }
+        return channels
+    }
+
+    private func livingState(_ channels: [Double], pose: CharacterPose, face: CharacterFace,
+                             motion: CharacterBustPose, artwork: CharacterBustArtwork,
+                             carried: Bool) -> LivingPaintingState {
+        var state = LivingPaintingState()
+        state.channels = channels
+        // Witherspoon's sheets hold the nine basic faces only, as for her
+        // sliced portrait.
+        let basicOnly = agentID == CharacterMotion.witherspoonID
+        state.face = LivingPaintingPanel(face: basicOnly ? face.basicSheetFace : face)
+        state.prior = LivingPaintingPanel(face: basicOnly ? pose.priorFace.basicSheetFace : pose.priorFace)
+        state.blend = pose.faceBlend
+        if carried {
+            // The tall body already turns and lifts this head as one piece.
+            if PuppetChannel.headRoll.rawValue < state.channels.count { state.channels[PuppetChannel.headRoll.rawValue] = 0 }
+        } else {
+            state.rollDegrees = motion.headAngle
+            // The bust's offsets are in its world pixels; the rig's in panel pixels.
+            state.offsetY = (motion.headOffsetY + motion.breathOffsetY) * 414 / artwork.panelSide
+        }
+        return state
     }
 
     /// Same native face/patch/matte compositor, with the accepted square's
@@ -534,19 +625,29 @@ struct CharacterPortraitView: View {
     private func conversationBody(_ artwork: CharacterConversationBodyArtwork,
                                   pose: CharacterPose, face: CharacterFace, body: CharacterFigurePose,
                                   presentation: CharacterPresentation, elapsed: Double,
-                                  outputLevel: Double, performance: CharacterBodyPerformanceSample) -> some View {
+                                  outputLevel: Double, performance: CharacterBodyPerformanceSample,
+                                  living: [Double]? = nil) -> some View {
         let bust = artwork.existingBust
         let unit = side / bust.cropSide
+        // The tall body turns and lifts the head itself, so a living head
+        // here only warps the face (`carried`).
+        let carried = CharacterBustPose(headAngle: 0, bodyAngle: 0, headOffsetY: 0, bodyOffsetY: 0)
         return ZStack(alignment: .topLeading) {
             CharacterConversationBodyView(artwork: artwork, side: side, active: active,
                 presentation: presentation, figurePose: body, elapsed: elapsed,
                 outputLevel: outputLevel, performance: performance) {
                     if artwork.kind == .lilly {
-                        maskedBustHead(bust, pose: pose, face: face, unit: unit)
-                            .clipShape(CharacterConversationLillyHeadCut(artwork: bust))
+                        livingOrSlicedHead(bust, pose: pose, face: face, motion: carried, living: living,
+                            carried: true, cut: .conversationLilly) {
+                            maskedBustHead(bust, pose: pose, face: face, unit: unit)
+                                .clipShape(CharacterConversationLillyHeadCut(artwork: bust))
+                        }
                     } else {
-                        maskedBustHead(bust, pose: pose, face: face, unit: unit)
-                            .clipShape(CharacterBustCut(artwork: bust, outline: bust.headOutline))
+                        livingOrSlicedHead(bust, pose: pose, face: face, motion: carried, living: living,
+                            carried: true) {
+                            maskedBustHead(bust, pose: pose, face: face, unit: unit)
+                                .clipShape(CharacterBustCut(artwork: bust, outline: bust.headOutline))
+                        }
                     }
                 }
             if let sheet {
@@ -568,7 +669,8 @@ struct CharacterPortraitView: View {
     }
 
     private func articulatedDella(pose: CharacterPose, face: CharacterFace,
-                                  motion: CharacterBustPose, arms: CharacterDellaArmPose) -> some View {
+                                  motion: CharacterBustPose, arms: CharacterDellaArmPose,
+                                  living: [Double]? = nil) -> some View {
         let geometry = CharacterDellaArticulatedGeometry.self
         let artwork = CharacterDellaBustGeometry.artwork
         let height = geometry.stageHeight(side: side)
@@ -599,10 +701,12 @@ struct CharacterPortraitView: View {
             .offset(y: (motion.bodyOffsetY + motion.breathOffsetY) * unit)
             // The original atlas and generated alpha-only mask remain at their
             // accepted destinations. Tall framing never stretches the head.
-            maskedBustHead(artwork, pose: pose, face: face, unit: unit)
-                .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
-                .rotationEffect(.degrees(motion.headAngle), anchor: neck)
-                .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
+            livingOrSlicedHead(artwork, pose: pose, face: face, motion: motion, living: living) {
+                maskedBustHead(artwork, pose: pose, face: face, unit: unit)
+                    .clipShape(CharacterBustCut(artwork: artwork, outline: artwork.headOutline))
+                    .rotationEffect(.degrees(motion.headAngle), anchor: neck)
+                    .offset(y: (motion.headOffsetY + motion.breathOffsetY) * unit)
+            }
         }
         .frame(width: side, height: height, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -934,5 +1038,27 @@ private struct CharacterBustCut: Shape {
         path.addCurve(to: CGPoint(x: 306, y: 286), control1: CGPoint(x: 284, y: 336), control2: CGPoint(x: 289, y: 308))
         path.closeSubpath()
         return path
+    }
+}
+
+/// Oct 16 2026: a head cut in its 414-pixel atlas panel's own pixels, the
+/// same cut the sliced head uses, for the living painting's matte. Each cut
+/// is laid out for a crop frame at the origin, then moved so the panel
+/// starts at zero.
+enum CharacterBustOutlinePanel {
+    static func bust(_ artwork: CharacterBustArtwork) -> CGPath {
+        panelPath(CharacterBustCut(artwork: artwork, outline: artwork.headOutline), artwork)
+    }
+
+    static func conversationLilly(_ artwork: CharacterBustArtwork) -> CGPath {
+        panelPath(CharacterConversationLillyHeadCut(artwork: artwork), artwork)
+    }
+
+    private static func panelPath<Cut: Shape>(_ cut: Cut, _ artwork: CharacterBustArtwork) -> CGPath {
+        let unit = 414 / artwork.panelSide
+        let side = artwork.cropSide * unit
+        let path = cut.path(in: CGRect(x: 0, y: 0, width: side, height: side))
+        return path.applying(CGAffineTransform(translationX: -(artwork.panelX - artwork.cropX) * unit,
+            y: -(artwork.panelY - artwork.cropY) * unit)).cgPath
     }
 }

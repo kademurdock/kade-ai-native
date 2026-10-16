@@ -553,8 +553,14 @@ final class Earcons {
     /// byte; a resume passes ~0.45s and the bubbles swell back under the
     /// silence instead of snapping on.
     func startWaitingLoop(fadeIn: TimeInterval = 0) {
-        guard FeedbackPrefs.shared.soundEffects else { return }
-        if let player = waitingPlayer, player.isPlaying { return }
+        guard FeedbackPrefs.shared.soundEffects else {
+            if fadeIn == 0 { KadeBreadcrumbs.drop("thinking loop: skipped, Sound effects is off") }
+            return
+        }
+        if let player = waitingPlayer, player.isPlaying {
+            if fadeIn == 0 { KadeBreadcrumbs.drop("thinking loop: already playing at volume \(player.volume)") }
+            return
+        }
         guard prepareFeedbackSession() else { return }
         waitingPlayer = nil
         // July 22 2026: Kade's bubbling Thinking loop (shipped pre-trimmed —
@@ -578,6 +584,7 @@ final class Earcons {
             if fadeIn > 0 { player.setVolume(target, fadeDuration: fadeIn) }
             waitingPlayer = player
             waitingVolume = target
+            crumbWaitingLoop(fadeIn: fadeIn, sound: "bubbles")
             return
         }
         if waitingData == nil {
@@ -612,11 +619,29 @@ final class Earcons {
         if fadeIn > 0 { player.setVolume(synthTarget, fadeDuration: fadeIn) }
         waitingPlayer = player
         waitingVolume = synthTarget
+        crumbWaitingLoop(fadeIn: fadeIn, sound: "fallback ticks (bubbles file missing)")
     }
 
-    func stopWaitingLoop() {
+    /// Oct 16 2026 (her report: no bubbles in 337, ring switch off): one trail
+    /// line per start, saying which sound played and on which audio profile.
+    private var waitingStartedAt: Date?
+    private func crumbWaitingLoop(fadeIn: TimeInterval, sound: String) {
+        waitingStartedAt = Date()
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let mutable = session.category == .ambient || session.category == .soloAmbient
+        KadeBreadcrumbs.drop("thinking loop: playing \(sound) (\(fadeIn > 0 ? "gap resume" : "send")) category=\(session.category.rawValue) silentSwitchMutes=\(mutable) vo=\(UIAccessibility.isVoiceOverRunning) route=\(route)")
+    }
+
+    /// The default arguments name the caller in the trail, with how long the
+    /// bubbles ran; no caller changes.
+    func stopWaitingLoop(caller: StaticString = #fileID, line: UInt = #line) {
+        if let player = waitingPlayer, player.isPlaying, let started = waitingStartedAt {
+            KadeBreadcrumbs.drop("thinking loop: stopped after \(String(format: "%.1f", Date().timeIntervalSince(started)))s by \(caller):\(line)")
+        }
         waitingPlayer?.stop()
         waitingPlayer = nil
+        waitingStartedAt = nil
     }
 
     /// Clubhouse room chimes (Aug 4 2026, Kade: "make it play the connect and
