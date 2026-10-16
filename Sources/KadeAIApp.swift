@@ -38,7 +38,8 @@ struct KadeAIApp: App {
     private var offlineCharacterReview: Bool {
         #if DEBUG && targetEnvironment(simulator)
         return ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" ||
-            (ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing)
+            (ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing) ||
+            PuppetGalleryView.isRequested
         #else
         return false
         #endif
@@ -66,7 +67,9 @@ struct KadeAIApp: App {
         WindowGroup {
             Group {
                 #if DEBUG && targetEnvironment(simulator)
-                if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
+                if PuppetGalleryView.isRequested {
+                    PuppetGalleryView()
+                } else if ProcessInfo.processInfo.environment["KADE_PUPPET_LAB"] == "1" && KadeUITestMode.isAuditing {
                     CharacterPuppetLabView()
                 } else if ProcessInfo.processInfo.environment["KADE_CHARACTER_AUDIT"] == "1" {
                     if CharacterPuppetCompletionAudit.isEnabled {

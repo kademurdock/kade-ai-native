@@ -107,6 +107,10 @@ targets:
       configs:
         Debug:
           ENABLE_DEBUG_DYLIB: "NO"
+        # Oct 16 2026: the puppet gallery's sample bodies are data for a DEBUG
+        # simulator screen only (PuppetGalleryView); a release never carries them.
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: PuppetSamples.json
     info:
       path: Sources/Info.plist
       properties:
