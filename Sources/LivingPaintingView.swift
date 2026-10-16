@@ -250,7 +250,7 @@ struct LivingPaintingGalleryView: View {
                 Self.pair(0, "resting", [:]),
                 Self.pair(1, "blink, half", ["eye.blink": 0.5]),
                 Self.pair(2, "glance and head turn", ["head.yaw": 0.7, "gaze.x": 0.8, "head.roll": 0.4, "hair.swing": -0.6]),
-                Self.pair(3, "brows up, eyes wide", ["brow.raise": 1, "eye.wide": 1]),
+                Self.pair(3, "brows lift on a stressed word", ["brow.raise": 0.45, "gaze.y": -0.2]),
             ]
         }
     }

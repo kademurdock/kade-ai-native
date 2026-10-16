@@ -110,7 +110,12 @@ def smooth01(v):
 
 def region_mask(lm, name, X, Y):
     if name == 'brows':
+        # Brows and forehead only: the lashes and the eye opening stay put, so
+        # a lifting brow stretches the lid skin instead of smearing the lashes.
         m = sum(smooth01(soft_ellipse(X, Y, b['x'], b['y'] + 2, b['w'] * 1.5, b['h'] * 2.6, 0.35)) for b in lm['brows'])
+        for e in lm['eyes']:
+            m = m * (1 - smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['w'] * 1.25,
+                                               (e['lower'] - e['upper']) / 2 + 4, 0.4)))
     elif name == 'eyes':
         m = sum(smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['w'] * 1.7, 15, 0.4)) for e in lm['eyes'])
     elif name == 'cheeks':

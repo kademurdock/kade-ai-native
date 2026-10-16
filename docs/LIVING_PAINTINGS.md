@@ -131,7 +131,11 @@ expression panels, the speaking mouth panels, the painted closed eyes.
   (needs `pip install opencv-python-headless numpy pillow` on the developer's
   computer only).
 
-Cost: the grid takes a fraction of a millisecond of CPU per frame; the GPU
+Cost: one frame's grid took 0.044 ms on the CI Mac (optimized build,
+LivingPaintingTests, Oct 16 2026). The slowest phone the app supports (iPhone
+XS/XR, A12, iOS 17) is roughly three to four times slower per core, so about
+0.15 to 0.2 ms, under 1% of one core at 30 frames a second; this is an
+estimate, not yet measured on a phone. The GPU
 draws at most six layers of 8,064 textured triangles over about 600 by 600
 pixels, which is far below the old SwiftUI masks and blurs. Frame rates and
 pauses follow the existing portrait budget (8 to 30 frames a second, none in
@@ -146,6 +150,28 @@ arithmetic, so the web port is the same grid drawn with WebGL: one
 `drawElements` per layer with per-layer texture coordinates and the same
 fragment masks, driven by `motion.mjs`. Canvas 2D textured triangles were
 considered and rejected (seams between triangles, too slow at this density).
+
+## The rest of the cast and the web: plan and cost
+
+Nothing below needs paid art. Every step runs on the developer's computer
+and the free GitHub macOS runners; a TestFlight build waits for Kade's word.
+
+| Step | What it takes | Time | Money |
+| --- | --- | --- | --- |
+| Renderer, once | head frames placed anywhere in the stage (Kiana, Lilly, Harley and Witherspoon's panels are not their crop); head cut from an outline path drawn into a matte at load (Kiana, Lilly, Witherspoon have no matte picture) | about 1 hour | none |
+| Kiana | landmarks, rig, gallery; locs swing more (hair reach) | 1.5 to 2 hours | none |
+| Lilly (and Skylee's Lilly, same art) | landmarks, rig; the cats stay still beside her as now; hood edge held like hair | about 2 hours | none |
+| Harley | landmarks, rig; his hat brim moves with his head as one piece instead of bending like a face | 2 to 3 hours | none |
+| Mrs. Witherspoon | landmarks, rig from her nine basic faces (she has no nuance sheet); her crown is cropped by the stage, so pitch stays small | about 1.5 hours | none |
+| Angel | not a painting: she is already drawn by code and moves that way | none | none |
+| Web | a WebGL copy of the runtime and renderer driven by `motion.mjs` (with the painted-face option mirrored), tested against the same golden file; the rig files served beside the characters' web pictures | 4 to 6 hours | none |
+| Real phone check | a TestFlight build with the setting on for Kade's family, plus a frame-time readout, to measure the oldest phone in use | one build | none |
+
+Optional extra pictures, only with Kade's yes (about $0.14 each with Gemini
+image generation): a back-hair plate for Kiana and one for Lilly, so long
+hair can swing without the head's outline (2 pictures, about $0.28); loose
+irises for wider glances (one per painted character, 5 pictures, about
+$0.70). All seven together: about $1.
 
 ## Limits
 
