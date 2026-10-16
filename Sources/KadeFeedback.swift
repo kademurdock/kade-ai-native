@@ -518,27 +518,12 @@ final class Earcons {
     }
 
     /// Only choose a mixing UI-sound profile when no other app audio lane has
-    /// configured the session (untouched .soloAmbient, or the .ambient chosen
-    /// here earlier). Recording, calls, books and speech own theirs.
-    ///
-    /// Oct 16 2026 (Kade, build 337: "I no longer hear audio bubbles when
-    /// waiting on my reply"): .ambient obeys the ring/silent switch, so on a
-    /// silenced phone every send before the app run's first spoken clip had no
-    /// send bloop and no bubbles; the reply voice (.playback) already plays
-    /// through silent. Under VoiceOver the feedback sounds now use the voice's
-    /// own mixing profile, so they are heard exactly when the voice is. Still
-    /// chosen only at a real sound, never at launch or idle, and never
-    /// activates the session (d58a6d3). Sighted users keep .ambient.
+    /// configured the session. Recording, calls, books and speech own theirs.
     private func prepareFeedbackSession() -> Bool {
         let session = AVAudioSession.sharedInstance()
-        let category = session.category
-        guard category == .soloAmbient || category == .ambient else { return true }
+        guard session.category == .soloAmbient else { return true }
         do {
-            if UIAccessibility.isVoiceOverRunning {
-                try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            } else if category == .soloAmbient {
-                try session.setCategory(.ambient, mode: .default)
-            }
+            try session.setCategory(.ambient, mode: .default)
             return true
         } catch {
             KadeBreadcrumbs.drop("feedback audio: mixing setup failed (\(error.localizedDescription))")
@@ -599,7 +584,7 @@ final class Earcons {
             if fadeIn > 0 { player.setVolume(target, fadeDuration: fadeIn) }
             waitingPlayer = player
             waitingVolume = target
-            crumbWaitingLoop(fadeIn: fadeIn)
+            crumbWaitingLoop(fadeIn: fadeIn, sound: "bubbles")
             return
         }
         if waitingData == nil {
@@ -634,18 +619,18 @@ final class Earcons {
         if fadeIn > 0 { player.setVolume(synthTarget, fadeDuration: fadeIn) }
         waitingPlayer = player
         waitingVolume = synthTarget
-        crumbWaitingLoop(fadeIn: fadeIn)
+        crumbWaitingLoop(fadeIn: fadeIn, sound: "fallback ticks (bubbles file missing)")
     }
 
-    /// Oct 16 2026: one trail line per start, so a "no bubbles" report says
-    /// whether the loop played and whether the silent switch could mute it.
+    /// Oct 16 2026 (her report: no bubbles in 337, ring switch off): one trail
+    /// line per start, saying which sound played and on which audio profile.
     private var waitingStartedAt: Date?
-    private func crumbWaitingLoop(fadeIn: TimeInterval) {
+    private func crumbWaitingLoop(fadeIn: TimeInterval, sound: String) {
         waitingStartedAt = Date()
         let session = AVAudioSession.sharedInstance()
         let route = session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
         let mutable = session.category == .ambient || session.category == .soloAmbient
-        KadeBreadcrumbs.drop("thinking loop: playing (\(fadeIn > 0 ? "gap resume" : "send")) category=\(session.category.rawValue) silentSwitchMutes=\(mutable) vo=\(UIAccessibility.isVoiceOverRunning) route=\(route)")
+        KadeBreadcrumbs.drop("thinking loop: playing \(sound) (\(fadeIn > 0 ? "gap resume" : "send")) category=\(session.category.rawValue) silentSwitchMutes=\(mutable) vo=\(UIAccessibility.isVoiceOverRunning) route=\(route)")
     }
 
     /// The default arguments name the caller in the trail when a loop is

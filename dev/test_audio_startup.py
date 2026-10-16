@@ -49,14 +49,9 @@ class AudioStartupTests(unittest.TestCase):
 
     def test_actual_feedback_only_selects_an_untouched_mixing_profile(self):
         setup = method(EARCONS, "prepareFeedbackSession")
-        # Oct 16 2026: only an untouched session or the .ambient chosen here.
-        self.assertRegex(setup, r"guard category == \.soloAmbient \|\| category == \.ambient else\s*\{\s*return true\s*\}")
-        self.assertLess(setup.index("guard category"), setup.index("setCategory"))
-        # Under VoiceOver feedback uses the reply voice's own profile, heard on silent like the voice.
-        self.assertRegex(setup, r"if UIAccessibility\.isVoiceOverRunning\s*\{\s*try session\.setCategory\(\.playback, mode: \.default, options: \[\.mixWithOthers\]\)")
-        # Sighted users keep the silent-switch-respecting profile.
-        self.assertRegex(setup, r"else if category == \.soloAmbient\s*\{\s*try session\.setCategory\(\.ambient, mode: \.default\)")
-        self.assertEqual(setup.count("setCategory("), 2)
+        self.assertRegex(setup, r"guard session\.category == \.soloAmbient else\s*\{\s*return true\s*\}")
+        self.assertIn("session.setCategory(.ambient, mode: .default)", setup)
+        self.assertLess(setup.index("guard session.category"), setup.index("setCategory"))
         self.assertRegex(setup, r"catch\s*\{[\s\S]*return false")
         self.assertNotRegex(setup, r"setActive|duckOthers|interruptSpokenAudio|overrideOutputAudioPort|setPreferredInput|volume")
 
