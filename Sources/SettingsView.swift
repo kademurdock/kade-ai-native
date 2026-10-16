@@ -247,23 +247,15 @@ struct SettingsView: View {
             ShareSheet(item: item)
         }
         .confirmationDialog(
-            "Voice delivery pace",
+            "Voice speed",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
-            ForEach(VoicePacePolicy.fishOptions, id: \.value) { pace in
-                Button("Fish: \(pace.label)") {
-                    voiceService.fishPace = pace.value
-                    UIAccessibility.post(notification: .announcement, argument: "Fish delivery pace \(pace.label). Applies to the next message.")
-                }
-            }
-            ForEach(VoiceService.availableRates, id: \.self) { rate in
-                Button("Classic Inworld: \(VoiceService.rateSpokenLabel(rate))") {
-                    voiceService.playbackRate = rate
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: "Classic Inworld \(VoiceService.rateSpokenLabel(rate)). Applies to the next message."
-                    )
+            // Oct 16 2026: one list for every voice, Fish and Classic alike.
+            ForEach(VoicePacePolicy.options, id: \.value) { pace in
+                Button(pace.label) {
+                    voiceService.voicePace = pace.value
+                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(pace.label). Applies to the next message.")
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -848,7 +840,7 @@ struct SettingsView: View {
                 tileLabel("Voice speed", systemImage: "speedometer", tint: SectionTint.voice)
                     .foregroundStyle(Color.primary)
                 Spacer()
-                Text("\(voiceService.fishPace == "character" ? "Auto" : VoicePacePolicy.fishName(voiceService.fishPace)) / \(VoiceService.rateLabel(voiceService.playbackRate))")
+                Text(VoicePacePolicy.chipLabel(voiceService.voicePace))
                     .foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
@@ -858,8 +850,8 @@ struct SettingsView: View {
         // children:.ignore on a Button — this was the exact construction
         // that killed Amber's conversation rows. Label/value/hint stay.
         .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice speed") : "Voice speed")
-        .accessibilityValue("Fish: \(VoicePacePolicy.fishName(voiceService.fishPace)). Classic Inworld: \(VoiceService.rateSpokenLabel(voiceService.playbackRate)).")
-        .accessibilityHint("Choose Fish delivery instructions or Classic Inworld API speed for the next voice message. Current audio keeps its original speed.")
+        .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
+        .accessibilityHint("Choose how fast every voice speaks, starting with the next message.")
     }
 
     private func pronunciationRow(searchStyle: Bool) -> some View {

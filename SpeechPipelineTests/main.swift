@@ -950,32 +950,39 @@ checkEqual("Inworld clamps rates below its API range", VoicePacePolicy.rate(base
 checkEqual("Inworld keeps a supported rate exact", VoicePacePolicy.rate(base: 1.4, preference: 1.2), 1.2)
 checkEqual("Inworld retains a character rate without a listener override", VoicePacePolicy.rate(base: 1.25, preference: nil), 1.25)
 checkEqual("Invalid rate never reaches the provider", VoicePacePolicy.rate(base: nil, preference: .nan), 1)
-checkEqual("Fish unhurried selects an instruction value", VoicePacePolicy.fishRate("unhurried", base: 1.2), 0.75)
-checkEqual("Fish easygoing selects an instruction value", VoicePacePolicy.fishRate("easygoing", base: nil), 0.9)
-checkEqual("Fish natural overrides a fast character", VoicePacePolicy.fishRate("natural", base: 1.5), 1)
-checkEqual("Fish brisk selects an instruction value", VoicePacePolicy.fishRate("brisk", base: 0.75), 1.2)
-checkEqual("Fish quick selects an instruction value", VoicePacePolicy.fishRate("quick", base: nil), 1.5)
-checkEqual("Fish character pace retains the saved setting", VoicePacePolicy.fishRate("character", base: 1.2), 1.2)
-checkEqual("Unknown saved Fish pace safely uses the character setting", VoicePacePolicy.fishRate("unknown", base: nil), 1)
-check("Classic metadata wins over Fish-looking names", !VoicePacePolicy.isFish(voice: "fish:old-alias", providers: ["fish:old-alias": "inworld"]))
-check("Saved Inworld aliases use provider metadata", !VoicePacePolicy.isFish(voice: "Miss-A", providers: ["Miss-A": "inworld"]))
-check("New personal Fish voices retain their provider", VoicePacePolicy.isFish(voice: "Miss-A (Amber A)", providers: ["Miss-A (Amber A)": "fish"]))
-check("Classic fallback is safe while metadata is unavailable", !VoicePacePolicy.isFish(voice: "Cedar (Classic)", providers: [:]))
-checkEqual("Fish pace labels make no numerical speed promise", VoicePacePolicy.fishName("brisk"), "Brisk")
-checkEqual("Unknown Fish label is a safe character default", VoicePacePolicy.fishName("unknown"), "Character setting")
-checkEqual("Classic speed labels keep two decimals", VoicePacePolicy.classicRates.map { VoicePacePolicy.rateLabel($0) },
-    ["0.5x", "0.75x", "1x", "1.2x", "1.25x", "1.5x"])
-check("Every classic speed button has its own label",
-    Set(VoicePacePolicy.classicRates.map { VoicePacePolicy.rateLabel($0) }).count == VoicePacePolicy.classicRates.count)
-check("Float-widened picker speeds keep their labels",
-    VoicePacePolicy.classicRates.allSatisfy { VoicePacePolicy.rateLabel(Double(Float($0))) == VoicePacePolicy.rateLabel($0) })
+// Oct 16 2026: one pace for every voice; the proxy maps it per provider.
+checkEqual("Unhurried overrides a fast character", VoicePacePolicy.paceRate("unhurried", base: 1.2), 0.75)
+checkEqual("Easygoing selects its value", VoicePacePolicy.paceRate("easygoing", base: nil), 0.9)
+checkEqual("Natural overrides a fast character", VoicePacePolicy.paceRate("natural", base: 1.5), 1)
+checkEqual("Brisk overrides a slow character", VoicePacePolicy.paceRate("brisk", base: 0.75), 1.2)
+checkEqual("Quick selects its value", VoicePacePolicy.paceRate("quick", base: nil), 1.5)
+checkEqual("Character's own speed retains the saved setting", VoicePacePolicy.paceRate("character", base: 1.2), 1.2)
+checkEqual("Unknown saved pace safely uses the character setting", VoicePacePolicy.paceRate("unknown", base: nil), 1)
+checkEqual("Pace names make no numerical speed promise", VoicePacePolicy.name("brisk"), "Brisk")
+checkEqual("Unknown pace name is a safe character default", VoicePacePolicy.name("unknown"), "Character's own speed")
+checkEqual("The chip says Auto for the character's own speed", VoicePacePolicy.chipLabel("character"), "Auto")
+checkEqual("The chip names a chosen pace", VoicePacePolicy.chipLabel("quick"), "Quick")
+checkEqual("The chip never shows an unknown saved value", VoicePacePolicy.chipLabel("1.25"), "Auto")
+check("One list, each pace named once", Set(VoicePacePolicy.options.map { $0.label }).count == VoicePacePolicy.options.count)
+check("No list entry names a provider",
+    VoicePacePolicy.options.allSatisfy { !$0.label.contains("Fish") && !$0.label.contains("Classic") && !$0.label.contains("Inworld") })
 
-checkEqual("No old speed keeps the character default", VoicePacePolicy.legacyFishPace(nil), "character")
-checkEqual("Old normal speed keeps the character default", VoicePacePolicy.legacyFishPace(1), "character")
-checkEqual("Saved 1.2 becomes Brisk rather than silently resetting", VoicePacePolicy.legacyFishPace(1.2), "brisk")
-checkEqual("Saved slow speed becomes Unhurried", VoicePacePolicy.legacyFishPace(0.75), "unhurried")
-checkEqual("Saved 2x becomes Quick without residual stretching", VoicePacePolicy.legacyFishPace(2), "quick")
-checkEqual("Invalid stored speed has a safe default", VoicePacePolicy.legacyFishPace(.nan), "character")
+checkEqual("No old speed keeps the character default", VoicePacePolicy.legacyPace(nil), "character")
+checkEqual("Old normal speed keeps the character default", VoicePacePolicy.legacyPace(1), "character")
+checkEqual("Saved 1.2 becomes Brisk rather than silently resetting", VoicePacePolicy.legacyPace(1.2), "brisk")
+checkEqual("Saved slow speed becomes Unhurried", VoicePacePolicy.legacyPace(0.75), "unhurried")
+checkEqual("Saved 2x becomes Quick without residual stretching", VoicePacePolicy.legacyPace(2), "quick")
+checkEqual("Invalid stored speed has a safe default", VoicePacePolicy.legacyPace(.nan), "character")
+checkEqual("A chosen Fish pace becomes the one voice speed",
+    VoicePacePolicy.unifiedPace(fishPace: "brisk", classicRate: 0.5), "brisk")
+checkEqual("A Classic rate is kept when Fish was left on the character setting",
+    VoicePacePolicy.unifiedPace(fishPace: "character", classicRate: 1.25), "brisk")
+checkEqual("A Classic rate is kept when Fish pace was never saved",
+    VoicePacePolicy.unifiedPace(fishPace: nil, classicRate: 0.75), "unhurried")
+checkEqual("A damaged Fish pace falls back to the Classic rate",
+    VoicePacePolicy.unifiedPace(fishPace: "warp", classicRate: 1.5), "quick")
+checkEqual("Nothing saved keeps the character's own speed",
+    VoicePacePolicy.unifiedPace(fishPace: nil, classicRate: nil), "character")
 
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {

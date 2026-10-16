@@ -185,33 +185,28 @@ final class VoiceService: NSObject, ObservableObject {
      * queued, and — via this property — everything the pump has in flight. */
     private var streamedTurnKey: String?
 
-    /// Generation preferences apply to the next request; they never stretch playing audio.
-    @Published var playbackRate: Float = VoiceService.loadPlaybackRate() {
-        didSet { UserDefaults.standard.set(playbackRate, forKey: Self.playbackRateKey) }
+    /// One voice speed for every voice (Oct 16 2026). Generation preferences
+    /// apply to the next request; they never stretch playing audio.
+    @Published var voicePace: String = VoiceService.loadVoicePace() {
+        didSet { UserDefaults.standard.set(voicePace, forKey: Self.voicePaceKey) }
     }
-    @Published var fishPace: String = VoiceService.loadFishPace() {
-        didSet { UserDefaults.standard.set(fishPace, forKey: "kade.voiceMessage.fishPace") }
-    }
-    private static let playbackRateKey = "kade.voiceMessage.playbackRate"
-    private static func loadFishPace() -> String {
-        if let kept = UserDefaults.standard.string(forKey: "kade.voiceMessage.fishPace"),
-           VoicePacePolicy.fishOptions.contains(where: { $0.value == kept }) { return kept }
-        let stored = UserDefaults.standard.object(forKey: playbackRateKey) as? NSNumber
-        let pace = VoicePacePolicy.legacyFishPace(stored?.doubleValue)
-        UserDefaults.standard.set(pace, forKey: "kade.voiceMessage.fishPace")
+    private static let voicePaceKey = "kade.voiceMessage.pace"
+    /// First run after the merge: the older Fish pace and Classic rate
+    /// preferences become the one pace (VoicePacePolicy.unifiedPace).
+    private static func loadVoicePace() -> String {
+        let defaults = UserDefaults.standard
+        if let kept = defaults.string(forKey: voicePaceKey),
+           VoicePacePolicy.options.contains(where: { $0.value == kept }) { return kept }
+        let classic = (defaults.object(forKey: "kade.voiceMessage.playbackRate") as? NSNumber)?.doubleValue
+        let pace = VoicePacePolicy.unifiedPace(fishPace: defaults.string(forKey: "kade.voiceMessage.fishPace"), classicRate: classic)
+        defaults.set(pace, forKey: voicePaceKey)
         return pace
     }
 
-
-    /// Oct 16 2026: never waits for the catalog download. Until it arrives,
-    /// isFish falls back to the "(Classic)" voice-name suffix.
-    private func synthesisSpeed(voice: String?, base: Double?, preference: Float, pace: String) async -> Double {
-        let providers = await VoiceCatalog.shared.cachedProviders()
-        if providers == nil { await VoiceCatalog.shared.prefetch() }
-        if VoicePacePolicy.isFish(voice: voice, providers: providers ?? [:]) {
-            return VoicePacePolicy.fishRate(pace, base: base)
-        }
-        return VoicePacePolicy.rate(base: base, preference: preference == 1 ? nil : Double(preference))
+    /// The same pace for Fish and Classic voices; the proxy maps it per
+    /// provider, so speech never waits on the voice catalog for this.
+    private func synthesisSpeed(base: Double?) -> Double {
+        VoicePacePolicy.paceRate(voicePace, base: base)
     }
 
     // MARK: Delivery (Part 119.3)
@@ -239,42 +234,13 @@ final class VoiceService: NSObject, ObservableObject {
         }
     }
 
-    /// The speeds offered in the picker. Deliberately a short, opinionated
-    /// list rather than a slider: a slider is fiddly with VoiceOver and
-    /// nobody actually wants 1.37x.
-    static let availableRates: [Float] = VoicePacePolicy.classicRates.map { Float($0) }
-
-    /// Compact form for the on-screen chip ("1x", "1.25x"); the tested
-    /// formatting lives in VoicePacePolicy.rateLabel.
-    nonisolated static func rateLabel(_ rate: Float) -> String {
-        // Explicit Double conversion: String(format:) takes CVarArg and a
-        // Float promoting through varargs is exactly the sort of thing that
-        // is "probably fine" rather than known-correct, which is not a trade
-        // worth making with no compiler here.
-        VoicePacePolicy.rateLabel(Double(rate))
-    }
-
-    /// Spoken form. "Normal speed" rather than "1x" for the default,
-    /// because that is the useful thing to hear when checking where you are.
-    nonisolated static func rateSpokenLabel(_ rate: Float) -> String {
-        if rate == 1.0 { return "Normal speed" }
-        return "\(rateLabel(rate)) speed"
-    }
-
-    private static func loadPlaybackRate() -> Float {
-        let stored = UserDefaults.standard.float(forKey: playbackRateKey)
-        // `float(forKey:)` returns 0 for "never set" -- which is also an
-        // invalid rate, so one check covers both.
-        return stored >= 0.5 && stored.isFinite ? min(1.5, stored) : 1.0
-    }
-
     /// Session 17 (Kade: "a native way to access settings like speech and
     /// whatnot"): the default "Voice messages" starting state for a FRESH
     /// `ConversationDetailView` -- that screen's own `readAloudEnabled` is
     /// plain per-view `@State` (always started `false` before this),
     /// seeded from this published, persisted value in its `.task` instead.
     /// Lives here rather than in a separate prefs object because it is
-    /// conceptually the same kind of setting as `playbackRate` right
+    /// conceptually the same kind of setting as `voicePace` right
     /// above -- one more small, non-sensitive speech preference, same
     /// persistence pattern, same home.
     @Published var defaultReadAloudOn: Bool = VoiceService.loadDefaultReadAloud() {
@@ -311,8 +277,7 @@ final class VoiceService: NSObject, ObservableObject {
      * off until you find the switch has the default backwards.
      *
      * An EXPLICIT off is still honoured: `bool(forKey:)` cannot tell "never
-     * set" from "set to false" (the trap loadPlaybackRate documents right
-     * above), so the stored object is checked for existence first. Somebody
+     * set" from "set to false", so the stored object is checked for existence first. Somebody
      * who turned it off keeps it off; only a seat that never touched it gets
      * the new default. */
     private static func loadDefaultReadAloud() -> Bool {
@@ -1125,7 +1090,7 @@ final class VoiceService: NSObject, ObservableObject {
         var fields: [(String, String)] = [("input", text)]
         if let voice { fields.append(("voice", voice)) }
         // The proxy interprets Fish pace as instructions and Classic pace as an API rate.
-        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
@@ -1210,7 +1175,7 @@ final class VoiceService: NSObject, ObservableObject {
         }
         var fields: [(String, String)] = [("input", item.text), ("stream", "1")]
         if let voice { fields.append(("voice", voice)) }
-        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: item.agentId) { fields.append(("delivery", delivery)) }
         return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
@@ -1365,7 +1330,7 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", trimmed)]
         if let voice { fields.append(("voice", voice)) }
-        let tuned = await synthesisSpeed(voice: voice, base: speed, preference: playbackRate, pace: fishPace)
+        let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
 
