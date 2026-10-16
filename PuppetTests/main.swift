@@ -322,9 +322,162 @@ for (index, prepared) in preparedFixtures.enumerated() {
     check(changed > 30, "fixture \(index) an open mouth and closed eyes change the picture (\(changed) pixels)")
 }
 
+// MARK: Body editor (PuppetRecipe.swift): recipe paths, sliders, accessories, Undo, words
+
+let builderStart = count
+func json(_ text: String) -> PuppetJSON {
+    do { return try JSONDecoder().decode(PuppetJSON.self, from: Data(text.utf8)) } catch { fatalError("json \(text): \(error)") }
+}
+let small = json(#"{"hair":{"style":"bob"},"accessories":["round-glasses","cowboy-hat",7],"schema":1,"on":true,"gone":null}"#)
+check(small.value(at: "hair.style") == .string("bob"), "path read finds a nested value")
+check(small.value(at: "hair.color") == nil && small.value(at: "eyes.size") == nil, "path read of a missing key is nil")
+check(small.value(at: "on") == .bool(true) && small.value(at: "schema") == .number(1), "true stays a Bool and 1 stays a number")
+check(small.value(at: "gone") == .null, "null survives decoding")
+let recoloured = small.setting(.string("auburn"), at: "hair.color")
+check(recoloured.value(at: "hair.color") == .string("auburn") && recoloured.value(at: "hair.style") == .string("bob"),
+    "path write keeps the sibling fields")
+check(small.value(at: "hair.color") == nil, "path write leaves the original recipe alone")
+check(small.setting(.number(0.3), at: "eyes.size").value(at: "eyes.size") == .number(0.3), "path write creates missing objects")
+check(small.setting(.string("dusk"), at: "backdrop").value(at: "backdrop") == .string("dusk"), "path write at the top level")
+check(small.setting(.string("x"), at: "on.deeper").value(at: "on.deeper") == .string("x"), "path write through a non-object makes an object")
+if let encoded = try? JSONEncoder().encode(recoloured), let again = try? JSONDecoder().decode(PuppetJSON.self, from: encoded) {
+    check(again == recoloured, "a recipe survives encoding and decoding unchanged")
+} else {
+    check(false, "a recipe encodes and decodes")
+}
+
+check(PuppetRecipeEdit.sliderWords(0.2, low: "Narrow", high: "Wide") == "Narrow, 20 percent", "slider words near the low end")
+check(PuppetRecipeEdit.sliderWords(0.5, low: "Narrow", high: "Wide") == "In between, 50 percent", "slider words in the middle")
+check(PuppetRecipeEdit.sliderWords(0.8, low: "Narrow", high: "Wide") == "Wide, 80 percent", "slider words near the high end")
+check(PuppetRecipeEdit.sliderWords(0, low: "None", high: "Very rosy") == "None, 0 percent", "slider words at zero")
+check(PuppetRecipeEdit.sliderWords(1, low: "Small", high: "Big") == "Big, 100 percent", "slider words at one")
+check(PuppetRecipeEdit.sliderWords(0.33, low: "a", high: "b") == "a, 33 percent"
+    && PuppetRecipeEdit.sliderWords(0.34, low: "a", high: "b") == "In between, 34 percent"
+    && PuppetRecipeEdit.sliderWords(0.66, low: "a", high: "b") == "In between, 66 percent"
+    && PuppetRecipeEdit.sliderWords(0.67, low: "a", high: "b") == "b, 67 percent", "slider words switch at a third and two thirds")
+check(PuppetRecipeEdit.sliderWords(.nan, low: "a", high: "b") == "In between, 50 percent"
+    && PuppetRecipeEdit.sliderWords(1.7, low: "a", high: "b") == "b, 100 percent"
+    && PuppetRecipeEdit.sliderWords(-2, low: "a", high: "b") == "a, 0 percent", "slider words clamp odd values")
+let widthControl = PuppetCatalog.Control(path: "head.width", kind: .slider, name: "Face width", ends: ["Narrow", "Wide"])
+check(PuppetRecipeEdit.sliderValue(widthControl, in: small) == 0.5, "a missing slider value reads as the middle")
+check(PuppetRecipeEdit.sliderValue(widthControl, in: small.setting(.number(1.4), at: "head.width")) == 1, "a slider value clamps to one")
+let widened = PuppetRecipeEdit.setting(slider: 0.456, for: widthControl, in: small)
+check(widened.value(at: "head.width") == .number(0.46), "a slider writes two decimals")
+check(widthControl.low == "Narrow" && widthControl.high == "Wide" && widthControl.isEditable, "slider ends and editability")
+
+let glasses = PuppetCatalog.Control(path: "accessories", kind: .accessory, name: "Glasses",
+    options: [.init(id: "", name: "None"), .init(id: "round-glasses", name: "Round glasses"), .init(id: "square-glasses", name: "Square glasses")],
+    slot: "eyewear")
+check(glasses.id == "accessories.eyewear", "accessory controls are told apart by slot")
+check(PuppetRecipeEdit.selectedID(glasses, in: small) == "round-glasses", "the glasses slot reads what it wears")
+let squared = PuppetRecipeEdit.choosing("square-glasses", for: glasses, in: small)
+let squaredIDs = squared.value(at: "accessories")?.array?.compactMap(\.string) ?? []
+check(squaredIDs.contains("square-glasses") && !squaredIDs.contains("round-glasses") && squaredIDs.contains("cowboy-hat"),
+    "new glasses replace the old ones and keep the hat")
+check(squared.value(at: "accessories")?.array?.contains(.number(7)) == true, "an accessory entry this build does not know rides along")
+let bare = PuppetRecipeEdit.choosing("", for: glasses, in: squared)
+check(PuppetRecipeEdit.selectedID(glasses, in: bare) == "" && (bare.value(at: "accessories")?.array?.compactMap(\.string) ?? []) == ["cowboy-hat"],
+    "None takes the glasses off and nothing else")
+let hairStyle = PuppetCatalog.Control(path: "hair.style", kind: .choice, name: "Hairstyle",
+    options: [.init(id: "bob", name: "Bob"), .init(id: "afro", name: "Afro", note: "a full rounded afro")])
+check(PuppetRecipeEdit.selectedOption(hairStyle, in: small)?.name == "Bob", "a choice reads its option")
+check(PuppetRecipeEdit.selectedID(hairStyle, in: PuppetRecipeEdit.choosing("afro", for: hairStyle, in: small)) == "afro", "a choice writes its option")
+check(PuppetCatalog.Option(id: "slim", name: "Slim", note: "slim").extraNote == ""
+    && PuppetCatalog.Option(id: "broad", name: "Broad", note: "broad-shouldered").extraNote == "broad-shouldered",
+    "an option's note shows only when it says more than its name")
+check(!PuppetCatalog.Control(path: "x", kind: .choice, name: "X", options: [.init(id: "a", name: "A")]).isEditable
+    && !PuppetCatalog.Control(path: "y", kind: .other, name: "Y").isEditable, "single-option and unknown controls are not shown")
+
+var history = PuppetEditHistory()
+let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+let r0 = json(#"{"n":0}"#), r1 = json(#"{"n":1}"#), r2 = json(#"{"n":2}"#)
+history.record(before: r0, label: "Face width", key: "head.width", at: t0)
+history.record(before: r1, label: "Face width", key: "head.width", at: t0.addingTimeInterval(1.5))
+history.record(before: r2, label: "Face width", key: "head.width", at: t0.addingTimeInterval(3))
+check(history.entries.count == 1 && history.entries[0].recipe == r0, "a run of changes to one control is one Undo step")
+history.record(before: r1, label: "Face width", key: "head.width", at: t0.addingTimeInterval(5.5))
+history.record(before: r2, label: "Hair colour", key: "hair.color", at: t0.addingTimeInterval(5.6))
+check(history.entries.count == 3 && history.lastLabel == "Hair colour", "a pause or another control starts a new step")
+let undone = history.undo()
+check(undone?.recipe == r2 && undone?.label == "Hair colour" && history.entries.count == 2, "Undo returns the last step's recipe")
+for index in 0..<100 { history.record(before: r0, label: "Design", key: "design-\(index)", at: t0) }
+check(history.entries.count == PuppetEditHistory.limit && history.canUndo, "Undo keeps the newest \(PuppetEditHistory.limit) steps")
+history.clear()
+check(!history.canUndo && history.undo() == nil, "a cleared Undo list is empty")
+
+let lookBefore = "An oval face with fair skin. Round green eyes, soft brows. Hair: a bob, auburn. Average build; moves in an easygoing way."
+let lookAfter = "An oval face with fair skin. Round green eyes, soft brows. Hair: a bob, jet black. Average build; moves in an easygoing way."
+check(PuppetDescriptionText.changedSentences(before: lookBefore, after: lookAfter) == "Hair: a bob, jet black.", "only the changed sentence is said")
+check(PuppetDescriptionText.changedSentences(before: lookBefore, after: lookBefore) == "", "no change says nothing")
+check(PuppetDescriptionText.changedSentences(before: "", after: "One. Two.") == "One. Two.", "a first description is said whole")
+check(PuppetDescriptionText.sentences("Size 0.5 is fine. Next one! Last?  ") == ["Size 0.5 is fine.", "Next one!", "Last?"],
+    "sentences split at an end mark and a space, not inside a number")
+check(PuppetDescriptionText.dollars(0.0012) == "$0.0012" && PuppetDescriptionText.dollars(0.031) == "$0.03"
+    && PuppetDescriptionText.dollars(0) == "$0.00" && PuppetDescriptionText.dollars(.nan) == "$0.00", "cost words")
+
+// The real catalog and a real saved body, as the server sends them (written by the kit).
+struct BuilderSample: Decodable {
+    struct Body: Decodable {
+        let rev: Int
+        let recipe: PuppetJSON
+        let description: String
+        let scene: PuppetScene
+    }
+    let catalog: PuppetCatalogReply
+    let body: Body
+}
+let samplePath = ProcessInfo.processInfo.environment["PUPPET_BUILDER_SAMPLE"] ?? "Sources/PuppetBuilderSample.json"
+if let data = try? Data(contentsOf: URL(fileURLWithPath: samplePath)) {
+    do {
+        let sample = try JSONDecoder().decode(BuilderSample.self, from: data)
+        let controls = sample.catalog.catalog.sections.flatMap(\.controls)
+        check(sample.catalog.catalog.sections.count >= 6 && controls.count >= 40, "the catalog has its sections (\(controls.count) controls)")
+        check(controls.allSatisfy { $0.kind != .other }, "every catalog control kind is one the editor draws")
+        check(Set(controls.map(\.id)).count == controls.count, "every control has its own id")
+        for control in controls where control.isEditable {
+            switch control.kind {
+            case .slider:
+                check(control.ends.count == 2, "\(control.id) names both ends")
+                let start = PuppetRecipeEdit.sliderValue(control, in: sample.catalog.defaults)
+                check(start >= 0 && start <= 1 && sample.catalog.defaults.value(at: control.path)?.number != nil,
+                    "\(control.id) has a default value")
+                let moved = PuppetRecipeEdit.setting(slider: 0.3, for: control, in: sample.catalog.defaults)
+                check(PuppetRecipeEdit.sliderValue(control, in: moved) == 0.3, "\(control.id) writes and reads back")
+            case .choice, .color, .accessory:
+                check(Set(control.options.map(\.id)).count == control.options.count, "\(control.id) option ids are unique")
+                check(control.options.allSatisfy { !$0.name.isEmpty }, "\(control.id) every option has a spoken name")
+                if control.kind == .accessory {
+                    check(control.options.first?.id == "" && control.slot != nil, "\(control.id) starts with None and has a slot")
+                } else {
+                    let chosen = PuppetRecipeEdit.selectedID(control, in: sample.catalog.defaults)
+                    check(control.options.contains { $0.id == chosen }, "\(control.id) default \(chosen) is one of its options")
+                    let saved = PuppetRecipeEdit.selectedID(control, in: sample.body.recipe)
+                    check(control.options.contains { $0.id == saved }, "\(control.id) saved \(saved) is one of its options")
+                }
+                for option in control.options {
+                    let next = PuppetRecipeEdit.choosing(option.id, for: control, in: sample.body.recipe)
+                    if PuppetRecipeEdit.selectedID(control, in: next) != option.id {
+                        check(false, "\(control.id) choosing \(option.id) reads back")
+                    }
+                }
+                check(true, "\(control.id) every option reads back after choosing")
+            case .other:
+                break
+            }
+        }
+        check(sample.body.rev > 0 && !sample.body.description.isEmpty, "the sample body has a revision and words")
+        check(sample.body.scene.problems().isEmpty && PuppetPreparedScene(scene: sample.body.scene) != nil, "the sample body's scene draws")
+    } catch {
+        check(false, "the builder sample decodes: \(error)")
+    }
+} else {
+    check(false, "missing builder sample at \(samplePath)")
+}
+let builderChecks = count - builderStart
+
 if !failures.isEmpty {
     print("PUPPET TESTS FAILED: \(failures.count) of \(count) checks")
     for failure in failures.prefix(40) { print("  - " + failure) }
     exit(1)
 }
-print("Puppet tests passed: \(count) checks (\(matrixChecks) matrices, \(coordinateChecks) coordinates, \(alphaChecks) alphas, \(motionChecks) motion channel values).")
+print("Puppet tests passed: \(count) checks (\(matrixChecks) matrices, \(coordinateChecks) coordinates, \(alphaChecks) alphas, \(motionChecks) motion channel values, \(builderChecks) body editor checks).")

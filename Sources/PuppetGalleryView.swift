@@ -3,15 +3,16 @@ import SwiftUI
 
 /// Oct 16 2026: DEBUG simulator gallery of the bundled sample bodies, for CI
 /// screenshots (dev/puppet-gallery.sh). Launch with -KadePuppetGallery and
-/// optionally -KadePuppetGalleryPage 0, 1 or 2. Never reachable in a release
-/// build, and the sample file is excluded from Release in project.yml.
+/// optionally -KadePuppetGalleryPage 0 to 7 (3 to 7 are the Body editor,
+/// offline). Never reachable in a release build, and the sample files are
+/// excluded from Release in project.yml.
 struct PuppetGalleryView: View {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("-KadePuppetGallery") }
     static var requestedPage: Int {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-KadePuppetGalleryPage"), index + 1 < arguments.count,
               let page = Int(arguments[index + 1]) else { return 0 }
-        return min(2, max(0, page))
+        return min(7, max(0, page))
     }
 
     /// The same states as the web reference sheet (gen-samples.mjs).
@@ -54,11 +55,15 @@ struct PuppetGalleryView: View {
     }
 
     var body: some View {
-        // Scrolls so the grid starts below the status bar on every phone size.
-        ScrollView {
-            gallery
+        if page >= 3 {
+            PuppetBuilderGallery(page: page)
+        } else {
+            // Scrolls so the grid starts below the status bar on every phone size.
+            ScrollView {
+                gallery
+            }
+            .task { await load() }
         }
-        .task { await load() }
     }
 
     private var gallery: some View {
@@ -117,6 +122,52 @@ struct PuppetGalleryView: View {
         }.value
         renderers = result.0
         report = result.1
+    }
+}
+
+/// Pages 3 to 7: the Body editor on the bundled sample catalog and body
+/// (PuppetBuilderSample.json, written by the kit): the editor's top, the hair
+/// colour list, the editor at an accessibility text size, then scrolled to
+/// the quick looks and to the eye controls.
+private struct PuppetBuilderGallery: View {
+    let page: Int
+    @EnvironmentObject private var client: KadeAPIClient
+
+    var body: some View {
+        if let sample = PuppetBuilderSample.load() {
+            PuppetBuilderGalleryStack(page: page, client: client, sample: sample)
+        } else {
+            Text("No PuppetBuilderSample.json in the bundle.")
+        }
+    }
+}
+
+private struct PuppetBuilderGalleryStack: View {
+    let page: Int
+    @StateObject private var model: PuppetBuilderModel
+
+    init(page: Int, client: KadeAPIClient, sample: PuppetBuilderSample) {
+        self.page = page
+        _model = StateObject(wrappedValue: PuppetBuilderModel.gallery(client: client, sample: sample))
+    }
+
+    var body: some View {
+        NavigationStack {
+            if page == 4 {
+                Group {
+                    if let control = model.catalog?.sections.flatMap(\.controls).first(where: { $0.path == "hair.color" }) {
+                        PuppetOptionList(control: control, model: model)
+                    } else {
+                        ProgressView()
+                    }
+                }
+                .task { await model.load() }
+            } else {
+                PuppetBuilderView(model: model, agentId: model.agentId, agentName: "Sample",
+                    scrollTarget: page == 6 ? "actions" : page == 7 ? "eyes.color" : nil)
+            }
+        }
+        .environment(\.dynamicTypeSize, page == 5 ? .accessibility2 : .large)
     }
 }
 #endif
