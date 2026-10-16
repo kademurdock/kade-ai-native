@@ -89,10 +89,18 @@ struct VoicePickerView: View {
     let shelves: [Shelf]
     /// The voices to offer instead of the platform's list (the describer's own).
     let voiceList: [String]?
-    /// Auditions at this pace (the API takes 0.5-1.5) and with this delivery
-    /// when none is chosen here. nil = as before.
+    /// Oct 16 2026: an audition sounds like a voice message from this
+    /// character — the same speed, delivery and filler setting the chat sends.
+    /// These three let a surface that is not a chat say otherwise.
+    /// `previewSpeed`: auditions at this pace (the API takes 0.5-1.5). nil =
+    /// the speed this character's voice messages use: her Voice speed over
+    /// the character's own rate (VoiceService.voiceMessageSpeed).
+    /// `previewDelivery`: used when no delivery is chosen here. nil = the
+    /// proxy's default, as a reply with no delivery chosen gets.
+    /// `previewFillers`: nil = her "Filler words and little sounds" switch.
     let previewSpeed: Double?
     let previewDelivery: String?
+    let previewFillers: Bool?
     /// A sentence shown under "About this voice" (the describer's default and Fish notes).
     let noteFor: ((String) -> String?)?
     /// Words after a voice's name in the wheel and the search list ("your default, favourite").
@@ -160,6 +168,7 @@ struct VoicePickerView: View {
         shelves: [Shelf] = [],
         previewSpeed: Double? = nil,
         previewDelivery: String? = nil,
+        previewFillers: Bool? = nil,
         noteFor: ((String) -> String?)? = nil,
         markFor: ((String) -> String?)? = nil,
         favorites: Set<String> = [],
@@ -176,6 +185,7 @@ struct VoicePickerView: View {
         self.shelves = shelves
         self.previewSpeed = previewSpeed
         self.previewDelivery = previewDelivery
+        self.previewFillers = previewFillers
         self.noteFor = noteFor
         self.markFor = markFor
         self.favorites = favorites
@@ -741,6 +751,11 @@ struct VoicePickerView: View {
     private func load() async {
         isLoading = true
         loadFailed = false
+        // The character's own rate is fetched while the catalog loads, so the
+        // first audition does not wait for it.
+        if previewSpeed == nil {
+            Task { _ = await voice.voiceMessageSpeed(forAgent: deliveryAgentId) }
+        }
         let list: [String]
         if let voiceList, !voiceList.isEmpty {
             list = voiceList
@@ -803,15 +818,27 @@ struct VoicePickerView: View {
         if force { voice.stopSpeaking() }
         RecentVoices.record(v)
         previewing = v
-        // No delivery chosen here: the surface's own (the describer's Steady), else the proxy's.
+        // Oct 16 2026: every audition, long or quick, is sent the way a voice
+        // message from this character is: same speed, delivery and fillers.
+        // No delivery chosen here: the surface's own (Steady for the Library
+        // and the describer), else the proxy's, as a reply gets.
         let d = delivery.isEmpty ? previewDelivery : delivery
-        if let sample = nextAgentSample(long: long) {
-            await voice.previewVoice(v, sample: sample, delivery: d, speed: previewSpeed)
-        } else if long, d != nil {
-            // The long audition sentinel, with the delivery choice attached.
-            await voice.previewVoice(v, sample: "Hi there. This is how I sound.", delivery: d, speed: previewSpeed)
+        let speed: Double
+        if let previewSpeed {
+            speed = previewSpeed
         } else {
-            await voice.previewVoice(v, long: long)
+            speed = await voice.voiceMessageSpeed(forAgent: deliveryAgentId)
+            // She moved on, or pressed Stop, while the speed was looked up.
+            guard previewing == v, !Task.isCancelled else {
+                if previewing == v { previewing = nil }
+                return
+            }
+        }
+        let fillers = previewFillers ?? VoiceService.fillersSwitchOn
+        if let sample = nextAgentSample(long: long) {
+            await voice.previewVoice(v, sample: sample, delivery: d, speed: speed, fillers: fillers)
+        } else {
+            await voice.previewVoice(v, long: long, delivery: d, speed: speed, fillers: fillers)
         }
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }

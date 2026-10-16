@@ -1429,7 +1429,12 @@ struct ConversationDetailView: View {
                     UIAccessibility.post(notification: .announcement, argument: "Voice speed \(pace.label). Applies to the next message.")
                 }
             }
+            // Oct 16 2026: Settings' "Filler words and little sounds", here too,
+            // because this list is where she already is when a voice sounds off.
+            Button(fillersToggleTitle) { toggleFillers() }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(fillersDialogMessage)
         }
         .onChange(of: conversationsService.actionMessage) { _, message in
             guard let message else { return }
@@ -2885,7 +2890,27 @@ struct ConversationDetailView: View {
         .accessibilityLabel("Voice speed")
         .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
         .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
-        .accessibilityHint("Choose how fast every voice speaks, starting with the next message.")
+        .accessibilityHint("Choose how fast every voice speaks, starting with the next message. Filler words and little sounds can be turned on or off here too.")
+    }
+
+    /// The Voice speed list's last choice (Oct 16 2026), the same switch as
+    /// Settings' "Filler words and little sounds".
+    private var fillersToggleTitle: String {
+        voiceService.fillersOn ? "Turn off filler words and little sounds" : "Turn on filler words and little sounds"
+    }
+
+    private var fillersDialogMessage: String {
+        voiceService.fillersOn
+            ? "Filler words and little sounds are on: characters sometimes say um, take a breath, or laugh a little. The text never changes."
+            : "Filler words and little sounds are off."
+    }
+
+    private func toggleFillers() {
+        voiceService.fillersOn.toggle()
+        let spoken: String = voiceService.fillersOn
+            ? "Filler words and little sounds on. Applies to the next message."
+            : "Filler words and little sounds off. Applies to the next message."
+        UIAccessibility.post(notification: .announcement, argument: spoken)
     }
 
     // MARK: - Composer (Phase 3)

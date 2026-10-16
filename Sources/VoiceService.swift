@@ -234,6 +234,65 @@ final class VoiceService: NSObject, ObservableObject {
         }
     }
 
+    // MARK: Filler words and little sounds (Oct 16 2026)
+
+    /// Settings > Voice & Audio > "Filler words and little sounds", on by
+    /// default. Bound by the Settings switch and the chat's Voice speed list.
+    @Published var fillersOn: Bool = VoiceService.fillersSwitchOn {
+        didSet { UserDefaults.standard.set(fillersOn, forKey: VoiceFillerPolicy.defaultsKey) }
+    }
+    /// Read when each request is built, so every VoiceService (the voice
+    /// picker stands up its own) follows the switch the moment it moves.
+    static var fillersSwitchOn: Bool {
+        let defaults = UserDefaults.standard
+        let key = VoiceFillerPolicy.defaultsKey
+        return VoiceFillerPolicy.isOn(stored: defaults.object(forKey: key) == nil ? nil : defaults.bool(forKey: key))
+    }
+    /// The Library's reading voice keeps its delivery under this id; it is
+    /// never a character.
+    private static func isLibraryReading(_ agentId: String?) -> Bool {
+        agentId == ReadingRoomPlayer.deliveryPreference
+    }
+    /// The `fillers` field for a spoken line: a character's voice message
+    /// (an agent, or the Debate Room's cast voice) follows the switch; Library
+    /// reading never gets them; a line with no character (a description, a
+    /// transcript) is told only when the switch is off.
+    private static func fillersField(agentId: String?, explicitVoice: String? = nil) -> String? {
+        let speaker: VoiceFillerPolicy.Speaker
+        if isLibraryReading(agentId) {
+            speaker = .libraryReading
+        } else if !(agentId ?? "").isEmpty || !(explicitVoice ?? "").isEmpty {
+            speaker = .character
+        } else {
+            speaker = .noCharacter
+        }
+        return VoiceFillerPolicy.field(switchOn: fillersSwitchOn, speaker: speaker)
+    }
+
+    /// The `speed` this character's voice messages are sent with: her Voice
+    /// speed over the character's own rate, exactly as `synthesize` works it
+    /// out. No character (nil, or the Library's reading id) = her Voice speed
+    /// alone. Auditions use this so a voice sounds the same in the picker as
+    /// in the chat. Reads the rate without filling the voice cache, so an
+    /// audition can never change which voice a reply speaks in.
+    func voiceMessageSpeed(forAgent agentId: String?) async -> Double {
+        guard let agentId, !agentId.isEmpty, !Self.isLibraryReading(agentId) else {
+            return synthesisSpeed(base: nil)
+        }
+        if let cached = agentVoiceCache[agentId] { return synthesisSpeed(base: cached.speed) }
+        if let rate = agentRateCache[agentId] { return synthesisSpeed(base: rate) }
+        let revision = voiceSelectionRevision
+        let req = client.request(path: "api/agents/\(agentId)", authorized: true)
+        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+              let detail = try? JSONDecoder().decode(AgentTTSDetail.self, from: data) else {
+            // Not remembered: the next audition asks again.
+            return synthesisSpeed(base: nil)
+        }
+        let rate = detail.tts?.speakingRate
+        if revision == voiceSelectionRevision { agentRateCache.updateValue(rate, forKey: agentId) }
+        return synthesisSpeed(base: rate)
+    }
+
     /// Session 17 (Kade: "a native way to access settings like speech and
     /// whatnot"): the default "Voice messages" starting state for a FRESH
     /// `ConversationDetailView` -- that screen's own `readAloudEnabled` is
@@ -288,6 +347,8 @@ final class VoiceService: NSObject, ObservableObject {
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
+    /// Characters' own speaking rates, for auditions (voiceMessageSpeed).
+    private var agentRateCache: [String: Double?] = [:]
     /// The signed-in user's OWN per-agent voice picks ({agentId: voice}),
     /// which override the agent's builder default. Loaded once from
     /// `GET /api/kade/voice-prefs`; nil until first load.
@@ -320,6 +381,7 @@ final class VoiceService: NSObject, ObservableObject {
     private func invalidateVoiceSelections() {
         voiceSelectionRevision += 1
         agentVoiceCache.removeAll()
+        agentRateCache.removeAll()
         userVoicePrefs = nil
     }
 
@@ -760,26 +822,27 @@ final class VoiceService: NSObject, ObservableObject {
     /// the read-aloud queue; stops any current playback first so rapid
     /// previews never stack up.
     /// Aug 6 2026 (her "native is my premium platform" pass): two lengths.
-    /// `long` (default) sends the sentinel the proxy swaps for the FULL
-    /// performed audition — steering beats, both providers' dialects, the
-    /// works. Quick sends a genuinely short line (deliberately NOT the
-    /// sentinel, so no swap fires).
-    func previewVoice(_ voiceId: String, long: Bool = true) async {
-        let sample = long
-            ? "Hi there. This is how I sound."
-            : "Hey — quick hello from this voice, right here with you."
-        await previewVoice(voiceId, sample: sample)
+    /// `long` sends the sentinel the proxy swaps for the FULL performed
+    /// audition — steering beats, both providers' dialects, the works. Quick
+    /// sends the short line (VoiceAudition has both).
+    ///
+    /// Oct 16 2026 (Kade: an audition should sound like that character's real
+    /// voice messages): every audition carries what a voice message from that
+    /// character carries — the same speed (`voiceMessageSpeed(forAgent:)`),
+    /// the same delivery and the same filler setting. VoicePickerView works
+    /// those out per surface (the Library's reading voice and the describer's
+    /// narrator use their own speed, Steady, and no fillers).
+    func previewVoice(_ voiceId: String, long: Bool, delivery: String?, speed: Double, fillers: Bool) async {
+        await previewVoice(voiceId, sample: VoiceAudition.sample(long: long), delivery: delivery, speed: speed, fillers: fillers)
     }
 
-    /// `speed` (Sep 25 2026, the describer's narrator picker): the audition is
-    /// synthesized at this pace, inside the API's 0.5-1.5 range. nil = the
-    /// voice's own pace, as every other picker plays it.
-    func previewVoice(_ voiceId: String, sample: String, delivery: String? = nil, speed: Double? = nil) async {
+    /// `speed` is kept inside the API's 0.5-1.5 range, as a reply's is.
+    func previewVoice(_ voiceId: String, sample: String, delivery: String?, speed: Double, fillers: Bool) async {
         stopSpeaking()
         var fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
+        fields.append(("speed", String(VoicePacePolicy.rate(base: nil, preference: speed))))
         if let delivery { fields.append(("delivery", delivery)) }
-        if let speed { fields.append(("speed", String(min(1.5, max(0.5, speed))))) }
-        // Previews play at the picker's own pace, whatever the reply speed is.
+        fields.append(("fillers", fillers ? "true" : "false"))
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { return }
         await playAudio(data)
@@ -1093,6 +1156,7 @@ final class VoiceService: NSObject, ObservableObject {
         let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
+        if let fillers = Self.fillersField(agentId: agentId, explicitVoice: explicitVoice) { fields.append(("fillers", fillers)) }
 
         /* ⭐ PART 94 — ONE RETRY, BECAUSE THE FAILURE CLASS HERE IS LATENCY.
          *
@@ -1178,6 +1242,7 @@ final class VoiceService: NSObject, ObservableObject {
         let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: item.agentId) { fields.append(("delivery", delivery)) }
+        if let fillers = Self.fillersField(agentId: item.agentId, explicitVoice: item.explicitVoice) { fields.append(("fillers", fillers)) }
         return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
     }
 
@@ -1333,6 +1398,7 @@ final class VoiceService: NSObject, ObservableObject {
         let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
+        if let fillers = Self.fillersField(agentId: agentId) { fields.append(("fillers", fillers)) }
 
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else {

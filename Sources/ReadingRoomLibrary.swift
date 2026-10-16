@@ -174,10 +174,12 @@ extension ReadingRoomService {
     }
 
     /// One line of speech from the platform's voice, as WAV bytes (the same
-    /// `tts/manual` lane the app's read-aloud uses).
+    /// `tts/manual` lane the app's read-aloud uses). Library speech never
+    /// gets filler words or little sounds (Oct 16 2026).
     func speech(_ text: String, voice: String?) async throws -> Data {
         var fields: [(String, String)] = [("input", text)]
         if let voice, !voice.isEmpty { fields.append(("voice", voice)) }
+        fields.append(("fillers", "false"))
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200, !data.isEmpty else { throw RRError(message: "The voice did not answer.") }

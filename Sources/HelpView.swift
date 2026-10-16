@@ -360,6 +360,10 @@ struct HelpSection: Identifiable {
                 body: "The speed button beside Hear replies runs from 0.75 up to 2 times. It takes effect straight away, even in the middle of a clip, and it's remembered next time."
             ),
             HelpEntry(
+                title: "Filler words and little sounds",
+                body: "Settings, Voice and Audio, Filler words and little sounds starts on. Characters sometimes say um or I mean, take a breath, or laugh a little, like a real voice message. It only changes what you hear; the written reply never changes, and books in the Library never get them. The last choice in a conversation's Voice speed list turns it on or off too. Voice auditions in the voice picker follow it, and play at that character's speed."
+            ),
+            HelpEntry(
                 title: "Saving one",
                 body: "Save Voice Message in a message's actions opens the share sheet, where Save to Files, AirDrop, Messages and Mail all live. The file is named after who said it and when."
             ),

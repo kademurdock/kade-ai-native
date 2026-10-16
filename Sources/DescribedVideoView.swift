@@ -1038,6 +1038,8 @@ struct DescribedVideoView: View {
             shelves: narratorShelves,
             previewSpeed: rate,
             previewDelivery: "STABLE",
+            // A narrator describes; it never ums.
+            previewFillers: false,
             noteFor: { (name: String) -> String? in voiceNote(name) },
             markFor: { (name: String) -> String? in voiceMark(name) },
             favorites: Set(prefs.favorites),

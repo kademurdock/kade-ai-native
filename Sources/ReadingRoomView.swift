@@ -733,7 +733,9 @@ struct ReadingRoomView: View {
             .accessibilityLabel("Voice: \(player.voice.isEmpty ? "the library's voice" : player.voice)")
             .accessibilityHint("Opens the voice picker. Flick through the wheel to hear a preview of each voice, then press Done.")
             .sheet(isPresented: $showVoicePicker) {
-                VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }), deliveryAgentId: ReadingRoomPlayer.deliveryPreference)
+                // Oct 16 2026: auditions here sound like the book will: her
+                // reading speed, Steady unless she picks a delivery, no fillers.
+                VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }), deliveryAgentId: ReadingRoomPlayer.deliveryPreference, previewSpeed: player.speed, previewDelivery: "STABLE", previewFillers: false)
             }
             Picker("Speed", selection: Binding(get: { player.speed }, set: { player.changeSpeed($0) })) {
                 ForEach(speeds, id: \.0) { Text($0.1).tag($0.0) }

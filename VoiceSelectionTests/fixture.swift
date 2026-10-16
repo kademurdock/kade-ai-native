@@ -34,6 +34,7 @@ import FoundationNetworking
     let client: FixtureClient
     var voiceSelectionRevision = 0
     var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
+    var agentRateCache: [String: Double?] = [:]
     var userVoicePrefs: [String: String]?
     struct AgentTTSDetail: Codable {
         struct TTS: Codable { let voiceId: String?; let speakingRate: Double? }

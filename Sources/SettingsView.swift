@@ -299,11 +299,12 @@ struct SettingsView: View {
             streamingVoiceRow(searchStyle: false)
             whisperRow(searchStyle: false)
             speedRow(searchStyle: false)
+            fillersRow(searchStyle: false)
             pronunciationRow(searchStyle: false)
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("Fish pace requests an acting delivery. Classic Inworld uses its supported API speaking rate. Changes apply to future voice messages; playing audio keeps its original speed.")
+            Text("Fish pace requests an acting delivery. Classic Inworld uses its supported API speaking rate. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
         }
     }
 
@@ -568,7 +569,7 @@ struct SettingsView: View {
     /// person types the word THEY have, not the word the screen has.
     private enum SettingRow: String, CaseIterable, Identifiable {
         case mainAgent, appIcon, ringtone
-        case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, pronunciation
+        case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, fillers, pronunciation
         case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
         case highContrast, font, spacing, pictures, pictureWords
@@ -591,6 +592,7 @@ struct SettingsView: View {
             case .streamingVoice: return "Faster voice (streaming)"
             case .whisper: return "Whisper mode"
             case .speed: return "Voice speed"
+            case .fillers: return "Filler words and little sounds"
             case .pronunciation: return "Pronunciation Dictionary"
             case .notificationPermission: return "Notifications"
             case .longTaskPing: return "Tell me when a slow reply lands"
@@ -626,7 +628,7 @@ struct SettingsView: View {
             case .mainAgent: return "Main character"
             case .appIcon: return "App icon"
             case .ringtone: return "Calls"
-            case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .pronunciation: return "Voice & Audio"
+            case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .fillers, .pronunciation: return "Voice & Audio"
             case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
             case .highContrast, .font, .spacing, .pictures, .pictureWords: return "Accessibility"
@@ -652,6 +654,7 @@ struct SettingsView: View {
             case .streamingVoice: return "faster voice streaming stream latency delay gap wait quick sooner beta first word space between message"
             case .whisper: return "whisper quiet night hushed gentle soft volume"
             case .speed: return "speed rate fast slow playback voice message messages quicker talk faster"
+            case .fillers: return "filler fillers um uh ums i mean breath breathing laugh laughing little sounds human natural real voice message messages clean plain"
             case .pronunciation: return "pronunciation pronounce names dictionary say saying word words"
             case .notificationPermission: return "notifications notify push alerts banner permission allow turn on"
             case .longTaskPing: return "notification notify ping slow reply long task push tell alert"
@@ -732,6 +735,7 @@ struct SettingsView: View {
         case .streamingVoice: streamingVoiceRow(searchStyle: true)
         case .whisper: whisperRow(searchStyle: true)
         case .speed: speedRow(searchStyle: true)
+        case .fillers: fillersRow(searchStyle: true)
         case .pronunciation: pronunciationRow(searchStyle: true)
         case .notificationPermission: notificationPermissionRows(searchStyle: true)
         case .longTaskPing: longTaskPingRow(searchStyle: true)
@@ -856,6 +860,15 @@ struct SettingsView: View {
         .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice speed") : "Voice speed")
         .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
         .accessibilityHint("Choose how fast every voice speaks, starting with the next message.")
+    }
+
+    /// Oct 16 2026: the proxy's "um", a breath, a small laugh. On by default;
+    /// sent with every voice message and audition (VoiceFillerPolicy).
+    private func fillersRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $voiceService.fillersOn) {
+            tileLabel(searchStyle ? searchLabel(.fillers, "Filler words and little sounds") : "Filler words and little sounds", systemImage: "quote.bubble", tint: SectionTint.voice)
+        }
+        .accessibilityHint("Characters sometimes say um or I mean, take a breath, or laugh a little, like a real voice message. Only in what you hear; the text never changes. Never in books.")
     }
 
     private func pronunciationRow(searchStyle: Bool) -> some View {

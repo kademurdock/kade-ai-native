@@ -44,6 +44,48 @@ enum VoicePacePolicy {
     }
 }
 
+/// Filler words and little sounds (Oct 16 2026): the "um", "I mean", a
+/// breath or a small laugh the proxy can add to what a character SAYS. The
+/// text never changes. Settings carries the switch, on by default.
+/// The request field is `fillers`: "true" on, "false" off, left out = the
+/// server's default (on for Fish chat voices today).
+enum VoiceFillerPolicy {
+    static let defaultsKey = "kade.voiceMessage.fillers"
+
+    /// Who a speech request speaks for.
+    enum Speaker: Equatable {
+        /// A character's voice message, or a cast voice in the Debate Room.
+        case character
+        /// A book or anything else from the Library: never fillers.
+        case libraryReading
+        /// No character (a picture description, a transcript read back).
+        case noCharacter
+    }
+
+    /// Nothing saved yet = on.
+    static func isOn(stored: Bool?) -> Bool { stored ?? true }
+
+    /// The `fillers` field for one request, or nil to leave it out. Off is
+    /// always sent, so no lane falls back to the server's default; a line
+    /// with no character keeps the server's default while the switch is on.
+    static func field(switchOn: Bool, speaker: Speaker) -> String? {
+        switch speaker {
+        case .libraryReading: return "false"
+        case .character: return switchOn ? "true" : "false"
+        case .noCharacter: return switchOn ? nil : "false"
+        }
+    }
+}
+
+/// The two audition lines. The proxy matches both exactly: the long one
+/// becomes the full performed audition, and both get a voice message's
+/// treatment. Change them only together with the proxy.
+enum VoiceAudition {
+    static let longSample = "Hi there. This is how I sound."
+    static let quickSample = "Hey — quick hello from this voice, right here with you."
+    static func sample(long: Bool) -> String { long ? longSample : quickSample }
+}
+
 /// A play command is not evidence that the renderer has advanced. One bounded
 /// recovery may restart the same queued audio; it never synthesizes a new clip.
 struct StreamPlaybackStart {

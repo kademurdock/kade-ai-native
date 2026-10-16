@@ -984,6 +984,31 @@ checkEqual("A damaged Fish pace falls back to the Classic rate",
 checkEqual("Nothing saved keeps the character's own speed",
     VoicePacePolicy.unifiedPace(fishPace: nil, classicRate: nil), "character")
 
+// Oct 16 2026: filler words and little sounds, and auditions that sound like voice messages.
+check("Filler words start on when nothing is saved", VoiceFillerPolicy.isOn(stored: nil))
+check("A saved off stays off", !VoiceFillerPolicy.isOn(stored: false))
+check("A saved on stays on", VoiceFillerPolicy.isOn(stored: true))
+checkEqual("A character's voice message asks for fillers while the switch is on",
+    VoiceFillerPolicy.field(switchOn: true, speaker: .character), "true")
+checkEqual("A character's voice message says no when the switch is off",
+    VoiceFillerPolicy.field(switchOn: false, speaker: .character), "false")
+checkEqual("Library reading never gets fillers, switch on",
+    VoiceFillerPolicy.field(switchOn: true, speaker: .libraryReading), "false")
+checkEqual("Library reading never gets fillers, switch off",
+    VoiceFillerPolicy.field(switchOn: false, speaker: .libraryReading), "false")
+check("A line with no character keeps the server's default while the switch is on",
+    VoiceFillerPolicy.field(switchOn: true, speaker: .noCharacter) == nil)
+checkEqual("A line with no character says no when the switch is off",
+    VoiceFillerPolicy.field(switchOn: false, speaker: .noCharacter), "false")
+checkEqual("The long audition is the sentinel the proxy matches",
+    VoiceAudition.sample(long: true), "Hi there. This is how I sound.")
+checkEqual("The quick audition is the line the proxy matches",
+    VoiceAudition.sample(long: false), "Hey \u{2014} quick hello from this voice, right here with you.")
+checkEqual("An audition speed is kept inside the API range like a reply's",
+    VoicePacePolicy.rate(base: nil, preference: 1.8), 1.5)
+checkEqual("An audition at the character's own speed sends that rate",
+    VoicePacePolicy.paceRate("character", base: 1.15), 1.15)
+
 print("  Speech pipeline — \(checks) checks")
 if failures.isEmpty {
     print("  all green")
