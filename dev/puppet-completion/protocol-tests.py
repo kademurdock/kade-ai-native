@@ -326,7 +326,8 @@ class ProtocolChecks(unittest.TestCase):
         global CHECKS
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
-        original_project_sha = "a74a49f90313513ba42a4d7d784113fefb94635297b99be894606293eddad892"
+        # Oct 16 2026: repinned for the Release-only exclusion of the DEBUG puppet gallery samples.
+        original_project_sha = "14cf2e6d5ce6a8c943e3b73055ae9b566fa9c10047ef23a062e068d8759ab01c"
         # Bind the exact original command expression bytes. ast.dump is a
         # Python-version-dependent representation, not the build arguments.
         original_command_sha = "bf5b25c7e5fd0070363cb4d18c44c755902d21c1a1dbccfa0dda2f8999293999"
@@ -1053,7 +1054,7 @@ class ProtocolChecks(unittest.TestCase):
                     'startedAtUtc':owned['launchStartedAtUtc'],'finishedAtUtc':termination(owned,15)['finishedAtUtc']}
         self.assertIs(audit.validate_capture_ownership(completion),completion);CHECKS+=1
         for key,value in [('schema','old'),('compiledAfterVerified',False),('ownedProcess',None),('ownedTermination',None),
-                          ('terminationVerified',False),('elapsedSeconds',301.001)]:
+                          ('terminationVerified',False),('elapsedSeconds',audit.CAPTURE_SECONDS+1.001)]:
             changed=copy.deepcopy(completion);changed[key]=value
             with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
             CHECKS+=1
@@ -1083,7 +1084,7 @@ class ProtocolChecks(unittest.TestCase):
             owner[key]=old
         for actual,expected in ((audit.host.BOOT_SECONDS,600),(audit.host.UI_SECONDS["large"],900),
                                 (audit.host.UI_SECONDS["small"],720),(audit.host.OPERATION_SECONDS,4920),
-                                (audit.host.JOB_SECONDS,5400),(audit.CAPTURE_SECONDS,300),(audit.MAX_FILES,25),
+                                (audit.host.JOB_SECONDS,5400),(audit.CAPTURE_SECONDS,600),(audit.MAX_FILES,25),
                                 (len(audit.PHASES),21),(len(audit.EVENTS),28),(len(audit.UI_METHODS),3)):
             CHECKS += 1
             self.assertEqual(actual,expected)

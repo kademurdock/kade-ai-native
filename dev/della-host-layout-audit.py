@@ -40,7 +40,7 @@ PINS={
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'6b5c6f1ee223be785fc75396ba439fe46fdd7b1f30bf2c78feee6a649953be9f',
+    'Sources/CharacterPortraitView.swift':'c72e9db282f1edf9f536e2e179dc428f7e85036eadecd7fd6a5fc41282b4fa74',
     'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(
@@ -156,8 +156,10 @@ MAX_RAW=50*1024*1024
 MAX_ARCHIVE=32*1024*1024
 MAX_ENCODED=44*1024*1024
 MAX_FILES=32
-CAPTURE_SECONDS=480
-AGGREGATE_CAPTURE_SECONDS=960
+# Oct 16 2026: one slow macos-26 runner needed more than 480 s for one phone's fourteen
+# hosts (successful runs took 6 to 11 minutes for both phones). Bounds stay finite.
+CAPTURE_SECONDS=900
+AGGREGATE_CAPTURE_SECONDS=1500
 SCREENSHOT_SECONDS=75
 READY_SECONDS=60
 # Cold first boot (bootstatus 145-200 s) plus the app preflight must fit one envelope.
@@ -178,7 +180,7 @@ UI_SECONDS={'large':900,'small':720}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
 UI_GUARD_SECONDS={key:value+120 for key,value in UI_SECONDS.items()}
-EXPECTED_MODEL_CHECKS=171686
+EXPECTED_MODEL_CHECKS=188976
 JOB_SECONDS=90*60
 OPERATION_SECONDS=82*60
 FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS
@@ -1983,19 +1985,23 @@ def capture(expected):
                     raise
                 finally:
                     termination={};receipt['ownedTerminations'][phase]=termination
-                    try:terminate_owned_process(owned,identifier,compiled,deadline,termination,bound=30)
+                    # Cleanup keeps its own 30 s even when the capture watchdog already expired,
+                    # so an expired phase still records a real, valid exit instead of a
+                    # zero-second bound that masks the original error.
+                    try:terminate_owned_process(owned,identifier,compiled,max(deadline,time.monotonic()+30),
+                                                termination,bound=30)
                     except Exception as error:
                         if phase_failure is None:raise
                     finally:
                         timing['elapsedSeconds']=round(time.monotonic()-phase_started,3)
                         timing['captureElapsedSeconds']=round(time.monotonic()-aggregate_started,3)
             device['captureSeconds']=round(time.monotonic()-device_started,3)
-            require(device['captureSeconds']<CAPTURE_SECONDS,'Per-device host capture exceeded480-second cap')
+            require(device['captureSeconds']<CAPTURE_SECONDS,f'Per-device host capture exceeded{CAPTURE_SECONDS}-second cap')
             if key=='large':
                 # Avoid running two memory-heavy simulators at the same time.
                 sim('shutdown',identifier,timeout=global_remaining(30))
         aggregate_finished=time.monotonic()
-        require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,'Aggregate capture exceeded960-second cap')
+        require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,f'Aggregate capture exceeded{AGGREGATE_CAPTURE_SECONDS}-second cap')
         require(set(receipt['captures'])==set(receipt['nativeReady'])==required_phases(),'Twenty-eight actual host cases incomplete')
         require(set(receipt['ownedProcesses'])==set(receipt['ownedTerminations'])==required_phases()
                 and all(record['passed'] for record in receipt['ownedTerminations'].values()),
@@ -2028,6 +2034,11 @@ def capture(expected):
         if aggregate_started is not None:
             receipt['aggregateCaptureElapsedSeconds']=round((aggregate_finished or time.monotonic())-aggregate_started,3)
         receipt['finishedAtUtc']=now()
+        if not receipt.get('passed'):
+            # Name the original failure first; a later ownership check must not hide it.
+            print(json.dumps({'captureFailure':{key:receipt.get(key) for key in
+                  ('errorType','error','failedPhase','failedDevice','failedOperation','timeoutSeconds')}}),
+                  file=sys.stderr,flush=True)
         validate_capture_ownership(receipt)
         save('receipt.json',receipt)
         for device in records.values():

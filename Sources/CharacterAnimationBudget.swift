@@ -47,6 +47,9 @@ struct CharacterAnimationBudget {
         return rate > 0 ? 1 / rate : 1
     }
 
+    // The puppet model tests compile this file for CharacterThermalPressure only,
+    // without the face clock (CharacterMotion.swift).
+    #if !PUPPET_MODEL_TESTS
     /// The gap to the frame after one drawn at `time`. Looks one steady frame
     /// ahead, so the faster frames begin before the eyelid starts to close.
     func interval(after time: Double, faces: CharacterFaceClock) -> TimeInterval {
@@ -54,9 +57,10 @@ struct CharacterAnimationBudget {
         return interval(blinking: faces.wantsBlinkFrames(at: time)
             || faces.wantsBlinkFrames(at: time + steady))
     }
+    #endif
 }
 
-#if canImport(SwiftUI) && !CHARACTER_MODEL_TESTS
+#if canImport(SwiftUI) && !CHARACTER_MODEL_TESTS && !PUPPET_MODEL_TESTS
 import SwiftUI
 
 /// The portrait's frame dates: the activity budget's steady rate, raised to

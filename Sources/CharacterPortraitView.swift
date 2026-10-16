@@ -116,8 +116,7 @@ struct CharacterPortraitView: View {
             let viewportBounds = viewport ?? UIScreen.main.bounds
             // A puppet runs its own faster clock; this one then only redraws on change.
             TimelineView(CharacterAnimationSchedule(budget: budget,
-                paused: budget.paused || completionCaptureFrozen || puppetRenderer != nil,
-                faces: faceClock)) { timeline in
+                paused: budget.paused || completionCaptureFrozen || puppetRenderer != nil, faces: faceClock)) { timeline in
                 let offeredPerformance = resolvedPresentation()
                 let ownsOutput = offeredPerformance.outputPhase == .unspecified
                     || offeredPerformance.outputPhase == .stopped
