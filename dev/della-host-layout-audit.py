@@ -1012,6 +1012,16 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
     if revalidation_record is not None:
         revalidation_record['revalidationDiagnostic']=owned_revalidation_diagnostic(
             first,status_sink['status'],base,identifier,match,original_owned)
+    if match is None:
+        # Oct 16 2026: name WHERE the launched executable was (a category, never the path).
+        path=first['path'];root=str(base).removesuffix('/data/Containers/Bundle/Application')
+        where=('sameSimulatorOtherPath' if path.startswith(root+'/') else
+               'otherSimulatorDevice' if '/CoreSimulator/Devices/' in path else
+               'xctestDevices' if '/XCTestDevices/' in path else
+               'buildProducts' if '/Build/Products/' in path else
+               'sameAppSuffixElsewhere' if path.endswith('/KadeAI.app/KadeAI') else 'otherAbsolutePath')
+        print(json.dumps({'launchedOutsideInstalledApp':where,'executableName':str(path).rsplit('/',1)[-1][:40]}),
+              file=sys.stderr,flush=True)
     require(match is not None,'Launched executable is outside the exact simulator installed app')
     executable=Path(first['path']);plist=executable.parent/'Info.plist'
     for item in (executable,plist):
