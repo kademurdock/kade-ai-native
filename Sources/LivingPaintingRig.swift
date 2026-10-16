@@ -1,0 +1,492 @@
+import Foundation
+
+/// Oct 16 2026: living paintings. A painted character keeps its original
+/// panels as the only pictures, and a grid of points laid over the neutral
+/// panel bends like a rubber sheet (the Live2D / VTuber mesh-warp technique),
+/// driven by the same motion channels as the coded puppets (PuppetMotion).
+///
+/// The rig file (LivingPainting<Name>.json, built offline by
+/// dev/living-paintings/lp_rig.py) holds the grid, landmarks for the lids,
+/// irises, head and neck, and "flows": where every neutral point's feature
+/// sits in each of the painter's other panels. A painted expression or mouth
+/// shape is then a real morph: the grid moves toward that panel's shape while
+/// its pixels dissolve in, both registered point for point.
+///
+/// Pure data and arithmetic, no UIKit or Metal, so the model tests can check
+/// it against the Python reference (LivingPaintingTests, lp-golden.json).
+/// Any change here must land in lp_runtime.py (and the web port) too.
+struct LivingPaintingRig {
+    struct Oval: Decodable { let x: Double; let y: Double; let rx: Double; let ry: Double }
+    struct Head: Decodable { let x: Double; let y: Double; let rx: Double; let ry: Double; let rz: Double }
+    struct Nose: Decodable { let x: Double; let y: Double; let r: Double; let z: Double }
+    struct Eye: Decodable {
+        let x: Double
+        let y: Double
+        /// Half the eye opening's width.
+        let w: Double
+        /// Upper lid, closed lash line and lower lid at the eye's middle.
+        let upper: Double
+        let closed: Double
+        let lower: Double
+        /// How far above the lid the skin stretches as the lid comes down.
+        let crease: Double
+        let iris: Double
+    }
+    struct Brow: Decodable { let x: Double; let y: Double; let w: Double; let h: Double; let inner: Double }
+    struct Spot: Decodable { let x: Double; let y: Double; let r: Double }
+    struct Mouth: Decodable { let x: Double; let y: Double; let w: Double; let h: Double }
+    struct Neck: Decodable { let x: Double; let y: Double; let chin: Double; let collar: Double }
+    struct Hair: Decodable { let x: Double; let y: Double; let inner: Double; let outer: Double; let reach: Double }
+    struct Landmarks: Decodable {
+        let face: Oval
+        let head: Head
+        let nose: Nose
+        let eyes: [Eye]
+        let brows: [Brow]
+        let mouth: Mouth
+        let cheeks: [Spot]
+        let neck: Neck
+        let hair: Hair
+    }
+    struct Sheets: Decodable { let faces: String; let mouths: String; let nuance: String; let pitch: Double }
+    struct Matte: Decodable { let asset: String; let x: Double; let y: Double; let side: Double }
+    struct File: Decodable {
+        let id: String
+        let version: Int
+        let panel: Double
+        let sheets: Sheets
+        let mask: Matte
+        let core: Oval
+        /// The old rig's dissolve regions as fractions of the panel:
+        /// x, y, width, height, feather inner radius.
+        let regions: [String: [Double]]
+        let landmarks: Landmarks
+        /// Mouth sheet signatures: open, wide, round, press.
+        let visemes: [[Double]]
+        let gridX: [Double]
+        let gridY: [Double]
+        let flowScale: Double
+        let flows: [String: String]
+        let keyforms: [String: String]
+    }
+
+    enum RigError: Error { case shape(String) }
+
+    static let yawDegrees = 9.0
+    static let pitchDegrees = 6.0
+    static let rollDegrees = 5.0
+    static let laughKey = "faces.2"
+    static let closedKey = "faces.8"
+
+    let file: File
+    let columns: Int
+    let rows: Int
+    var vertexCount: Int { columns * rows }
+    let restX: [Double]
+    let restY: [Double]
+    /// Per vertex, interleaved x, y: where that neutral point's feature sits
+    /// in each painted panel ("faces.3", "mouths.5", "nuance.2").
+    let flows: [String: [Double]]
+    let keyforms: [String: [Double]]
+    let mouthWeight: [Double]
+    let faceWeight: [Double]
+    let headWeight: [Double]
+    let depth: [Double]
+    let hairWeight: [Double]
+    let triangles: [UInt16]
+
+    init(data: Data) throws {
+        let file = try JSONDecoder().decode(File.self, from: data)
+        self.file = file
+        columns = file.gridX.count
+        rows = file.gridY.count
+        let count = columns * rows
+        guard columns >= 2, rows >= 2, count <= 65_535, file.flowScale > 0 else {
+            throw RigError.shape("grid \(columns) x \(rows)")
+        }
+        var xs = [Double](repeating: 0, count: count)
+        var ys = [Double](repeating: 0, count: count)
+        for r in 0..<rows {
+            for c in 0..<columns {
+                xs[r * columns + c] = file.gridX[c]
+                ys[r * columns + c] = file.gridY[r]
+            }
+        }
+        restX = xs
+        restY = ys
+        func unpack(_ name: String, _ text: String) throws -> [Double] {
+            guard let bytes = Data(base64Encoded: text), bytes.count == count * 4 else {
+                throw RigError.shape("field \(name)")
+            }
+            var values = [Double](repeating: 0, count: count * 2)
+            bytes.withUnsafeBytes { raw in
+                for i in 0..<(count * 2) {
+                    let low = UInt16(raw[i * 2]), high = UInt16(raw[i * 2 + 1])
+                    values[i] = Double(Int16(bitPattern: low | (high << 8))) / file.flowScale
+                }
+            }
+            return values
+        }
+        var flows: [String: [Double]] = [:]
+        for (key, text) in file.flows { flows[key] = try unpack(key, text) }
+        var keyforms: [String: [Double]] = [:]
+        for (key, text) in file.keyforms { keyforms[key] = try unpack(key, text) }
+        self.flows = flows
+        self.keyforms = keyforms
+
+        let lm = file.landmarks
+        var mouth = [Double](repeating: 0, count: count)
+        var face = [Double](repeating: 0, count: count)
+        var head = [Double](repeating: 0, count: count)
+        var depth = [Double](repeating: 0, count: count)
+        var hair = [Double](repeating: 0, count: count)
+        for i in 0..<count {
+            let x = xs[i], y = ys[i]
+            mouth[i] = Self.smooth01(Self.softEllipse(x, y, lm.mouth.x, lm.mouth.y + 2,
+                lm.mouth.w * 1.9, lm.mouth.h * 3.2, 0.3))
+            face[i] = Self.smooth01(Self.softEllipse(x, y, lm.face.x, lm.face.y + 14,
+                lm.face.rx * 1.1, lm.face.ry * 1.12, 0.5))
+            head[i] = 1 - Self.smooth01((y - lm.neck.chin) / (lm.neck.collar - lm.neck.chin))
+            let hx = (x - lm.head.x) / lm.head.rx, hy = (y - lm.head.y) / lm.head.ry
+            let r2 = hx * hx + hy * hy
+            let nx = x - lm.nose.x, ny = y - lm.nose.y
+            depth[i] = lm.head.rz * min(1, max(0, 1 - r2)).squareRoot()
+                + lm.nose.z * Self.bump((nx * nx + ny * ny) / (lm.nose.r * lm.nose.r))
+            let hang = min(1.3, max(0, (y - lm.hair.y + 40) / lm.head.ry))
+            hair[i] = Self.smooth01((r2.squareRoot() - lm.hair.inner) / (lm.hair.outer - lm.hair.inner))
+                * (1 - face[i]) * hang * lm.hair.reach
+        }
+        mouthWeight = mouth
+        faceWeight = face
+        headWeight = head
+        self.depth = depth
+        hairWeight = hair
+
+        var triangles: [UInt16] = []
+        triangles.reserveCapacity((rows - 1) * (columns - 1) * 6)
+        for r in 0..<(rows - 1) {
+            for c in 0..<(columns - 1) {
+                let a = UInt16(r * columns + c), b = UInt16(r * columns + c + 1)
+                let d = UInt16((r + 1) * columns + c), e = UInt16((r + 1) * columns + c + 1)
+                triangles += [a, b, e, a, e, d]
+            }
+        }
+        self.triangles = triangles
+        for key in ["browRaise", "browFurrow", "browSad", "eyeWide", "smileUp", "smileDown", "cheekRaise"]
+            where keyforms[key] == nil { throw RigError.shape("keyform \(key)") }
+        for index in 0..<file.visemes.count where flows["mouths.\(index)"] == nil {
+            throw RigError.shape("mouths.\(index)")
+        }
+        guard lm.eyes.count == 2, file.visemes.allSatisfy({ $0.count == 4 }) else {
+            throw RigError.shape("landmarks")
+        }
+    }
+
+    static func smooth01(_ value: Double) -> Double {
+        let v = min(1, max(0, value))
+        return v * v * (3 - 2 * v)
+    }
+
+    /// (1 - r^2)^2 inside the unit circle: smooth, with zero slope at its edge.
+    static func bump(_ r2: Double) -> Double {
+        let t = min(1, max(0, 1 - r2))
+        return t * t
+    }
+
+    /// The old rig's feathered region: opaque to `inner`, fading to clear at
+    /// the ellipse's edge.
+    static func softEllipse(_ x: Double, _ y: Double, _ cx: Double, _ cy: Double,
+                            _ rx: Double, _ ry: Double, _ inner: Double) -> Double {
+        let dx = (x - cx) / rx, dy = (y - cy) / ry
+        let r = (dx * dx + dy * dy).squareRoot()
+        return min(1, max(0, (1 - r) / max(1e-6, 1 - inner)))
+    }
+}
+
+/// One painted panel of a character's sheets.
+struct LivingPaintingPanel: Hashable {
+    enum Sheet: String { case faces, mouths, nuance }
+    let sheet: Sheet
+    let index: Int
+    var key: String { sheet.rawValue + "." + String(index) }
+
+    /// The portrait's shown expression as a painted panel; nil is the neutral
+    /// panel itself (and the closed-eye panel is never an expression).
+    init?(face: CharacterFace) {
+        switch face {
+        case .neutral, .closed: return nil
+        default:
+            let raw = face.rawValue
+            if raw < 9 { self.init(sheet: .faces, index: raw) } else { self.init(sheet: .nuance, index: raw - 8) }
+        }
+    }
+
+    init(sheet: Sheet, index: Int) {
+        self.sheet = sheet
+        self.index = index
+    }
+}
+
+/// Everything one frame needs. Channels are indexed by PuppetChannel.
+struct LivingPaintingState {
+    var channels = [Double](repeating: 0, count: PuppetChannel.count)
+    var face: LivingPaintingPanel? = nil
+    var prior: LivingPaintingPanel? = nil
+    /// How far the shown face has replaced the prior one (0...1).
+    var blend = 1.0
+    /// The body's own head turn and lift, so head and shoulders stay one figure.
+    var rollDegrees = 0.0
+    var offsetY = 0.0
+    /// False draws the old sliced portrait with the same pictures and
+    /// regions: whole panels dissolving over a head that only turns and
+    /// lifts. Kept for side-by-side review and as a still fallback.
+    var warp = true
+    /// The old portrait's single painted mouth (mouth sheet panel), when not warping.
+    var slicedViseme = 0
+
+    func value(_ channel: PuppetChannel) -> Double {
+        channel.rawValue < channels.count ? channels[channel.rawValue] : 0
+    }
+}
+
+/// One draw of the grid: which panel's pixels, at what opacity, in which
+/// feathered region. `flowKey` nil samples the panel at the rest grid.
+struct LivingPaintingLayer: Equatable {
+    enum Region: String { case head, face, mouth, eyes }
+    let panel: LivingPaintingPanel
+    let flowKey: String?
+    let alpha: Double
+    let region: Region
+}
+
+extension LivingPaintingRig {
+    /// Painted mouth panels nearest the engine's mouth shape (top two),
+    /// scaled by how much the mouth is doing. A laugh keeps its own mouth.
+    func visemeWeights(_ state: LivingPaintingState) -> [(index: Int, weight: Double)] {
+        if state.face?.key == Self.laughKey { return [] }
+        let open = state.value(.mouthOpen), wide = state.value(.mouthWide)
+        let round = state.value(.mouthRound), press = state.value(.mouthPress)
+        let amount = min(1, max(open, round, press, wide * 0.6) / 0.12)
+        guard amount > 0.001 else { return [] }
+        let signature = [open, wide, round, press]
+        var weights: [(weight: Double, index: Int)] = []
+        for (index, panel) in file.visemes.enumerated() {
+            var d2 = 0.0
+            for k in 0..<4 {
+                let d = signature[k] - panel[k]
+                d2 += d * d
+            }
+            weights.append((exp(-d2 / 0.06), index))
+        }
+        weights.sort { $0.weight != $1.weight ? $0.weight > $1.weight : $0.index > $1.index }
+        let top = weights.prefix(2)
+        let total = top.reduce(0) { $0 + $1.weight }
+        return top.compactMap { item -> (index: Int, weight: Double)? in
+            let weight = amount * item.weight / total
+            return weight > 0.01 ? (item.index, weight) : nil
+        }
+    }
+
+    /// Which expression panels shape the face and how strongly, mirroring the
+    /// dissolve: the prior face fades out while the shown one fades in.
+    func expressionWeights(_ state: LivingPaintingState) -> [(key: String, weight: Double)] {
+        var out: [(key: String, weight: Double)] = []
+        if let prior = state.prior, prior != state.face, state.blend < 1 {
+            out.append((prior.key, 1 - state.blend))
+        }
+        if let shown = state.face {
+            out.append((shown.key, state.prior != shown ? state.blend : 1))
+        }
+        return out
+    }
+
+    /// Screen positions (panel pixels, interleaved x, y) of every grid vertex.
+    func vertices(_ state: LivingPaintingState, into out: UnsafeMutablePointer<Float>) {
+        let n = vertexCount
+        let lm = file.landmarks
+        func ch(_ channel: PuppetChannel) -> Double { state.value(channel) }
+        guard state.warp else {
+            // The old portrait: one rigid head, turned about the neck.
+            let rho = (ch(.headRoll) * Self.rollDegrees + state.rollDegrees) * .pi / 180
+            let cs = cos(rho), sn = sin(rho)
+            for i in 0..<n {
+                let cx = restX[i] - lm.neck.x, cy = restY[i] - lm.neck.y
+                out[i * 2] = Float(lm.neck.x + cx * cs - cy * sn)
+                out[i * 2 + 1] = Float(lm.neck.y + cx * sn + cy * cs + state.offsetY)
+            }
+            return
+        }
+        var dx = [Double](repeating: 0, count: n)
+        var dy = [Double](repeating: 0, count: n)
+        // 1. painted morphs: expressions, speaking mouth shapes, keyforms.
+        // A speaking mouth takes the lips over from the expression's own.
+        let visemes = visemeWeights(state)
+        let speak = min(1, visemes.reduce(0) { $0 + $1.weight })
+        func add(_ field: [Double], _ weight: Double, keep: Bool = false) {
+            for i in 0..<n {
+                if keep {
+                    let k = 1 - mouthWeight[i] * speak
+                    dx[i] += weight * field[i * 2] * k
+                    dy[i] += weight * field[i * 2 + 1] * k
+                } else {
+                    dx[i] += weight * field[i * 2]
+                    dy[i] += weight * field[i * 2 + 1]
+                }
+            }
+        }
+        for item in expressionWeights(state) {
+            if let field = flows[item.key] { add(field, item.weight, keep: true) }
+        }
+        for item in visemes {
+            if let field = flows["mouths.\(item.index)"] { add(field, item.weight) }
+        }
+        let lift = ch(.browRaise)
+        // Keyforms cut from different panels are each fold-free; a combination
+        // stays a weighted average of them, never a sum past full strength.
+        let brows: [(String, Double)] = [("browRaise", lift > 0 ? lift : lift * 0.6),
+            ("browFurrow", ch(.browFurrow)), ("browSad", ch(.browSad))]
+        let smile = ch(.mouthSmile)
+        let cheeks: [(String, Double)] = [("smileUp", max(0, smile)), ("smileDown", max(0, -smile)),
+            ("cheekRaise", ch(.cheekRaise))]
+        // A closing lid takes over the eye: the iris and a widened lid rest.
+        let open = 1 - min(1, max(ch(.eyeBlink), ch(.eyeWink)))
+        for group in [brows, cheeks, [("eyeWide", ch(.eyeWide) * open)]] {
+            let total = group.reduce(0) { $0 + abs($1.1) }
+            let norm = total > 1 ? 1 / total : 1
+            for (key, weight) in group where abs(weight) > 1e-4 {
+                if let field = keyforms[key] { add(field, weight * norm) }
+            }
+        }
+        // 2. eyes: irises follow the gaze inside the lids
+        let gazeX = ch(.gazeX), gazeY = ch(.gazeY)
+        for eye in lm.eyes {
+            for i in 0..<n {
+                let ex = (restX[i] - eye.x) / (eye.w * 1.05), ey = (restY[i] - eye.y) / (eye.iris * 1.5)
+                let wg = Self.bump(ex * ex + ey * ey)
+                if wg == 0 { continue }
+                dx[i] += gazeX * eye.iris * 0.55 * wg * open
+                dy[i] += gazeY * eye.iris * 0.3 * wg * open
+            }
+        }
+        // Lids last, as monotonic remaps of each grid column's already-moved
+        // points (the column is its rest x), so nothing can fold through a
+        // closing eye: first the upper lid comes down, then the lower lid rises.
+        let squint = ch(.eyeSquint)
+        for (side, eye) in lm.eyes.enumerated() {
+            var blink = ch(.eyeBlink)
+            if side == 1 { blink = max(blink, ch(.eyeWink)) }
+            blink = min(1, max(blink, squint * 0.25))
+            let yc = eye.closed, yu = eye.upper, low = eye.lower
+            let h2 = 9.0
+            for i in 0..<n {
+                let u = (restX[i] - eye.x) / eye.w
+                guard abs(u) < 1 else { continue }
+                let f = 1 - u * u
+                let lid = yc - (yc - yu) * f
+                // 0.96: a closed lid keeps a sliver of height; no zero-area cells.
+                let d = min(blink, 0.96) * (yc - yu) * f
+                let top = lid - eye.crease
+                let span = max(yc - lid, 0.01)
+                var py = restY[i] + dy[i]
+                if py >= top && py < lid { py += d * (py - top) / eye.crease }
+                else if py >= lid && py < yc { py += d * (yc - py) / span }
+                let rise = squint * 0.35 * (low - yu) * f
+                if py > eye.y && py <= low { py -= rise * (py - eye.y) / (low - eye.y) }
+                else if py > low && py <= low + h2 { py -= rise * (1 - (py - low) / h2) }
+                dy[i] = py - restY[i]
+            }
+        }
+        let swing = ch(.hairSwing)
+        // 3. head turn: an ellipsoid head with a nose; features slide, outline holds
+        let phi = ch(.headYaw) * Self.yawDegrees * .pi / 180
+        let theta = ch(.headPitch) * Self.pitchDegrees * .pi / 180
+        let cosPhi = cos(phi) - 1, sinPhi = sin(phi)
+        let cosTheta = cos(theta) - 1, sinTheta = sin(theta)
+        // 4. roll about the neck; the neck bends instead of the head cutting
+        let roll = (ch(.headRoll) * Self.rollDegrees + state.rollDegrees) * .pi / 180
+        for i in 0..<n {
+            let x = restX[i], y = restY[i], hw = headWeight[i]
+            var qx = x + dx[i] + swing * hairWeight[i]
+            var qy = y + dy[i]
+            qx += hw * ((x - lm.head.x) * cosPhi + depth[i] * sinPhi)
+            qy += hw * ((y - lm.head.y) * cosTheta + depth[i] * sinTheta)
+            let rho = roll * hw
+            let cx = qx - lm.neck.x, cy = qy - lm.neck.y
+            let cs = cos(rho), sn = sin(rho)
+            qx = lm.neck.x + cx * cs - cy * sn
+            qy = lm.neck.y + cx * sn + cy * cs
+            // 5. the body's breath and nod lift the whole head
+            out[i * 2] = Float(qx)
+            out[i * 2 + 1] = Float(qy + state.offsetY)
+        }
+    }
+
+    func vertices(_ state: LivingPaintingState) -> [Float] {
+        var out = [Float](repeating: 0, count: vertexCount * 2)
+        out.withUnsafeMutableBufferPointer { buffer in
+            if let base = buffer.baseAddress { vertices(state, into: base) }
+        }
+        return out
+    }
+
+    /// The draw list, bottom to top: the neutral panel cut by the head matte,
+    /// the dissolving expressions, the speaking mouth shapes, then the
+    /// painted closed eyes as the lids arrive.
+    func layers(_ state: LivingPaintingState) -> [LivingPaintingLayer] {
+        var out = [LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .faces, index: 0),
+            flowKey: nil, alpha: 1, region: .head)]
+        let fading = state.blend < 1 && state.prior != state.face
+        guard state.warp else {
+            if fading, let prior = state.prior {
+                out.append(LivingPaintingLayer(panel: prior, flowKey: nil,
+                    alpha: state.face == nil ? 1 - state.blend : 1, region: .face))
+            }
+            if let shown = state.face {
+                out.append(LivingPaintingLayer(panel: shown, flowKey: nil, alpha: fading ? state.blend : 1, region: .face))
+            }
+            if state.slicedViseme > 0, state.slicedViseme < file.visemes.count, state.face?.key != Self.laughKey {
+                out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .mouths, index: state.slicedViseme),
+                    flowKey: nil, alpha: 1, region: .mouth))
+            }
+            let blink = min(1, max(0, state.value(.eyeBlink)))
+            if blink > 0.001 {
+                out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .faces, index: 8),
+                    flowKey: nil, alpha: blink, region: .eyes))
+            }
+            return out
+        }
+        if fading, let prior = state.prior {
+            out.append(LivingPaintingLayer(panel: prior, flowKey: prior.key,
+                alpha: state.face == nil ? 1 - state.blend : 1, region: .face))
+        }
+        if let shown = state.face {
+            out.append(LivingPaintingLayer(panel: shown, flowKey: shown.key,
+                alpha: fading ? state.blend : 1, region: .face))
+        }
+        let visemes = visemeWeights(state)
+        var later = visemes.reduce(0) { $0 + $1.weight }
+        // Stable order by weight, heaviest drawn first.
+        let ordered = visemes.enumerated().sorted {
+            $0.element.weight != $1.element.weight ? $0.element.weight > $1.element.weight : $0.offset < $1.offset
+        }.map { $0.element }
+        for item in ordered {
+            later -= item.weight
+            out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .mouths, index: item.index),
+                flowKey: "mouths.\(item.index)", alpha: min(1, item.weight / max(1e-6, 1 - later)), region: .mouth))
+        }
+        let closed = Self.smooth01((state.value(.eyeBlink) - 0.45) / 0.45)
+        if closed > 0.001 {
+            out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .faces, index: 8),
+                flowKey: nil, alpha: closed, region: .eyes))
+        }
+        return out
+    }
+
+    /// The region a layer is feathered into, in panel pixels: centre x, y,
+    /// radii x, y and the feather's inner radius.
+    func region(_ region: LivingPaintingLayer.Region) -> (cx: Double, cy: Double, rx: Double, ry: Double, inner: Double) {
+        guard region != .head, let r = file.regions[region.rawValue], r.count == 5 else { return (0, 0, 1, 1, 0) }
+        let p = file.panel
+        return ((r[0] + r[2] / 2) * p, (r[1] + r[3] / 2) * p, r[2] * p / 2, r[3] * p / 2, r[4])
+    }
+}
