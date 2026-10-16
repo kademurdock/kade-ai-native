@@ -31,6 +31,14 @@ struct LivingPaintingRig {
         /// How far above the lid the skin stretches as the lid comes down.
         let crease: Double
         let iris: Double
+        /// Slope of the lid line across the eye (a painted head roll plus
+        /// the eye's own corner tilt), and of the painted closed lash line.
+        var tilt: Double? = nil
+        var closedTilt: Double? = nil
+        /// Thickness of the lash line that slides down whole (default 3).
+        var lash: Double? = nil
+        /// How much of the opening the lid travels (default 1).
+        var travel: Double? = nil
     }
     struct Brow: Decodable { let x: Double; let y: Double; let w: Double; let h: Double; let inner: Double }
     struct Spot: Decodable { let x: Double; let y: Double; let r: Double }
@@ -47,16 +55,24 @@ struct LivingPaintingRig {
         let cheeks: [Spot]
         let neck: Neck
         let hair: Hair
+        /// Rows this near the top hold still (a crown touching the stage edge).
+        var pinTop: Double? = nil
+        /// Scale on the engine's own head roll (default 1).
+        var rollChannel: Double? = nil
     }
-    struct Sheets: Decodable { let faces: String; let mouths: String; let nuance: String; let pitch: Double }
+    /// Witherspoon has no nuance sheet.
+    struct Sheets: Decodable { let faces: String; let mouths: String; let nuance: String?; let pitch: Double }
+    /// A matte picture's place in panel pixels; its alpha cuts the head.
     struct Matte: Decodable { let asset: String; let x: Double; let y: Double; let side: Double }
     struct File: Decodable {
         let id: String
         let version: Int
         let panel: Double
         let sheets: Sheets
-        let mask: Matte
-        let core: Oval
+        /// The head cut: a matte picture and an always-opaque face oval
+        /// (Della, Harley), joined with the bust's head outline at load.
+        let mask: Matte?
+        let core: Oval?
         /// The old rig's dissolve regions as fractions of the panel:
         /// x, y, width, height, feather inner radius.
         let regions: [String: [Double]]
@@ -68,6 +84,11 @@ struct LivingPaintingRig {
         let flowScale: Double
         let flows: [String: String]
         let keyforms: [String: String]
+        /// Panels whose painted eyes are already closed: no blink on them.
+        var noBlinkFaces: [String]? = nil
+        /// Where the painted closed eyes start fading in, and over how much
+        /// blink (default 0.45, 0.45).
+        var closedFade: [Double]? = nil
     }
 
     enum RigError: Error { case shape(String) }
@@ -94,6 +115,8 @@ struct LivingPaintingRig {
     let depth: [Double]
     let hairWeight: [Double]
     let triangles: [UInt16]
+    let noBlink: Set<String>
+    let rollChannel: Double
 
     init(data: Data) throws {
         let file = try JSONDecoder().decode(File.self, from: data)
@@ -135,6 +158,9 @@ struct LivingPaintingRig {
         self.keyforms = keyforms
 
         let lm = file.landmarks
+        noBlink = Set(file.noBlinkFaces ?? [])
+        rollChannel = lm.rollChannel ?? 1
+        let pinTop = lm.pinTop ?? 0
         var mouth = [Double](repeating: 0, count: count)
         var face = [Double](repeating: 0, count: count)
         var head = [Double](repeating: 0, count: count)
@@ -142,19 +168,25 @@ struct LivingPaintingRig {
         var hair = [Double](repeating: 0, count: count)
         for i in 0..<count {
             let x = xs[i], y = ys[i]
+            // Where a speaking mouth takes over from an expression's own mouth
+            // shape: wide and flat-topped, so even a cartoon's big smile hands
+            // its cheeks over gently.
             mouth[i] = Self.smooth01(Self.softEllipse(x, y, lm.mouth.x, lm.mouth.y + 2,
-                lm.mouth.w * 1.9, lm.mouth.h * 3.2, 0.3))
+                lm.mouth.w * 2.4, lm.mouth.h * 4.2, 0.5))
             face[i] = Self.smooth01(Self.softEllipse(x, y, lm.face.x, lm.face.y + 14,
                 lm.face.rx * 1.1, lm.face.ry * 1.12, 0.5))
-            head[i] = 1 - Self.smooth01((y - lm.neck.chin) / (lm.neck.collar - lm.neck.chin))
+            let pin = pinTop > 0 ? Self.smooth01(y / pinTop) : 1
+            head[i] = (1 - Self.smooth01((y - lm.neck.chin) / (lm.neck.collar - lm.neck.chin))) * pin
             let hx = (x - lm.head.x) / lm.head.rx, hy = (y - lm.head.y) / lm.head.ry
             let r2 = hx * hx + hy * hy
             let nx = x - lm.nose.x, ny = y - lm.nose.y
             depth[i] = lm.head.rz * min(1, max(0, 1 - r2)).squareRoot()
                 + lm.nose.z * Self.bump((nx * nx + ny * ny) / (lm.nose.r * lm.nose.r))
             let hang = min(1.3, max(0, (y - lm.hair.y + 40) / lm.head.ry))
+            // Hair below the collar lies on the shoulders and stays with them.
+            let shoulders = 1 - Self.smooth01((y - lm.neck.collar) / 40)
             hair[i] = Self.smooth01((r2.squareRoot() - lm.hair.inner) / (lm.hair.outer - lm.hair.inner))
-                * (1 - face[i]) * hang * lm.hair.reach
+                * (1 - face[i]) * hang * lm.hair.reach * shoulders * pin
         }
         mouthWeight = mouth
         faceWeight = face
@@ -319,7 +351,19 @@ extension LivingPaintingRig {
     }
 
     /// Screen positions (panel pixels, interleaved x, y) of every grid vertex.
-    func vertices(_ state: LivingPaintingState, into out: UnsafeMutablePointer<Float>) {
+    /// The frame's state with blinks removed on a face painted with its eyes
+    /// already closed (CharacterFacialPolicy.shouldBlink's laughing panels).
+    func blinkable(_ state: LivingPaintingState) -> LivingPaintingState {
+        guard let face = state.face, noBlink.contains(face.key) else { return state }
+        var state = state
+        for channel in [PuppetChannel.eyeBlink, .eyeWink] where channel.rawValue < state.channels.count {
+            state.channels[channel.rawValue] = 0
+        }
+        return state
+    }
+
+    func vertices(_ given: LivingPaintingState, into out: UnsafeMutablePointer<Float>) {
+        let state = blinkable(given)
         let n = vertexCount
         let lm = file.landmarks
         func ch(_ channel: PuppetChannel) -> Double { state.value(channel) }
@@ -403,24 +447,33 @@ extension LivingPaintingRig {
                 let u = (file.gridX[c] - eye.x) / eye.w
                 guard abs(u) < 1 else { continue }
                 let f = 1 - u * u
-                let lid = yc - (yc - yu) * f
+                // A tilted eye's lid line rises or falls across its width; its
+                // painted closed lash line may slope its own way.
+                let t = (eye.tilt ?? 0) * (file.gridX[c] - eye.x)
+                let tc = (eye.closedTilt ?? eye.tilt ?? 0) * (file.gridX[c] - eye.x)
+                let lid = yc - (yc - yu) * f + t
                 func moved(_ y: Double) -> Double {
-                    let (r, t) = Self.rowAt(gy, y)
-                    return y + dy[r * columns + c] * (1 - t) + dy[(r + 1) * columns + c] * t
+                    let (r, w) = Self.rowAt(gy, y)
+                    return y + dy[r * columns + c] * (1 - w) + dy[(r + 1) * columns + c] * w
                 }
-                let lidMoved = moved(lid), closedMoved = moved(yc)
-                let middleMoved = moved(eye.y), lowMoved = moved(low)
+                let lidMoved = moved(lid), closedMoved = moved(yc + tc)
+                let middleMoved = moved(eye.y + t), lowMoved = moved(low + t)
                 let opening = max(closedMoved - lidMoved, 0)
                 // 0.96: a closed lid keeps a sliver of height; no zero-area cells.
-                let d = min(blink, 0.96) * opening
+                // A big cartoon lid may travel part of the way.
+                let d = min(blink, 0.96) * opening * (eye.travel ?? 1)
                 let top = lidMoved - eye.crease
+                // The lash line slides down whole; only the skin above it stretches.
+                let lash = min(eye.lash ?? 3, eye.crease * 0.5)
+                let band = lidMoved - lash
                 let span = max(opening, 0.01)
                 let rise = squint * 0.35 * max(lowMoved - lidMoved, 0) * f
                 let reach = max(lowMoved - middleMoved, 0.01)
                 for r in 0..<rows {
                     let i = r * columns + c
                     var py = gy[r] + dy[i]
-                    if py >= top && py < lidMoved { py += d * (py - top) / eye.crease }
+                    if py >= top && py < band { py += d * (py - top) / (eye.crease - lash) }
+                    else if py >= band && py < lidMoved { py += d }
                     else if py >= lidMoved && py < closedMoved { py += d * (closedMoved - py) / span }
                     if py > middleMoved && py <= lowMoved { py -= rise * (py - middleMoved) / reach }
                     else if py > lowMoved && py <= lowMoved + h2 { py -= rise * (1 - (py - lowMoved) / h2) }
@@ -435,7 +488,7 @@ extension LivingPaintingRig {
         let cosPhi = cos(phi) - 1, sinPhi = sin(phi)
         let cosTheta = cos(theta) - 1, sinTheta = sin(theta)
         // 4. roll about the neck; the neck bends instead of the head cutting
-        let roll = (ch(.headRoll) * Self.rollDegrees + state.rollDegrees) * .pi / 180
+        let roll = (ch(.headRoll) * Self.rollDegrees * rollChannel + state.rollDegrees) * .pi / 180
         for i in 0..<n {
             let x = restX[i], y = restY[i], hw = headWeight[i]
             var qx = x + dx[i] + swing * hairWeight[i]
@@ -464,7 +517,8 @@ extension LivingPaintingRig {
     /// The draw list, bottom to top: the neutral panel cut by the head matte,
     /// the dissolving expressions, the speaking mouth shapes, then the
     /// painted closed eyes as the lids arrive.
-    func layers(_ state: LivingPaintingState) -> [LivingPaintingLayer] {
+    func layers(_ given: LivingPaintingState) -> [LivingPaintingLayer] {
+        let state = blinkable(given)
         var out = [LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .faces, index: 0),
             flowKey: nil, alpha: 1, region: .head)]
         let fading = state.blend < 1 && state.prior != state.face
@@ -506,7 +560,9 @@ extension LivingPaintingRig {
             out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .mouths, index: item.index),
                 flowKey: "mouths.\(item.index)", alpha: min(1, item.weight / max(1e-6, 1 - later)), region: .mouth))
         }
-        let closed = Self.smooth01((state.value(.eyeBlink) - 0.45) / 0.45)
+        let fade = file.closedFade ?? [0.45, 0.45]
+        let start = fade.count == 2 ? fade[0] : 0.45, width = fade.count == 2 ? max(fade[1], 0.01) : 0.45
+        let closed = Self.smooth01((state.value(.eyeBlink) - start) / width)
         if closed > 0.001 {
             out.append(LivingPaintingLayer(panel: LivingPaintingPanel(sheet: .faces, index: 8),
                 flowKey: nil, alpha: closed, region: .eyes))

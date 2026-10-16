@@ -30,6 +30,7 @@ struct Golden: Decodable {
         let offsetY: Double?
     }
     struct Case: Decodable {
+        let rig: String?
         let name: String
         let state: State
         let indices: [Int]
@@ -48,15 +49,26 @@ func panel(_ key: String?) -> LivingPaintingPanel? {
     return LivingPaintingPanel(sheet: sheet, index: index)
 }
 
-let rigData = try! Data(contentsOf: root.appendingPathComponent("Sources/LivingPaintingDella.json"))
-let rig = try! LivingPaintingRig(data: rigData)
+// Oct 16 2026: the whole painted cast. Every rig decodes, its grid fits the
+// 16-bit triangle indices, and its required panels and keyforms are there.
+let castRigs = ["LivingPaintingDella", "LivingPaintingKiana", "LivingPaintingHarley",
+                "LivingPaintingLilly", "LivingPaintingWitherspoon"]
+var rigs: [String: LivingPaintingRig] = [:]
+for name in castRigs {
+    let data = try! Data(contentsOf: root.appendingPathComponent("Sources/\(name).json"))
+    let loaded = try! LivingPaintingRig(data: data)
+    rigs[name] = loaded
+    check(loaded.vertexCount == loaded.restX.count && loaded.vertexCount <= 65_535
+        && loaded.triangles.count == (loaded.columns - 1) * (loaded.rows - 1) * 6, "\(name): grid and triangles agree")
+}
+let rig = rigs["LivingPaintingDella"]!
 let golden = try! JSONDecoder().decode(Golden.self,
     from: Data(contentsOf: root.appendingPathComponent("LivingPaintingTests/lp-golden.json")))
-check(rig.vertexCount == rig.restX.count && rig.triangles.count == (rig.columns - 1) * (rig.rows - 1) * 6,
-    "grid and triangles agree")
+check(Set(golden.cases.compactMap { $0.rig }) == Set(castRigs), "the fixture covers every painted character")
 
 var worst = 0.0
 for item in golden.cases {
+    let rig = rigs[item.rig ?? "LivingPaintingDella"]!
     var state = LivingPaintingState()
     state.channels = PuppetChannel.values(item.state.channels)
     state.face = panel(item.state.face)

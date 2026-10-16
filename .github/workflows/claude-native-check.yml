@@ -17,7 +17,7 @@ jobs:
   check:
     if: github.repository == 'kademurdock/kade-ai-native' && github.event.repository.private == false
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       HOMEBREW_NO_AUTO_UPDATE: '1'
@@ -53,19 +53,25 @@ jobs:
         timeout-minutes: 25
         run: |
           set -o pipefail
+          # The step shell stops at the first failing command, so keep the
+          # build's status instead of letting a failure skip its summary.
+          status=0
           xcodebuild -jobs 3 -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/check CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= build > build.log 2>&1
-          status=$?
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= build > build.log 2>&1 || status=$?
           grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -n 200 || true
+          if [ "$status" -ne 0 ]; then
+            grep -n -E "error|failed|Failed|Stack dump" build.log | tail -n 60 || true
+            tail -n 40 build.log || true
+          fi
           exit $status
 
       - name: Puppet gallery screenshots
         id: gallery
         if: ${{ steps.compile.outcome == 'success' && hashFiles('dev/puppet-gallery.sh') != '' }}
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 45
         run: bash dev/puppet-gallery.sh build/check
 
       - name: Keep the gallery for review

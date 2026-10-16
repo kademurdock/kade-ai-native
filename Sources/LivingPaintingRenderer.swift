@@ -35,7 +35,9 @@ final class LivingPaintingResources {
 
     /// The character's resources, loaded once. Throws when the rig file, a
     /// picture or the GPU is missing; callers then keep the sliced portrait.
-    static func shared(rigName: String) throws -> LivingPaintingResources {
+    /// `outline` is the bust's head cut in panel pixels (the same cut the
+    /// sliced head uses); it joins the rig's matte at the first load.
+    static func shared(rigName: String, cutKey: String = "bust", outline: CGPath? = nil) throws -> LivingPaintingResources {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if memoryWatch == nil {
@@ -46,14 +48,21 @@ final class LivingPaintingResources {
                 LivingPaintingResources.purge()
             }
         }
-        if let cached = cache[rigName] { return cached }
+        let key = rigName + "|" + cutKey
+        if let cached = cache[key] { return cached }
         guard let url = Bundle.main.url(forResource: rigName, withExtension: "json") else {
             throw LoadError.unavailable("no \(rigName).json in the bundle")
         }
         let rig = try LivingPaintingRig(data: Data(contentsOf: url))
-        let made = try LivingPaintingResources(rig: rig)
-        cache[rigName] = made
+        let made = try LivingPaintingResources(rig: rig, outline: outline)
+        cache[key] = made
         return made
+    }
+
+    static func isLoaded(rigName: String, cutKey: String) -> Bool {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return cache[rigName + "|" + cutKey] != nil
     }
 
     /// Frees the pictures when the app is told memory is short; the next
@@ -64,7 +73,7 @@ final class LivingPaintingResources {
         cacheLock.unlock()
     }
 
-    init(rig: LivingPaintingRig) throws {
+    init(rig: LivingPaintingRig, outline: CGPath? = nil) throws {
         self.rig = rig
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw LoadError.unavailable("no Metal device")
@@ -116,9 +125,75 @@ final class LivingPaintingResources {
                 .textureStorageMode: MTLStorageMode.private.rawValue])
         }
         let sheets = rig.file.sheets
-        self.sheets = [.faces: try texture(sheets.faces), .mouths: try texture(sheets.mouths),
-                       .nuance: try texture(sheets.nuance)]
-        matte = try texture(rig.file.mask.asset)
+        var loaded: [LivingPaintingPanel.Sheet: MTLTexture] = [.faces: try texture(sheets.faces),
+                                                              .mouths: try texture(sheets.mouths)]
+        if let nuance = sheets.nuance { loaded[.nuance] = try texture(nuance) }
+        self.sheets = loaded
+        matte = try Self.composeMatte(rig: rig, outline: outline, device: device)
+    }
+
+    /// The head cut as one alpha texture over the panel, drawn once: the
+    /// rig's matte picture and opaque face oval (Della, Harley), inside the
+    /// bust's head outline (Kiana, Lilly, Witherspoon, Harley). Every layer is
+    /// cut by it, as the sliced portrait cut its whole face composite.
+    private static func composeMatte(rig: LivingPaintingRig, outline: CGPath?, device: MTLDevice) throws -> MTLTexture {
+        let panel = rig.file.panel
+        let scale = 3.0
+        let side = Int((panel * scale).rounded())
+        guard side > 0, let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+            throw LoadError.unavailable("matte context")
+        }
+        // Panel pixels, y down, like the rig.
+        context.translateBy(x: 0, y: CGFloat(side))
+        context.scaleBy(x: CGFloat(scale), y: -CGFloat(scale))
+        context.setFillColor(gray: 1, alpha: 1)
+        if let outline {
+            context.addPath(outline)
+            context.clip()
+        }
+        if let mask = rig.file.mask {
+            guard let alpha = alphaImage(mask.asset) else { throw LoadError.unavailable("matte \(mask.asset)") }
+            context.saveGState()
+            // Upright inside its own square: undo the y flip there.
+            context.translateBy(x: CGFloat(mask.x), y: CGFloat(mask.y + mask.side))
+            context.scaleBy(x: 1, y: -1)
+            context.draw(alpha, in: CGRect(x: 0, y: 0, width: mask.side, height: mask.side))
+            context.restoreGState()
+            if let core = rig.file.core {
+                context.fillEllipse(in: CGRect(x: core.x - core.rx, y: core.y - core.ry,
+                    width: core.rx * 2, height: core.ry * 2))
+            }
+        } else {
+            context.fill(CGRect(x: 0, y: 0, width: panel, height: panel))
+        }
+        guard let bytes = context.data else { throw LoadError.unavailable("matte bytes") }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm,
+            width: side, height: side, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw LoadError.unavailable("matte texture")
+        }
+        texture.replace(region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0,
+            withBytes: bytes, bytesPerRow: side)
+        return texture
+    }
+
+    /// A picture's alpha as a grey image (white = opaque).
+    private static func alphaImage(_ asset: String) -> CGImage? {
+        guard let image = UIImage(named: asset)?.cgImage else { return nil }
+        let width = image.width, height = image.height
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let bytes = context.data else { return nil }
+        let data = Data(bytes: bytes, count: width * height)
+        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     func texture(_ sheet: LivingPaintingPanel.Sheet) -> MTLTexture? { sheets[sheet] }
@@ -152,8 +227,9 @@ final class LivingPaintingResources {
             SIMD4<Float>(Float(region.cx), Float(region.cy), Float(region.rx), Float(region.ry)),
             SIMD4<Float>(Float(origin.x), Float(origin.y), Float(size.x), Float(size.y)),
             SIMD4<Float>(Float(layer.alpha), Float(region.inner), layer.region == .head ? 0 : 1, 0),
-            SIMD4<Float>(Float(file.mask.x), Float(file.mask.y), Float(file.mask.side), 0),
-            SIMD4<Float>(Float(file.core.x), Float(file.core.y), Float(file.core.rx), Float(file.core.ry)),
+            // The composed matte covers the panel exactly.
+            SIMD4<Float>(0, 0, Float(file.panel), 0),
+            SIMD4<Float>(0, 0, 0, 0),
         ]
     }
 
@@ -194,16 +270,12 @@ final class LivingPaintingResources {
                                 constant LPLayer &layer [[buffer(0)]]) {
         constexpr sampler smooth(coord::normalized, filter::linear, address::clamp_to_edge);
         float4 color = art.sample(smooth, (layer.sheet.xy + in.uv) / layer.sheet.zw);
-        float alpha;
-        if (layer.look.z < 0.5) {
-            float2 m = (in.rest - layer.matte.xy) / layer.matte.z;
-            float inside = step(0.0, m.x) * step(0.0, m.y) * step(m.x, 1.0) * step(m.y, 1.0);
-            float cut = matte.sample(smooth, m).a * inside;
-            float2 e = (in.rest - layer.core.xy) / layer.core.zw;
-            alpha = max(cut, dot(e, e) <= 1.0 ? 1.0 : 0.0);
-        } else {
+        // Every layer is cut by the head matte, sampled where its pixel rests.
+        float cut = matte.sample(smooth, (in.rest - layer.matte.xy) / layer.matte.z).r;
+        float alpha = cut;
+        if (layer.look.z >= 0.5) {
             float2 e = (in.rest - layer.region.xy) / layer.region.zw;
-            alpha = clamp((1.0 - length(e)) / max(1e-4, 1.0 - layer.look.y), 0.0, 1.0);
+            alpha = cut * clamp((1.0 - length(e)) / max(1e-4, 1.0 - layer.look.y), 0.0, 1.0);
         }
         alpha *= layer.look.x;
         return float4(color.rgb * alpha, alpha);
