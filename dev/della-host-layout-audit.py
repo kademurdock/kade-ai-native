@@ -1020,8 +1020,11 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
                'xctestDevices' if '/XCTestDevices/' in path else
                'buildProducts' if '/Build/Products/' in path else
                'sameAppSuffixElsewhere' if path.endswith('/KadeAI.app/KadeAI') else 'otherAbsolutePath')
-        print(json.dumps({'launchedOutsideInstalledApp':where,'executableName':str(path).rsplit('/',1)[-1][:40]}),
-              file=sys.stderr,flush=True)
+        # The device-relative shape with UUID-like parts masked (simulator-internal folders only).
+        shape=re.sub(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}','<uuid>',
+                     str(path)[len(root)+1:] if str(path).startswith(root+'/') else '')[:200]
+        print(json.dumps({'launchedOutsideInstalledApp':where,'executableName':str(path).rsplit('/',1)[-1][:40],
+                          'deviceRelativeShape':shape}),file=sys.stderr,flush=True)
     require(match is not None,'Launched executable is outside the exact simulator installed app')
     executable=Path(first['path']);plist=executable.parent/'Info.plist'
     for item in (executable,plist):
