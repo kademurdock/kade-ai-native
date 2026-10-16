@@ -37,9 +37,10 @@ try:
     names = [(t["name"], t["identifier"]) for t in json.load(sys.stdin).get("devicetypes", [])]
 except Exception:
     names = []
-phones = [n for n in names if n[0].startswith("iPhone")]
-plain = [n for n in phones if n[0].endswith(" Pro")] or [n for n in phones if "Max" not in n[0] and "Plus" not in n[0] and " SE" not in n[0]] or phones
-print(plain[-1][1] if plain else "")
+import re
+pro = sorted((int(m.group(1)), n[1]) for n in names for m in [re.fullmatch(r"iPhone (\d+) Pro", n[0])] if m)
+phones = [n[1] for n in names if n[0].startswith("iPhone")]
+print(pro[-1][1] if pro else (phones[-1] if phones else ""))
 ')"
 if [ -z "$DEVICE_TYPE" ]; then note "no iPhone device type"; exit 0; fi
 note "runtime $RUNTIME, device $DEVICE_TYPE"
@@ -63,8 +64,9 @@ for page in 0 1 2; do
   if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadePuppetGallery -KadePuppetGalleryPage "$page"; then
     note "launch of page $page failed"; continue
   fi
-  # The first launch also warms the simulator's render server.
-  if [ "$page" = 0 ]; then sleep 15; else sleep 8; fi
+  # The first launch also warms the simulator's render server and lets the
+  # fresh device's welcome notifications come and go before any screenshot.
+  if [ "$page" = 0 ]; then sleep 30; else sleep 10; fi
   if limit 120 xcrun simctl io "$UDID" screenshot "$OUT/gallery-page$page.png"; then
     shots=$((shots + 1))
   else

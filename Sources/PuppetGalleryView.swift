@@ -54,6 +54,14 @@ struct PuppetGalleryView: View {
     }
 
     var body: some View {
+        // Scrolls so the grid starts below the status bar on every phone size.
+        ScrollView {
+            gallery
+        }
+        .task { await load() }
+    }
+
+    private var gallery: some View {
         VStack(spacing: 6) {
             Text("Puppet gallery, page \(page + 1). \(report)")
                 .font(.caption2)
@@ -69,10 +77,8 @@ struct PuppetGalleryView: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
         }
         .padding(.top, 4)
-        .task { await load() }
     }
 
     @ViewBuilder private func tileView(_ tile: Tile) -> some View {
