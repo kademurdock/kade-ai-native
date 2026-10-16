@@ -22,8 +22,24 @@ enum CharacterFacialPolicy {
         return presentation.face
     }
 
+    /// Whether the eyelid reads as closed: past the threshold on a face that
+    /// takes the closed-eye patch at all.
     static func shouldBlink(amount: Double, face: CharacterFace, agentID: String?) -> Bool {
         guard amount.isFinite, (0...1).contains(amount), amount >= blinkThreshold else { return false }
+        return allowsBlink(face: face, agentID: agentID)
+    }
+
+    /// Oct 16 2026: the authored closed-eye patch fades in and out with the
+    /// eyelid, restoring the dissolve removed on Oct 9, so every blink has
+    /// in-between frames instead of a one-frame swap. Faces whose own panel
+    /// already closes the eyes keep them and show no patch.
+    static func blinkOpacity(amount: Double, face: CharacterFace, agentID: String?) -> Double {
+        guard amount.isFinite, (0...1).contains(amount), amount > 0,
+              allowsBlink(face: face, agentID: agentID) else { return 0 }
+        return amount
+    }
+
+    static func allowsBlink(face: CharacterFace, agentID: String?) -> Bool {
         // Harley's delighted nuance also has authored closed/squinted eyes.
         // The other delighted panels have visible open eyes.
         if face == .delighted, agentID == CharacterMotion.harleyID { return false }

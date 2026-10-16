@@ -52,8 +52,7 @@ enum CharacterAngelArtwork {
               CharacterMotion.prepared(id: agentID, path: avatarPath) else { return nil }
         return loaded
     }
-    static let limits = CharacterBustMotionLimits(headDegrees: 1.8,
-        bodyDegrees: 0.4, headOffsetPixels: 2, bodyOffsetPixels: 1.5)
+    static let limits = CharacterAngelVectorArt.motionLimits
 }
 
 fileprivate struct CharacterAngelVectorDrawing {
@@ -146,7 +145,8 @@ struct CharacterAngelVectorView: View {
             context.scaleBy(x: size.width / art.canvas, y: size.height / art.canvas)
             var torso = context
             rotate(&torso, degrees: motion.bodyAngle, around: art.pivots["body"]!)
-            torso.translateBy(x: 0, y: motion.bodyOffsetY)
+            // The breath lifts the torso, which carries wings, head and halo.
+            torso.translateBy(x: 0, y: motion.bodyOffsetY + motion.breathOffsetY)
             var leftWing = torso
             rotate(&leftWing, degrees: ornaments.leftWingDegrees, around: art.pivots["leftWing"]!)
             draw(group: "leftWing", into: &leftWing)

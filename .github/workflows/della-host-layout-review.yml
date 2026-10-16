@@ -2,7 +2,7 @@ name: Della full host layout unsigned review
 
 'on':
   push:
-    branches: [codex/voice-playback-host-20261015]
+    branches: [claude/release-host-20261016]
     # Dedicated proof branch: verify every push, including branch creation.
 
 permissions:
@@ -21,12 +21,13 @@ jobs:
       github.event.repository.private == false &&
       toJSON(github.event.repository.private) == 'false' &&
       github.repository == 'kademurdock/kade-ai-native' &&
-      github.ref == 'refs/heads/codex/voice-playback-host-20261015' &&
+      github.ref == 'refs/heads/claude/release-host-20261016' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
     # Two simulator phone device types and twenty-eight actual host cases,
     # and targeted UI-tree tests share one compiled app and a finite job budget.
-    timeout-minutes: 55
+    # Slow 3-vCPU macos-26 hosts needed up to 50 of the old 55 minutes on passing runs.
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       KADE_EXPECTED_COMMIT: ${{ github.sha }}
@@ -41,7 +42,7 @@ jobs:
           started=datetime.now(timezone.utc)
           with open(os.environ['GITHUB_ENV'],'a') as target:
               target.write('KADE_HOST_OPERATION_STARTED_UTC='+started.isoformat()+'\n')
-              target.write('KADE_HOST_OPERATION_DEADLINE_UTC='+(started+timedelta(minutes=52)).isoformat()+'\n')
+              target.write('KADE_HOST_OPERATION_DEADLINE_UTC='+(started+timedelta(minutes=82)).isoformat()+'\n')
           PY
 
       - name: Check out the exact public host candidate source
@@ -71,8 +72,18 @@ jobs:
           bash run-speech-tests.sh
 
       - name: Require both simulator phone device types on installed iOS26.4
-        timeout-minutes: 5
+        # The first simctl call on a fresh runner starts CoreSimulatorService.
+        timeout-minutes: 8
         run: python3 dev/della-host-layout-audit.py preflight --expected-sha "$KADE_EXPECTED_COMMIT"
+
+      - name: Start the first Pro Max boot so first-boot setup overlaps compilation
+        # simctl boot returns once booting starts. The explicit boot step below
+        # still waits on bootstatus and runs the unchanged offline app preflight.
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          large="$(python3 dev/della-host-layout-audit.py device --expected-sha "$KADE_EXPECTED_COMMIT" --device large)"
+          xcrun simctl boot "$large"
 
       - name: Stage unchanged optional review art and generate simulator project
         timeout-minutes: 10
@@ -90,27 +101,27 @@ jobs:
       - name: Explicitly boot the Pro Max simulator and require native readiness
         id: ui-boot-large
         if: ${{ always() && !cancelled() && steps.compiled-tests.outcome == 'success' }}
-        timeout-minutes: 8
+        timeout-minutes: 11
         run: python3 dev/della-host-layout-audit.py boot-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device large
 
       - name: Test sixteen Pro Max simulator cases with the exact compiled runner
         id: ui-large
         if: ${{ always() && !cancelled() && steps.ui-boot-large.outcome == 'success' }}
-        # Python retains the unchanged600-second test cap, then bounded cleanup.
-        timeout-minutes: 12
+        # Python keeps a 900-second test cap, then bounded cleanup.
+        timeout-minutes: 17
         run: python3 dev/della-host-layout-audit.py run-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device large
 
       - name: Explicitly boot the SE simulator and require native readiness
         id: ui-boot-small
         if: ${{ always() && !cancelled() && steps.compiled-tests.outcome == 'success' }}
-        timeout-minutes: 8
+        timeout-minutes: 11
         run: python3 dev/della-host-layout-audit.py boot-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device small
 
       - name: Test eight SE simulator cases with the exact compiled runner
         id: ui-small
         if: ${{ always() && !cancelled() && steps.ui-boot-small.outcome == 'success' }}
-        # Python retains the unchanged480-second test cap, then bounded cleanup.
-        timeout-minutes: 10
+        # Python keeps a 720-second test cap, then bounded cleanup.
+        timeout-minutes: 14
         run: python3 dev/della-host-layout-audit.py run-ui --expected-sha "$KADE_EXPECTED_COMMIT" --device small
 
       - name: Always retain UI diagnostics and require both complete native results
@@ -122,19 +133,19 @@ jobs:
       - name: Reboot and preflight the Pro Max for the all-cast suite
         id: completion-boot
         if: ${{ always() && !cancelled() && steps.native-ui-results.outcome == 'success' }}
-        timeout-minutes: 8
+        timeout-minutes: 11
         run: python3 -B dev/puppet-completion-audit.py boot --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Require all-cast keyposes, motion stops and roomy sending with the exact compiled runner
         id: completion-ui
         if: ${{ always() && !cancelled() && steps.completion-boot.outcome == 'success' }}
-        timeout-minutes: 12
+        timeout-minutes: 17
         run: python3 -B dev/puppet-completion-audit.py ui --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Capture twenty-one observed all-cast production keyposes
         id: completion-capture
         if: ${{ always() && !cancelled() && steps.completion-ui.outcome == 'success' }}
-        timeout-minutes: 6
+        timeout-minutes: 11
         run: python3 -B dev/puppet-completion-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Capture twenty-eight silent hosts only after both UI groups pass
@@ -148,7 +159,8 @@ jobs:
         run: python3 dev/della-host-layout-audit.py clean-review --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Emit bounded host PNG and receipt evidence through free logs
-        timeout-minutes: 1
+        # Two base64 archives (~40 MB of log lines) took 34-66 s; 1 minute killed 3 passing runs.
+        timeout-minutes: 5
         if: ${{ always() }}
         run: python3 -B dev/puppet-completion-audit.py emit-all --expected-sha "$KADE_EXPECTED_COMMIT"
         # No artifact storage, cache, signing, app archive, deployment or release.

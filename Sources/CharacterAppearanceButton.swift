@@ -5,12 +5,14 @@ import SwiftUI
 struct CharacterAppearanceButton: View {
     let agentID: String?
     @EnvironmentObject private var agents: AgentsService
+    @EnvironmentObject private var puppets: PuppetStore
     private struct Notice { let name: String; let text: String }
     @State private var notice: Notice?
 
     private var agent: KadeAgent? { agents.agents.first { $0.id == agentID } }
     private var description: String? {
-        CharacterAppearance.description(agentID: agentID, avatarPath: agent?.avatar?.filepath)
+        CharacterAppearance.description(agentID: agentID, avatarPath: agent?.avatar?.filepath,
+            puppetDescription: puppets.description(for: agentID))
     }
 
     var body: some View {

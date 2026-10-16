@@ -17,10 +17,13 @@ enum CharacterKianaBustGeometry {
             panelX: 205, panelY: -5, panelSide: 640,
             neckX: 576, neckY: 445, waistX: 512, waistY: 1050,
             faceCore: nil, headOutline: .kianaHead, accessoryOutlines: [],
-            // The original panel ends at y635, beyond the crop's y620 edge.
-            // Its15px margin exceeds the worst displacement (under5px).
-            motionLimits: CharacterBustMotionLimits(headDegrees: 0.60, bodyDegrees: 0,
-                headOffsetPixels: 0.60, bodyOffsetPixels: 0))
+            // The original panel ends at y635, beyond the crop's y620 edge,
+            // and its crown starts 5px above the crop's top edge. Oct 16 2026:
+            // a 1.1 degree turn with 0.9px of nod and a 2px upward breath
+            // lifts the lower edge at most about 10px (inside the 15px margin)
+            // and drops the cut crown at most about 3.1px (inside its 5px).
+            motionLimits: CharacterBustMotionLimits(headDegrees: 1.1, bodyDegrees: 0,
+                headOffsetPixels: 0.9, bodyOffsetPixels: 0, breathPixels: 2.0))
         // Mandatory: this resource contains a generated face and mismatched
         // chest. Its entire visible range is excluded from this close crop.
         value.bodyClipMinY = bodyClipMinY

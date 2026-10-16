@@ -1,8 +1,8 @@
-name: Voice playback start and preserved motion checks
+name: Provider pacing and preserved playback/motion checks
 
 'on':
   push:
-    branches: [codex/voice-playback-start-20261015]
+    branches: [codex/provider-pace-20261015]
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
       github.event.repository.private == false &&
       toJSON(github.event.repository.private) == 'false' &&
       github.repository == 'kademurdock/kade-ai-native' &&
-      github.ref == 'refs/heads/codex/voice-playback-start-20261015' &&
+      github.ref == 'refs/heads/codex/provider-pace-20261015' &&
       toJSON(github.event.deleted) == 'false'
     runs-on: macos-26
     timeout-minutes: 10
@@ -40,6 +40,7 @@ jobs:
           bash run-character-tests.sh
           bash run-speech-tests.sh
           python3 -B dev/test-playback-start-mutants.py
+          python3 -B dev/test-pace-mutants.py
           git diff --exit-code
       - name: Prove that the old freeze and phase reset are detected, then restore exact source
         timeout-minutes: 4
@@ -62,8 +63,8 @@ jobs:
           subprocess.run(['git','diff','--exit-code'],check=True)
           paths=[pathlib.Path('Sources/CharacterMotion.swift'),path]
           originals={p:p.read_bytes() for p in paths}
-          old=b'let motionTime = performance?.activityElapsed ?? time'
-          wrapped=b'let motionTime = (performance?.activityElapsed ?? time).truncatingRemainder(dividingBy: 120 * .pi)'
+          old=b'let ambient = performance?.ambientElapsed ?? time'
+          wrapped=b'let ambient = (performance?.ambientElapsed ?? time).truncatingRemainder(dividingBy: 120 * .pi)'
           try:
               for p,data in originals.items():
                   assert data.count(old)==1

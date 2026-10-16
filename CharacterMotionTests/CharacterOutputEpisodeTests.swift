@@ -115,7 +115,12 @@ func runCharacterOutputEpisodeChecks(_ check: (Bool, String) -> Void) {
         "A syllable gap releases the body gently instead of snapping both hands shut")
     let paused = sample(10.30, speech(0.30, phase: .paused), level: 0)
     let held = sample(1000, speech(0.30, phase: .paused), level: 0)
-    check(paused == held, "A long pause spends neither gesture time nor body energy")
+    // Oct 16 2026: breathing and drift keep their own ambient clock through
+    // the pause; every gesture and energy field stays exactly where it was.
+    var heldGesture = held
+    heldGesture.ambientElapsed = paused.ambientElapsed
+    check(paused == heldGesture && held.ambientElapsed > paused.ambientElapsed,
+        "A long pause spends neither gesture time nor body energy")
     let resumed = sample(1000.1, speech(0.40))
     check(close(resumed.elapsed, 0.40) && resumed.accentScale == paused.accentScale,
         "Resume follows the frozen source clock without replaying a greeting")

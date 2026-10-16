@@ -1399,16 +1399,22 @@ struct ConversationDetailView: View {
         }
         // Sep 23 2026 redesign (B2): "Voice speed" (was "Voice message speed").
         .confirmationDialog(
-            "Voice speed",
+            "Voice delivery pace",
             isPresented: $showingSpeedPicker,
             titleVisibility: .visible
         ) {
+            ForEach(VoicePacePolicy.fishOptions, id: \.value) { pace in
+                Button("Fish: \(pace.label)") {
+                    voiceService.fishPace = pace.value
+                    UIAccessibility.post(notification: .announcement, argument: "Fish delivery pace \(pace.label). Applies to the next message.")
+                }
+            }
             ForEach(VoiceService.availableRates, id: \.self) { rate in
-                Button(VoiceService.rateSpokenLabel(rate)) {
+                Button("Classic Inworld: \(VoiceService.rateSpokenLabel(rate))") {
                     voiceService.playbackRate = rate
                     UIAccessibility.post(
                         notification: .announcement,
-                        argument: "Voice speed \(VoiceService.rateSpokenLabel(rate))."
+                        argument: "Classic Inworld \(VoiceService.rateSpokenLabel(rate)). Applies to the next message."
                     )
                 }
             }
@@ -2851,15 +2857,12 @@ struct ConversationDetailView: View {
     /// fix session 11 made to the toggle itself. Named "Voice speed" since
     /// the Sep 23 2026 redesign (B2; it was "Voice message speed").
     ///
-    /// Applied client-side via `AVAudioPlayer.rate`, NOT by asking the TTS
-    /// service to synthesize faster: re-synthesizing would re-bill every
-    /// clip and would change the voice's actual prosody rather than just
-    /// how fast it plays.
+    /// Changes generation for future replies; already playing audio stays at 1x.
     private var speedButton: some View {
         Button {
             showingSpeedPicker = true
         } label: {
-            Text(VoiceService.rateLabel(voiceService.playbackRate))
+            Text("\(voiceService.fishPace == "character" ? "Auto" : VoicePacePolicy.fishName(voiceService.fishPace)) / \(VoiceService.rateLabel(voiceService.playbackRate))")
                 .font(.footnote.monospacedDigit())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
@@ -2869,9 +2872,9 @@ struct ConversationDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Voice speed")
-        .accessibilityValue(VoiceService.rateSpokenLabel(voiceService.playbackRate))
+        .accessibilityValue("Fish: \(VoicePacePolicy.fishName(voiceService.fishPace)). Classic Inworld: \(VoiceService.rateSpokenLabel(voiceService.playbackRate)).")
         .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
-        .accessibilityHint("Double-tap to change how fast voice messages play.")
+        .accessibilityHint("Choose Fish delivery instructions or Classic Inworld API speed for the next voice message. Current audio keeps its original speed.")
     }
 
     // MARK: - Composer (Phase 3)

@@ -7,6 +7,7 @@ trap 'rm -rf "$OUT"' EXIT
   "$ROOT/Sources/CharacterFacialPolicy.swift" \
   "$ROOT/Sources/CharacterAnimationBudget.swift" "$ROOT/CharacterMotionTests/CharacterAnimationBudgetTests.swift" \
   "$ROOT/CharacterMotionTests/CharacterBodyPerformanceTests.swift" \
+  "$ROOT/CharacterMotionTests/CharacterRestingLifeTests.swift" \
   "$ROOT/CharacterMotionTests/CharacterOutputEpisodeTests.swift" \
   "$ROOT/Sources/CharacterConversationBodyArtwork.swift" "$ROOT/Sources/CharacterConversationBodyGeometry.swift" \
   "$ROOT/CharacterMotionTests/CharacterConversationBodyTests.swift" \

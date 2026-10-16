@@ -58,6 +58,7 @@ import UIKit
 /// path, it just stops making everyone walk through it to reach search.
 struct AgentPickerView: View {
     @EnvironmentObject private var agentsService: AgentsService
+    @EnvironmentObject private var puppets: PuppetStore
     let currentAgentId: String?
     let onSelect: (KadeAgent) -> Void
 
@@ -377,7 +378,8 @@ struct AgentPickerView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if let description = CharacterAppearance.description(
-                agentID: agent.id, avatarPath: agent.avatar?.filepath
+                agentID: agent.id, avatarPath: agent.avatar?.filepath,
+                puppetDescription: puppets.description(for: agent.id)
             ) {
                 Button {
                     isSearchFieldFocused = false
@@ -402,7 +404,8 @@ struct AgentPickerView: View {
         .accessibilityLabel(accessibleLabel(for: agent, isSelected: agent.id == currentAgentId))
         .accessibilityAddTraits(agent.id == currentAgentId ? [.isSelected] : [])
         .accessibilityHint(CharacterAppearance.description(
-            agentID: agent.id, avatarPath: agent.avatar?.filepath
+            agentID: agent.id, avatarPath: agent.avatar?.filepath,
+            puppetDescription: puppets.description(for: agent.id)
         ) == nil
             ? "Switches to this character for your next message."
             : "Switches to this character for your next message. Actions include Describe appearance.")
@@ -498,4 +501,5 @@ enum RecentAgents {
     let client = KadeAPIClient()
     return AgentPickerView(currentAgentId: nil, onSelect: { _ in })
         .environmentObject(AgentsService(client: client))
+        .environmentObject(PuppetStore(client: client))
 }

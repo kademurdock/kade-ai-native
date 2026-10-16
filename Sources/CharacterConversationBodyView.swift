@@ -31,9 +31,17 @@ struct CharacterConversationBodyView<Head: View>: View {
         let bust = artwork.existingBust
         let neck = UnitPoint(x: (bust.neckX - bust.cropX) / bust.cropSide,
                              y: (bust.neckY - bust.cropY) / bust.cropSide)
+        // Oct 16 2026: a breath raises the shoulders by `rise` points. The
+        // body stretches up from the stage's lower edge, which never moves, so
+        // no cloth edge opens there; the head rides on the shoulders.
+        let rise = pose.breathLift * side
+        let shoulderSpan = max(1, height - side * 0.86)
         ZStack(alignment: .topLeading) {
-            CharacterConversationClothing(artwork: artwork, side: side, height: height).equatable()
-            CharacterConversationArms(artwork: artwork, pose: pose, side: side, height: height).equatable()
+            Group {
+                CharacterConversationClothing(artwork: artwork, side: side, height: height).equatable()
+                CharacterConversationArms(artwork: artwork, pose: pose, side: side, height: height).equatable()
+            }
+            .scaleEffect(x: 1, y: 1 + rise / shoulderSpan, anchor: .bottom)
             Group {
                 if artwork.kind == .kiana {
                     // The compact Kiana head remains unchanged. Only this tall
@@ -75,7 +83,7 @@ struct CharacterConversationBodyView<Head: View>: View {
             }
                 .frame(width: side, height: side)
                 .rotationEffect(.degrees(pose.headDegrees), anchor: neck)
-                .offset(y: pose.headLift * side)
+                .offset(y: pose.headLift * side - rise)
         }
         .frame(width: side, height: height, alignment: .topLeading)
         .rotationEffect(.degrees(pose.bodyDegrees),

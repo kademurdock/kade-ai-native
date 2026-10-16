@@ -32,7 +32,9 @@ POLICIES = ('compact','reduceMotion','offscreen','resume')
 EVENTS = tuple(person+'-'+policy for person in PEOPLE for policy in POLICIES)
 UI_METHODS = {'testAllCastKeyposes':'allCastKeyposes','testCompactAndMotionPolicies':'compactAndMotionPolicies',
               'testRoomySendingKeepsBodyAndComposer':'roomySendingLight'}
-CAPTURE_SECONDS = 300
+# Oct 16 2026: a slow macos-26 runner needed more than 300 s for the 21 keyposes
+# (successful runs took 1.6 to 3.2 minutes). Still finite.
+CAPTURE_SECONDS = 600
 UI_SECONDS = 600
 MAX_FILES = 25
 IDS = {
@@ -148,7 +150,8 @@ def validate_ready(data, phase, source):
             and host.number(render['time']) and abs(render['time']-expected_time)<1e-6
             and abs(geometry['portrait'][2]-248)<1 and abs(geometry['portrait'][3]-(height+40))<1,
             'Native renderer and measured portrait dimensions disagree')
-    expected_fps=8 if pose=='neutral' else 24
+    # Oct 16 2026: the resting stage samples its breathing and drift at 12 fps.
+    expected_fps=12 if pose=='neutral' else 24
     require(render['framesPerSecond']==expected_fps and type(render['framesPerSecond']) in (int,float)
             and type(render['face']) is int and render['face']==(0 if pose=='neutral' else 1)
             and integer(render['viseme'],0,8) and ((render['viseme']>0) if pose=='gesturePeak' else render['viseme']==0),
@@ -168,9 +171,12 @@ def validate_ready(data, phase, source):
     if person in REGISTRATION or person=='lilly-private':
         validate_joints(values,person)
         kind='lilly' if person=='lilly-private' else person
-        head_limit,body_limit,crop,head_offset={'harley':(2,.75,540,3),'kiana':(.6,.55,620,.6),
-                                  'lilly':(1.95,.65,700,1.7),'witherspoon':(1,.42,620,.6)}[kind]
+        # Oct 16 2026: Kiana's crop allows 1.1 degrees and 0.9 px of nod;
+        # Witherspoon turns up to 1.3 degrees the crown-safe way (0.35 clockwise).
+        head_limit,body_limit,crop,head_offset={'harley':(2,.75,540,3),'kiana':(1.1,.55,620,.9),
+                                  'lilly':(1.95,.65,700,1.7),'witherspoon':(1.3,.42,620,.6)}[kind]
         require(abs(values['headDegrees'])<=head_limit and abs(values['bodyDegrees'])<=body_limit
+                and (kind!='witherspoon' or values['headDegrees']<=.35+1e-9)
                 and abs(values['bodyLift'])<=.0024 and abs(values['headLift']*crop)<=head_offset
                 and abs(values['headAngle']-values['headDegrees'])<1e-6
                 and abs(values['bodyAngle']-values['bodyDegrees'])<1e-6
@@ -291,7 +297,7 @@ def capture(expected):
         report['ownedProcess']=host.owned_process_identity(host.launch_pid(launched),identifier,compiled,
                                                           deadline-15,launch_started,launch_finished)
         for phase in PHASES:
-            ready_deadline=time.monotonic()+remaining(30);data=None
+            ready_deadline=time.monotonic()+remaining(45);data=None
             while time.monotonic()<ready_deadline:
                 if ready.is_file():
                     require(0<ready.stat().st_size<=64*1024,'Completion native readiness exceeds64KiB')
@@ -417,10 +423,11 @@ def main():
     require(source_path.is_file() and 0<source_path.stat().st_size<=256*1024,'Original completion source record missing or oversized')
     recorded=json.loads(source_path.read_bytes());host.validate_operation_source(recorded)
     started=datetime.fromisoformat(recorded['operationStartedAtUtc']).timestamp()
-    if args.action=='emit-all':host._OPERATION_DEADLINE=min(time.time()+60,started+host.JOB_SECONDS-15)
+    # Two base64 evidence archives through logs took 34-66 s; keep a 240 s bound.
+    if args.action=='emit-all':host._OPERATION_DEADLINE=min(time.time()+240,started+host.JOB_SECONDS-15)
     else:
         shared=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
-        action=time.time()+(host.BOOT_SECONDS+30 if args.action=='boot' else 660 if args.action=='ui' else CAPTURE_SECONDS+15)
+        action=time.time()+(host.BOOT_SECONDS+30 if args.action=='boot' else host.UI_GUARD_SECONDS['large'] if args.action=='ui' else CAPTURE_SECONDS+15)
         host._OPERATION_DEADLINE=min(shared,action)
         host._DEADLINE_ROLE='actionGuardDeadline' if action<shared else 'sharedOperationDeadline'
     host.initial_source(args.expected_sha)

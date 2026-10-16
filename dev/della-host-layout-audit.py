@@ -30,7 +30,7 @@ sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/della-host-layout-audit'
 REPOSITORY='kademurdock/kade-ai-native'
-BRANCH='codex/voice-playback-host-20261015'
+BRANCH='claude/release-host-20261016'
 BUNDLE_ID='com.kademurdock.kadeai'
 APP=ROOT/'build/della-host-layout-simulator/Build/Products/Debug-iphonesimulator/KadeAI.app'
 MASTER_SHA='285b6e1f176b79ba08cfc7a4252a3d8864901eabbdcbc1e58f304299164206d2'
@@ -40,7 +40,7 @@ PINS={
     'dev/puppet-review-assets/della-body-plate.png':'e0709e31501d6b3e2b59a18c7cff93e1012b411e489b9ba9f956e8b72281018e',
     'dev/della-articulated-review/della-body-gesture-master-v1.png':MASTER_SHA,
     'Sources/Assets.xcassets/CharacterDellaArticulatedReview.imageset/della-body-gesture-master-v1.png':MASTER_SHA,
-    'Sources/CharacterPortraitView.swift':'ec73a0cc03a2ae6034dacae43c348228fb9ff6bf891efcd85301b229cd1aaaaa',
+    'Sources/CharacterPortraitView.swift':'c72e9db282f1edf9f536e2e179dc428f7e85036eadecd7fd6a5fc41282b4fa74',
     'Sources/CharacterDellaArticulatedGeometry.swift':'c893524c79bb7226bf0498bcfb42cd08331ab60983b3233689e58b106c085d7f',
 }
 SOURCE_INPUTS=(
@@ -156,23 +156,33 @@ MAX_RAW=50*1024*1024
 MAX_ARCHIVE=32*1024*1024
 MAX_ENCODED=44*1024*1024
 MAX_FILES=32
-CAPTURE_SECONDS=480
-AGGREGATE_CAPTURE_SECONDS=960
+# Oct 16 2026: one slow macos-26 runner needed more than 480 s for one phone's fourteen
+# hosts (successful runs took 6 to 11 minutes for both phones). Bounds stay finite.
+CAPTURE_SECONDS=900
+AGGREGATE_CAPTURE_SECONDS=1500
 SCREENSHOT_SECONDS=75
-READY_SECONDS=30
-BOOT_SECONDS=420
+READY_SECONDS=60
+# Cold first boot (bootstatus 145-200 s) plus the app preflight must fit one envelope.
+BOOT_SECONDS=600
 INSTALL_SECONDS=180
 PREFLIGHT_CONTAINER_SECONDS=90
-PREFLIGHT_LAUNCH_SECONDS=120
+PREFLIGHT_LAUNCH_SECONDS=240
+# First `simctl ui appearance` after a cold boot took 9.7 s to >45 s on 3-vCPU runners.
+APPEARANCE_SECONDS=120
+# The first `simctl list` on a fresh runner starts CoreSimulatorService (>45 s seen 5 times).
+LIST_SECONDS=120
+# Read-only or idempotent simctl verbs get exactly one retry after a timeout.
+SIM_RETRY_VERBS=('list','get_app_container','ui')
 PREFLIGHT_STOP_SECONDS=5
 PREFLIGHT_DRAIN_SECONDS=2
 PREFLIGHT_OUTPUT_BYTES=64*1024
-UI_SECONDS={'large':600,'small':480}
+UI_SECONDS={'large':900,'small':720}
 UI_LOG_BYTES=8*1024*1024
 UI_STOP_SECONDS=10
-EXPECTED_MODEL_CHECKS=171686
-JOB_SECONDS=55*60
-OPERATION_SECONDS=52*60
+UI_GUARD_SECONDS={key:value+120 for key,value in UI_SECONDS.items()}
+EXPECTED_MODEL_CHECKS=188976
+JOB_SECONDS=90*60
+OPERATION_SECONDS=82*60
 FINAL_RESERVE_SECONDS=JOB_SECONDS-OPERATION_SECONDS
 _OPERATION_DEADLINE=None
 _DEADLINE_ROLE='sharedOperationDeadline'
@@ -222,24 +232,31 @@ def git(*args):
 
 
 def sim(*args, timeout=45, env=None):
-    timeout=operation_remaining(timeout)
-    try:
-        return subprocess.check_output(['xcrun','simctl',*args],text=True,stderr=subprocess.PIPE,
-                                       timeout=timeout,env=env).strip()
-    except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
-        print(f'simctl {args[0] if args else "operation"} failed ({type(error).__name__}, timeout bound{timeout}s).',file=sys.stderr)
-        # bootstatus reports startup progress on stdout, including when the
-        # cold simulator exceeds its readiness bound. Preserve that evidence.
-        for stream_name,stream in [('stdout',error.output),('stderr',error.stderr)]:
-            diagnostic=stream or ''
-            if isinstance(diagnostic,bytes):
-                diagnostic=diagnostic.decode('utf-8',errors='replace')
-            diagnostic=re.sub(r'https?://\S+','[URL omitted]',diagnostic)
-            diagnostic=re.sub(r'(?i)(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+',
-                              r'\1=[redacted]',diagnostic)
-            if diagnostic:
-                print(stream_name+':\n'+diagnostic[-4000:],file=sys.stderr)
-        raise
+    requested=timeout
+    attempts=2 if args and args[0] in SIM_RETRY_VERBS else 1
+    for attempt in range(1,attempts+1):
+        timeout=operation_remaining(requested)
+        try:
+            return subprocess.check_output(['xcrun','simctl',*args],text=True,stderr=subprocess.PIPE,
+                                           timeout=timeout,env=env).strip()
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
+            print(f'simctl {args[0] if args else "operation"} failed ({type(error).__name__}, timeout bound{timeout}s, attempt {attempt}/{attempts}).',file=sys.stderr)
+            # bootstatus reports startup progress on stdout, including when the
+            # cold simulator exceeds its readiness bound. Preserve that evidence.
+            for stream_name,stream in [('stdout',error.output),('stderr',error.stderr)]:
+                diagnostic=stream or ''
+                if isinstance(diagnostic,bytes):
+                    diagnostic=diagnostic.decode('utf-8',errors='replace')
+                diagnostic=re.sub(r'https?://\S+','[URL omitted]',diagnostic)
+                diagnostic=re.sub(r'(?i)(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+',
+                                  r'\1=[redacted]',diagnostic)
+                if diagnostic:
+                    print(stream_name+':\n'+diagnostic[-4000:],file=sys.stderr)
+            # Only a timeout of a read-only/idempotent verb is retried, once, inside
+            # the same shared/action deadline. Any nonzero simctl exit still fails.
+            if attempt<attempts and isinstance(error,subprocess.TimeoutExpired):
+                continue
+            raise
 
 
 def png_framebuffer(idat,width,height,header):
@@ -573,13 +590,13 @@ def simulator_preflight(expected):
     # confined to the fresh ephemeral runner, before either phone is booted.
     subprocess.check_call(['defaults','write','com.apple.iphonesimulator','ConnectHardwareKeyboard',
                            '-bool','false'],timeout=30)
-    runtimes=json.loads(sim('list','runtimes','--json'))['runtimes']
+    runtimes=json.loads(sim('list','runtimes','--json',timeout=LIST_SECONDS))['runtimes']
     choices=[runtime for runtime in runtimes if runtime.get('isAvailable')
              and '.iOS-' in runtime['identifier']
              and re.fullmatch(r'26\.4(?:\.[0-9]+)?',str(runtime.get('version',''))) is not None]
     require(choices,'Installed iOS26.4 runtime missing; no download or fallback')
     runtime=choices[-1]['identifier']
-    types=json.loads(sim('list','devicetypes','--json'))['devicetypes']
+    types=json.loads(sim('list','devicetypes','--json',timeout=LIST_SECONDS))['devicetypes']
     known={item['identifier'] for item in types}
     result={'schema':'kade.della-host-simulators.v1','source':initial,'devices':{},'createdAtUtc':now(),
             'softwareKeyboardRequired':True}
@@ -600,7 +617,7 @@ def simulator_record(expected):
     require(record.get('schema')=='kade.della-host-simulators.v1' and record.get('source')==initial
             and record.get('softwareKeyboardRequired') is True
             and set(record.get('devices',{}))==set(DEVICES),'Fresh simulator/source record mismatch')
-    installed=json.loads(sim('list','devices','--json'))['devices']
+    installed=json.loads(sim('list','devices','--json',timeout=LIST_SECONDS))['devices']
     for key,device in record['devices'].items():
         require(all(device.get(field)==value for field,value in DEVICES[key].items()),'Recorded device type drift')
         matches=[item for item in installed.get(device['runtime'],[]) if item.get('udid')==device['identifier']]
@@ -757,7 +774,7 @@ def validate_app_preflight(report,identifier,initial):
     require(started.tzinfo is not None and finished.tzinfo is not None and started<=finished
             and (finished-started).total_seconds()<=BOOT_SECONDS+1,'Invalid offline app preflight timestamp order')
     durations=report.get('operationSeconds')
-    bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':30,'container':PREFLIGHT_CONTAINER_SECONDS,
+    bounds={'compiledBefore':BOOT_SECONDS,'install':INSTALL_SECONDS,'appearance':APPEARANCE_SECONDS,'container':PREFLIGHT_CONTAINER_SECONDS,
             'launch':PREFLIGHT_LAUNCH_SECONDS,'readiness':READY_SECONDS,'ownedProcess':BOOT_SECONDS,
             'ownedTermination':30,'compiledAfter':BOOT_SECONDS}
     grace=2*PREFLIGHT_STOP_SECONDS+PREFLIGHT_DRAIN_SECONDS
@@ -1240,7 +1257,7 @@ def app_preflight(expected,identifier,initial,device,deadline,report):
         report['compiledRunner']=timed('compiledBefore',unchanged);report['compiledBeforeVerified']=True
         report['status']='installing'
         command('install','install',identifier,str(APP),bound=INSTALL_SECONDS)
-        command('appearance','ui',identifier,'appearance','dark',bound=30)
+        command('appearance','ui',identifier,'appearance','dark',bound=APPEARANCE_SECONDS)
         container=command('container','get_app_container',identifier,BUNDLE_ID,'data',bound=PREFLIGHT_CONTAINER_SECONDS)
         require(isinstance(container,str) and 0<len(container)<=2048 and re.fullmatch(
             r'/.+/CoreSimulator/Devices/'+re.escape(identifier)+
@@ -1336,7 +1353,9 @@ def boot_ui(expected,key,completion=False):
         states={item['udid']:item.get('state') for items in installed.values() for item in items}
         other=records['small' if key=='large' else 'large']['identifier']
         if states.get(other)=='Booted': sim('shutdown',other,timeout=remaining(30))
-        report['alreadyBooted']=states.get(identifier)=='Booted'
+        # The workflow starts the first Pro Max boot before compiling; a device that
+        # is still Booting is not booted again. bootstatus below still gates readiness.
+        report['alreadyBooted']=states.get(identifier) in ('Booted','Booting')
         if not report['alreadyBooted']: sim('boot',identifier,timeout=remaining(45))
         sim('bootstatus',identifier,'-b',timeout=remaining(BOOT_SECONDS))
         if key=='large':
@@ -1571,7 +1590,7 @@ def validate_ui_launch(report,key,initial):
         require(isinstance(lines,list) and len(lines)<=bound
                 and all(isinstance(line,str) and len(line)<=320 and sanitize_ui_line(line)==line for line in lines),
                 'Unsafe/unbounded native UI diagnostic text')
-    for name,maximum in (('elapsedSeconds',720 if key=='large' else 600),
+    for name,maximum in (('elapsedSeconds',UI_GUARD_SECONDS[key]),
                          ('testElapsedSeconds',UI_SECONDS[key]+2*UI_STOP_SECONDS),
                          ('effectiveTimeoutSeconds',UI_SECONDS[key])):
         if name in report:require(number(report[name]) and 0<=report[name]<=maximum+5,
@@ -1966,19 +1985,23 @@ def capture(expected):
                     raise
                 finally:
                     termination={};receipt['ownedTerminations'][phase]=termination
-                    try:terminate_owned_process(owned,identifier,compiled,deadline,termination,bound=30)
+                    # Cleanup keeps its own 30 s even when the capture watchdog already expired,
+                    # so an expired phase still records a real, valid exit instead of a
+                    # zero-second bound that masks the original error.
+                    try:terminate_owned_process(owned,identifier,compiled,max(deadline,time.monotonic()+30),
+                                                termination,bound=30)
                     except Exception as error:
                         if phase_failure is None:raise
                     finally:
                         timing['elapsedSeconds']=round(time.monotonic()-phase_started,3)
                         timing['captureElapsedSeconds']=round(time.monotonic()-aggregate_started,3)
             device['captureSeconds']=round(time.monotonic()-device_started,3)
-            require(device['captureSeconds']<CAPTURE_SECONDS,'Per-device host capture exceeded480-second cap')
+            require(device['captureSeconds']<CAPTURE_SECONDS,f'Per-device host capture exceeded{CAPTURE_SECONDS}-second cap')
             if key=='large':
                 # Avoid running two memory-heavy simulators at the same time.
                 sim('shutdown',identifier,timeout=global_remaining(30))
         aggregate_finished=time.monotonic()
-        require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,'Aggregate capture exceeded960-second cap')
+        require(aggregate_finished<aggregate_started+AGGREGATE_CAPTURE_SECONDS,f'Aggregate capture exceeded{AGGREGATE_CAPTURE_SECONDS}-second cap')
         require(set(receipt['captures'])==set(receipt['nativeReady'])==required_phases(),'Twenty-eight actual host cases incomplete')
         require(set(receipt['ownedProcesses'])==set(receipt['ownedTerminations'])==required_phases()
                 and all(record['passed'] for record in receipt['ownedTerminations'].values()),
@@ -2011,6 +2034,11 @@ def capture(expected):
         if aggregate_started is not None:
             receipt['aggregateCaptureElapsedSeconds']=round((aggregate_finished or time.monotonic())-aggregate_started,3)
         receipt['finishedAtUtc']=now()
+        if not receipt.get('passed'):
+            # Name the original failure first; a later ownership check must not hide it.
+            print(json.dumps({'captureFailure':{key:receipt.get(key) for key in
+                  ('errorType','error','failedPhase','failedDevice','failedOperation','timeoutSeconds')}}),
+                  file=sys.stderr,flush=True)
         validate_capture_ownership(receipt)
         save('receipt.json',receipt)
         for device in records.values():
@@ -2169,7 +2197,7 @@ def main():
         recorded=json.loads((OUT/'source.json').read_text())
         _OPERATION_DEADLINE=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
         if args.action in ('run-ui','build-tests','boot-ui'):
-            guard=(720 if args.device=='large' else 600) if args.action=='run-ui' else BOOT_SECONDS+30 if args.action=='boot-ui' else 960
+            guard=UI_GUARD_SECONDS[args.device] if args.action=='run-ui' else BOOT_SECONDS+30 if args.action=='boot-ui' else 960
             action_deadline=time.time()+guard-30
             if action_deadline<_OPERATION_DEADLINE:
                 _OPERATION_DEADLINE=action_deadline;_DEADLINE_ROLE='actionGuardDeadline'
