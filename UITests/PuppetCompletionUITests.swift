@@ -66,7 +66,8 @@ final class PuppetCompletionUITests: XCTestCase {
             XCTAssertEqual(observed.text("renderer"), renderers[person])
             XCTAssertGreaterThanOrEqual(observed.number("activeSamples"), 3)
             XCTAssertGreaterThanOrEqual(observed.number("distinctVectors"), 2)
-            XCTAssertEqual(observed.number("fps"), index % 3 == 0 ? 8 : 24)
+            // Oct 16 2026: the resting stage samples breathing and drift at 12 fps.
+            XCTAssertEqual(observed.number("fps"), index % 3 == 0 ? 12 : 24)
             XCTAssertEqual(observed.number("face"), index % 3 == 0 ? 0 : 1)
             if index % 3 == 1 { XCTAssertTrue((1...8).contains(observed.number("viseme"))) }
             else { XCTAssertEqual(observed.number("viseme"), 0) }

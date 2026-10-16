@@ -66,6 +66,10 @@ struct CharacterAngelVectorArt: Decodable {
     let pivots: [String: [Double]]
     let features: Features
     static let groups = ["leftWing", "rightWing", "body", "head", "halo"]
+    /// Turn and lift limits in canvas units. Her robe ends at y1018 of the
+    /// 1024 canvas, so a breath only ever lifts it (Oct 16 2026).
+    static let motionLimits = CharacterBustMotionLimits(headDegrees: 1.8,
+        bodyDegrees: 0.4, headOffsetPixels: 2, bodyOffsetPixels: 1.5, breathPixels: 3.5)
 
     static func colorIsValid(_ value: String) -> Bool {
         guard value.first == "#", [4, 7, 9].contains(value.count) else { return false }

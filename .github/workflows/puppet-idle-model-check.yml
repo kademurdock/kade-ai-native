@@ -63,8 +63,8 @@ jobs:
           subprocess.run(['git','diff','--exit-code'],check=True)
           paths=[pathlib.Path('Sources/CharacterMotion.swift'),path]
           originals={p:p.read_bytes() for p in paths}
-          old=b'let motionTime = performance?.activityElapsed ?? time'
-          wrapped=b'let motionTime = (performance?.activityElapsed ?? time).truncatingRemainder(dividingBy: 120 * .pi)'
+          old=b'let ambient = performance?.ambientElapsed ?? time'
+          wrapped=b'let ambient = (performance?.ambientElapsed ?? time).truncatingRemainder(dividingBy: 120 * .pi)'
           try:
               for p,data in originals.items():
                   assert data.count(old)==1

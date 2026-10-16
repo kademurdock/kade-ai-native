@@ -10,8 +10,14 @@ enum CharacterWitherspoonBustGeometry {
         panelX: 202, panelY: 90, panelSide: 620,
         neckX: 512, neckY: 540, waistX: 512, waistY: 1025,
         faceCore: nil, headOutline: .witherspoonHead, accessoryOutlines: [],
-        motionLimits: CharacterBustMotionLimits(headDegrees: 1, bodyDegrees: 0,
-            headOffsetPixels: 0.6, bodyOffsetPixels: 0))
+        // Her panel is exactly the crop, so breathing only ever lifts her
+        // (the cropped crown rises out of view, never drops into it). Oct 16
+        // 2026: a clockwise turn past about 0.35 degrees opened a 1-2 px gap
+        // above the right of her cropped crown, so that direction stops there;
+        // the other way lowers only the crown's near end (under 1 px at 1.3).
+        motionLimits: CharacterBustMotionLimits(headDegrees: 1.3, bodyDegrees: 0,
+            headOffsetPixels: 0.6, bodyOffsetPixels: 0, breathPixels: 2.0,
+            clockwiseHeadDegrees: 0.35))
 }
 
 #if canImport(SwiftUI) && !CHARACTER_MODEL_TESTS

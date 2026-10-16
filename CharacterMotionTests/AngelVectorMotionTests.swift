@@ -169,7 +169,8 @@ func runAngelVectorArtBoundsChecks(_ art: CharacterAngelVectorArt,
     for bodyAngle in [-0.4, 0, 0.4] {
         for headAngle in [-1.8, 0, 1.8] {
             for wingAngle in [-1.8, 0, 1.8] {
-                for offset in [-1.5, 0, 1.5] {
+                // A lift of 1.5 plus a full 3.5-unit breath, or a 1.5 drop.
+                for offset in [-5, 0, 1.5] {
                     for shape in art.shapes {
                         let margin = (shape.strokeWidth ?? 0) / 2
                         for command in shape.path {
