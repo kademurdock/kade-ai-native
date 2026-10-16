@@ -1150,7 +1150,8 @@ struct ConversationDetailView: View {
                  * before any fetch, so it means exactly "the voice has this
                  * one." If it does not, she gets her ding and is never left
                  * with a reply that arrived in total silence. */
-                if !readAloudEnabled || !voiceService.isSpeaking {
+                let receivedBloop = !readAloudEnabled || !voiceService.isSpeaking
+                if receivedBloop {
                     Earcons.shared.play(.messageReceived)
                 }
                 // Aug 6 2026 (her "haptics to match visuals" ask): the reply
@@ -1187,7 +1188,17 @@ struct ConversationDetailView: View {
                     // OVER the received bloop): duck it under the bloop,
                     // then ease back up for the TTS-fetch stretch. The
                     // stop is still owned by the watchers below.
-                    Earcons.shared.duckWaitingLoop(resume: true)
+                    //
+                    // Oct 16 2026 (her report: no bubbles while waiting in
+                    // 337): duck only when that bloop actually plays. With
+                    // the voice already queued (Part 98.5) there is no bloop,
+                    // and the 1.25 s dip plus 0.35 s fade silenced most of a
+                    // short wait once replies got fast (same night).
+                    if receivedBloop {
+                        Earcons.shared.duckWaitingLoop(resume: true)
+                    } else {
+                        KadeBreadcrumbs.drop("thinking loop: kept through reply landing (voice queued, no bloop)")
+                    }
                     speechWaitWatchdog?.cancel()
                     let waitGeneration = speechWaitGeneration
                     speechWaitWatchdog = Task { @MainActor in

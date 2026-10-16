@@ -633,11 +633,10 @@ final class Earcons {
         KadeBreadcrumbs.drop("thinking loop: playing \(sound) (\(fadeIn > 0 ? "gap resume" : "send")) category=\(session.category.rawValue) silentSwitchMutes=\(mutable) vo=\(UIAccessibility.isVoiceOverRunning) route=\(route)")
     }
 
-    /// The default arguments name the caller in the trail when a loop is
-    /// stopped within 3 s of starting; no caller changes.
+    /// The default arguments name the caller in the trail, with how long the
+    /// bubbles ran; no caller changes.
     func stopWaitingLoop(caller: StaticString = #fileID, line: UInt = #line) {
-        if let player = waitingPlayer, player.isPlaying, let started = waitingStartedAt,
-           Date().timeIntervalSince(started) < 3 {
+        if let player = waitingPlayer, player.isPlaying, let started = waitingStartedAt {
             KadeBreadcrumbs.drop("thinking loop: stopped after \(String(format: "%.1f", Date().timeIntervalSince(started)))s by \(caller):\(line)")
         }
         waitingPlayer?.stop()
