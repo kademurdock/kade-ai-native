@@ -1012,6 +1012,19 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
     if revalidation_record is not None:
         revalidation_record['revalidationDiagnostic']=owned_revalidation_diagnostic(
             first,status_sink['status'],base,identifier,match,original_owned)
+    if match is None:
+        # Oct 16 2026: name WHERE the launched executable was (a category, never the path).
+        path=first['path'];root=str(base).removesuffix('/data/Containers/Bundle/Application')
+        where=('sameSimulatorOtherPath' if path.startswith(root+'/') else
+               'otherSimulatorDevice' if '/CoreSimulator/Devices/' in path else
+               'xctestDevices' if '/XCTestDevices/' in path else
+               'buildProducts' if '/Build/Products/' in path else
+               'sameAppSuffixElsewhere' if path.endswith('/KadeAI.app/KadeAI') else 'otherAbsolutePath')
+        # The device-relative shape with UUID-like parts masked (simulator-internal folders only).
+        shape=re.sub(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}','<uuid>',
+                     str(path)[len(root)+1:] if str(path).startswith(root+'/') else '')[:200]
+        print(json.dumps({'launchedOutsideInstalledApp':where,'executableName':str(path).rsplit('/',1)[-1][:40],
+                          'deviceRelativeShape':shape}),file=sys.stderr,flush=True)
     require(match is not None,'Launched executable is outside the exact simulator installed app')
     executable=Path(first['path']);plist=executable.parent/'Info.plist'
     for item in (executable,plist):
@@ -1907,8 +1920,18 @@ def capture(expected):
                 device['bootSeconds']=round(time.monotonic()-boot_started,3)
             device['installReady']=False; device['installTimeoutSeconds']=INSTALL_SECONDS
             install_started=time.monotonic()
+            # Oct 16 2026: no reinstall here. The earlier UI groups already installed this exact
+            # compiled app on both phones, and owned_process_identity hashes the installed
+            # executable and Info.plist against the compiled artifacts on every launch. A reinstall
+            # moved the replaced copy to containermanagerd's Dead folder, and minutes later the
+            # kernel could name the running app by that copy's path (run 38870116120 attempt 2:
+            # data/Library/Caches/com.apple.containermanagerd/Dead/temp.*/<uuid>/KadeAI.app/KadeAI),
+            # failing the identity check on the right app. The keypose capture never reinstalls
+            # and has never hit this.
             try:
-                sim('install',identifier,str(APP),timeout=global_remaining(INSTALL_SECONDS))
+                installed=sim('get_app_container',identifier,BUNDLE_ID,'app',timeout=global_remaining(45)).strip()
+                require(installed.endswith('/KadeAI.app') and Path(installed).is_dir(),
+                        'The compiled app is not installed on '+key)
                 device['installReady']=True
             finally:
                 device['installSeconds']=round(time.monotonic()-install_started,3)
