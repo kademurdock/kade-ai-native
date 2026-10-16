@@ -17,7 +17,7 @@ BRANCH = 'codex/provider-pace-simctl-diagnostic-20261015'
 FILES = {'dev/provider-pace-simctl-diagnostic.py', '.github/workflows/provider-pace-simctl-diagnostic.yml'}
 START = time.monotonic()
 DEADLINE = START + 480
-RECEIPT = {'schema': 'kade.pre-app-simctl-diagnostic.v1', 'parent': PARENT,
+RECEIPT = {'schema': 'kade.pre-app-simctl-cache-diagnostic.v1', 'parent': PARENT,
            'startedUTC': datetime.now(timezone.utc).isoformat(), 'nativeProof': False,
            'appInstalled': False, 'appLaunched': False, 'appInputsChanged': False,
            'signing': False, 'speechRequests': 0, 'operations': [], 'passed': False}
@@ -98,6 +98,14 @@ def main():
     # no broad inventory output, downloads, substitute runtime, or app install.
     kind = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
     runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4'
+    # Apple documents degraded performance while runtime dyld caches are built.
+    # Chromium's simulator harness uses this exact-runtime form before boot.
+    # Scoped, non-forced preparation only; no --all/remove/download or app work.
+    RECEIPT['cacheHypothesis'] = 'unproven exact-runtime preparation before simulator startup'
+    RECEIPT['runtimeCacheTarget'] = runtime
+    cache_output = command(['xcrun', 'simctl', 'runtime', 'dyld_shared_cache', 'update', runtime], 45)
+    RECEIPT['exactRuntimeCachePreparationPassed'] = True
+    RECEIPT['cacheOutput'] = cache_output[:2000]
     identifier = None
     try:
         created = command(['xcrun', 'simctl', 'create', 'Kade pre-app diagnostic large', kind, runtime], 30)
