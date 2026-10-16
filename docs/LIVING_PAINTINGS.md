@@ -116,6 +116,12 @@ expression panels, the speaking mouth panels, the painted closed eyes.
 
 ## On the phone
 
+- The switch: "Living painted faces" in Settings, Feedback & Sounds
+  (`LivingPaintingSetting`, stored as `kadeLivingPaintings`). On by default
+  (Kade, Oct 16 2026: most people never open Settings); it greys out while
+  Animated characters is off. Turning it off brings back the picture-swapping
+  faces. Reduce Motion (system or in-app), Low Power Mode, heat and a
+  backgrounded app hold the painting still, through the portrait's own gate.
 - `LivingPaintingRig.swift`: the rig file and the per-frame grid. Pure
   arithmetic, pinned to the Python reference (`dev/living-paintings/lp_runtime.py`)
   by `LivingPaintingTests` within 0.002 px.

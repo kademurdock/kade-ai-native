@@ -31,12 +31,21 @@ final class LivingPaintingResources {
 
     private static var cache: [String: LivingPaintingResources] = [:]
     private static let cacheLock = NSLock()
+    private static var memoryWatch: NSObjectProtocol?
 
     /// The character's resources, loaded once. Throws when the rig file, a
     /// picture or the GPU is missing; callers then keep the sliced portrait.
     static func shared(rigName: String) throws -> LivingPaintingResources {
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        if memoryWatch == nil {
+            // A face already on screen keeps its own pictures; the cache
+            // lets go of the rest when iOS asks for memory back.
+            memoryWatch = NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
+                LivingPaintingResources.purge()
+            }
+        }
         if let cached = cache[rigName] { return cached }
         guard let url = Bundle.main.url(forResource: rigName, withExtension: "json") else {
             throw LoadError.unavailable("no \(rigName).json in the bundle")

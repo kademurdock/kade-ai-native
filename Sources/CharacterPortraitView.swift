@@ -25,7 +25,7 @@ struct CharacterPortraitView: View {
     /// Compact hosts and ordinary portrait rows retain their square framing.
     var dellaArticulatedReview = false
     /// Oct 16 2026: living paintings (docs/LIVING_PAINTINGS.md). nil follows
-    /// the "kadeLivingPaintings" setting, which stays off until Kade says yes.
+    /// the "Living painted faces" setting, which is on by default.
     var livingPainting: Bool? = nil
     #if DEBUG && targetEnvironment(simulator)
     /// Controlled audit samples only; never a production speech-turn trigger.
@@ -55,7 +55,7 @@ struct CharacterPortraitView: View {
     /// Blinks and expression cross-fades; its queued blinks also raise the
     /// frame schedule briefly (CharacterAnimationSchedule).
     @State private var faceClock = CharacterFaceClock()
-    @AppStorage("kadeLivingPaintings") private var livingPaintingsSetting = false
+    @AppStorage(LivingPaintingSetting.key) private var livingPaintingsSetting = LivingPaintingSetting.defaultOn
     @State private var livingClock = LivingPaintingClock()
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }

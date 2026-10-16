@@ -109,6 +109,11 @@ var furrow = 0.0
 for _ in 0..<60 { furrow = max(furrow, motion.update(dt: 1.0 / 30)[PuppetChannel.browFurrow.rawValue]) }
 check(furrow == 0, "a painted angry face never furrows the warped brows (\(furrow))")
 
+// Kade, Oct 16 2026: living paintings are on unless someone turns them off
+// in Settings, and the switch keeps the key the portrait and Settings share.
+check(LivingPaintingSetting.defaultOn, "living painted faces are on by default")
+check(LivingPaintingSetting.key == "kadeLivingPaintings", "the setting keeps its stored key")
+
 // Cost of one frame's grid on this machine (the phone measures its own).
 var timing = LivingPaintingState()
 timing.channels = PuppetChannel.values(["head.yaw": 0.5, "eye.blink": 0.5, "mouth.open": 0.6, "gaze.x": 0.4])

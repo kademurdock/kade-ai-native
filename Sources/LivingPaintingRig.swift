@@ -212,6 +212,15 @@ struct LivingPaintingRig {
     }
 }
 
+/// The "Living painted faces" switch in Settings, Feedback & Sounds. On by
+/// default (Kade, Oct 16 2026: most people never open Settings); anyone can
+/// turn it off there. Reduce Motion, Low Power Mode, heat and the Animated
+/// characters switch still hold every portrait still, as before.
+enum LivingPaintingSetting {
+    static let key = "kadeLivingPaintings"
+    static let defaultOn = true
+}
+
 /// One painted panel of a character's sheets.
 struct LivingPaintingPanel: Hashable {
     enum Sheet: String { case faces, mouths, nuance }
