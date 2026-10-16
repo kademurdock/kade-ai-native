@@ -26,11 +26,27 @@ struct CharacterBustMotionLimits {
     let bodyDegrees: Double
     let headOffsetPixels: Double
     let bodyOffsetPixels: Double
+    /// Oct 16 2026: a full breath lifts body and head together by this many
+    /// source pixels, upward only, so no crown edge ever drops into view.
+    /// About 0.7 pt at the 208 pt stage for every character.
+    var breathPixels: Double = 0
+    /// A clockwise turn lowers the right of the head. Where that would drop
+    /// a cropped crown below the stage's top edge (Witherspoon), clockwise
+    /// turns stop at this many degrees.
+    var clockwiseHeadDegrees: Double? = nil
+
+    /// A figure head angle (-7...7) in this artwork's reviewed degrees.
+    func turnDegrees(figure angle: Double) -> Double {
+        guard angle.isFinite else { return 0 }
+        let fraction = min(1, max(-1, angle / 7))
+        let clockwise = min(headDegrees, max(0, clockwiseHeadDegrees ?? headDegrees))
+        return fraction * (fraction > 0 ? clockwise : headDegrees)
+    }
 
     static let harley = CharacterBustMotionLimits(headDegrees: 2, bodyDegrees: 0.5,
-        headOffsetPixels: 3, bodyOffsetPixels: 2)
+        headOffsetPixels: 3, bodyOffsetPixels: 2, breathPixels: 1.8)
     static let lilly = CharacterBustMotionLimits(headDegrees: 1.95, bodyDegrees: 0.22,
-        headOffsetPixels: 1.7, bodyOffsetPixels: 0)
+        headOffsetPixels: 1.7, bodyOffsetPixels: 0, breathPixels: 2.4)
 }
 
 /// Close framing and source registration for the immutable approved atlas.
@@ -64,11 +80,16 @@ struct CharacterBustArtwork {
 
     var requiredAssets: [String] { [bodyAsset] + (maskAsset.map { [$0] } ?? []) }
 
+    /// Breathing lifts the supporting plate with the head, except where the
+    /// plate is clipped out of the crop entirely (Kiana's excluded concept).
+    var breathMovesBody: Bool { bodyClipMinY.map { $0 < cropY + cropSide } ?? true }
+
     var isValid: Bool {
         let values = [bodyX, bodyY, bodyWidth, bodyHeight, cropX, cropY, cropSide,
             panelX, panelY, panelSide, neckX, neckY, waistX, waistY,
             motionLimits.headDegrees, motionLimits.bodyDegrees,
-            motionLimits.headOffsetPixels, motionLimits.bodyOffsetPixels]
+            motionLimits.headOffsetPixels, motionLimits.bodyOffsetPixels, motionLimits.breathPixels,
+            motionLimits.clockwiseHeadDegrees ?? 0]
         guard values.allSatisfy(\.isFinite), bodyWidth > 0, bodyHeight > 0,
               cropSide > 0, panelSide > 0, !bodyAsset.isEmpty,
               maskAsset.map({ !$0.isEmpty }) ?? true else { return false }
@@ -89,7 +110,8 @@ struct CharacterBustArtwork {
                   cropY + cropSide <= minimum else { return false }
         }
         return [motionLimits.headDegrees, motionLimits.bodyDegrees,
-            motionLimits.headOffsetPixels, motionLimits.bodyOffsetPixels].allSatisfy { $0 >= 0 }
+            motionLimits.headOffsetPixels, motionLimits.bodyOffsetPixels,
+            motionLimits.breathPixels, motionLimits.clockwiseHeadDegrees ?? 0].allSatisfy { $0 >= 0 }
     }
 
     /// Exact ID/avatar gates never grant access to an agent. The authenticated
@@ -147,6 +169,9 @@ struct CharacterBustPose {
     let bodyAngle: Double
     let headOffsetY: Double
     let bodyOffsetY: Double
+    /// The breath's shared lift (zero or negative, upward), applied to the
+    /// head and the body together on top of their own offsets.
+    var breathOffsetY: Double = 0
 }
 
 enum CharacterBustMotion {
@@ -158,10 +183,12 @@ enum CharacterBustMotion {
             guard value.isFinite else { return 0 }
             return min(1, max(-1, value / limit))
         }
+        let breath = figure.breath.isFinite ? min(1, max(0, figure.breath)) : 0
         return CharacterBustPose(
-            headAngle: fraction(figure.headAngle, limit: 7) * limits.headDegrees,
+            headAngle: limits.turnDegrees(figure: figure.headAngle),
             bodyAngle: fraction(figure.torsoAngle, limit: 3) * limits.bodyDegrees,
             headOffsetY: fraction(figure.headNod, limit: 0.018) * limits.headOffsetPixels,
-            bodyOffsetY: -fraction(figure.torsoLift, limit: 0.008) * limits.bodyOffsetPixels)
+            bodyOffsetY: -fraction(figure.torsoLift, limit: 0.008) * limits.bodyOffsetPixels,
+            breathOffsetY: -breath * limits.breathPixels)
     }
 }

@@ -175,7 +175,7 @@ check(!CharacterFacialPolicy.shouldBlink(amount: 0, face: .neutral, agentID: Cha
     && !CharacterFacialPolicy.shouldBlink(amount: 0.349999, face: .neutral, agentID: CharacterMotion.harleyID)
     && CharacterFacialPolicy.shouldBlink(amount: 0.35, face: .neutral, agentID: CharacterMotion.harleyID)
     && CharacterFacialPolicy.shouldBlink(amount: 1, face: .neutral, agentID: CharacterMotion.harleyID),
-    "authored closed eyes switch at a bounded threshold without fractional opacity")
+    "the eyelid reads as closed past a bounded threshold")
 for id in [CharacterMotion.harleyID, CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.skyleeLillyID] {
     check(!CharacterFacialPolicy.shouldBlink(amount: 1, face: .laugh, agentID: id),
         "an authored closed-eye laugh retains its own eyes, including private Lilly")
@@ -191,49 +191,162 @@ for id in [CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.sky
     check(CharacterFacialPolicy.shouldBlink(amount: 1, face: .delighted, agentID: id),
         "the other authored open-eye delighted panels retain their blink")
 }
-// Both existing sinusoid windows must survive the actual 12/24 fps cadence,
-// regardless of where the window falls between two display ticks. No new
-// animation clock or duration is introduced by the discrete pixel selection.
-for duration in [0.16, 0.2] {
-    let ownedDuration = duration * (1 - 2 * asin(CharacterFacialPolicy.blinkThreshold) / .pi)
-    check(ownedDuration > 0.12 && ownedDuration < 0.16,
-        "the authored closed-eye hold stays brief inside the existing blink wave")
-    for fps in [12, 24] {
-        for offset in 0..<48 {
-            var closedTicks = 0
-            for tick in -1...(Int(ceil(duration * Double(fps))) + 1) {
-                let elapsed = (Double(tick) + Double(offset) / 48) / Double(fps)
-                let amount = (0...duration).contains(elapsed) ? sin(elapsed / duration * .pi) : 0
-                if CharacterFacialPolicy.shouldBlink(amount: amount, face: .neutral, agentID: CharacterMotion.harleyID) {
-                    closedTicks += 1
-                }
-            }
-            check(closedTicks >= Int(floor(ownedDuration * Double(fps)))
-                && closedTicks <= Int(ceil(ownedDuration * Double(fps))),
-                "blink is visible for the expected bounded ticks at 12/24 fps")
+for id in [CharacterMotion.harleyID, CharacterMotion.kianaID, CharacterMotion.lillyID, CharacterMotion.skyleeLillyID] {
+    check(CharacterFacialPolicy.blinkOpacity(amount: 0.6, face: .laugh, agentID: id) == 0,
+        "a closed-eye laugh never fades the closed-eye patch over its own eyes")
+}
+check(CharacterFacialPolicy.blinkOpacity(amount: 0.6, face: .delighted, agentID: CharacterMotion.harleyID) == 0,
+    "Harley's closed-eye delight never fades a second pair of eyelids over his own")
+for invalid in [Double.nan, Double.infinity, -1, 1.01, 0] {
+    check(CharacterFacialPolicy.blinkOpacity(amount: invalid, face: .neutral, agentID: CharacterMotion.dellaID) == 0,
+        "invalid or open eyelids draw no closed-eye patch")
+}
+check(CharacterFacialPolicy.blinkOpacity(amount: 0.4, face: .neutral, agentID: CharacterMotion.dellaID) == 0.4,
+    "the closed-eye patch fades in with the eyelid instead of switching at a threshold")
+// Oct 16 2026: a blink is a real eyelid movement, never a one- or two-frame
+// swap: about 70 ms closing, 40 ms closed, 110 ms opening.
+check(abs(CharacterFaceClock.closing - 0.07) < 1e-9 && abs(CharacterFaceClock.closedHold - 0.04) < 1e-9
+    && abs(CharacterFaceClock.opening - 0.11) < 1e-9, "the blink closes, holds and opens on its authored timing")
+check(CharacterFaceClock.amount(sinceStart: 0) == 0 && CharacterFaceClock.amount(sinceStart: 0.09) == 1
+    && CharacterFaceClock.amount(sinceStart: CharacterFaceClock.blinkDuration) == 0
+    && CharacterFaceClock.amount(sinceStart: .nan) == 0 && CharacterFaceClock.amount(sinceStart: -0.01) == 0,
+    "the eyelid starts and ends open and is fully closed during its hold")
+var eyelid = 0.0
+for step in 1...220 {
+    let amount = CharacterFaceClock.amount(sinceStart: Double(step) / 1000)
+    check(step <= 110 ? amount >= eyelid : amount <= eyelid, "the eyelid closes, then opens, without flicker")
+    eyelid = amount
+}
+// The schedule raises the clock to at least 20 fps around each blink.
+// Wherever the blink falls between two frames it has in-between eyelids.
+for fps in [20.0, 24.0] {
+    for offset in 0..<48 {
+        var shown: [Double] = []
+        for tick in -2...(Int(ceil(CharacterFaceClock.blinkDuration * fps)) + 2) {
+            let amount = CharacterFaceClock.amount(sinceStart: (Double(tick) + Double(offset) / 48) / fps)
+            if amount > 0 { shown.append(amount) }
         }
+        check(shown.count >= 4, "a blink spans at least four frames at the blink rate")
+        check(shown.contains { $0 > 0.05 && $0 < 0.95 }, "every blink has in-between eyelid frames")
+        check(shown.contains { CharacterFacialPolicy.shouldBlink(amount: $0, face: .neutral,
+            agentID: CharacterMotion.harleyID) }, "every blink visibly closes the eye")
     }
 }
+// Irregular, seeded, per-character gaps: 1.1 to 11 s, mean about 4.2 s, some doubles.
+check(abs(CharacterFaceClock.gap(0) - 1.1) < 1e-9 && abs(CharacterFaceClock.gap(1) - 11) < 1e-9
+    && CharacterFaceClock.gap(.nan).isFinite, "blink gaps stay between 1.1 and 11 seconds")
+var gapMean = 0.0
+for index in 0..<10_000 { gapMean += CharacterFaceClock.gap((Double(index) + 0.5) / 10_000) / 10_000 }
+check(gapMean > 4.0 && gapMean < 4.4, "the mean gap between blinks is about 4.2 seconds")
+func blinkStarts(_ id: String, seconds: Double, step: Double = 0.02) -> [Double] {
+    let clock = CharacterFaceClock()
+    var starts: [Double] = []
+    var previous = 0.0
+    var time = 1000.0
+    while time < 1000 + seconds {
+        let amount = clock.sample(identity: id + "|/images/a.png", time: time, face: .neutral,
+            glance: 0, active: true).blink
+        if amount > 0 && previous == 0 { starts.append(time) }
+        previous = amount
+        time += step
+    }
+    return starts
+}
+var firstBlinks = Set<String>()
 for id in CharacterMotion.animatedIDs {
-    for fps in [12, 24] {
-        var blinkRun = 0
-        var totalClosed = 0
-        for tick in 0..<(20 * fps) {
-            let pose = CharacterMotion.pose(id: id, time: Double(tick) / Double(fps), level: 0,
-                active: true, presentation: neutralListener)
-            if CharacterFacialPolicy.shouldBlink(amount: pose.blink, face: .neutral, agentID: id) {
-                blinkRun += 1; totalClosed += 1
-                check(blinkRun <= Int(ceil(0.16 * Double(fps))),
-                    "actual per-character blink waves never hold the eye patch too long")
-            } else {
-                blinkRun = 0
+    let starts = blinkStarts(id, seconds: 1800)
+    let gaps = zip(starts.dropFirst(), starts).map { $0 - $1 }
+    let doubles = gaps.filter { $0 < 0.5 }
+    let events = gaps.filter { $0 >= 0.5 }
+    check(doubles.allSatisfy { $0 > 0.27 && $0 < 0.39 }, "a double blink reopens the eye between its two blinks")
+    check(events.allSatisfy { $0 > 1.05 && $0 < 11.1 }, "ordinary blinks are 1.1 to 11 seconds apart")
+    let mean = events.reduce(0, +) / Double(max(1, events.count))
+    check(mean > 3.6 && mean < 4.9, "each character blinks about every 4.2 seconds")
+    let share = Double(doubles.count) / Double(max(1, events.count + 1))
+    check(share > 0.08 && share < 0.26, "about one blink in six is a double blink")
+    check(Set(events.map { ($0 * 10).rounded() }).count > 20, "blink gaps are irregular, not a fixed rhythm")
+    check(blinkStarts(id, seconds: 30) == starts.filter { $0 < 1030 }, "each character's blink rhythm is seeded")
+    firstBlinks.insert(starts.prefix(4).map { String(format: "%.2f", $0) }.joined(separator: ","))
+}
+check(firstBlinks.count == CharacterMotion.animatedIDs.count - 1,
+    "every rig has its own blink rhythm (both Lillys share one)")
+// A changed expression cross-fades and brings a blink; so does a larger glance.
+func quietMoment(_ clock: CharacterFaceClock, after time: Double, identity: String,
+                 face: CharacterFace) -> Double {
+    var moment = time
+    while stride(from: moment - 0.7, through: moment + 1.2, by: 0.02).contains(where: { clock.wantsBlinkFrames(at: $0) }) {
+        moment += 0.05
+        _ = clock.sample(identity: identity, time: moment, face: face, glance: 0, active: true)
+    }
+    return moment
+}
+for id in [CharacterMotion.harleyID, CharacterMotion.kianaID, CharacterMotion.witherspoonID] {
+    let clock = CharacterFaceClock()
+    let identity = id + "|/images/a.png"
+    _ = clock.sample(identity: identity, time: 10, face: .neutral, glance: 0, active: true)
+    let change = quietMoment(clock, after: 10, identity: identity, face: .neutral)
+    let changed = clock.sample(identity: identity, time: change, face: .smile, glance: 0, active: true)
+    check(changed.face == .smile && changed.priorFace == .neutral && changed.faceBlend == 0,
+        "a new expression starts its dissolve from the old one")
+    let midway = clock.sample(identity: identity, time: change + 0.1, face: .smile, glance: 0, active: true)
+    check(midway.faceBlend > 0.2 && midway.faceBlend < 0.8, "the expression dissolve is part way after 0.1 s")
+    let closed = clock.sample(identity: identity, time: change + CharacterFaceClock.frameLead + 0.09,
+        face: .smile, glance: 0, active: true)
+    check(closed.blink == 1 && closed.faceBlend == 1, "an expression change brings a blink and finishes its dissolve")
+    let glanceAt = quietMoment(clock, after: change + 1, identity: identity, face: .smile)
+    _ = clock.sample(identity: identity, time: glanceAt, face: .smile, glance: 0.2, active: true)
+    _ = clock.sample(identity: identity, time: glanceAt + 0.05, face: .smile, glance: 0.7, active: true)
+    check(clock.sample(identity: identity, time: glanceAt + 0.05 + CharacterFaceClock.frameLead + 0.09,
+        face: .smile, glance: 0.7, active: true).blink == 1, "a larger glance brings a blink with it")
+    check(clock.sample(identity: identity, time: glanceAt + 3, face: .smile, glance: 0.7, active: false) == .still,
+        "the motion policy stops every blink and dissolve")
+}
+// The frame schedule: steady resting frames, then at least 20 fps around each
+// blink, so every blink is drawn with several frames including in-between lids.
+for thermal in [CharacterThermalPressure.nominal, .fair] {
+    for id in CharacterMotion.animatedIDs {
+        let clock = CharacterFaceClock()
+        let budget = CharacterAnimationBudget(active: true, activity: .idle, thermal: thermal)
+        var frames: [(time: Double, blink: Double)] = []
+        var time = 500.0
+        while time < 800 {
+            // The schedule may choose the next date before this frame renders.
+            let next = time + budget.interval(after: time, faces: clock)
+            frames.append((time, clock.sample(identity: id + "|/images/a.png", time: time,
+                face: .neutral, glance: 0, active: true).blink))
+            time = next
+        }
+        var run: [Double] = []
+        var blinks = 0
+        for (index, frame) in frames.enumerated() {
+            if frame.blink > 0 {
+                run.append(frame.blink)
+                if index + 1 < frames.count {
+                    check(frames[index + 1].time - frame.time <= 1 / 20 + 1e-9,
+                        "the clock runs at least 20 fps while the eyelid moves")
+                }
+            } else if !run.isEmpty {
+                blinks += 1
+                check(run.count >= 4 && run.contains { $0 > 0.05 && $0 < 0.95 }
+                    && run.contains { $0 >= CharacterFacialPolicy.blinkThreshold },
+                    "every scheduled blink closes, holds and opens over several frames")
+                run = []
             }
         }
-        check(totalClosed > 0, "actual per-character clocks retain blinks at each display cadence")
+        check(blinks > 40, "a resting face keeps blinking")
+        let averageFPS = Double(frames.count) / 300
+        check(averageFPS > budget.framesPerSecond && averageFPS < budget.framesPerSecond * 1.4,
+            "faster blink frames stay brief, so the resting budget holds")
     }
 }
 check(!CharacterFacialPolicy.shouldBlink(amount: CharacterPose.still.blink, face: .neutral,
         agentID: CharacterMotion.harleyID), "the still pose has no decorative blink")
+check(CharacterMotion.pose(id: CharacterMotion.harleyID, time: 10, level: 0, active: true).blink == 0,
+    "without the portrait's face clock the eyes stay open")
+let fading = CharacterMotion.pose(id: CharacterMotion.harleyID, time: 10, level: 0, active: true,
+    facial: CharacterFaceClock.Sample(blink: 0.5, face: .smile, priorFace: .angry, faceBlend: 0.3))
+check(fading.blink == 0.5 && fading.priorFace == .angry && fading.faceBlend == 0.3,
+    "the pose carries the face clock's eyelid and dissolve to every renderer")
 print("Authored facial selection: \(count - facialBefore) checks passed")
 
 let handBefore = count
@@ -483,9 +596,22 @@ for (id, file) in productionPeople {
                 [limits.headDegrees, limits.bodyDegrees, limits.headOffsetPixels, limits.bodyOffsetPixels])
                 .allSatisfy { $0.0.isFinite && abs($0.0) <= $0.1 },
                 "authored performance remains inside each character's native bounds")
+            let breathing = CharacterBustMotion.pose(figure, limits: limits).breathOffsetY
+            check(breathing <= 0 && breathing >= -limits.breathPixels,
+                "a breath only ever lifts body and head together, inside its limit")
         }
     }
+    check(artwork.motionLimits.breathPixels * 208 / artwork.cropSide >= 0.6,
+        "a full breath rises at least 0.6 pt on the 208 pt stage")
 }
+let witherspoonLimits = CharacterWitherspoonBustGeometry.artwork.motionLimits
+check(abs(witherspoonLimits.turnDegrees(figure: 7) - 0.35) < 1e-9
+    && abs(witherspoonLimits.turnDegrees(figure: -7) + 1.3) < 1e-9
+    && witherspoonLimits.turnDegrees(figure: .nan) == 0,
+    "Witherspoon's crown-lowering clockwise turn stops at 0.35 degrees")
+check(abs(CharacterBustMotionLimits.harley.turnDegrees(figure: 7) - 2) < 1e-9
+    && abs(CharacterBustMotionLimits.harley.turnDegrees(figure: -14) + 2) < 1e-9,
+    "uncropped heads keep their full turn both ways")
 var unsafeKiana = CharacterKianaBustGeometry.artwork
 unsafeKiana.bodyClipMinY = nil
 check(!unsafeKiana.isValid, "Kiana cannot expose the reused concept's generated face without the torso clip")
@@ -515,13 +641,23 @@ check(kianaPanelBottom > kianaCropBottom,
 let kianaAngle = closeKiana.motionLimits.headDegrees * Double.pi / 180
 for angle in [-kianaAngle, kianaAngle] {
     for x in [closeKiana.panelX, closeKiana.panelX + closeKiana.panelSide] {
+        // A nod up and a full breath both lift her head and shoulders.
         let movedBottom = closeKiana.neckY + (x - closeKiana.neckX) * sin(angle)
             + (kianaPanelBottom - closeKiana.neckY) * cos(angle)
-            - closeKiana.motionLimits.headOffsetPixels
+            - closeKiana.motionLimits.headOffsetPixels - closeKiana.motionLimits.breathPixels
         check(movedBottom > kianaCropBottom,
             "Kiana's original lower edge remains outside the crop at the extreme allowed poses")
     }
+    // Her crown is cut by the panel's own top edge, 5 px above the crop.
+    for atlasX in [167.0, 279.0] {
+        let x = closeKiana.panelX + atlasX * closeKiana.panelSide / 414
+        let movedCrown = closeKiana.neckY + (x - closeKiana.neckX) * sin(angle)
+            + (closeKiana.panelY - closeKiana.neckY) * cos(angle) + closeKiana.motionLimits.headOffsetPixels
+        check(movedCrown < closeKiana.cropY, "Kiana's cut crown never drops into the top of the stage")
+    }
 }
+check(!closeKiana.breathMovesBody && CharacterDellaBustGeometry.artwork.breathMovesBody,
+    "Kiana's excluded plate never breathes into view; visible plates rise with the head")
 var invalidMask = CharacterDellaBustGeometry.artwork
 invalidMask.maskPlacement = CharacterBustMaskPlacement(x: 35, y: 0, side: .nan)
 check(!invalidMask.isValid, "invalid matte registration cannot enter the production renderer")
@@ -571,6 +707,7 @@ let angelBefore = count
 runAngelVectorMotionChecks(check)
 runCharacterAnimationBudgetTests(check)
 runCharacterBodyPerformanceChecks(check)
+runCharacterRestingLifeChecks(check)
 runCharacterOutputEpisodeChecks(check)
 runCharacterConversationBodyChecks(check)
 runCharacterDellaArmMotionChecks(check)

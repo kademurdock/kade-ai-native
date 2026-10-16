@@ -203,9 +203,12 @@ final class VoiceService: NSObject, ObservableObject {
     }
 
 
+    /// Oct 16 2026: never waits for the catalog download. Until it arrives,
+    /// isFish falls back to the "(Classic)" voice-name suffix.
     private func synthesisSpeed(voice: String?, base: Double?, preference: Float, pace: String) async -> Double {
-        let catalog = await VoiceCatalog.shared.snapshot()
-        if VoicePacePolicy.isFish(voice: voice, providers: catalog.providers) {
+        let providers = await VoiceCatalog.shared.cachedProviders()
+        if providers == nil { await VoiceCatalog.shared.prefetch() }
+        if VoicePacePolicy.isFish(voice: voice, providers: providers ?? [:]) {
             return VoicePacePolicy.fishRate(pace, base: base)
         }
         return VoicePacePolicy.rate(base: base, preference: preference == 1 ? nil : Double(preference))
@@ -239,17 +242,16 @@ final class VoiceService: NSObject, ObservableObject {
     /// The speeds offered in the picker. Deliberately a short, opinionated
     /// list rather than a slider: a slider is fiddly with VoiceOver and
     /// nobody actually wants 1.37x.
-    static let availableRates: [Float] = [0.5, 0.75, 1.0, 1.2, 1.25, 1.5]
+    static let availableRates: [Float] = VoicePacePolicy.classicRates.map { Float($0) }
 
-    /// Compact form for the on-screen chip ("1x", "1.5x").
+    /// Compact form for the on-screen chip ("1x", "1.25x"); the tested
+    /// formatting lives in VoicePacePolicy.rateLabel.
     nonisolated static func rateLabel(_ rate: Float) -> String {
         // Explicit Double conversion: String(format:) takes CVarArg and a
         // Float promoting through varargs is exactly the sort of thing that
         // is "probably fine" rather than known-correct, which is not a trade
         // worth making with no compiler here.
-        rate == rate.rounded()
-            ? String(format: "%.0fx", Double(rate))
-            : String(format: "%.2gx", Double(rate))
+        VoicePacePolicy.rateLabel(Double(rate))
     }
 
     /// Spoken form. "Normal speed" rather than "1x" for the default,
@@ -341,6 +343,9 @@ final class VoiceService: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.invalidateVoiceSelections() }
         }
+        // Warm the voice catalog at launch so the first reply's speed choice
+        // can use the provider map without waiting for it.
+        Task { await VoiceCatalog.shared.prefetch() }
     }
 
     deinit {

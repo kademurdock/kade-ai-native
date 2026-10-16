@@ -9,6 +9,13 @@ struct CharacterFigurePose: Equatable {
     let torsoLift: Double
     let farArmAngle: Double
     let nearArmAngle: Double
+    /// Oct 16 2026: how far the chest has risen in its breath, 0 (resting
+    /// exhale) to 1 (full inhale). Each renderer turns it into an upward lift
+    /// of body and head together, inside its own registration limits.
+    var breath: Double = 0
+    /// The glance-follow head turn included in headAngle, -1...1. A larger
+    /// glance brings a blink with it (CharacterFaceClock).
+    var glance: Double = 0
 
     static let still = CharacterFigurePose(headAngle: 0, headNod: 0,
         torsoAngle: 0, torsoLift: 0, farArmAngle: 0, nearArmAngle: 0)
@@ -19,6 +26,15 @@ struct CharacterFigurePose: Equatable {
 struct CharacterBodyPerformanceSample: Equatable {
     var elapsed: Double = 0
     var activityElapsed: Double = 0
+    /// Oct 16 2026: the clock for breathing, drift and sway. Unlike
+    /// activityElapsed it never restarts on an activity change and has no
+    /// speech cap; only a policy stop, new identity or backwards clock clears it.
+    var ambientElapsed: Double = 0
+    /// The activity being blended out, its own elapsed time when it ended,
+    /// and how far (0...1) the current activity has replaced it.
+    var previousActivity: CharacterActivity = .idle
+    var previousActivityElapsed: Double = 0
+    var activityBlend: Double = 1
     var energy: Double = 0
     var accentElapsed: Double = 0
     var accentScale: Double = 0
@@ -35,6 +51,9 @@ struct CharacterBodyPerformanceSample: Equatable {
 /// Call only from the portrait's existing main-thread timeline.
 final class CharacterBodyPerformanceClock {
     static let queueGap = 1.2
+    /// An activity change cross-fades its posture over this long instead of
+    /// jumping to the new activity's pose.
+    static let activityBlendDuration = 0.6
     private var identity: String?
     private var start: Double?
     private var lastSpeech: Double?
@@ -48,6 +67,10 @@ final class CharacterBodyPerformanceClock {
     private var sourceElapsed: Double?
     private var turnElapsed = 0.0
     private var activityElapsed = 0.0
+    private var ambientElapsed = 0.0
+    private var previousActivity: CharacterActivity = .idle
+    private var previousActivityElapsed = 0.0
+    private var blendElapsed = CharacterBodyPerformanceClock.activityBlendDuration
     private var bodyEnergy = 0.0
     private var accentElapsed = 0.0
     private var accentScale = 0.0
@@ -78,6 +101,10 @@ final class CharacterBodyPerformanceClock {
         sourceElapsed = nil
         turnElapsed = 0
         activityElapsed = 0
+        ambientElapsed = 0
+        previousActivity = .idle
+        previousActivityElapsed = 0
+        blendElapsed = Self.activityBlendDuration
         bodyEnergy = 0
         accentElapsed = 0
         accentScale = 0
@@ -90,6 +117,11 @@ final class CharacterBodyPerformanceClock {
         expression = .neutral
         previousExpression = .neutral
         transitionElapsed = 0.28
+    }
+
+    private var activityBlend: Double {
+        let p = min(1, max(0, blendElapsed / Self.activityBlendDuration))
+        return p * p * (3 - 2 * p)
     }
 
     /// Source-clock progress crosses sentence boundaries, but does not spend
@@ -118,9 +150,22 @@ final class CharacterBodyPerformanceClock {
         let rig = CharacterMotion.rigID(String(currentIdentity.split(separator: "|", maxSplits: 1).first ?? "")) ?? currentIdentity
         let episode = explicit ? presentation.outputEpisodeKey : nil
         let seed = (rig + "|" + (episode ?? "attention")).utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
+        // Breathing and drift keep one continuous clock through every
+        // activity and the whole of a long reply (Oct 16 2026: speech used to
+        // freeze it at 120 s, and each activity change restarted it).
+        ambientElapsed += wallDelta
+        if let sampledActivity, sampledActivity != presentation.activity {
+            previousActivity = sampledActivity
+            previousActivityElapsed = activityElapsed
+            blendElapsed = 0
+        } else {
+            blendElapsed = min(Self.activityBlendDuration, blendElapsed + wallDelta)
+        }
 
         guard presentation.activity == .speaking, presentation.outputPhase != .stopped else {
             if sampledActivity != presentation.activity {
+                // Finite attention pulses start from rest in the new activity;
+                // the old activity's posture blends out over activityBlend.
                 activityElapsed = 0
                 attentionVariant = Int(seed % 3)
             } else {
@@ -147,6 +192,8 @@ final class CharacterBodyPerformanceClock {
             gapElapsed = 0
             silentElapsed = 0
             return CharacterBodyPerformanceSample(activityElapsed: activityElapsed,
+                ambientElapsed: ambientElapsed, previousActivity: previousActivity,
+                previousActivityElapsed: previousActivityElapsed, activityBlend: activityBlend,
                 attentionVariant: attentionVariant, previousExpression: presentation.expression)
         }
         let phase: CharacterOutputPhase = explicit ? presentation.outputPhase : .playing
@@ -225,6 +272,8 @@ final class CharacterBodyPerformanceClock {
         sampledPhase = phase
         let blend = transitionElapsed / 0.28
         return CharacterBodyPerformanceSample(elapsed: turnElapsed, activityElapsed: activityElapsed,
+            ambientElapsed: ambientElapsed, previousActivity: previousActivity,
+            previousActivityElapsed: previousActivityElapsed, activityBlend: activityBlend,
             energy: bodyEnergy, accentElapsed: accentElapsed, accentScale: accentScale,
             gestureVariant: gestureVariant, attentionVariant: attentionVariant,
             previousExpression: previousExpression, expressionBlend: blend * blend * (3 - 2 * blend))
@@ -280,6 +329,93 @@ enum CharacterFigureMotion {
         }
     }
 
+    /// Oct 16 2026: the share of each drawn head's reviewed turn range that
+    /// resting life may use. Tight crops (Kiana, Witherspoon) spend more of a
+    /// smaller range, so every face visibly moves at rest; speech, listening
+    /// and thinking postures add to it inside the same limits.
+    static func restingReach(id: String) -> Double {
+        switch CharacterMotion.rigID(id) {
+        case CharacterMotion.kianaID, CharacterMotion.witherspoonID: return 0.86
+        case CharacterMotion.dellaID: return 0.72
+        default: return 0.64
+        }
+    }
+
+    /// One relaxed breath, between 3.5 and 5 seconds by temperament.
+    static func breathPeriod(id: String) -> Double {
+        switch CharacterMotion.rigID(id) {
+        case CharacterMotion.dellaID: return 4.6
+        case CharacterMotion.harleyID: return 4.4
+        case CharacterMotion.witherspoonID: return 4.7
+        case CharacterMotion.lillyID: return 3.8
+        case CharacterMotion.angelID: return 3.7
+        case CharacterMotion.kianaID: return 4.1
+        default: return 4.2
+        }
+    }
+
+    struct Resting: Equatable {
+        let head: Double
+        let nod: Double
+        let torso: Double
+        let breath: Double
+        let glance: Double
+        static let still = Resting(head: 0, nod: 0, torso: 0, breath: 0, glance: 0)
+    }
+
+    /// Oct 16 2026 (Kade's sister: the faces blinked while the rest of the face
+    /// stayed frozen): resting life for the large stage. Each value is smooth
+    /// noise from detuned sines rather than one repeating sine: a slow head
+    /// drift with glance-follow turns, a small nod, torso sway and breathing.
+    /// head, nod, torso and glance are -1...1; breath is 0 (exhaled) to 1.
+    static func resting(id: String, time: Double) -> Resting {
+        guard time.isFinite, time >= 0 else { return .still }
+        let rig = CharacterMotion.rigID(id) ?? id
+        let seed = UInt64(rig.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) })
+        let tempo = profile(id: rig).tempo
+        func unit(_ salt: UInt64) -> Double {
+            var z = (seed &+ salt &* 0x9E3779B97F4A7C15) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+            z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+            z ^= z >> 31
+            return Double(z >> 11) / 9007199254740992.0
+        }
+        func wave(_ seconds: Double, _ salt: UInt64) -> Double {
+            sin(CharacterMotion.cycle(time: time, rate: 2 * .pi * tempo / seconds,
+                period: 2 * .pi, offset: unit(salt) * 2 * .pi))
+        }
+        let drift = 0.5 * wave(13.7, 1) + 0.3 * wave(7.9, 2) + 0.2 * wave(23.3, 3)
+        let nod = 0.6 * wave(9.1, 4) + 0.4 * wave(5.3, 5)
+        let torso = 0.6 * wave(17.3, 6) + 0.4 * wave(11.1, 7)
+        // The breath's phase wanders slowly, so no two breaths are quite the
+        // same length, and it lingers at the relaxed exhale.
+        let wander = 0.2 * sin(CharacterMotion.cycle(time: time, rate: 2 * .pi / 23,
+            period: 2 * .pi, offset: unit(8) * 2 * .pi))
+        let angle = CharacterMotion.cycle(time: time, rate: 2 * .pi / breathPeriod(id: rig),
+            period: 2 * .pi, offset: unit(9) * 2 * .pi) + wander
+        let breath = pow(max(0, (1 - cos(angle)) / 2), 1.3)
+        // Glance-follow turns: most slots of a few seconds hold one short
+        // look to a side, eased in and out, before the head settles back.
+        let slot = 7.5 / tempo
+        let clock = time.truncatingRemainder(dividingBy: slot * 1_048_576)
+        let index = (clock / slot).rounded(.down)
+        func look(_ k: Double) -> Double {
+            guard k >= 0 else { return 0 }
+            let salt = UInt64(k) &* 16 &+ 100
+            guard unit(salt) >= 0.3 else { return 0 }
+            let start = slot * (0.15 + 0.45 * unit(salt &+ 1))
+            let hold = 0.6 + 1.6 * unit(salt &+ 2)
+            let size = (0.45 + 0.55 * unit(salt &+ 3)) * (unit(salt &+ 4) < 0.5 ? -1 : 1)
+            return size * pulse(clock - k * slot, start: start, rise: 0.38, hold: hold, fall: 0.7)
+        }
+        let glance = min(1, max(-1, look(index) + look(index - 1)))
+        // Drift and glance add, then round off softly below 1 instead of
+        // flattening against a hard limit.
+        let turn = 0.75 * drift + 0.5 * glance
+        return Resting(head: turn / (1 + 0.4 * turn * turn).squareRoot(), nod: nod, torso: torso,
+            breath: breath, glance: glance)
+    }
+
     /// An eased entrance, a readable hold, then a complete return to rest.
     /// Repeated speech syllables do not make hands swing like pendulums.
     static func pulse(_ elapsed: Double, start: Double, rise: Double,
@@ -321,6 +457,17 @@ enum CharacterFigureMotion {
             + 0.34 * pulse(t, start: 6.1 + Double(variant) * 0.32, rise: 0.40, hold: 0.28, fall: 0.94)
     }
 
+    /// Rest share per activity: speech, attention and thinking postures need
+    /// room inside the same limits, so their resting drift is smaller.
+    static func restingWeight(_ activity: CharacterActivity) -> (life: Double, breath: Double) {
+        switch activity {
+        case .idle: return (1, 1)
+        case .listening: return (0.75, 1)
+        case .thinking: return (0.6, 1)
+        case .speaking: return (0.5, 0.8)
+        }
+    }
+
     static func pose(id: String, time: Double, level: Double, active: Bool,
                      presentation: CharacterPresentation,
                      performanceElapsed: Double? = nil,
@@ -330,94 +477,134 @@ enum CharacterFigureMotion {
         let rigID = CharacterMotion.rigID(id) ?? id
         let seed = rigID.utf8.reduce(UInt32(5381)) { ($0 &* 33) &+ UInt32($1) }
         let phase = Double(seed % 1000) / 1000 * 2 * Double.pi
-        let motionTime = performance?.activityElapsed ?? time
+        // Oscillators read the ambient clock, which an activity change or the
+        // speech gesture cap never restarts. Finite attention pulses read the
+        // activity's own clock, so they still begin from rest.
+        let ambient = performance?.ambientElapsed ?? time
+        let motionTime = ambient.isFinite && ambient >= 0 ? ambient : time
         func oscillation(_ frequency: Double) -> Double {
             sin(CharacterMotion.cycle(time: motionTime, rate: personality.tempo * frequency,
                 period: 2 * .pi, offset: phase))
         }
-        let breath = oscillation(0.82)
-        let drift = oscillation(0.31)
         let audio = presentation.activity == .speaking
             ? min(1, max(0, performance?.energy ?? (level.isFinite ? (level - 0.008) * 5 : 0))) : 0
         let elapsed = performanceElapsed ?? presentation.elapsed
         let validElapsed = elapsed.isFinite && elapsed >= 0 ? elapsed : 0
         let gesture = performance.map { gestureEnvelope(performance: $0, tempo: personality.tempo) }
             ?? gestureEnvelope(elapsed: validElapsed, tempo: personality.tempo)
+        let rawBlend = performance?.activityBlend ?? 1
+        let blend = rawBlend.isFinite ? min(1, max(0, rawBlend)) : 1
+        let previousActivity = performance?.previousActivity ?? presentation.activity
 
-        var head = drift * 0.64
-        var nod = breath * 0.002
-        var torso = drift * 0.25
-        var lift = breath * 0.0022
+        // Resting life on every activity: head drift with glance-follow
+        // turns, a small nod, torso sway and breathing.
+        let life = resting(id: rigID, time: motionTime)
+        let before = restingWeight(previousActivity), now = restingWeight(presentation.activity)
+        let lifeWeight = before.life + (now.life - before.life) * blend
+        let breathWeight = before.breath + (now.breath - before.breath) * blend
+        var head = restingReach(id: rigID) * 7 * life.head * lifeWeight
+        var nod = 0.004 * life.nod * lifeWeight
+        var torso = 1.0 * life.torso * lifeWeight
+        var lift = 0.0
         var farArm = 0.0
         var nearArm = 0.0
 
-        switch presentation.activity {
-        case .listening:
-            // An occasional finite acknowledgement, with a long still hold.
-            let variant = Double(performance?.attentionVariant ?? 0)
-            let period = performance == nil ? 8.8 : 11.2 + variant * 1.8
-            let cycle = CharacterMotion.cycle(time: motionTime, rate: personality.tempo, period: period, offset: phase)
-            let acknowledgement = pulse(cycle, start: performance == nil ? 7.2 : 3.0 + variant * 1.4,
-                rise: 0.30, hold: 0.12, fall: 0.90)
-            let lean = performance == nil ? 1.05 : [-0.85, 0.65, 1.15][min(2, max(0, performance!.attentionVariant))]
-            let enter = performance.map { min(1, $0.activityElapsed / 0.45) } ?? 1
-            head += lean * enter + acknowledgement * 1.25
-            nod += acknowledgement * 0.009
-            torso -= 0.30
-        case .thinking:
-            let variant = Double(performance?.attentionVariant ?? 0)
-            let enter = performance.map { min(1, $0.activityElapsed / 0.55) } ?? 1
-            let consider = performance.map { pulse($0.activityElapsed, start: 1.8 + variant * 0.4,
-                rise: 0.50, hold: 0.65, fall: 1.15) } ?? 0
-            head -= (2.7 - variant * 0.35) * enter + consider * 0.45
-            torso += 0.75 * enter
-            nod += 0.001
-        case .speaking:
+        func recipe(for expression: CharacterExpression) -> (Double, Double, Double, Double, Double, Double) {
             // Head, nod, torso, lift, far arm, near arm. The authored emotion
             // has a modest held posture as well as its larger finite gesture.
-            func recipe(for expression: CharacterExpression) -> (Double, Double, Double, Double, Double, Double) {
-            let recipe: (Double, Double, Double, Double, Double, Double)
             switch expression {
-            case .neutral:    recipe = (1.1, 0.002, 0.3, 0.001, 3, -4)
-            case .warm:       recipe = (1.6, 0.004, -0.45, 0.001, 4, -8)
-            case .amused:     recipe = (1.9, -0.003, -0.75, 0.004, 7, -9)
-            case .serious:    recipe = (-0.5, 0.004, 0.5, 0, 3, -4)
-            case .concerned:  recipe = (-1.6, 0.005, 0.8, -0.001, 2, -6)
-            case .skeptical:  recipe = (-3.2, 0, 0.55, 0, 2, -4)
-            case .surprised:  recipe = (3, -0.006, -1.4, 0.004, 10, -12)
-            case .tender:     recipe = (-0.9, 0.004, 0.6, -0.001, 2, -6)
-            case .calm:       recipe = (0.6, 0.003, 0.2, 0.001, 2, -3)
-            case .confident:  recipe = (-0.65, -0.002, -0.9, 0.002, 6, -5)
-            case .playful:    recipe = (2.4, 0.001, -0.75, 0.003, 5, -10)
-            case .excited:    recipe = (2.8, -0.004, -1, 0.004, 11, -13)
-            case .smug:       recipe = (-2, -0.001, -0.4, 0.001, 2, -5)
-            case .curious:    recipe = (2.4, 0.003, 0.5, 0.001, 3, -5)
-            case .thoughtful: recipe = (-2.8, 0.001, 1, 0, 1, -3)
-            case .dry:        recipe = (-2.5, 0.001, 0.45, 0, 1, -3)
-            case .frustrated: recipe = (-0.5, 0.002, 0.9, 0.001, 5, -6)
-            case .angry:      recipe = (-0.8, 0.004, 0.8, 0.002, 8, -8)
-            case .disgusted:  recipe = (-2.4, -0.002, 1, 0, 4, -4)
-            case .afraid:     recipe = (-1.8, 0.004, 0.8, -0.002, 1, -4)
-            case .sad:        recipe = (-1.6, 0.007, 0.6, -0.003, 1, -3)
-            case .tired:      recipe = (1.8, 0.007, 0.8, -0.002, 0.5, -1)
+            case .neutral:    return (1.1, 0.002, 0.3, 0.001, 3, -4)
+            case .warm:       return (1.6, 0.004, -0.45, 0.001, 4, -8)
+            case .amused:     return (1.9, -0.003, -0.75, 0.004, 7, -9)
+            case .serious:    return (-0.5, 0.004, 0.5, 0, 3, -4)
+            case .concerned:  return (-1.6, 0.005, 0.8, -0.001, 2, -6)
+            case .skeptical:  return (-3.2, 0, 0.55, 0, 2, -4)
+            case .surprised:  return (3, -0.006, -1.4, 0.004, 10, -12)
+            case .tender:     return (-0.9, 0.004, 0.6, -0.001, 2, -6)
+            case .calm:       return (0.6, 0.003, 0.2, 0.001, 2, -3)
+            case .confident:  return (-0.65, -0.002, -0.9, 0.002, 6, -5)
+            case .playful:    return (2.4, 0.001, -0.75, 0.003, 5, -10)
+            case .excited:    return (2.8, -0.004, -1, 0.004, 11, -13)
+            case .smug:       return (-2, -0.001, -0.4, 0.001, 2, -5)
+            case .curious:    return (2.4, 0.003, 0.5, 0.001, 3, -5)
+            case .thoughtful: return (-2.8, 0.001, 1, 0, 1, -3)
+            case .dry:        return (-2.5, 0.001, 0.45, 0, 1, -3)
+            case .frustrated: return (-0.5, 0.002, 0.9, 0.001, 5, -6)
+            case .angry:      return (-0.8, 0.004, 0.8, 0.002, 8, -8)
+            case .disgusted:  return (-2.4, -0.002, 1, 0, 4, -4)
+            case .afraid:     return (-1.8, 0.004, 0.8, -0.002, 1, -4)
+            case .sad:        return (-1.6, 0.007, 0.6, -0.003, 1, -3)
+            case .tired:      return (1.8, 0.007, 0.8, -0.002, 0.5, -1)
             }
-            return recipe
+        }
+
+        /// Listening and thinking postures, from that activity's own clock.
+        func attention(_ activity: CharacterActivity, elapsed: Double?) -> (head: Double, nod: Double, torso: Double) {
+            let since = elapsed.map { $0.isFinite && $0 >= 0 ? $0 : 0 }
+            switch activity {
+            case .listening:
+                // An occasional finite acknowledgement, with a long still hold.
+                let variant = Double(performance?.attentionVariant ?? 0)
+                let period = performance == nil ? 8.8 : 11.2 + variant * 1.8
+                let cycle = CharacterMotion.cycle(time: since ?? time, rate: personality.tempo,
+                    period: period, offset: phase)
+                let acknowledgement = pulse(cycle, start: performance == nil ? 7.2 : 3.0 + variant * 1.4,
+                    rise: 0.30, hold: 0.12, fall: 0.90)
+                let lean = performance == nil ? 1.05 : [-0.85, 0.65, 1.15][min(2, max(0, performance!.attentionVariant))]
+                // The whole attentive posture eases in, so an acknowledgement
+                // already under way when listening starts cannot pop in.
+                let enter = since.map { min(1, $0 / 0.45) } ?? 1
+                return ((lean + acknowledgement * 1.25) * enter, acknowledgement * 0.009 * enter, -0.30 * enter)
+            case .thinking:
+                let variant = Double(performance?.attentionVariant ?? 0)
+                let enter = since.map { min(1, $0 / 0.55) } ?? 1
+                let consider = since.map { pulse($0, start: 1.8 + variant * 0.4,
+                    rise: 0.50, hold: 0.65, fall: 1.15) } ?? 0
+                return (-(2.7 - variant * 0.35) * enter - consider * 0.45, 0.001 * enter, 0.75 * enter)
+            case .idle, .speaking:
+                return (0, 0, 0)
             }
+        }
+
+        let current = attention(presentation.activity, elapsed: performance.map { $0.activityElapsed })
+        head += current.head
+        nod += current.nod
+        torso += current.torso
+        if blend < 1, previousActivity != presentation.activity {
+            // The activity that just ended releases its posture over the
+            // blend instead of snapping; a finished reply keeps its held
+            // expression posture only, never another gesture.
+            let release = 1 - blend
+            if previousActivity == .speaking {
+                let held = recipe(for: presentation.expression)
+                let posture = 0.36 * personality.energy
+                head += held.0 * posture * release
+                nod += held.1 * posture * release
+                torso += held.2 * posture * release
+            } else {
+                let ended = attention(previousActivity, elapsed: performance?.previousActivityElapsed)
+                head += ended.head * release
+                nod += ended.nod * release
+                torso += ended.torso * release
+            }
+        }
+
+        if presentation.activity == .speaking {
             let next = recipe(for: presentation.expression)
             let old = recipe(for: performance?.previousExpression ?? presentation.expression)
             let mix = min(1, max(0, performance?.expressionBlend ?? 1))
-            func blend(_ a: Double, _ b: Double) -> Double { a + (b - a) * mix }
-            let recipe = (blend(old.0, next.0), blend(old.1, next.1), blend(old.2, next.2),
-                blend(old.3, next.3), blend(old.4, next.4), blend(old.5, next.5))
+            func mixed(_ a: Double, _ b: Double) -> Double { a + (b - a) * mix }
+            let posed = (mixed(old.0, next.0), mixed(old.1, next.1), mixed(old.2, next.2),
+                mixed(old.3, next.3), mixed(old.4, next.4), mixed(old.5, next.5))
             let enter = pulse(min(validElapsed, 0.42), start: 0, rise: 0.42, hold: 1, fall: 1)
             let posture = enter * (0.36 + gesture * 0.64) * personality.energy
             let accent = gesture * audio * personality.energy
-            head += recipe.0 * posture + audio * oscillation(2.4) * 0.55
-            nod += recipe.1 * posture + audio * 0.0016
-            torso += recipe.2 * posture
-            lift += recipe.3 * accent
-            farArm = recipe.4 * accent
-            nearArm = recipe.5 * accent
+            head += posed.0 * posture + audio * oscillation(2.4) * 0.55
+            nod += posed.1 * posture + audio * 0.0016
+            torso += posed.2 * posture
+            lift += posed.3 * accent
+            farArm = posed.4 * accent
+            nearArm = posed.5 * accent
             if presentation.laughing {
                 // A real authored laugh owns a short two-beat recoil. Its
                 // clip clock remains appropriate for this explicit moment.
@@ -427,13 +614,15 @@ enum CharacterFigureMotion {
                 lift += laugh * 0.0025 * audio
                 head += laugh * 1.2 * audio
             }
-        case .idle:
-            break
         }
 
-        func bound(_ value: Double, _ limit: Double) -> Double { min(limit, max(-limit, value)) }
+        func bound(_ value: Double, _ limit: Double) -> Double {
+            value.isFinite ? min(limit, max(-limit, value)) : 0
+        }
         return CharacterFigurePose(headAngle: bound(head, 7), headNod: bound(nod, 0.018),
             torsoAngle: bound(torso, 3), torsoLift: bound(lift, 0.008),
-            farArmAngle: bound(farArm, 14), nearArmAngle: bound(nearArm, 16))
+            farArmAngle: bound(farArm, 14), nearArmAngle: bound(nearArm, 16),
+            breath: min(1, max(0, life.breath * breathWeight)),
+            glance: bound(life.glance * lifeWeight, 1))
     }
 }

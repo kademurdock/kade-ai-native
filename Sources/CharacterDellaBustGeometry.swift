@@ -12,7 +12,7 @@ enum CharacterDellaBustGeometry {
         faceCore: CharacterBustFaceCore(x: 219, y: 193, radiusX: 73, radiusY: 91),
         headOutline: .dellaHead, accessoryOutlines: [],
         motionLimits: CharacterBustMotionLimits(headDegrees: 1.55, bodyDegrees: 0.16,
-            headOffsetPixels: 0.65, bodyOffsetPixels: 0),
+            headOffsetPixels: 0.65, bodyOffsetPixels: 0, breathPixels: 1.4),
         maskPlacement: CharacterBustMaskPlacement(x: 35, y: 0, side: 350))
 }
 
