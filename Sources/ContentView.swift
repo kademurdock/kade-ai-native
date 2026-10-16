@@ -25,6 +25,7 @@ struct ContentView: View {
     @EnvironmentObject private var auth: AuthService
     @EnvironmentObject private var conversationsService: ConversationsService
     @EnvironmentObject private var agentsService: AgentsService
+    @EnvironmentObject private var puppetStore: PuppetStore
     @EnvironmentObject private var voiceService: VoiceService
     @EnvironmentObject private var apiClient: KadeAPIClient
     @State private var selectedHarnessRunId: String?
@@ -1209,6 +1210,7 @@ struct ContentView: View {
             // person's lists, place or book to the next one.
             conversationsService.reset()
             agentsService.reset()
+            puppetStore.reset()
             voiceService.reset()
             LibraryNowPlaying.shared.stop()
             KadeUnread.shared.reset()
@@ -1274,6 +1276,7 @@ struct SafariView: UIViewControllerRepresentable {
         .environmentObject(ConversationsService(client: client))
         .environmentObject(AgentsService(client: client))
         .environmentObject(VoiceService(client: client))
+        .environmentObject(PuppetStore(client: client))
         // Session 17: MessageRow now reads this via the environment too.
         .environmentObject(AppearancePreferences())
 }
