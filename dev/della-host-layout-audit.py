@@ -1925,6 +1925,13 @@ def capture(expected):
                 device['installReady']=True
             finally:
                 device['installSeconds']=round(time.monotonic()-install_started,3)
+            # Oct 16 2026: right after a reinstall the simulator removes the replaced copy, and for up
+            # to ~45 s the kernel can name the running app's executable by that copy's path
+            # (sameSimulatorOtherPath: pid, uid and birth match, the path does not; runs 38163550458,
+            # 38860482471, 38864872807). Let the install settle before the first launch.
+            settle_until=time.monotonic()+min(75,max(0,global_remaining(75)-1))
+            while time.monotonic()<settle_until:
+                time.sleep(min(1,max(0,settle_until-time.monotonic())))
             documents=Path(sim('get_app_container',identifier,BUNDLE_ID,'data',timeout=global_remaining(45)))/'Documents'
             documents.mkdir(exist_ok=True)
             if aggregate_started is None:
