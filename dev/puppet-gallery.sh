@@ -57,6 +57,9 @@ limit 600 xcrun simctl boot "$UDID" || note "boot returned an error (continuing 
 if ! limit 600 xcrun simctl bootstatus "$UDID" -b; then note "simulator never finished booting"; exit 0; fi
 limit 60 xcrun simctl status_bar "$UDID" override --time 9:41 >/dev/null 2>&1 || true
 if ! limit 300 xcrun simctl install "$UDID" "$APP"; then note "install failed"; exit 0; fi
+# A fresh iOS 26 device posts an "Apple Intelligence" welcome banner about a
+# minute after boot; let it come and go before the first screenshot.
+sleep 75
 
 shots=0
 for page in 0 1 2; do
@@ -64,9 +67,8 @@ for page in 0 1 2; do
   if ! limit 180 xcrun simctl launch "$UDID" "$BUNDLE" -KadePuppetGallery -KadePuppetGalleryPage "$page"; then
     note "launch of page $page failed"; continue
   fi
-  # The first launch also warms the simulator's render server and lets the
-  # fresh device's welcome notifications come and go before any screenshot.
-  if [ "$page" = 0 ]; then sleep 30; else sleep 10; fi
+  # The first launch also warms the simulator's render server.
+  if [ "$page" = 0 ]; then sleep 15; else sleep 10; fi
   if limit 120 xcrun simctl io "$UDID" screenshot "$OUT/gallery-page$page.png"; then
     shots=$((shots + 1))
   else
