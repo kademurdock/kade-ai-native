@@ -187,6 +187,15 @@ struct LivingPaintingRig {
         return v * v * (3 - 2 * v)
     }
 
+    /// The grid row at or above height y (clamped to the grid) and how far y
+    /// sits toward the next row.
+    static func rowAt(_ gy: [Double], _ y: Double) -> (Int, Double) {
+        var r = 0
+        while r + 1 < gy.count && gy[r + 1] <= y { r += 1 }
+        r = max(0, min(gy.count - 2, r))
+        return (r, (y - gy[r]) / (gy[r + 1] - gy[r]))
+    }
+
     /// (1 - r^2)^2 inside the unit circle: smooth, with zero slope at its edge.
     static func bump(_ r2: Double) -> Double {
         let t = min(1, max(0, 1 - r2))
@@ -369,31 +378,45 @@ extension LivingPaintingRig {
             }
         }
         // Lids last, as monotonic remaps of each grid column's already-moved
-        // points (the column is its rest x), so nothing can fold through a
-        // closing eye: first the upper lid comes down, then the lower lid rises.
+        // points: first the upper lid comes down, then the lower lid rises.
+        // The lid lines are read where the face has already moved them in that
+        // column (an expression may have half-closed the eye), so a blink
+        // closes what is open now and never pushes one lid through the other.
         let squint = ch(.eyeSquint)
+        let h2 = 9.0
+        let gy = file.gridY
         for (side, eye) in lm.eyes.enumerated() {
             var blink = ch(.eyeBlink)
             if side == 1 { blink = max(blink, ch(.eyeWink)) }
             blink = min(1, max(blink, squint * 0.25))
             let yc = eye.closed, yu = eye.upper, low = eye.lower
-            let h2 = 9.0
-            for i in 0..<n {
-                let u = (restX[i] - eye.x) / eye.w
+            for c in 0..<columns {
+                let u = (file.gridX[c] - eye.x) / eye.w
                 guard abs(u) < 1 else { continue }
                 let f = 1 - u * u
                 let lid = yc - (yc - yu) * f
+                func moved(_ y: Double) -> Double {
+                    let (r, t) = Self.rowAt(gy, y)
+                    return y + dy[r * columns + c] * (1 - t) + dy[(r + 1) * columns + c] * t
+                }
+                let lidMoved = moved(lid), closedMoved = moved(yc)
+                let middleMoved = moved(eye.y), lowMoved = moved(low)
+                let opening = max(closedMoved - lidMoved, 0)
                 // 0.96: a closed lid keeps a sliver of height; no zero-area cells.
-                let d = min(blink, 0.96) * (yc - yu) * f
-                let top = lid - eye.crease
-                let span = max(yc - lid, 0.01)
-                var py = restY[i] + dy[i]
-                if py >= top && py < lid { py += d * (py - top) / eye.crease }
-                else if py >= lid && py < yc { py += d * (yc - py) / span }
-                let rise = squint * 0.35 * (low - yu) * f
-                if py > eye.y && py <= low { py -= rise * (py - eye.y) / (low - eye.y) }
-                else if py > low && py <= low + h2 { py -= rise * (1 - (py - low) / h2) }
-                dy[i] = py - restY[i]
+                let d = min(blink, 0.96) * opening
+                let top = lidMoved - eye.crease
+                let span = max(opening, 0.01)
+                let rise = squint * 0.35 * max(lowMoved - lidMoved, 0) * f
+                let reach = max(lowMoved - middleMoved, 0.01)
+                for r in 0..<rows {
+                    let i = r * columns + c
+                    var py = gy[r] + dy[i]
+                    if py >= top && py < lidMoved { py += d * (py - top) / eye.crease }
+                    else if py >= lidMoved && py < closedMoved { py += d * (closedMoved - py) / span }
+                    if py > middleMoved && py <= lowMoved { py -= rise * (py - middleMoved) / reach }
+                    else if py > lowMoved && py <= lowMoved + h2 { py -= rise * (1 - (py - lowMoved) / h2) }
+                    dy[i] = py - gy[r]
+                }
             }
         }
         let swing = ch(.hairSwing)

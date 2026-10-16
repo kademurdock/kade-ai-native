@@ -44,6 +44,13 @@ def soft_ellipse(X, Y, x, y, rx, ry, inner):
     return np.clip((1 - r) / max(1e-6, 1 - inner), 0, 1)
 
 
+def column_at(gy, y):
+    """The grid row below height y and how far y sits toward the next row."""
+    r = int(np.searchsorted(gy, y, side='right')) - 1
+    r = max(0, min(len(gy) - 2, r))
+    return r, (y - gy[r]) / (gy[r + 1] - gy[r])
+
+
 class Rig:
     def __init__(self, path):
         self.data = d = json.load(open(path))
@@ -161,32 +168,48 @@ def vertices(rig, state):
         dx += ch['gaze.x'] * e['iris'] * 0.55 * wg * open_
         dy += ch['gaze.y'] * e['iris'] * 0.3 * wg * open_
     # Lids last, as monotonic remaps of each grid column's already-moved
-    # points (the column is its rest x), so nothing can fold through a
-    # closing eye: first the upper lid comes down, then the lower lid rises.
-    py = Y + dy
+    # points: first the upper lid comes down, then the lower lid rises. The
+    # lid lines are read where the face has already moved them in that
+    # column (an expression may have half-closed the eye), so a blink closes
+    # what is open now and never pushes one lid through the other.
+    gy = rig.gy
+    dyg = dy.reshape(rig.rows, rig.cols).copy()
+    squint = ch['eye.squint']
+    h2 = 9.0
     for i, e in enumerate(lm['eyes']):
         blink = ch['eye.blink']
         if i == 1:
             blink = max(blink, ch['eye.wink'])
-        blink = min(1.0, max(blink, ch['eye.squint'] * 0.25))
-        u = (X - e['x']) / e['w']
-        f = np.where(np.abs(u) < 1, 1 - u * u, 0.0)
-        yc, yu = e['closed'], e['upper']
-        lid = yc - (yc - yu) * f
-        # 0.96: a closed lid keeps a sliver of height; no zero-area cells.
-        d = min(blink, 0.96) * (yc - yu) * f
-        top = lid - e['crease']
-        span = np.maximum(yc - lid, 0.01)
-        ramp = (py >= top) & (py < lid)
-        squash = (py >= lid) & (py < yc)
-        py = py + np.where(ramp, d * (py - top) / e['crease'], 0.0) + np.where(squash, d * (yc - py) / span, 0.0)
-        rise = ch['eye.squint'] * 0.35 * (e['lower'] - e['upper']) * f
-        low = e['lower']
-        h2 = 9.0
-        up = (py > e['y']) & (py <= low)
-        below = (py > low) & (py <= low + h2)
-        py = py - np.where(up, rise * (py - e['y']) / (low - e['y']), 0.0) - np.where(below, rise * (1 - (py - low) / h2), 0.0)
-    dy = py - Y
+        blink = min(1.0, max(blink, squint * 0.25))
+        yc, yu, low = e['closed'], e['upper'], e['lower']
+        for c in range(rig.cols):
+            u = (rig.gx[c] - e['x']) / e['w']
+            if abs(u) >= 1:
+                continue
+            f = 1 - u * u
+            lid = yc - (yc - yu) * f
+            col = dyg[:, c]
+
+            def moved(y):
+                r, t = column_at(gy, y)
+                return y + col[r] * (1 - t) + col[r + 1] * t
+            lid_d, yc_d, ey_d, low_d = moved(lid), moved(yc), moved(e['y']), moved(low)
+            opening = max(yc_d - lid_d, 0.0)
+            # 0.96: a closed lid keeps a sliver of height; no zero-area cells.
+            d = min(blink, 0.96) * opening
+            top = lid_d - e['crease']
+            span = max(opening, 0.01)
+            py = gy + col
+            ramp = (py >= top) & (py < lid_d)
+            squash = (py >= lid_d) & (py < yc_d)
+            py = py + np.where(ramp, d * (py - top) / e['crease'], 0.0) + np.where(squash, d * (yc_d - py) / span, 0.0)
+            rise = squint * 0.35 * max(low_d - lid_d, 0.0) * f
+            reach = max(low_d - ey_d, 0.01)
+            up = (py > ey_d) & (py <= low_d)
+            below = (py > low_d) & (py <= low_d + h2)
+            py = py - np.where(up, rise * (py - ey_d) / reach, 0.0) - np.where(below, rise * (1 - (py - low_d) / h2), 0.0)
+            dyg[:, c] = py - gy
+    dy = dyg.reshape(-1)
     dx += ch['hair.swing'] * rig.hair_weight
     # 3. head turn: an ellipsoid head with a nose; features slide, outline holds
     phi = math.radians(ch['head.yaw'] * YAW_DEGREES)

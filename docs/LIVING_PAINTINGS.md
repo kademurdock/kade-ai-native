@@ -47,12 +47,19 @@ The tool also relaxes any flow that would fold the sheet over itself
 (painted panels are not perfectly registered), and the runtime checks for
 folds in tests across thousands of random poses.
 
+Flow settings matter: DIS refined to full resolution with small dense
+patches measured about a third less registration error on the brows than the
+library's preset, which removed a grey smear a reviewer saw on an inner brow
+half-way into surprise. Mouth-panel flows stop at the nostrils (talking used
+to flatten the nose), and the eye-widening keyform moves the lids around the
+irises instead of enlarging them.
+
 ## The parts, and how each one is made
 
 | Part | How it is made | New art needed? |
 | --- | --- | --- |
 | Head, face | the neutral panel itself, cut by the existing head matte | no |
-| Upper lids | analytic lid remap per grid column: the skin between crease and lid slides down, the eye opening above the closed lash line folds into it; the painted closed-eye panel fades in as the lid arrives | no |
+| Upper lids | analytic lid remap per grid column: the skin between crease and lid slides down, the eye opening above the closed lash line folds into it; the lid lines are read where the current expression has already moved them, so a squinting face blinks from its squint; the painted closed-eye panel fades in as the lid arrives | no |
 | Lower lids, squint | the same remap from below; cheeks push up with it | no |
 | Irises, eye whites | the area inside the eye opening slides with the gaze, pinned at the lids (about 3.5 px each way on a 414 px panel) | no; a separate iris layer would allow larger glances |
 | Brows | keyforms from the surprised, angry and worried panels | no |

@@ -64,7 +64,7 @@ CHARACTERS = {
             'browRaise': ('faces', 3, 'brows'),
             'browFurrow': ('faces', 5, 'brows'),
             'browSad': ('faces', 7, 'brows'),
-            'eyeWide': ('faces', 3, 'eyes'),
+            'eyeWide': ('faces', 3, 'eyeLids'),
             'smileUp': ('faces', 1, 'smile'),
             'smileDown': ('faces', 6, 'smile'),
             'cheekRaise': ('faces', 2, 'cheeks'),
@@ -118,6 +118,18 @@ def region_mask(lm, name, X, Y):
     elif name == 'smile':
         mo = lm['mouth']
         m = smooth01(soft_ellipse(X, Y, mo['x'], mo['y'] + 2, mo['w'] * 1.9, mo['h'] * 3.2, 0.3))
+    elif name == 'mouthPanels':
+        # A mouth shape moves lips, jaw and cheeks but stops at the nostrils
+        # (the review saw talking flatten her nose).
+        mo, no = lm['mouth'], lm['nose']
+        m = smooth01(soft_ellipse(X, Y, mo['x'], mo['y'] + 2, mo['w'] * 1.9, mo['h'] * 3.2, 0.3)) \
+            * smooth01((Y - (no['y'] + 10)) / 12)
+    elif name == 'eyeLids':
+        # Lids and the skin around them, never the irises themselves: a
+        # widening eye shows more white instead of a bigger iris.
+        m = sum(smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['w'] * 1.7, 15, 0.4))
+                * (1 - smooth01(soft_ellipse(X, Y, e['x'], e['y'], e['iris'] * 1.6, e['iris'] * 1.6, 0.55)))
+                for e in lm['eyes'])
     elif name == 'mouthCore':
         mo = lm['mouth']
         m = smooth01(soft_ellipse(X, Y, mo['x'], mo['y'] + 3, mo['w'] * 1.35, mo['h'] * 1.7, 0.45))
@@ -129,8 +141,15 @@ def region_mask(lm, name, X, Y):
     return np.clip(m, 0, 1)
 
 
-# Preset 2 is DIS 'medium' (the FINE name is missing from some builds).
+# DIS from the 'medium' preset (2; the FINE name is missing from some
+# builds), refined down to full resolution with small dense patches: about a
+# third less registration error on the brows than the preset alone.
 _dis = cv2.DISOpticalFlow_create(2)
+_dis.setFinestScale(0)
+_dis.setPatchSize(6)
+_dis.setPatchStride(2)
+_dis.setGradientDescentIterations(40)
+_dis.setVariationalRefinementIterations(15)
 
 
 def gray(im):
@@ -142,7 +161,7 @@ def face_flow(neutral, other, lm):
     and made smooth inside the mouth, where lips part and flow cannot follow."""
     f = _dis.calc(gray(neutral), gray(other), None)
     Y, X = np.mgrid[0:PANEL, 0:PANEL].astype(np.float32)
-    fine = cv2.GaussianBlur(f, (0, 0), 2.0)
+    fine = cv2.GaussianBlur(f, (0, 0), 1.0)
     coarse = cv2.GaussianBlur(f, (0, 0), 9.0)
     core = region_mask(lm, 'mouthCore', X, Y)[..., None]
     g = fine * (1 - core) + coarse * core
@@ -206,14 +225,16 @@ def build(name):
             K = panel(sheet, i)
             f = face_flow(N, K, lm)
             if sheet_name == 'mouths':
-                f = f * region_mask(lm, 'smile', X, Y)[..., None]
+                f = f * region_mask(lm, 'mouthPanels', X, Y)[..., None]
             flows[f'{sheet_name}.{i}'] = f
             g = at_grid(f, xs, ys)
             report[f'{sheet_name}.{i}'] = round(float(np.abs(g).max()), 2)
     keyforms = {}
     for key, (sheet_name, i, region) in c['keyforms'].items():
         f = flows[f'{sheet_name}.{i}'] * region_mask(lm, region, X, Y)[..., None]
-        keyforms[key] = f
+        # A surprised panel's lids open far; on its own, as a channel, 60% of
+        # that reads as widening without stretching the lid skin.
+        keyforms[key] = f * (0.6 if key == 'eyeWide' else 1.0)
     rig = {
         'id': name, 'version': 1, 'panel': PANEL,
         'sheets': {'faces': c['faces'], 'mouths': c['mouths'], 'nuance': c['nuance'], 'pitch': PITCH},
