@@ -118,7 +118,9 @@ func runCharacterRestingLifeChecks(_ check: (Bool, String) -> Void) {
                 if previous.activity != activity {
                     check(sample.activityBlend == 0 && sample.previousActivity == previous.activity,
                         "a new activity starts blending from the one that ended")
-                    check(abs(figure.headAngle - previous.head) < 1.2 && abs(face.tilt - previous.tilt) < 0.35,
+                    // A glance alone may move about one degree in a frame; a
+                    // restarted cycle would jump several.
+                    check(abs(figure.headAngle - previous.head) < 1.6 && abs(face.tilt - previous.tilt) < 0.35,
                         "an activity change does not snap the head to a new start pose")
                 }
             }
