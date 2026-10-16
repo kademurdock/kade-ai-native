@@ -145,7 +145,7 @@ jobs:
       - name: Capture twenty-one observed all-cast production keyposes
         id: completion-capture
         if: ${{ always() && !cancelled() && steps.completion-ui.outcome == 'success' }}
-        timeout-minutes: 6
+        timeout-minutes: 11
         run: python3 -B dev/puppet-completion-audit.py capture --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Capture twenty-eight silent hosts only after both UI groups pass

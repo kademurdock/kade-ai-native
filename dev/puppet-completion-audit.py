@@ -32,7 +32,9 @@ POLICIES = ('compact','reduceMotion','offscreen','resume')
 EVENTS = tuple(person+'-'+policy for person in PEOPLE for policy in POLICIES)
 UI_METHODS = {'testAllCastKeyposes':'allCastKeyposes','testCompactAndMotionPolicies':'compactAndMotionPolicies',
               'testRoomySendingKeepsBodyAndComposer':'roomySendingLight'}
-CAPTURE_SECONDS = 300
+# Oct 16 2026: a slow macos-26 runner needed more than 300 s for the 21 keyposes
+# (successful runs took 1.6 to 3.2 minutes). Still finite.
+CAPTURE_SECONDS = 600
 UI_SECONDS = 600
 MAX_FILES = 25
 IDS = {
@@ -291,7 +293,7 @@ def capture(expected):
         report['ownedProcess']=host.owned_process_identity(host.launch_pid(launched),identifier,compiled,
                                                           deadline-15,launch_started,launch_finished)
         for phase in PHASES:
-            ready_deadline=time.monotonic()+remaining(30);data=None
+            ready_deadline=time.monotonic()+remaining(45);data=None
             while time.monotonic()<ready_deadline:
                 if ready.is_file():
                     require(0<ready.stat().st_size<=64*1024,'Completion native readiness exceeds64KiB')

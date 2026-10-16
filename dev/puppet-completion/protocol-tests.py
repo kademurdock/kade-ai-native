@@ -1053,7 +1053,7 @@ class ProtocolChecks(unittest.TestCase):
                     'startedAtUtc':owned['launchStartedAtUtc'],'finishedAtUtc':termination(owned,15)['finishedAtUtc']}
         self.assertIs(audit.validate_capture_ownership(completion),completion);CHECKS+=1
         for key,value in [('schema','old'),('compiledAfterVerified',False),('ownedProcess',None),('ownedTermination',None),
-                          ('terminationVerified',False),('elapsedSeconds',301.001)]:
+                          ('terminationVerified',False),('elapsedSeconds',audit.CAPTURE_SECONDS+1.001)]:
             changed=copy.deepcopy(completion);changed[key]=value
             with self.assertRaises(RuntimeError):audit.validate_capture_ownership(changed)
             CHECKS+=1
@@ -1083,7 +1083,7 @@ class ProtocolChecks(unittest.TestCase):
             owner[key]=old
         for actual,expected in ((audit.host.BOOT_SECONDS,600),(audit.host.UI_SECONDS["large"],900),
                                 (audit.host.UI_SECONDS["small"],720),(audit.host.OPERATION_SECONDS,4920),
-                                (audit.host.JOB_SECONDS,5400),(audit.CAPTURE_SECONDS,300),(audit.MAX_FILES,25),
+                                (audit.host.JOB_SECONDS,5400),(audit.CAPTURE_SECONDS,600),(audit.MAX_FILES,25),
                                 (len(audit.PHASES),21),(len(audit.EVENTS),28),(len(audit.UI_METHODS),3)):
             CHECKS += 1
             self.assertEqual(actual,expected)
