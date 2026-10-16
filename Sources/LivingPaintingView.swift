@@ -74,6 +74,24 @@ struct LivingPaintingHead<Fallback: View>: View {
     }
 }
 
+/// Which painted characters have a living-painting rig in this build.
+/// Della first (Oct 16 2026); the rest of the cast waits for Kade's review.
+enum LivingPaintingCast {
+    private static var bundled: [String: Bool] = [:]
+
+    static func rigName(agentID: String?) -> String? {
+        guard agentID == CharacterMotion.dellaID else { return nil }
+        return available("LivingPaintingDella") ? "LivingPaintingDella" : nil
+    }
+
+    static func available(_ name: String) -> Bool {
+        if let known = bundled[name] { return known }
+        let found = Bundle.main.url(forResource: name, withExtension: "json") != nil
+        bundled[name] = found
+        return found
+    }
+}
+
 /// The living painting's own motion: PuppetMotion with a painted face, so the
 /// painted panels carry each expression while the engine supplies breathing,
 /// glances, blinks, the speaking mouth and the head's turns.
@@ -126,10 +144,12 @@ final class LivingPaintingClock {
 /// Oct 16 2026: DEBUG simulator gallery for CI screenshots
 /// (dev/puppet-gallery.sh): Della's old sliced portrait beside the living
 /// painting, state by state. Launch with -KadeLivingGallery and
-/// -KadeLivingGalleryPage 0...3. Never reachable in a release build.
+/// -KadeLivingGalleryPage 0...5; pages 5 and 6 are the real stage portrait,
+/// sliced and living, moving. Never reachable in a release build.
 struct LivingPaintingGalleryView: View {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("-KadeLivingGallery") }
-    static let pageCount = 4
+    static let pageCount = 6
+    @EnvironmentObject private var agents: AgentsService
     static var requestedPage: Int {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-KadeLivingGalleryPage"), index + 1 < arguments.count,
@@ -227,16 +247,29 @@ struct LivingPaintingGalleryView: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            Text("Living painting, page \(page + 1) of \(Self.pageCount). Left: old sliced portrait. Right: living painting. \(report)")
-                .font(.caption2)
-                .lineLimit(3)
-                .padding(.horizontal, 8)
-            ForEach(rows) { row in
-                HStack(spacing: 8) {
-                    tile(row.old)
-                    tile(row.new)
+            if page >= 4 {
+                Text("Living painting, page \(page + 1) of \(Self.pageCount). The real stage portrait, speaking warmly. Top: sliced. Bottom: living painting.")
+                    .font(.caption2)
+                    .lineLimit(3)
+                    .padding(.horizontal, 8)
+                if agentsReady {
+                    stagePortrait(living: false)
+                    Text("sliced (as shipped)").font(.caption2)
+                    stagePortrait(living: true)
+                    Text("living painting").font(.caption2)
                 }
-                Text(row.label).font(.caption2)
+            } else {
+                Text("Living painting, page \(page + 1) of \(Self.pageCount). Left: old sliced portrait. Right: living painting. \(report)")
+                    .font(.caption2)
+                    .lineLimit(3)
+                    .padding(.horizontal, 8)
+                ForEach(rows) { row in
+                    HStack(spacing: 8) {
+                        tile(row.old)
+                        tile(row.new)
+                    }
+                    Text(row.label).font(.caption2)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -245,6 +278,23 @@ struct LivingPaintingGalleryView: View {
         .background(Color.white)
         .environment(\.colorScheme, .light)
         .task { await load() }
+        .task {
+            guard page >= 4 else { return }
+            agents.seedCharacterAudit()
+            agentsReady = true
+        }
+    }
+
+    @State private var agentsReady = false
+
+    /// The production portrait (page 5: the square bust; page 6: the tall
+    /// host layout with arms), driven by a speaking presentation.
+    private func stagePortrait(living: Bool) -> some View {
+        CharacterPortraitView(agentID: CharacterMotion.dellaID, name: "Della", playing: true,
+            level: { 0.06 + 0.05 * sin(Date().timeIntervalSinceReferenceDate * 9) },
+            presentation: { CharacterPresentation(activity: .speaking, expression: .warm) },
+            stage: true, side: page == 5 ? 160 : 170,
+            dellaArticulatedReview: page == 5, livingPainting: living)
     }
 
     /// Della's body plate exactly as the bust portrait places it, with the
