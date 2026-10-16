@@ -144,11 +144,11 @@ final class LivingPaintingClock {
 /// Oct 16 2026: DEBUG simulator gallery for CI screenshots
 /// (dev/puppet-gallery.sh): Della's old sliced portrait beside the living
 /// painting, state by state. Launch with -KadeLivingGallery and
-/// -KadeLivingGalleryPage 0...5; pages 5 and 6 are the real stage portrait,
+/// -KadeLivingGalleryPage 0...6; pages 6 and 7 are the real stage portrait,
 /// sliced and living, moving. Never reachable in a release build.
 struct LivingPaintingGalleryView: View {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("-KadeLivingGallery") }
-    static let pageCount = 6
+    static let pageCount = 7
     @EnvironmentObject private var agents: AgentsService
     static var requestedPage: Int {
         let arguments = ProcessInfo.processInfo.arguments
@@ -169,10 +169,11 @@ struct LivingPaintingGalleryView: View {
     @State private var report = "Loading Della's living painting"
 
     private static func state(_ named: [String: Double], face: CharacterFace = .neutral,
-                              warp: Bool, viseme: Int = 0, roll: Double = 0) -> LivingPaintingState {
+                              warp: Bool, viseme: Int = 0, roll: Double = 0, blend: Double = 1) -> LivingPaintingState {
         var state = LivingPaintingState()
         state.channels = PuppetChannel.values(named)
         state.face = LivingPaintingPanel(face: face)
+        state.blend = blend
         state.warp = warp
         state.slicedViseme = viseme
         state.rollDegrees = roll
@@ -180,15 +181,17 @@ struct LivingPaintingGalleryView: View {
     }
 
     /// The same moment drawn both ways: the old rig shows a painted panel or
-    /// patch; the living painting reaches it by moving the face.
+    /// patch; the living painting reaches it by moving the face. A blend
+    /// below 1 is an expression half-way in, as during a change.
     private static func pair(_ id: Int, _ label: String, _ named: [String: Double],
-                             face: CharacterFace = .neutral, viseme: Int = 0, roll: Double = 0) -> Row {
+                             face: CharacterFace = .neutral, viseme: Int = 0, roll: Double = 0,
+                             blend: Double = 1) -> Row {
         var oldNamed: [String: Double] = [:]
         if let blink = named["eye.blink"] { oldNamed["eye.blink"] = blink }
         if let turn = named["head.roll"] { oldNamed["head.roll"] = turn }
         return Row(id: id, label: label,
-            old: state(oldNamed, face: face, warp: false, viseme: viseme, roll: roll),
-            new: state(named, face: face, warp: true, roll: roll))
+            old: state(oldNamed, face: face, warp: false, viseme: viseme, roll: roll, blend: blend),
+            new: state(named, face: face, warp: true, roll: roll, blend: blend))
     }
 
     /// Oct 16 2026: a short stretch of the real engine speaking, sampled at
@@ -221,19 +224,26 @@ struct LivingPaintingGalleryView: View {
         switch page {
         case 1:
             return [
-                Self.pair(4, "smile", [:], face: .smile),
-                Self.pair(5, "surprised", [:], face: .surprised),
-                Self.pair(6, "sad", ["head.pitch": 0.4, "gaze.y": 0.4], face: .sad),
-                Self.pair(7, "angry", [:], face: .angry),
+                Self.pair(4, "smile, half-way in", [:], face: .smile, blend: 0.5),
+                Self.pair(5, "smile", [:], face: .smile),
+                Self.pair(6, "surprised, half-way in", [:], face: .surprised, blend: 0.5),
+                Self.pair(7, "surprised", [:], face: .surprised),
             ]
         case 2:
             return [
-                Self.pair(8, "talking: oh", ["mouth.open": 0.7, "mouth.round": 0.7], viseme: 3),
-                Self.pair(9, "talking: ee", ["mouth.open": 0.35, "mouth.wide": 0.9], viseme: 5),
-                Self.pair(10, "talking: ah", ["mouth.open": 1, "mouth.wide": 0.4], viseme: 8),
-                Self.pair(11, "talking: between", ["mouth.open": 0.45, "mouth.wide": 0.2, "mouth.round": 0.3], viseme: 2),
+                Self.pair(12, "sad", ["head.pitch": 0.4, "gaze.y": 0.4], face: .sad),
+                Self.pair(13, "angry", [:], face: .angry),
+                Self.pair(14, "worried", ["gaze.x": -0.5], face: .worried),
+                Self.pair(15, "laughing", ["head.roll": 0.4, "head.pitch": -0.3], face: .laugh),
             ]
         case 3:
+            return [
+                Self.pair(8, "talking: opening toward oh", ["mouth.open": 0.35, "mouth.round": 0.35], viseme: 1),
+                Self.pair(9, "talking: oh", ["mouth.open": 0.7, "mouth.round": 0.7], viseme: 3),
+                Self.pair(10, "talking: ee", ["mouth.open": 0.35, "mouth.wide": 0.9], viseme: 5),
+                Self.pair(11, "talking: ah", ["mouth.open": 1, "mouth.wide": 0.4], viseme: 8),
+            ]
+        case 4:
             return Self.filmstrip()
         default:
             return [
@@ -247,7 +257,7 @@ struct LivingPaintingGalleryView: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            if page >= 4 {
+            if page >= 5 {
                 Text("Living painting, page \(page + 1) of \(Self.pageCount). The real stage portrait, speaking warmly. Top: sliced. Bottom: living painting.")
                     .font(.caption2)
                     .lineLimit(3)
@@ -279,7 +289,7 @@ struct LivingPaintingGalleryView: View {
         .environment(\.colorScheme, .light)
         .task { await load() }
         .task {
-            guard page >= 4 else { return }
+            guard page >= 5 else { return }
             agents.seedCharacterAudit()
             agentsReady = true
         }
@@ -287,14 +297,14 @@ struct LivingPaintingGalleryView: View {
 
     @State private var agentsReady = false
 
-    /// The production portrait (page 5: the square bust; page 6: the tall
+    /// The production portrait (page 6: the square bust; page 7: the tall
     /// host layout with arms), driven by a speaking presentation.
     private func stagePortrait(living: Bool) -> some View {
         CharacterPortraitView(agentID: CharacterMotion.dellaID, name: "Della", playing: true,
             level: { 0.06 + 0.05 * sin(Date().timeIntervalSinceReferenceDate * 9) },
             presentation: { CharacterPresentation(activity: .speaking, expression: .warm) },
-            stage: true, side: page == 5 ? 160 : 170,
-            dellaArticulatedReview: page == 5, livingPainting: living)
+            stage: true, side: page == 6 ? 160 : 170,
+            dellaArticulatedReview: page == 6, livingPainting: living)
     }
 
     /// Della's body plate exactly as the bust portrait places it, with the
@@ -307,6 +317,7 @@ struct LivingPaintingGalleryView: View {
             Image("CharacterDellaBustBody").resizable().interpolation(.high)
                 .frame(width: 677.16 * unit, height: 677.16 * unit)
                 .offset(x: -132 * unit, y: (-1 + state.offsetY) * unit)
+                .frame(width: side, height: side, alignment: .topLeading)
             if let resources {
                 LivingPaintingCanvas(resources: resources, state: state)
                     .frame(width: side, height: side)
