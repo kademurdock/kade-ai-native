@@ -417,10 +417,11 @@ def main():
     require(source_path.is_file() and 0<source_path.stat().st_size<=256*1024,'Original completion source record missing or oversized')
     recorded=json.loads(source_path.read_bytes());host.validate_operation_source(recorded)
     started=datetime.fromisoformat(recorded['operationStartedAtUtc']).timestamp()
-    if args.action=='emit-all':host._OPERATION_DEADLINE=min(time.time()+60,started+host.JOB_SECONDS-15)
+    # Two base64 evidence archives through logs took 34-66 s; keep a 240 s bound.
+    if args.action=='emit-all':host._OPERATION_DEADLINE=min(time.time()+240,started+host.JOB_SECONDS-15)
     else:
         shared=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
-        action=time.time()+(host.BOOT_SECONDS+30 if args.action=='boot' else 660 if args.action=='ui' else CAPTURE_SECONDS+15)
+        action=time.time()+(host.BOOT_SECONDS+30 if args.action=='boot' else host.UI_GUARD_SECONDS['large'] if args.action=='ui' else CAPTURE_SECONDS+15)
         host._OPERATION_DEADLINE=min(shared,action)
         host._DEADLINE_ROLE='actionGuardDeadline' if action<shared else 'sharedOperationDeadline'
     host.initial_source(args.expected_sha)

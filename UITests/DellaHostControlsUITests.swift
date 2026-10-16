@@ -168,11 +168,23 @@ final class DellaHostControlsUITests: XCTestCase {
             else if requestedPhase.contains("controls-scrolled") { targetID = "della-host.chat.speed" }
             else { targetID = "della-host.chat.invite-not-now" }
             let target = app.buttons.matching(identifier: targetID).firstMatch
-            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
-                (object as? XCUIElement)?.isHittable == true
-            }, object: target)
-            try require(XCTWaiter.wait(for: [ready], timeout: 15) == .completed,
-                        "fixture completed its scroll before control checks")
+            // Ask isHittable only once the target's activation point (its frame
+            // center) is inside the window. Asking mid-scroll, while that point is
+            // off screen, makes XCTest record "Failed to determine hittability ...
+            // Activation point invalid" as a test failure even though the scroll
+            // then completes. The required end state (hittable target) is unchanged.
+            let window = app.frame
+            let deadline = Date().addingTimeInterval(30)
+            var settled = false
+            while !settled && Date() < deadline {
+                if target.exists {
+                    let frame = target.frame
+                    settled = valid(frame) && window.contains(CGPoint(x: frame.midX, y: frame.midY))
+                        && target.isHittable
+                }
+                if !settled { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+            }
+            try require(settled, "fixture completed its scroll before control checks")
         }
         return app
     }
@@ -485,7 +497,9 @@ final class DellaHostControlsUITests: XCTestCase {
                 return (exists: exists, frame: exists ? target.frame : CGRect.null)
             }
             if zip(targets, observations).allSatisfy({ pair in
-                pair.1.exists && pair.0.isHittable && valid(pair.1.frame) && targetBounds.contains(pair.1.frame)
+                // Same four requirements; hittability is asked last, only for an
+                // on-screen frame, so an off-screen target cannot record an XCTest issue.
+                pair.1.exists && valid(pair.1.frame) && targetBounds.contains(pair.1.frame) && pair.0.isHittable
             }) {
                 return
             }
@@ -499,9 +513,9 @@ final class DellaHostControlsUITests: XCTestCase {
         try require(app.keyboards.count == 0,
                     "software keyboard stays absent after target search [" + state.lastContext + "]")
         let reachable = targets.allSatisfy { target in
-            guard target.exists && target.isHittable else { return false }
+            guard target.exists else { return false }
             let frame = target.frame
-            return valid(frame) && region.contains(frame)
+            return valid(frame) && region.contains(frame) && target.isHittable
         }
         if !reachable {
             // These are fresh observations after the failed predicate. They
