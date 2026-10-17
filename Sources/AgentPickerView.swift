@@ -67,6 +67,11 @@ struct AgentPickerView: View {
     @State private var appearanceText: String?
     @State private var appearanceName = ""
     @FocusState private var isSearchFieldFocused: Bool
+    /// Oct 16 2026: About a character, pushed inside this sheet's own stack.
+    @State private var aboutTarget: CharacterAboutTarget?
+    /// The search field is focused once per presentation. Coming Back from
+    /// About appears this screen again, and must not pull focus to search.
+    @State private var searchFocusedOnce = false
 
     private var isSearching: Bool {
         !searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -210,7 +215,12 @@ struct AgentPickerView: View {
             } message: {
                 Text(appearanceText ?? "")
             }
+            .navigationDestination(item: $aboutTarget) { target in
+                CharacterAboutView(target: target)
+            }
             .onAppear {
+                guard !searchFocusedOnce else { return }
+                searchFocusedOnce = true
                 // Grabbing focus in the same tick a sheet starts
                 // presenting is unreliable -- the field isn't installed
                 // in the window yet, so the request gets dropped more
@@ -390,6 +400,16 @@ struct AgentPickerView: View {
                 }
                 .tint(.blue)
             }
+            // Oct 16 2026: About this character (how they're coming in, your
+            // moments together, their days). Like the others here it reaches
+            // the Actions rotor on its own.
+            Button {
+                isSearchFieldFocused = false
+                aboutTarget = CharacterAboutTarget(agentId: agent.id, name: agent.name)
+            } label: {
+                Label("About \(agent.name)", systemImage: "person.text.rectangle")
+            }
+            .tint(.indigo)
         }
         .buttonStyle(.plain)
         // Session 26, the Amber rule (build 139 / the df915e2 sweep):
@@ -407,8 +427,8 @@ struct AgentPickerView: View {
             agentID: agent.id, avatarPath: agent.avatar?.filepath,
             puppetDescription: puppets.description(for: agent.id)
         ) == nil
-            ? "Switches to this character for your next message."
-            : "Switches to this character for your next message. Actions include Describe appearance.")
+            ? "Switches to this character for your next message. Actions include About."
+            : "Switches to this character for your next message. Actions include Describe appearance and About.")
     }
 
     private func row(for agent: KadeAgent) -> some View {

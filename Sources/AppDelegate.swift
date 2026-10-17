@@ -191,6 +191,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 completionHandler()
                 return
             }
+            /* Oct 16 2026: a character wrote into one exact conversation (a
+             * friend's text, a finished background task, a research result).
+             * Only a real conversation id (a UUID) can choose the chat; a
+             * missing or malformed one still routes, and ContentView says so
+             * out loud and opens the conversation list. Never a silent drop,
+             * and never a new chat in its place. */
+            if dest == .conversation {
+                if response.actionIdentifier != UNNotificationDismissActionIdentifier {
+                    let conversationId = KadeConversationRoute.conversationId(
+                        from: response.notification.request.content.userInfo["kadeConversationId"])
+                    Task { @MainActor in IntentRouter.shared.requestConversation(conversationId) }
+                }
+                completionHandler()
+                return
+            }
             let runId = response.notification.request.content.userInfo["kadeRunId"] as? String
             Task { @MainActor in
                 IntentRouter.shared.pendingHarnessRunId = runId.flatMap {
@@ -224,8 +239,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
          * else, and fired HERE -- in the notification delegate, nowhere near
          * a SwiftUI transcript commit, which is the whole point of the
          * build-216 scar. */
-        let kind = KadeArrivalKind(categoryIdentifier: notification.request.content.categoryIdentifier)
-        Task { @MainActor in KadeHaptics.arrival(kind) }
+        var kind = KadeArrivalKind(categoryIdentifier: notification.request.content.categoryIdentifier)
+        // Oct 16 2026: a "conversation" push rides KADE_ROUTE, but it is a
+        // character writing to you, so it feels like a message, not an alert.
+        if (notification.request.content.userInfo["kadeRoute"] as? String) == KadeConversationRoute.routeName {
+            kind = .message
+        }
+        let felt = kind
+        Task { @MainActor in KadeHaptics.arrival(felt) }
         completionHandler([.banner, .list, .sound])
     }
 }

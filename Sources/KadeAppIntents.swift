@@ -100,6 +100,15 @@ final class IntentRouter: ObservableObject {
         case feedbackReports
         case adminHub
         case agentWork
+        // Oct 16 2026: a character wrote into one exact conversation (a
+        // friend's text, a finished background task, a research result).
+        // The bridge sends route "conversation" with kadeConversationId; the
+        // id parks in `pendingConversationId` and this case says go look.
+        case conversation
+        // Oct 16 2026: Forge asks Kade before it ships (route "approvals").
+        // ADMIN ONLY: ContentView opens it only for the admin seat; anyone
+        // else's tap is the plain open of the app, with nothing said.
+        case approvals
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a
@@ -113,6 +122,10 @@ final class IntentRouter: ObservableObject {
     @Published var pendingAgentCall: AgentCallPayload?
     @Published var pendingHarnessRunId: String?
     @Published private(set) var pendingFreshAgentChat: KadeFreshAgentChatRequest?
+    /// Oct 16 2026: the conversation a "conversation" push asked for. Nil
+    /// with `.conversation` pending means the push carried no usable id;
+    /// ContentView says so out loud and opens the conversation list.
+    @Published var pendingConversationId: String?
     private var freshAgentChatInbox = KadeFreshAgentChatInbox()
 
     private init() {}
@@ -122,7 +135,19 @@ final class IntentRouter: ObservableObject {
             freshAgentChatInbox.cancel()
             pendingFreshAgentChat = nil
         }
+        if destination != .conversation {
+            pendingConversationId = nil
+        }
         pending = destination
+    }
+
+    /// A tap on a "conversation" push. The id is already checked (a UUID or
+    /// nil); the newest tap wins, like the fresh-chat route.
+    func requestConversation(_ conversationId: String?) {
+        freshAgentChatInbox.cancel()
+        pendingFreshAgentChat = nil
+        pendingConversationId = conversationId
+        pending = .conversation
     }
 
     func requestFreshAgentChat(_ request: KadeFreshAgentChatRequest) {

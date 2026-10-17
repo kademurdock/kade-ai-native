@@ -859,6 +859,7 @@ struct ConversationDetailView: View {
                 .accessibilityLabel("Call \(agentDisplayLabel)")
                 .accessibilityHint("Starts a live voice call.")
             }
+            aboutToolbarItem
         }
         .onReceive(NotificationCenter.default.publisher(for: MessageSendingService.memoryArtifactNotification)) { note in
             guard chatOnScreen,
@@ -1386,6 +1387,8 @@ struct ConversationDetailView: View {
             case .voicePicker:
                 // Build 261: the way back to the creator's voice is the first row.
                 VoicePickerView(apiClient: apiClient, selection: $voiceOverride, defaultLabel: "Use \(agentDisplayLabel)'s own voice", deliveryAgentId: selectedAgentId)
+            case .about(let target):
+                aboutSheet(target)
             }
         }
         // Save the user's voice pick for the current agent whenever it
@@ -2597,6 +2600,13 @@ struct ConversationDetailView: View {
             .accessibilityLabel("Talking to \(agentDisplayLabel)")
             .accessibilityHint("Opens the list of characters to switch who answers your next message.")
             .accessibilityFocused($a11yFocus, equals: .agentButton)
+            // Oct 16 2026: About this character, in the Actions rotor (the
+            // visible way in is the toolbar's About item).
+            .accessibilityActions {
+                if let target = aboutTarget {
+                    Button("About \(target.name)") { activeSheet = .about(target) }
+                }
+            }
             .dellaHostProbe("agentButton", identifier: "della-host.chat.agent")
 
             // Session 25: moved here from the toolbar (see the toolbar
@@ -2632,6 +2642,37 @@ struct ConversationDetailView: View {
         }
         if agentsService.isLoading { return "Loading…" }
         return selectedAgentId == nil ? "No character selected" : "Current character"
+    }
+
+    /// Oct 16 2026: who an About screen opened from here is about. Nil until
+    /// the character and its name are known.
+    private var aboutTarget: CharacterAboutTarget? {
+        guard let selectedAgentId, let name = agentsService.name(for: selectedAgentId) else { return nil }
+        return CharacterAboutTarget(agentId: selectedAgentId, name: name)
+    }
+
+    /// The About item, in the toolbar's overflow menu where the system puts
+    /// secondary actions. Its own builder so the toolbar's type-check stays
+    /// small (the Sep 23 2026 time-limit lesson).
+    @ToolbarContentBuilder
+    private var aboutToolbarItem: some ToolbarContent {
+        if let target = aboutTarget {
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    activeSheet = .about(target)
+                } label: {
+                    Label("About \(target.name)", systemImage: "person.text.rectangle")
+                }
+                .accessibilityHint("How \(target.name) is coming in, your moments together, and \(target.name)'s days.")
+            }
+        }
+    }
+
+    private func aboutSheet(_ target: CharacterAboutTarget) -> some View {
+        NavigationStack {
+            CharacterAboutView(target: target, showsDone: true)
+        }
+        .environmentObject(apiClient)
     }
 
     /// `conversation?.displayTitle` reads oddly before a new conversation
@@ -5194,6 +5235,8 @@ enum DetailSheet: Identifiable {
     case share(ShareItem)
     case transcript(ChatTranscriptHandoff)
     case voicePicker
+    /// Oct 16 2026: About the character you're talking to.
+    case about(CharacterAboutTarget)
 
     var id: String {
         switch self {
@@ -5201,6 +5244,7 @@ enum DetailSheet: Identifiable {
         case .share(let item): return "share-\(item.id.uuidString)"
         case .transcript(let handoff): return "transcript-\(handoff.id)"
         case .voicePicker: return "voice-picker"
+        case .about(let target): return "about-\(target.agentId)"
         }
     }
 }

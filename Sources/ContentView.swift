@@ -415,8 +415,50 @@ struct ContentView: View {
             },
             pushLibrary: { route in
                 pushLibrary(route)
+            },
+            openConversationId: { id in
+                openConversation(id: id, fromPush: false)
             }
         )
+    }
+
+    /// Oct 16 2026: one exact saved conversation, by id: a tap on a
+    /// "conversation" push (a character wrote to you, a background task
+    /// finished) or Open the conversation on a background task. It opens THAT
+    /// chat over the conversation list, never a new chat. A missing, malformed
+    /// or unloadable id is said out loud; from a push it then lands on the
+    /// conversation list, so the tap is never a silent drop.
+    private func openConversation(id: String?, fromPush: Bool) {
+        let fallback = fromPush ? " Here are your conversations." : " Try again in a moment."
+        guard let id, KadeConversationRoute.isConversationId(id) else {
+            if fromPush { go(.conversations) }
+            announceAfterMove("That conversation couldn't be found." + fallback)
+            return
+        }
+        Task { @MainActor in
+            if let conversation = await conversationsService.fetchConversation(id: id) {
+                go(.savedChat(conversation))
+            } else {
+                if fromPush { go(.conversations) }
+                announceAfterMove("That conversation couldn't be opened. It may have been deleted, or the connection dropped." + fallback)
+            }
+        }
+    }
+
+    /// The admin seat (Kade alone): the same test the More tab uses to show
+    /// its Admin section. Never family, never the App Review seat.
+    private var isAdminSeat: Bool {
+        if case .signedIn(let user) = auth.state { return user.role == "ADMIN" }
+        return false
+    }
+
+    /// Spoken a moment after a screen change, so the change itself doesn't
+    /// talk over it.
+    private func announceAfterMove(_ text: String) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            UIAccessibility.post(notification: .announcement, argument: text)
+        }
     }
 
     private func startChat(_ agentId: String?) {
@@ -466,7 +508,7 @@ struct ContentView: View {
             tab = .more
             morePath = [.admin, .feedbackReports]
         case .alerts, .announcements, .agentWork, .bookmarks, .settings, .settingsSearch,
-             .search, .help, .admin, .brief, .accessRequests:
+             .search, .help, .admin, .brief, .accessRequests, .approvals:
             tab = .more
             morePath = [destination]
         }
@@ -583,6 +625,10 @@ struct ContentView: View {
             AdminView(apiClient: apiClient)
         case .feedbackReports:
             AdminFeedbackView(service: AdminService(client: apiClient))
+        case .approvals:
+            // Oct 16 2026: admin only; the server refuses anyone else and
+            // the screen says so in words.
+            ApprovalsView(apiClient: apiClient)
         }
     }
 
@@ -1093,6 +1139,16 @@ struct ContentView: View {
             // described-video, route "described-video"): the finished video,
             // even while another is still working.
             go(.describedVideo(DescribedVideoStart(openFinished: true)))
+        case .conversation:
+            // Oct 16 2026: the "conversation" push. Consumed the same
+            // one-shot way as the agent-call payload.
+            let wanted = router.pendingConversationId
+            router.pendingConversationId = nil
+            openConversation(id: wanted, fromPush: true)
+        case .approvals:
+            // Oct 16 2026: ADMIN ONLY. For anyone else the tap is the app's
+            // ordinary open, and nothing is said.
+            if isAdminSeat { go(.approvals) }
         }
     }
 
@@ -1399,6 +1455,8 @@ enum HomeRoute: Identifiable, Hashable {
     /// (route name "announcements"), and where a digest you MISSED can still
     /// be read. See AnnouncementsView for the whole story.
     case announcements
+    /// Oct 16 2026: Forge's requests for Kade's yes. Admin only.
+    case approvals
 
     var id: String {
         switch self {
@@ -1438,6 +1496,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .brief: return "brief"
         case .accessRequests: return "accessRequests"
         case .announcements: return "announcements"
+        case .approvals: return "approvals"
         }
     }
 }
