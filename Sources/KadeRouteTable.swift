@@ -61,6 +61,9 @@ extension IntentRouter.Destination {
         // "described-video" too).
         case .describedVideo:  return "described-video"
         case .agentChat:       return KadeFreshAgentChatParser.routeName
+        // Oct 16 2026: opens one exact conversation; the id rides beside the
+        // route as kadeConversationId (AppDelegate's KADE_ROUTE branch).
+        case .conversation:    return KadeConversationRoute.routeName
         // No outside name, and that is the decision: an agent call cannot be
         // asked for by name because it needs a payload (who is calling, why,
         // which plan). It arrives as its own push category with that payload

@@ -61,6 +61,8 @@ struct AgentWorkView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Check work after a connection drops. Open the chat to read the reply or stop a running request.")
                 if codingJobs { NavigationLink("Coding jobs") { CodingWorkView(apiClient: apiClient) } }
+                // Oct 16 2026: jobs a character took on in the background.
+                BackgroundTasksLink(apiClient: apiClient)
                 Text(status)
                     .font(.subheadline)
                     .accessibilityAddTraits(.updatesFrequently)

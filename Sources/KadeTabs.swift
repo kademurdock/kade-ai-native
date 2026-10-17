@@ -57,6 +57,10 @@ struct KadeNavigation {
     /// item) onto the Library tab's own stack, switching to that tab. The
     /// player for the item already on top is never pushed twice.
     var pushLibrary: (LibraryRoute) -> Void = { _ in }
+    /// Oct 16 2026: open one saved conversation by its id (a background
+    /// task's Open the conversation). The same door the "conversation" push
+    /// uses; a conversation that can't be loaded is said out loud.
+    var openConversationId: (String) -> Void = { _ in }
 }
 
 private struct KadeNavigationKey: EnvironmentKey {

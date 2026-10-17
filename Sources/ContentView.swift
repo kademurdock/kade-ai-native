@@ -415,8 +415,43 @@ struct ContentView: View {
             },
             pushLibrary: { route in
                 pushLibrary(route)
+            },
+            openConversationId: { id in
+                openConversation(id: id, fromPush: false)
             }
         )
+    }
+
+    /// Oct 16 2026: one exact saved conversation, by id: a tap on a
+    /// "conversation" push (a character wrote to you, a background task
+    /// finished) or Open the conversation on a background task. It opens THAT
+    /// chat over the conversation list, never a new chat. A missing, malformed
+    /// or unloadable id is said out loud; from a push it then lands on the
+    /// conversation list, so the tap is never a silent drop.
+    private func openConversation(id: String?, fromPush: Bool) {
+        let fallback = fromPush ? " Here are your conversations." : " Try again in a moment."
+        guard let id, KadeConversationRoute.isConversationId(id) else {
+            if fromPush { go(.conversations) }
+            announceAfterMove("That conversation couldn't be found." + fallback)
+            return
+        }
+        Task { @MainActor in
+            if let conversation = await conversationsService.fetchConversation(id: id) {
+                go(.savedChat(conversation))
+            } else {
+                if fromPush { go(.conversations) }
+                announceAfterMove("That conversation couldn't be opened. It may have been deleted, or the connection dropped." + fallback)
+            }
+        }
+    }
+
+    /// Spoken a moment after a screen change, so the change itself doesn't
+    /// talk over it.
+    private func announceAfterMove(_ text: String) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            UIAccessibility.post(notification: .announcement, argument: text)
+        }
     }
 
     private func startChat(_ agentId: String?) {
@@ -1093,6 +1128,12 @@ struct ContentView: View {
             // described-video, route "described-video"): the finished video,
             // even while another is still working.
             go(.describedVideo(DescribedVideoStart(openFinished: true)))
+        case .conversation:
+            // Oct 16 2026: the "conversation" push. Consumed the same
+            // one-shot way as the agent-call payload.
+            let wanted = router.pendingConversationId
+            router.pendingConversationId = nil
+            openConversation(id: wanted, fromPush: true)
         }
     }
 

@@ -191,6 +191,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 completionHandler()
                 return
             }
+            /* Oct 16 2026: a character wrote into one exact conversation (a
+             * friend's text, a finished background task, a research result).
+             * Only a real conversation id (a UUID) can choose the chat; a
+             * missing or malformed one still routes, and ContentView says so
+             * out loud and opens the conversation list. Never a silent drop,
+             * and never a new chat in its place. */
+            if dest == .conversation {
+                if response.actionIdentifier != UNNotificationDismissActionIdentifier {
+                    let conversationId = KadeConversationRoute.conversationId(
+                        from: response.notification.request.content.userInfo["kadeConversationId"])
+                    Task { @MainActor in IntentRouter.shared.requestConversation(conversationId) }
+                }
+                completionHandler()
+                return
+            }
             let runId = response.notification.request.content.userInfo["kadeRunId"] as? String
             Task { @MainActor in
                 IntentRouter.shared.pendingHarnessRunId = runId.flatMap {
