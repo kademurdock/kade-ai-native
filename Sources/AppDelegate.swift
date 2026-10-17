@@ -239,8 +239,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
          * else, and fired HERE -- in the notification delegate, nowhere near
          * a SwiftUI transcript commit, which is the whole point of the
          * build-216 scar. */
-        let kind = KadeArrivalKind(categoryIdentifier: notification.request.content.categoryIdentifier)
-        Task { @MainActor in KadeHaptics.arrival(kind) }
+        var kind = KadeArrivalKind(categoryIdentifier: notification.request.content.categoryIdentifier)
+        // Oct 16 2026: a "conversation" push rides KADE_ROUTE, but it is a
+        // character writing to you, so it feels like a message, not an alert.
+        if (notification.request.content.userInfo["kadeRoute"] as? String) == KadeConversationRoute.routeName {
+            kind = .message
+        }
+        let felt = kind
+        Task { @MainActor in KadeHaptics.arrival(felt) }
         completionHandler([.banner, .list, .sound])
     }
 }
