@@ -158,6 +158,41 @@ struct VoicePickerView: View {
     private static let moreGroup = "More"
     private static let groupOrder = ["Women", "Men", "Kids and teens", "Characters"]
 
+    /// Oct 17 2026, Kade: "instead of classic and fish voices, with classic
+    /// under more ... a split catalog, with fish and inworld as the 2 catalog
+    /// choices, and they're all organised the way they should be under each
+    /// category." The proxy files Inworld's voices as "Classic · Women, ..."
+    /// categories; each catalog gets the same four groups.
+    private static let fishCatalog = "Fish"
+    private static let inworldCatalog = "Inworld"
+    private static let classicPrefix = "Classic · "
+    private static let classicSuffix = " (Classic)"
+    @State private var library: String = VoicePickerView.fishCatalog
+
+    /// Which catalog a voice belongs to (the proxy's providers map, else the
+    /// "(Classic)" its label carries).
+    private func catalogOf(_ v: String) -> String {
+        if let p = catalog.providers[v] { return p == "inworld" ? Self.inworldCatalog : Self.fishCatalog }
+        return v.hasSuffix(Self.classicSuffix) ? Self.inworldCatalog : Self.fishCatalog
+    }
+
+    /// The catalogs this list holds, Fish first. A list with one engine (the
+    /// describer's) has one, and then no catalog switch is shown.
+    private var libraries: [String] {
+        let present = Set(voices.map { catalogOf($0) })
+        return [Self.fishCatalog, Self.inworldCatalog].filter { present.contains($0) }
+    }
+
+    private var activeLibrary: String {
+        libraries.contains(library) ? library : (libraries.first ?? Self.fishCatalog)
+    }
+
+    /// The voice's name without "(Classic)": inside the Inworld catalog it says nothing.
+    private func displayName(_ v: String) -> String {
+        let name = catalog.name(of: v)
+        return name.hasSuffix(Self.classicSuffix) ? String(name.dropLast(Self.classicSuffix.count)) : name
+    }
+
     init(
         apiClient: KadeAPIClient,
         selection: Binding<String>,
@@ -260,8 +295,11 @@ struct VoicePickerView: View {
     /// Her four groups, each holding the proxy's categories that start with
     /// its name, plus "More" for anything the list carries that no category
     /// claims. No catalog → one group, one kind, every voice in served order.
-    private var groups: [Who] {
-        let present = Set(voices)
+    private var groups: [Who] { groups(in: activeLibrary) }
+
+    private func groups(in lib: String) -> [Who] {
+        // Only this catalog's voices; the other catalog is one switch away.
+        let present = Set(voices.filter { catalogOf($0) == lib })
         // The describer's shelves come first, so a favourite opens on My favourites.
         var shelved: [Who] = []
         for shelf in shelves {
@@ -273,8 +311,9 @@ struct VoicePickerView: View {
                 shelved.append(Who(name: shelf.name, kinds: [Kind(name: shelf.name, short: shelf.name, voices: kept)]))
             }
         }
+        let listed = voices.filter { present.contains($0) }
         guard !catalog.categories.isEmpty else {
-            return shelved + [Who(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: voices)])]
+            return shelved + [Who(name: "All voices", kinds: [Kind(name: "All voices", short: "All voices", voices: listed)])]
         }
         var seen = Set<String>()
         var byGroup: [String: [Kind]] = [:]
@@ -282,12 +321,14 @@ struct VoicePickerView: View {
             let vs = c.voices.filter { present.contains($0) && !seen.contains($0) }
             vs.forEach { seen.insert($0) }
             guard !vs.isEmpty else { continue }
-            let g = Self.groupOrder.first { c.name == $0 || c.name.hasPrefix($0 + ",") || c.name.hasPrefix($0 + " ") } ?? Self.moreGroup
-            var short = c.name
+            // Inworld's categories arrive as "Classic · Women, ..."; inside its own catalog the prefix says nothing.
+            let name = c.name.hasPrefix(Self.classicPrefix) ? String(c.name.dropFirst(Self.classicPrefix.count)) : c.name
+            let g = Self.groupOrder.first { name == $0 || name.hasPrefix($0 + ",") || name.hasPrefix($0 + " ") } ?? Self.moreGroup
+            var short = name
             if short.hasPrefix(g + ", ") { short = String(short.dropFirst(g.count + 2)) }
-            byGroup[g, default: []].append(Kind(name: c.name, short: short, voices: vs))
+            byGroup[g, default: []].append(Kind(name: name, short: short, voices: vs))
         }
-        let rest = voices.filter { !seen.contains($0) }
+        let rest = listed.filter { !seen.contains($0) }
         if !rest.isEmpty {
             byGroup[Self.moreGroup, default: []].append(Kind(name: "Not yet described", short: "Not yet described", voices: rest))
         }
@@ -315,9 +356,14 @@ struct VoicePickerView: View {
     /// The voice's name as the wheel and the search list show it, with the
     /// describer's marks after it: "Flint (your default, favourite)".
     private func rowTitle(_ v: String) -> String {
-        let name = catalog.name(of: v)
+        let name = displayName(v)
         guard let mark = markFor?(v), !mark.isEmpty else { return name }
         return "\(name) (\(mark))"
+    }
+
+    /// Search spans both catalogs, so a result says which one it is in.
+    private func searchTitle(_ v: String) -> String {
+        libraries.count > 1 ? "\(rowTitle(v)), \(catalogOf(v))" : rowTitle(v)
     }
 
     private func favoriteTitle(_ v: String) -> String {
@@ -347,10 +393,12 @@ struct VoicePickerView: View {
         }
     }
 
-    /// Put the wheels on a voice: its group, its kind, itself.
+    /// Put the wheels on a voice: its catalog, its group, its kind, itself.
     private func point(at v: String) {
-        for g in groups {
+        let lib = libraries.contains(catalogOf(v)) ? catalogOf(v) : activeLibrary
+        for g in groups(in: lib) {
             for k in g.kinds where k.voices.contains(v) {
+                library = lib
                 group = g.name
                 kind = k.name
                 wheelVoice = v
@@ -392,7 +440,7 @@ struct VoicePickerView: View {
                     Button("Done") { commit() }
                         .accessibilityHint(useDefault
                             ? "Clears your own pick."
-                            : "Picks the voice the wheel is on: \(catalog.name(of: wheelVoice)).")
+                            : "Picks the voice the wheel is on: \(displayName(wheelVoice)).")
                 }
             }
             .task { await load() }
@@ -425,6 +473,9 @@ struct VoicePickerView: View {
                 }
 
                 if !useDefault {
+                    if libraries.count > 1 {
+                        catalogPicker
+                    }
                     if groups.count > 1 {
                         whoPicker
                             .onChange(of: group) { _, _ in
@@ -446,6 +497,26 @@ struct VoicePickerView: View {
                 }
             }
             .padding()
+        }
+    }
+
+    /// Fish or Inworld, above the groups. Switching keeps the same group when
+    /// the other catalog has it (Women stays Women) and lands on its first voice.
+    private var catalogPicker: some View {
+        Picker("Voice catalog", selection: $library) {
+            ForEach(libraries, id: \.self) { lib in
+                Text(lib).tag(lib)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Voice catalog")
+        .accessibilityHint("Fish or Inworld. Each catalog has its own groups of voices.")
+        .onChange(of: library) { _, lib in
+            guard !seeding, catalogOf(wheelVoice) != lib else { return }
+            let gs = groups(in: lib)
+            if !gs.contains(where: { $0.name == group }) { group = gs.first?.name ?? "" }
+            kind = activeGroup?.kinds.first?.name ?? ""
+            wheelVoice = wheelVoices.first ?? ""
         }
     }
 
@@ -550,7 +621,7 @@ struct VoicePickerView: View {
                           systemImage: previewing == wheelVoice ? "stop.fill" : "speaker.wave.2.fill")
                 }
                 .buttonStyle(.bordered)
-                .accessibilityHint("Plays the long audition in \(catalog.name(of: wheelVoice)).")
+                .accessibilityHint("Plays the long audition in \(displayName(wheelVoice)).")
                 if wheelVoice == current {
                     Label("Your current voice", systemImage: "checkmark.circle.fill")
                         .font(.footnote)
@@ -631,7 +702,7 @@ struct VoicePickerView: View {
         .disabled(flagBusy)
         .accessibilityHint("Tell Kade this voice is filed under the wrong heading. You say what it sounds like; the voice's name and its current heading go to the feedback board.")
         .confirmationDialog(
-            "What does \(catalog.name(of: wheelVoice)) actually sound like?",
+            "What does \(displayName(wheelVoice)) actually sound like?",
             isPresented: $flagging,
             titleVisibility: .visible
         ) {
@@ -668,12 +739,12 @@ struct VoicePickerView: View {
         return HStack {
             Button {
                 selection = v
-                UIAccessibility.post(notification: .announcement, argument: "\(catalog.name(of: v)) selected.")
+                UIAccessibility.post(notification: .announcement, argument: "\(displayName(v)) selected.")
                 dismiss()
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(rowTitle(v))
+                        Text(searchTitle(v))
                         Text(Self.spoken(v)).font(.footnote).foregroundStyle(.secondary)
                         if let about {
                             Text(about).font(.footnote).foregroundStyle(.secondary)
@@ -692,7 +763,7 @@ struct VoicePickerView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(rowTitle(v)), \(Self.spoken(v))")
+            .accessibilityLabel("\(searchTitle(v)), \(Self.spoken(v))")
             .accessibilityValue(isCurrent ? "Selected" : "")
             .accessibilityHint(about ?? "Picks this voice.")
             .accessibilityActions {
@@ -741,7 +812,7 @@ struct VoicePickerView: View {
         } else if touched, !wheelVoice.isEmpty, wheelVoice != selection {
             selection = wheelVoice
             RecentVoices.record(wheelVoice)
-            UIAccessibility.post(notification: .announcement, argument: "\(catalog.name(of: wheelVoice)) selected.")
+            UIAccessibility.post(notification: .announcement, argument: "\(displayName(wheelVoice)) selected.")
         }
         dismiss()
     }

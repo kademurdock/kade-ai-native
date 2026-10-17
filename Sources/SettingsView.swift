@@ -304,7 +304,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("Fish pace requests an acting delivery. Classic Inworld uses its supported API speaking rate. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
+            Text("Fish pace requests an acting delivery. Inworld uses its own speaking rate. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
         }
     }
 
