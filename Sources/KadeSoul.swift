@@ -215,7 +215,7 @@ struct KadeSoulLenient<Value: Decodable>: Decodable {
     init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
 }
 
-private extension KeyedDecodingContainer {
+extension KeyedDecodingContainer {
     /// A trimmed string, or "" when the field is missing, null or not text.
     func kadeText(_ key: Key) -> String {
         (try? decodeIfPresent(String.self, forKey: key))?

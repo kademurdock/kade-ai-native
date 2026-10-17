@@ -105,6 +105,10 @@ final class IntentRouter: ObservableObject {
         // The bridge sends route "conversation" with kadeConversationId; the
         // id parks in `pendingConversationId` and this case says go look.
         case conversation
+        // Oct 16 2026: Forge asks Kade before it ships (route "approvals").
+        // ADMIN ONLY: ContentView opens it only for the admin seat; anyone
+        // else's tap is the plain open of the app, with nothing said.
+        case approvals
     }
 
     /// Consumed and cleared by whoever handles it. Optional rather than a

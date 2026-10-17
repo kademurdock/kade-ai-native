@@ -445,6 +445,13 @@ struct ContentView: View {
         }
     }
 
+    /// The admin seat (Kade alone): the same test the More tab uses to show
+    /// its Admin section. Never family, never the App Review seat.
+    private var isAdminSeat: Bool {
+        if case .signedIn(let user) = auth.state { return user.role == "ADMIN" }
+        return false
+    }
+
     /// Spoken a moment after a screen change, so the change itself doesn't
     /// talk over it.
     private func announceAfterMove(_ text: String) {
@@ -501,7 +508,7 @@ struct ContentView: View {
             tab = .more
             morePath = [.admin, .feedbackReports]
         case .alerts, .announcements, .agentWork, .bookmarks, .settings, .settingsSearch,
-             .search, .help, .admin, .brief, .accessRequests:
+             .search, .help, .admin, .brief, .accessRequests, .approvals:
             tab = .more
             morePath = [destination]
         }
@@ -618,6 +625,10 @@ struct ContentView: View {
             AdminView(apiClient: apiClient)
         case .feedbackReports:
             AdminFeedbackView(service: AdminService(client: apiClient))
+        case .approvals:
+            // Oct 16 2026: admin only; the server refuses anyone else and
+            // the screen says so in words.
+            ApprovalsView(apiClient: apiClient)
         }
     }
 
@@ -1134,6 +1145,10 @@ struct ContentView: View {
             let wanted = router.pendingConversationId
             router.pendingConversationId = nil
             openConversation(id: wanted, fromPush: true)
+        case .approvals:
+            // Oct 16 2026: ADMIN ONLY. For anyone else the tap is the app's
+            // ordinary open, and nothing is said.
+            if isAdminSeat { go(.approvals) }
         }
     }
 
@@ -1440,6 +1455,8 @@ enum HomeRoute: Identifiable, Hashable {
     /// (route name "announcements"), and where a digest you MISSED can still
     /// be read. See AnnouncementsView for the whole story.
     case announcements
+    /// Oct 16 2026: Forge's requests for Kade's yes. Admin only.
+    case approvals
 
     var id: String {
         switch self {
@@ -1479,6 +1496,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .brief: return "brief"
         case .accessRequests: return "accessRequests"
         case .announcements: return "announcements"
+        case .approvals: return "approvals"
         }
     }
 }

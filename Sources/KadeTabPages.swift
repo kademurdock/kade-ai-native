@@ -232,6 +232,9 @@ struct MoreHomeView: View {
     @State private var webLoadFailed = false
     @State private var showWebLoadAlert = false
     @State private var showingFeedback = false
+    /// Oct 16 2026: how many of Forge's requests wait on her yes (admin only;
+    /// nil until the count lands or when it can't be read).
+    @State private var approvalsWaiting: Int?
 
     var body: some View {
         ScrollView {
@@ -302,6 +305,12 @@ struct MoreHomeView: View {
                     heading("Admin")
                     row("Admin dashboard", icon: "chart.bar.doc.horizontal", tint: .red, caption: nil,
                         spoken: "Admin dashboard", hint: "Usage and spending, feedback reports, and activity logs. Only admin accounts see this.") { nav.open(.admin) }
+                    // Oct 16 2026: Forge asks here before it ships.
+                    row("Approvals", icon: "checkmark.seal", tint: .green,
+                        caption: KadeApprovalWords.rowCaption(waiting: approvalsWaiting),
+                        spoken: KadeApprovalWords.rowSpoken(waiting: approvalsWaiting),
+                        hint: "Forge's requests to merge, commit, deploy or change settings. Nothing ships until you say yes.") { nav.open(.approvals) }
+                        .task { await countApprovals() }
                 }
 
                 Button(role: .destructive, action: auth.signOut) {
@@ -371,6 +380,16 @@ struct MoreHomeView: View {
             .font(.headline)
             .padding(.top, 8)
             .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Oct 16 2026: the Approvals row's count, quietly; admin seat only.
+    @MainActor
+    private func countApprovals() async {
+        guard user.role == "ADMIN" else { return }
+        let request = apiClient.request(path: "api/kade/approvals", authorized: true)
+        guard let (data, http) = try? await apiClient.send(request), http.statusCode == 200,
+              let list = try? JSONDecoder().decode(KadeApprovalList.self, from: data) else { return }
+        approvalsWaiting = list.approvals.filter(\.isPending).count
     }
 
     private func row(_ title: String, icon: String, tint: Color, caption: String?, badge: Int = 0,

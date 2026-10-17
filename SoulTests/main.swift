@@ -166,6 +166,64 @@ import Foundation
         check(list.tasks[0].chargedUSD == 0.03 && list.tasks[1].chargedUSD == nil, "Charged decodes, null stays unknown")
         check(list.tasks[1].conversationId == nil && list.tasks[1].isRunning, "Running task without a conversation")
 
+        // Approvals (admin only): status words, the row's one sentence, the alerts.
+        same(KadeApprovalWords.statusWords("pending"), "Waiting on you", "pending")
+        same(KadeApprovalWords.statusWords("running"), "Running now", "running")
+        same(KadeApprovalWords.statusWords("done"), "Done", "done")
+        same(KadeApprovalWords.statusWords("denied"), "You said no", "denied")
+        same(KadeApprovalWords.statusWords("failed"), "Didn't go through", "failed")
+        same(KadeApprovalWords.statusWords("expired"), "Expired", "expired")
+        same(KadeApprovalWords.statusWords("later"), "Status unknown", "unknown")
+
+        let waitingMerge = KadeApproval(approvalId: "a0123456789", kind: "github-merge", status: "pending",
+                                        summary: "Merge pull request 42 into main: fix the lyric desk timeout",
+                                        revert: "git revert the merge commit", createdAt: "2026-10-17T00:40:00.000Z")
+        same(KadeApprovalWords.spoken(waitingMerge, now: now, calendar: calendar),
+             "Waiting on you. Merge pull request 42 into main: fix the lyric desk timeout. Undo: git revert the merge commit. Asked 20 minutes ago.",
+             "Pending row")
+        let shipped = KadeApproval(approvalId: "a1", kind: "railway-deploy", status: "done",
+                                   summary: "Deploy the fork to Railway.", revert: "",
+                                   createdAt: "2026-10-15T20:00:00Z", decidedAt: "2026-10-15T23:30:00Z",
+                                   resultWords: "Deployed.", deployWords: "The site is live on the new build")
+        same(KadeApprovalWords.spoken(shipped, now: now, calendar: calendar),
+             "Done. Deploy the fork to Railway. Deployed. The site is live on the new build. Decided yesterday evening.",
+             "Done row, decided time")
+        let broke = KadeApproval(approvalId: "a2", status: "failed", summary: "Set two Railway variables",
+                                 decidedAt: "2026-10-13T19:00:00Z", error: "railway answered 500")
+        same(KadeApprovalWords.spoken(broke, now: now, calendar: calendar),
+             "Didn't go through. Set two Railway variables. Railway answered 500. Decided Tuesday afternoon.",
+             "Failed row keeps the weekday capitalized")
+        same(KadeApprovalWords.confirmMessage(waitingMerge),
+             "Merge pull request 42 into main: fix the lyric desk timeout.\n\nUndo: git revert the merge commit.", "Approve alert")
+        same(KadeApprovalWords.confirmMessage(shipped), "Deploy the fork to Railway.", "Approve alert without undo")
+        same(KadeApprovalWords.undoLine("  "), nil, "No undo line")
+        same(KadeApprovalWords.approveOutcome(shipped), "Deployed. The site is live on the new build.", "Outcome: done")
+        same(KadeApprovalWords.approveOutcome(broke), "It didn't go through. Railway answered 500.", "Outcome: failed")
+        same(KadeApprovalWords.approveOutcome(KadeApproval(approvalId: "a3", status: "done")), "Done.", "Outcome: bare done")
+        same(KadeApprovalWords.approveOutcome(KadeApproval(approvalId: "a4", status: "running")),
+             "Still running. Refresh in a minute to see how it went.", "Outcome: still running")
+        same(KadeApprovalWords.conflictWords("it is already expired"), "It is already expired. The list is refreshed.", "409")
+        same(KadeApprovalWords.conflictWords(nil), "That one isn't waiting anymore. The list is refreshed.", "409 bare")
+        same(KadeApprovalWords.statusLine([waitingMerge, shipped, broke]), "1 waiting on you.", "One waiting")
+        same(KadeApprovalWords.statusLine([]), "Nothing waiting on you.", "Nothing waiting")
+        same(KadeApprovalWords.statusLine([waitingMerge, waitingMerge, KadeApproval(approvalId: "r", status: "running")]),
+             "2 waiting on you, 1 running now.", "Waiting and running")
+        same(KadeApprovalWords.rowSpoken(waiting: 2), "Approvals, 2 waiting", "Admin row two")
+        same(KadeApprovalWords.rowSpoken(waiting: 0), "Approvals, nothing waiting", "Admin row none")
+        same(KadeApprovalWords.rowSpoken(waiting: nil), "Approvals", "Admin row before counting")
+
+        let approvalsJSON = """
+        {"approvals":[{"approvalId":"a0123456789","kind":"github-merge","status":"pending","summary":"Merge it",
+                       "revert":"git revert","agentId":"agent_forge","createdAt":"2026-10-17T00:40:00.000Z",
+                       "expiresAt":"2026-10-17T02:40:00.000Z","decidedAt":null,"decidedBy":null,
+                       "resultWords":"","deployWords":"","error":""},
+                      {"status":"pending"}, "junk"]}
+        """
+        let approvals = try JSONDecoder().decode(KadeApprovalList.self, from: Data(approvalsJSON.utf8))
+        check(approvals.approvals.count == 1 && approvals.approvals[0].isPending
+              && approvals.approvals[0].decidedAt == nil && approvals.approvals[0].decidedBy == nil,
+              "Approvals decode; id-less and junk rows are dropped")
+
         print("Synthetic soul words: \(count) checks passed")
     }
 }
