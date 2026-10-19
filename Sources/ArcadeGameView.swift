@@ -250,6 +250,12 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private var startWatch = ArcadeStartWatch()
     /// The current page load, so a failure of an older one is told apart.
     private var pageNavigation: WKNavigation?
+    /// The one wake for the start countdown, cancelled when the countdown
+    /// stops (leave, 'ready', away, a line said) or is set again.
+    private var startCheck: Task<Void, Never>?
+    /// A start failure's line that came while she was away (another app,
+    /// Control Center, a call): said on her return, not into the background.
+    private var startLinePending: String?
     /// Oct 19 2026: the game's Settings sheet is up (and with it Report a
     /// problem's text field), so a keyboard's presses are typing, not play:
     /// no key goes down in the game and Escape does not ask to leave.
@@ -383,6 +389,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         input.stop()
         evaluate(ArcadeJS.suspend)
         ended = true
+        stopStartCheck()
+        startLinePending = nil
         if let web = webView {
             web.configuration.userContentController.removeScriptMessageHandler(forName: "arcade")
             web.configuration.userContentController.removeAllUserScripts()
@@ -443,8 +451,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         pad?.resetFirstTouch()
         status = "Loading the game"
         // A fresh start countdown for every load, from the load itself in
-        // case the kit's 'started' never comes.
+        // case the kit's 'started' never comes. A line held from the last
+        // load is dropped: this start begins again.
         startWatch.load(now: Date())
+        startLinePending = nil
         scheduleStartCheck()
         pageNavigation = web.load(URLRequest(url: url))
     }
@@ -591,6 +601,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             status = "Playing"
             stopped = nil
             startWatch.becameReady()
+            stopStartCheck()
+            // It did start after all: a failure line held while she was away
+            // would be wrong now.
+            startLinePending = nil
             // Whatever changed while the page was starting reaches it now:
             // the speech choice, the input in use, and its sound.
             evaluate(ArcadeJS.setMode(voiceOverReadsAll ? "native" : defaultSpeechMode))
@@ -609,6 +623,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
                 couldNotStart(what)
             } else {
                 status = "The game hit a problem (\(what))"
+                // The RAM finder gave up: the kit has said its own line and no
+                // 'ready' follows, so the start is over and the countdown does
+                // not say a second, different failure a minute later.
+                if ArcadeStartWatch.kitEndedStart(what) { _ = claimStart() }
             }
         default:
             break
@@ -620,9 +638,41 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     /// before 'ready'): the status says so, and the line is said once per load.
     private func couldNotStart(_ what: String) {
         status = "The game hit a problem (\(what))"
-        if startWatch.claim() {
-            speak(ArcadeStartWatch.couldNotStartLine, urgent: true, flush: true)
+        guard claimStart() else { return }
+        sayStartLine(ArcadeStartWatch.couldNotStartLine)
+    }
+
+    /// Takes this load's one start line (ArcadeStartWatch.claim) and stops the
+    /// countdown's wake with it.
+    private func claimStart() -> Bool {
+        let claimed = startWatch.claim()
+        stopStartCheck()
+        return claimed
+    }
+
+    /// A start failure's line: said now, or, while she is away (another app,
+    /// Control Center, a call), held and said on her return. In the
+    /// background VoiceOver drops it or says it over the call, and her
+    /// return would bring no line, so the stall would be silent again.
+    private func sayStartLine(_ line: String) {
+        startLinePending = line
+        sayHeldStartLine()
+    }
+
+    /// The held start line, once she is in front: resumeGame says it on her
+    /// return. Not in front yet not counted as away (the scene has not said so
+    /// yet), it looks again shortly. A reload or 'ready' drops it.
+    private func sayHeldStartLine() {
+        guard !ended, !suspended, let line = startLinePending else { return }
+        guard UIApplication.shared.applicationState == .active else {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.sayHeldStartLine()
+            }
+            return
         }
+        startLinePending = nil
+        speak(line, urgent: true, flush: true)
     }
 
     /// A file the page asked for is not in the packs: it got a 404 (never a
@@ -636,35 +686,51 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         couldNotStart("emulator")
     }
 
-    /// Wakes when the start countdown would run out. A countdown started over
-    /// meanwhile has a later deadline, so an older wake finds nothing due.
-    private func scheduleStartCheck() {
+    /// The one wake for the start countdown: when it would run out, or
+    /// `after` seconds. Any earlier wake is cancelled; none is set while the
+    /// countdown is not running.
+    private func scheduleStartCheck(after: TimeInterval? = nil) {
+        stopStartCheck()
         guard let deadline = startWatch.deadline else { return }
-        let wait = max(0, deadline.timeIntervalSinceNow) + 0.05
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+        let wait = after ?? (max(0, deadline.timeIntervalSinceNow) + 0.05)
+        startCheck = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            } catch {
+                return   // cancelled: the countdown stopped or was set again
+            }
+            guard !Task.isCancelled else { return }
             self?.checkStart()
         }
+    }
+
+    private func stopStartCheck() {
+        startCheck?.cancel()
+        startCheck = nil
     }
 
     /// The countdown ran out with no 'ready': the game did not start. Never
     /// while she is away or the page waits to restart (her return starts the
     /// countdown over), and never after the page stopped for good.
     private func checkStart() {
-        guard !ended, startWatch.due(now: Date()) else { return }
+        guard !ended else { return }
+        guard startWatch.due(now: Date()) else {
+            // Woken before the deadline (the sleep keeps the phone's uptime,
+            // the deadline the wall clock, which can step back): wake again
+            // for it, so the countdown is never left without a wake.
+            if startWatch.deadline != nil { scheduleStartCheck() }
+            return
+        }
         if suspended || needsReload || stopped != nil { return }
         guard UIApplication.shared.applicationState == .active else {
             // Not in front, yet not counted as away: look again shortly.
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                self?.checkStart()
-            }
+            scheduleStartCheck(after: 5)
             return
         }
-        guard startWatch.claim() else { return }
+        guard claimStart() else { return }
         telemetry.note(error: "start: no ready after \(Int(ArcadeStartWatch.limit)) s (status: \(status))")
         status = ArcadeStartWatch.status
-        speak(ArcadeStartWatch.line, urgent: true, flush: true)
+        sayStartLine(ArcadeStartWatch.line)
     }
 
     private func setMode(_ next: String) {
@@ -760,6 +826,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         guard !suspended else { return }
         suspended = true
         startWatch.away()
+        stopStartCheck()
         suspendToken += 1
         let token = suspendToken
         pad?.releaseAll()
@@ -795,6 +862,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             return
         }
         scheduleStartCheck()
+        // A start failure that came while she was away is said now.
+        sayHeldStartLine()
         evaluate(ArcadeJS.resume)
         if pausedForAway {
             pausedForAway = false
@@ -921,12 +990,17 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     private func loadFailed(_ error: Error, navigation: WKNavigation?) {
         guard !ended else { return }
-        telemetry.note(error: "load: " + error.localizedDescription)
+        // An older load's failure (one a restart replaced) is only noted: the
+        // current load's status, line and countdown are left alone. (A load
+        // WebKit gave no navigation for counts every failure as its own.)
+        let current = navigation == nil || pageNavigation == nil || navigation === pageNavigation
+        telemetry.note(error: "load: " + error.localizedDescription + (current ? "" : " (an older load)"))
+        guard current else { return }
         status = "The game page did not load"
-        speak("The game page did not load. Leave the game and try again, or delete the download and get it again.", urgent: true, flush: true)
-        // This load's failure has said its own line: the start countdown has
-        // nothing to add. An older load's failure leaves the current one's alone.
-        if navigation == nil || navigation === pageNavigation { _ = startWatch.claim() }
+        // This load's failure says its own line: the start countdown has
+        // nothing to add. Away, the line waits for her return.
+        _ = claimStart()
+        sayStartLine("The game page did not load. Leave the game and try again, or delete the download and get it again.")
     }
 
     /// iOS ended the page's process (usually memory). Restart it and say so,
@@ -941,6 +1015,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if suspended || UIApplication.shared.applicationState != .active {
             suspended = true
             startWatch.away()
+            stopStartCheck()
             needsReload = true
             setMode("menu")
             status = "Waiting to restart"
@@ -953,7 +1028,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             stopped = line
             status = "Stopped"
             // Said here; no start countdown speaks over it later.
-            _ = startWatch.claim()
+            _ = claimStart()
+            startLinePending = nil
             speak(line, urgent: true, flush: true)
             return
         }

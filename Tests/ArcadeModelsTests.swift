@@ -24,7 +24,7 @@ import CryptoKit
         startWatched()
         savesKept()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, and the page errors and missing EmulatorJS files that mean a start failed), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -69,6 +69,20 @@ import CryptoKit
         check(awayAtLoad.deadline == nil && !awayAtLoad.due(now: at(500)), "a page loaded while she is away waits for her")
         awayAtLoad.back(now: at(600))
         check(awayAtLoad.due(now: at(690)) && !awayAtLoad.due(now: at(689)), "and counts from her return")
+
+        // The RAM finder gave up: the kit said its own line and no 'ready' follows.
+        var ramGaveUp = ArcadeStartWatch()
+        ramGaveUp.load(now: t0)
+        ramGaveUp.started(now: at(5))
+        check(ArcadeStartWatch.kitEndedStart("ram") && ramGaveUp.claim(), "the kit's 'ram' error takes the load's one line")
+        check(ramGaveUp.deadline == nil && !ramGaveUp.due(now: at(95)) && !ramGaveUp.due(now: at(10_000)),
+              "and nothing is due after it: no second line a minute later")
+        ramGaveUp.away()
+        ramGaveUp.back(now: at(200))
+        check(ramGaveUp.deadline == nil && !ramGaveUp.due(now: at(10_000)), "not after her return either")
+        for what in ["emulator", "start", "system", "save", ""] {
+            check(!ArcadeStartWatch.kitEndedStart(what), "only the RAM finder's error ends a start on the kit's own line, not '\(what)'")
+        }
 
         check(ArcadeStartWatch.limit == 90, "the countdown is 90 seconds")
         check(ArcadeStartWatch.status == "The game did not start"

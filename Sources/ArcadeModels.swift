@@ -2045,6 +2045,14 @@ struct ArcadeStartWatch {
         return true
     }
 
+    /// The kit's 'error' kinds that end a start with the kit's own spoken line
+    /// and no 'ready' after it: 'ram', its RAM finder gave up (it says the
+    /// profile's page.noRam first). The app takes the load's one line then,
+    /// so the countdown does not say a second, different failure a minute later.
+    static func kitEndedStart(_ what: String) -> Bool {
+        what == "ram"
+    }
+
     /// A page error before 'ready' that means EmulatorJS will never start: its
     /// runtime is missing (the core it loaded was not a core), or a file or the
     /// network failed it. Matched without regard to case.
