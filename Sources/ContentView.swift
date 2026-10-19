@@ -1047,6 +1047,9 @@ struct ContentView: View {
                 ("sound-booth", { go(.soundBooth) }),
                 ("help", { go(.help) }),
                 ("marketplace", { go(.marketplace) }),
+                // Oct 19 2026: the Arcade is in every build; the test seat
+                // meets its description and the greyed Family shelf.
+                ("arcade", { go(.arcade) }),
                 // Part 292: the screens that gained pictures.
                 ("clubhouse", { go(.lounge) }),
                 ("parlor", { go(.parlor) }),

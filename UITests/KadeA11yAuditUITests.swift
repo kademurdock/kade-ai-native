@@ -100,6 +100,9 @@ final class KadeA11yAuditUITests: XCTestCase {
         Stop(name: "Settings", tab: "More", path: ["Settings"]),
         Stop(name: "Settings, Accessibility", tab: "More", path: ["Settings", "Accessibility"]),
         Stop(name: "The Marketplace", tab: "Play", path: ["The Marketplace"]),
+        // Oct 19 2026: the Arcade's list only (no game is opened, so no game
+        // loop runs). It is in every build, so App Review meets it too.
+        Stop(name: "The Arcade", tab: "Play", path: ["The Arcade"]),
         Stop(name: "The Prompt Library", tab: "Create", path: ["The Prompt Library"]),
         Stop(name: "Bookmarks", tab: "More", path: ["Bookmarks"]),
         Stop(name: "Transcribe", tab: "Talk", path: ["Transcribe a voice memo"]),
