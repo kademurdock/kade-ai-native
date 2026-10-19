@@ -693,7 +693,7 @@ def compiled_tests(expected,emit_inventory=True):
             require(all(not (path/name).exists() and not (path/name).is_symlink()
                         for name in ('KadeAI.debug.dylib','__preview.dylib')),
                     'Compiled app code is split from the fingerprinted main executable')
-            require(info.get('CFBundleShortVersionString')=='2.2.14' and str(info.get('CFBundleVersion'))=='100'
+            require(info.get('CFBundleShortVersionString')=='2.2.15' and str(info.get('CFBundleVersion'))=='100'
                     and info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                     'Compiled app version/orientation drift')
         artifacts[role]={'path':str(path.relative_to(ROOT)),'bundleId':identities[role],
@@ -1889,14 +1889,14 @@ def capture(expected):
                 'Host capture app differs from both exact tested compiled runners')
         require(APP.is_dir(),'Unsigned Debug host app missing')
         info=plistlib.loads((APP/'Info.plist').read_bytes())
-        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.14'
+        require(info.get('CFBundleIdentifier')==BUNDLE_ID and info.get('CFBundleShortVersionString')=='2.2.15'
                 and str(info.get('CFBundleVersion'))=='100','Built app identity/version drift')
         require(info.get('DTPlatformName')=='iphonesimulator'
                 or 'iPhoneSimulator' in info.get('CFBundleSupportedPlatforms',[]),'App is not the simulator target')
         require(info.get('UISupportedInterfaceOrientations')==['UIInterfaceOrientationPortrait'],
                 'Host review must retain the actual phone portrait-only app declaration')
         require(not (APP/'_CodeSignature').exists(),'Signed app appeared in unsigned host review')
-        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.14','buildVersion':'100',
+        receipt['builtApp']={'bundleId':BUNDLE_ID,'marketingVersion':'2.2.15','buildVersion':'100',
                              'platform':'iphonesimulator','infoPlistSha256':sha(APP/'Info.plist'),
                              'developerSigningIdentityUsed':False}
         for key,device in records.items():
