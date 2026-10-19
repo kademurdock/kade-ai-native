@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import SwiftUI
 import UIKit
 import WebKit
@@ -1026,4 +1025,3 @@ struct ArcadeGameSettingsView: View {
         }
     }
 }
-#endif

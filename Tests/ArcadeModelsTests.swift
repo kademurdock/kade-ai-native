@@ -1,7 +1,7 @@
 import Foundation
 
-// The Arcade's pure models (Sources/ArcadeModels.swift), compiled with
-// -D KADE_ARCADE by run-arcade-tests.sh. No simulator, no WebKit, no network.
+// The Arcade's pure models (Sources/ArcadeModels.swift), compiled by
+// run-arcade-tests.sh. No simulator, no WebKit, no network.
 
 @main enum ArcadeModelsTests {
     static var checks = 0

@@ -192,7 +192,7 @@ struct HelpPlace: Identifiable {
         return false
     }
 
-    private static let listed: [HelpPlace] = [
+    static let all: [HelpPlace] = [
         HelpPlace(thing: "Your conversations", whereItIs: "Talk tab, under Call your Spotter", route: .conversations),
         HelpPlace(thing: "Your books, tapes and radio", whereItIs: "Library tab", route: .readingRoom),
         HelpPlace(thing: "Your family history", whereItIs: "Library tab, Family history, after Collections", route: .library(.family(.home))),
@@ -200,6 +200,7 @@ struct HelpPlace: Identifiable {
         HelpPlace(thing: "Making a described video", whereItIs: "Create tab, Described video", route: .describedVideo(DescribedVideoStart())),
         HelpPlace(thing: "Things you've made", whereItIs: "Create tab, My Creations", route: .myCreations),
         HelpPlace(thing: "Games", whereItIs: "Play tab, The Parlor", route: .parlor),
+        HelpPlace(thing: "Classic console games, played by ear", whereItIs: "Play tab, Arcade", route: .arcade),
         HelpPlace(thing: "Family voice rooms", whereItIs: "Play tab, Kade's Clubhouse", route: .lounge),
         HelpPlace(thing: "Meeting new characters", whereItIs: "Play tab, Marketplace", route: .marketplace),
         HelpPlace(thing: "Reminders", whereItIs: "More tab, Alerts", route: .alerts),
@@ -207,22 +208,6 @@ struct HelpPlace: Identifiable {
         HelpPlace(thing: "Ringtone, voice speed, your main character, app icon", whereItIs: "More tab, Settings", route: .settings),
         HelpPlace(thing: "Anything else", whereItIs: "More tab, Search everything", route: .search),
     ]
-
-    #if KADE_ARCADE
-    /// Oct 18 2026: the Arcade (internal TestFlight builds only), right after Games.
-    static let all: [HelpPlace] = {
-        var places = HelpPlace.listed
-        let arcade = HelpPlace(thing: "Classic console games, played by ear", whereItIs: "Play tab, Arcade", route: .arcade)
-        if let games = places.firstIndex(where: { $0.thing == "Games" }) {
-            places.insert(arcade, at: games + 1)
-        } else {
-            places.append(arcade)
-        }
-        return places
-    }()
-    #else
-    static let all: [HelpPlace] = listed
-    #endif
 }
 
 struct HelpEntry: Identifiable {

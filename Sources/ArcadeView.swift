@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import SwiftUI
 import UIKit
 
@@ -278,4 +277,3 @@ struct ArcadeView: View {
         playing = launch
     }
 }
-#endif

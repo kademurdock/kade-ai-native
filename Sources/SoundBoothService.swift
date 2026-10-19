@@ -631,21 +631,14 @@ struct KadeFamilyFeatures: Decodable, Equatable {
     let jukeboxLinks: Bool?
     /// Kade's shared Library shelves.
     let familyLibrary: Bool?
-    #if KADE_ARCADE
     /// Oct 18 2026: the Arcade's family shelf (GET /api/kade/arcade/config).
     /// Only true opens it; false, absent and the App Review seat's null all lock it.
     let arcadeFamily: Bool?
-    #endif
 
     /// The reason beside every greyed-out pack control (family/pack.ts FAMILY_PACK_NOTE).
     static let note = "Part of the Family feature pack"
 
-    private enum CodingKeys: String, CodingKey {
-        case mediaLinks, describerLinks, jukeboxLinks, familyLibrary
-        #if KADE_ARCADE
-        case arcadeFamily
-        #endif
-    }
+    private enum CodingKeys: String, CodingKey { case mediaLinks, describerLinks, jukeboxLinks, familyLibrary, arcadeFamily }
 
     init(from decoder: Decoder) throws {
         let c = try? decoder.container(keyedBy: CodingKeys.self)
@@ -657,9 +650,7 @@ struct KadeFamilyFeatures: Decodable, Equatable {
         describerLinks = flag(.describerLinks)
         jukeboxLinks = flag(.jukeboxLinks)
         familyLibrary = flag(.familyLibrary)
-        #if KADE_ARCADE
         arcadeFamily = flag(.arcadeFamily)
-        #endif
     }
 }
 

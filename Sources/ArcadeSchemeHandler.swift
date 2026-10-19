@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import Foundation
 import WebKit
 
@@ -113,4 +112,3 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import SwiftUI
 import UIKit
 import QuartzCore
@@ -231,4 +230,3 @@ struct ArcadeTouchPadSurface: UIViewRepresentable {
 
     func updateUIView(_ pad: ArcadeTouchPadView, context: Context) {}
 }
-#endif

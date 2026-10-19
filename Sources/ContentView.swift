@@ -502,12 +502,10 @@ struct ContentView: View {
         case .parlor, .lounge, .gameRoom, .debateRoom, .matchmaker, .marketplace:
             tab = .play
             playPath = [destination]
-        #if KADE_ARCADE
         case .arcade:
-            // Oct 18 2026: internal TestFlight builds only (KADE_ARCADE).
+            // Oct 18 2026: the Arcade, on the Play tab in every build.
             tab = .play
             playPath = [destination]
-        #endif
         case .feedbackReports:
             // A real parent route makes Back reliable, including another
             // notification tapped while already in Admin.
@@ -635,12 +633,10 @@ struct ContentView: View {
             // Oct 16 2026: admin only; the server refuses anyone else and
             // the screen says so in words.
             ApprovalsView(apiClient: apiClient)
-        #if KADE_ARCADE
         case .arcade:
             // Oct 18 2026: the Arcade list. Each game opens in ONE
             // fullScreenCover inside it, never a new navigationDestination.
             ArcadeView(apiClient: apiClient)
-        #endif
         }
     }
 
@@ -1291,11 +1287,9 @@ struct ContentView: View {
             FamilyHistoryAccess.shared.reset()
             FamilyHistoryService.shared.reset()
             FamilyImageLoader.shared.wipe()
-            #if KADE_ARCADE
             // Oct 18 2026: the Arcade's shelf and any download it started
             // belong to the account that signed out.
             ArcadeService.signedOut()
-            #endif
             if previous.hasPrefix("signedIn") { FamilyDemo.end() }
             talkPath = []
             libraryPath = []
@@ -1474,12 +1468,11 @@ enum HomeRoute: Identifiable, Hashable {
     case announcements
     /// Oct 16 2026: Forge's requests for Kade's yes. Admin only.
     case approvals
-    #if KADE_ARCADE
-    /// Oct 18 2026: the Arcade, classic games playable by ear. Compiled only
-    /// into internal TestFlight builds (the KADE_ARCADE flag). Deliberately
-    /// NOT the "games" route name, which opens the Game Room leaderboard.
+    /// Oct 18 2026: the Arcade, classic games playable by ear. In every build
+    /// since Oct 19 2026 (her decision), family shelf greyed outside the pack.
+    /// Deliberately NOT the "games" route name, which opens the Game Room
+    /// leaderboard.
     case arcade
-    #endif
 
     var id: String {
         switch self {
@@ -1520,9 +1513,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .accessRequests: return "accessRequests"
         case .announcements: return "announcements"
         case .approvals: return "approvals"
-        #if KADE_ARCADE
         case .arcade: return "arcade"
-        #endif
         }
     }
 }

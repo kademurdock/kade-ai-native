@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import Foundation
 import CryptoKit
 import UIKit
@@ -744,4 +743,3 @@ final class ArcadeRangeDownload: NSObject, URLSessionDataDelegate, @unchecked Se
         finish(written == expected ? nil : ArcadeServiceError(message: "The download ended early. Try again; it picks up where it stopped."))
     }
 }
-#endif

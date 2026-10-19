@@ -52,7 +52,7 @@ workflows:
           bash ./run-library-browse-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
-          # Oct 18 2026: the Arcade's pure models (compiled with -D KADE_ARCADE).
+          # Oct 18 2026: the Arcade's pure models.
           bash ./run-arcade-tests.sh
           # Sep 29 2026: Family history models, demo family and drawing maths.
           bash ./run-family-tests.sh
@@ -287,7 +287,7 @@ workflows:
           bash ./run-library-browse-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
-          # Oct 18 2026: the Arcade's pure models (compiled with -D KADE_ARCADE).
+          # Oct 18 2026: the Arcade's pure models.
           bash ./run-arcade-tests.sh
           bash ./run-family-tests.sh
           bash ./run-clubhouse-tests.sh
@@ -656,7 +656,7 @@ workflows:
           bash ./run-library-browse-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
-          # Oct 18 2026: the Arcade's pure models (compiled with -D KADE_ARCADE).
+          # Oct 18 2026: the Arcade's pure models.
           bash ./run-arcade-tests.sh
           bash ./run-family-tests.sh
           bash ./run-clubhouse-tests.sh
@@ -777,7 +777,7 @@ workflows:
           bash ./run-library-browse-tests.sh
           python3 VoiceSelectionTests/run.py
           bash ./run-world-tests.sh
-          # Oct 18 2026: the Arcade's pure models (compiled with -D KADE_ARCADE).
+          # Oct 18 2026: the Arcade's pure models.
           bash ./run-arcade-tests.sh
           bash ./run-family-tests.sh
           bash ./run-clubhouse-tests.sh

@@ -362,7 +362,7 @@ struct KadeSearchPlace: Identifiable {
         return false
     }
 
-    private static let listed: [KadeSearchPlace] = [
+    static let all: [KadeSearchPlace] = [
         KadeSearchPlace(title: "Your conversations", caption: "Talk tab", symbol: "bubble.left.and.bubble.right", tint: .blue, route: .conversations, keywords: "chats chat messages history talk list"),
         KadeSearchPlace(title: "Describe", caption: "Photos, videos and papers read to you", symbol: "plus.viewfinder", tint: .teal, route: .describe, keywords: "camera picture photo image document letter mail menu read describe see video"),
         KadeSearchPlace(title: "Transcribe", caption: "Turn your voice into text", symbol: "waveform", tint: .purple, route: .transcribe, keywords: "dictate dictation voice memo record recording text speech notes"),
@@ -376,6 +376,7 @@ struct KadeSearchPlace: Identifiable {
         KadeSearchPlace(title: "Agent Builder", caption: "Make your own character", symbol: "person.crop.circle.badge.plus", tint: .cyan, route: .agentBuilder, keywords: "build make create character agent persona new edit"),
         KadeSearchPlace(title: "The Prompt Library", caption: "Saved things to say", symbol: "text.badge.star", tint: .green, route: .prompts, keywords: "prompts prompt saved templates starters"),
         KadeSearchPlace(title: "The Parlor", caption: "Card and table games", symbol: "suit.club.fill", tint: .mint, route: .parlor, keywords: "games game cards blackjack uno trivia hangman play table poker"),
+        KadeSearchPlace(title: "The Arcade", caption: "Classic games, playable by ear", symbol: "gamecontroller.fill", tint: .purple, route: .arcade, keywords: "arcade retro classic old console video games game nintendo n64 emulator controller play by ear"),
         KadeSearchPlace(title: "Kade's Clubhouse", caption: "Live family voice rooms", symbol: "hifispeaker.2.fill", tint: .pink, route: .lounge, keywords: "clubhouse lounge voice rooms talk live family jukebox music hotel party"),
         KadeSearchPlace(title: "Debate Room", caption: "Characters talk it out together", symbol: "person.3.fill", tint: .indigo, route: .debateRoom, keywords: "debate argue discussion hall conversation hall group"),
         KadeSearchPlace(title: "Matchmaker", caption: "Find a character you'd like", symbol: "person.2.fill", tint: .pink, route: .matchmaker, keywords: "match matchmaker quiz find character who recommend"),
@@ -390,20 +391,4 @@ struct KadeSearchPlace: Identifiable {
         KadeSearchPlace(title: "Morning brief", caption: "Your daily rundown", symbol: "sun.max", tint: .yellow, route: .brief, keywords: "brief morning daily news rundown"),
         KadeSearchPlace(title: "Help", caption: "How everything works", symbol: "questionmark.circle", tint: .mint, route: .help, keywords: "help how guide instructions where is lost gestures"),
     ]
-
-    #if KADE_ARCADE
-    /// Oct 18 2026: the Arcade (internal TestFlight builds only), right after The Parlor.
-    static let all: [KadeSearchPlace] = {
-        var places = KadeSearchPlace.listed
-        let arcade = KadeSearchPlace(title: "The Arcade", caption: "Classic games, playable by ear", symbol: "gamecontroller.fill", tint: .purple, route: .arcade, keywords: "arcade retro classic old console video games game nintendo n64 emulator controller play by ear")
-        if let parlor = places.firstIndex(where: { $0.title == "The Parlor" }) {
-            places.insert(arcade, at: parlor + 1)
-        } else {
-            places.append(arcade)
-        }
-        return places
-    }()
-    #else
-    static let all: [KadeSearchPlace] = listed
-    #endif
 }

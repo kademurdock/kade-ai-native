@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import Foundation
 import GameController
 
@@ -169,4 +168,3 @@ final class ArcadeInput {
         }
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if KADE_ARCADE
 import Foundation
 import CryptoKit
 
@@ -23,8 +22,11 @@ import CryptoKit
 //     window.revivalKitHost script injected at document start (core/host.js)
 //   - telemetry counters and the "Copy test report" text
 //
-// The whole file compiles only with the KADE_ARCADE flag, so a regular App
-// Store build carries none of it.
+// Oct 19 2026, her decision: the Arcade is part of every build, the public
+// App Store one included, and visible to every account. The family shelf
+// stays visible but greyed outside the Family feature pack. No game, ROM,
+// sample or clip is ever in the app or the repo: games arrive from her
+// server as data, after the player says yes to the download.
 
 // MARK: - Lenient reading
 
@@ -1815,4 +1817,3 @@ struct ArcadeTelemetry {
         return lines.joined(separator: "\n")
     }
 }
-#endif
