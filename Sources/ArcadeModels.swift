@@ -1965,6 +1965,112 @@ enum ArcadeJS {
     }
 }
 
+// MARK: - A start that never finishes
+
+/// Oct 19 2026: build 340 sat at "Starting the emulator" for good. Under
+/// kadearcade:// EmulatorJS asked for a core file the packs lack, took the
+/// 404's text for the core, and stopped inside its own hidden page; the page
+/// only sent window errors, no kit 'error' event came, and nothing was said.
+/// So the app watches every start itself, whatever the kit does:
+///   - a countdown from the page load, started over at the kit's 'started',
+///     that says the game did not start when 'ready' has not come in time.
+///     Away (another app, a call, an interruption) it stops, and it starts
+///     over on her return;
+///   - a page error or a missing EmulatorJS file before 'ready' that means it
+///     can never start is said at once, like the kit's own 'error' {what: 'emulator'}.
+/// One start failure is said per page load, however many signs there are.
+struct ArcadeStartWatch {
+    /// How long a start may take before the app says it did not start.
+    static let limit: TimeInterval = 90
+    static let status = "The game did not start"
+    static let line = "The game did not start. Open Settings and choose Report a problem with this game, or leave and try again."
+    /// The line for the kit's 'error' about a game that never started
+    /// (ArcadeJS.cannotStart), and for the same failure seen by the app.
+    static let couldNotStartLine = "The game could not start. Open Settings and choose Report a problem with this game."
+
+    /// When the countdown runs out; nil while it is not running.
+    private(set) var deadline: Date?
+    /// 'ready' came for this page load.
+    private(set) var ready = false
+    /// A start failure was said for this page load.
+    private(set) var said = false
+    /// She is away: no countdown runs until she is back.
+    private(set) var isAway = false
+
+    /// Still starting, and nothing said about it yet.
+    var starting: Bool { !ready && !said }
+
+    /// A page load (the first, or a restart): everything starts over.
+    mutating func load(now: Date) {
+        ready = false
+        said = false
+        deadline = isAway ? nil : now.addingTimeInterval(Self.limit)
+    }
+
+    /// The kit's 'started': the countdown starts over from here.
+    mutating func started(now: Date) {
+        guard starting, !isAway else { return }
+        deadline = now.addingTimeInterval(Self.limit)
+    }
+
+    mutating func becameReady() {
+        ready = true
+        deadline = nil
+    }
+
+    mutating func away() {
+        isAway = true
+        deadline = nil
+    }
+
+    /// Back in front: a fresh countdown when the game is still starting.
+    mutating func back(now: Date) {
+        isAway = false
+        deadline = starting ? now.addingTimeInterval(Self.limit) : nil
+    }
+
+    /// Whether the countdown has run out.
+    func due(now: Date) -> Bool {
+        guard starting, !isAway, let deadline else { return false }
+        return now >= deadline
+    }
+
+    /// Takes this load's one start failure: true the first time, and the
+    /// countdown stops. Also taken when the page could not load or was
+    /// stopped for good, as those say their own lines.
+    mutating func claim() -> Bool {
+        guard !said else { return false }
+        said = true
+        deadline = nil
+        return true
+    }
+
+    /// A page error before 'ready' that means EmulatorJS will never start: its
+    /// runtime is missing (the core it loaded was not a core), or a file or the
+    /// network failed it. Matched without regard to case.
+    static func isStartError(_ message: String) -> Bool {
+        let text = message.lowercased()
+        return ["ejs_runtime", "error loading", "failed to download", "network error", "could not"]
+            .contains { text.contains($0) }
+    }
+
+    /// A file missing from the packs whose absence stops EmulatorJS: a script
+    /// or a core in its folder (the kit's `emulatorData`, `emulatorjs/` by
+    /// default). Not a translation (a phone in another language asks for its
+    /// own and EmulatorJS goes on in English), a core's report (EmulatorJS
+    /// goes on without it, and a core it then lacks is caught on its own), a
+    /// stylesheet or a source map: the game can start without those.
+    static func isMissingEmulatorFile(_ path: String, emulatorData: String) -> Bool {
+        let folders = [emulatorData, "emulatorjs/"]
+            .map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            .filter { $0.count > 1 }
+        guard let folder = folders.first(where: { path.hasPrefix($0) }) else { return false }
+        let inside = String(path.dropFirst(folder.count)).lowercased()
+        if inside.hasPrefix("localization/") || inside.hasPrefix("cores/reports/") { return false }
+        return inside.hasSuffix(".js") || (inside.hasPrefix("cores/") && !inside.hasSuffix("/"))
+    }
+}
+
 // MARK: - Words
 
 enum ArcadeText {

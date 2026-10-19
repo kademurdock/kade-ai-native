@@ -36,6 +36,11 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Files served, for the how-the-game-ran text.
     private(set) var served = 0
     private(set) var missing: [String] = []
+    /// Oct 19 2026: told every missing path, after its 404 has gone, so the
+    /// game's host can say at once when EmulatorJS cannot start without it.
+    /// The answer stays a 404: a failed load would send EmulatorJS to its
+    /// public CDN for a core, a different build from the kit's.
+    var onMissing: (@MainActor (String) -> Void)?
 
     init(game: [ArcadeMount], kit: [ArcadeMount], overlays: [ArcadeOverlay] = []) {
         self.game = game
@@ -104,6 +109,7 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
         answer(key, token: token, url: url, status: 404,
                headers: ["Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*"],
                body: Data("Not in the downloaded game: \(path)".utf8))
+        onMissing?(path)
     }
 
     /// Answers up to this size are read whole; bigger ones go in pieces.

@@ -21,9 +21,91 @@ import CryptoKit
         try touchFights()
         controllersAndKeys()
         javascriptAndWords()
+        startWatched()
         savesKept()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, and the page errors and missing EmulatorJS files that mean a start failed), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+    }
+
+    // MARK: A start that never finishes
+
+    static func startWatched() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
+
+        var watch = ArcadeStartWatch()
+        check(watch.deadline == nil && !watch.due(now: at(10_000)), "nothing is due before a page loads")
+        watch.load(now: t0)
+        check(watch.starting && !watch.due(now: at(89)) && watch.due(now: at(90)),
+              "from the page load, in case 'started' never comes: 90 seconds")
+        watch.started(now: at(30))
+        check(!watch.due(now: at(119)) && watch.due(now: at(120)), "the kit's 'started' starts the countdown over")
+        watch.away()
+        check(watch.isAway && watch.deadline == nil && !watch.due(now: at(5_000)), "never while she is away")
+        watch.started(now: at(510))
+        check(watch.deadline == nil, "a 'started' while away starts nothing")
+        watch.back(now: at(600))
+        check(!watch.isAway && !watch.due(now: at(689)) && watch.due(now: at(690)), "her return starts the countdown over")
+        check(watch.claim() && !watch.starting && watch.deadline == nil && !watch.due(now: at(1_000)),
+              "the failure is said, and the countdown stops")
+        check(!watch.claim(), "once per load, whatever else says it")
+        watch.back(now: at(1_100))
+        check(watch.deadline == nil, "a start already said gets no new countdown on her return")
+        watch.load(now: at(2_000))
+        check(watch.starting && watch.due(now: at(2_090)) && watch.claim(), "a reload starts over, with a line of its own")
+
+        watch.load(now: at(3_000))
+        watch.becameReady()
+        check(!watch.starting && watch.deadline == nil && !watch.due(now: at(9_000)), "'ready' ends the watch")
+        watch.started(now: at(3_100))
+        watch.away()
+        watch.back(now: at(3_200))
+        check(watch.deadline == nil && !watch.due(now: at(9_000)), "after 'ready', no 'started' or return brings it back")
+        check(watch.claim() && !watch.claim(), "the kit's own 'error' after 'ready' is still said, once")
+
+        var awayAtLoad = ArcadeStartWatch()
+        awayAtLoad.away()
+        awayAtLoad.load(now: t0)
+        check(awayAtLoad.deadline == nil && !awayAtLoad.due(now: at(500)), "a page loaded while she is away waits for her")
+        awayAtLoad.back(now: at(600))
+        check(awayAtLoad.due(now: at(690)) && !awayAtLoad.due(now: at(689)), "and counts from her return")
+
+        check(ArcadeStartWatch.limit == 90, "the countdown is 90 seconds")
+        check(ArcadeStartWatch.status == "The game did not start"
+              && ArcadeStartWatch.line == "The game did not start. Open Settings and choose Report a problem with this game, or leave and try again.",
+              "what the countdown says, and the status it leaves")
+        check(ArcadeStartWatch.couldNotStartLine == "The game could not start. Open Settings and choose Report a problem with this game.",
+              "a start failure seen at once says the kit error's line")
+
+        for message in ["ReferenceError: Can't find variable: EJS_Runtime", "EJS_Runtime is not defined",
+                        "Error loading EmulatorJS runtime", "Failed to download the core", "Network Error",
+                        "Could not start the game", "TypeError: could not read the core", "ejs_runtime"] {
+            check(ArcadeStartWatch.isStartError(message), "a start failure: " + message)
+        }
+        for message in ["", "error", "unhandled rejection", "TypeError: undefined is not an object (evaluating 'a.b')",
+                        "NotAllowedError: The request is not allowed by the user agent", "Script error."] {
+            check(!ArcadeStartWatch.isStartError(message), "not a start failure: " + message)
+        }
+
+        for path in ["emulatorjs/cores/mupen64plus_next-legacy-wasm.data", "emulatorjs/cores/fceumm-wasm.data",
+                     "emulatorjs/loader.js", "emulatorjs/emulator.min.js", "emulatorjs/compression/extract7z.js",
+                     "emulatorjs/src/emulator.js"] {
+            check(ArcadeStartWatch.isMissingEmulatorFile(path, emulatorData: "emulatorjs/"), "EmulatorJS cannot start without " + path)
+        }
+        for path in ["emulatorjs/localization/en-GB.json", "emulatorjs/cores/reports/fceumm.json", "emulatorjs/emulator.min.css",
+                     "emulatorjs/emulator.css", "emulatorjs/emulator.min.js.map", "emulatorjs/cores/", "emulatorjs/",
+                     "games/demo/local/rom.z64", "games/_plain/local/demo.gb", "core/app.js", "(no address)",
+                     "kadearcade://other/emulatorjs/loader.js", "emulator/loader.js"] {
+            check(!ArcadeStartWatch.isMissingEmulatorFile(path, emulatorData: "emulatorjs/"), "the game can start without " + path)
+        }
+        check(ArcadeStartWatch.isMissingEmulatorFile("ejs/cores/demo-wasm.data", emulatorData: "ejs/")
+              && ArcadeStartWatch.isMissingEmulatorFile("ejs/loader.js", emulatorData: "ejs")
+              && ArcadeStartWatch.isMissingEmulatorFile("emulatorjs/loader.js", emulatorData: "ejs/")
+              && !ArcadeStartWatch.isMissingEmulatorFile("ejs/localization/fr-FR.json", emulatorData: "ejs/"),
+              "the kit's own emulatorData folder counts, with or without its slash, and so does emulatorjs/")
+        check(!ArcadeStartWatch.isMissingEmulatorFile("loader.js", emulatorData: "")
+              && ArcadeStartWatch.isMissingEmulatorFile("emulatorjs/loader.js", emulatorData: ""),
+              "an empty folder never makes every missing file count")
     }
 
     // MARK: Saves

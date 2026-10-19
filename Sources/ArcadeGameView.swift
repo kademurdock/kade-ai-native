@@ -245,6 +245,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private var suspendToken = 0
     /// Leaving waits (briefly) for the game's save.
     private var leaveWaiter: (() -> Void)?
+    /// Oct 19 2026: every start is watched, so a stall is never silent
+    /// (ArcadeStartWatch; build 340 sat at "Starting the emulator" for good).
+    private var startWatch = ArcadeStartWatch()
+    /// The current page load, so a failure of an older one is told apart.
+    private var pageNavigation: WKNavigation?
     /// Oct 19 2026: the game's Settings sheet is up (and with it Report a
     /// problem's text field), so a keyboard's presses are typing, not play:
     /// no key goes down in the game and Escape does not ask to leave.
@@ -403,6 +408,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         let handler = ArcadeSchemeHandler(game: launch.game, kit: launch.kit, overlays: launch.overlays)
+        handler.onMissing = { [weak self] path in self?.fileMissing(path) }
         config.setURLSchemeHandler(handler, forURLScheme: ArcadeRoute.scheme)
         config.userContentController.add(ArcadeScriptRelay(self), name: "arcade")
         // The document-start script is written by loadPage, fresh for every load.
@@ -436,7 +442,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         content.addUserScript(WKUserScript(source: hostScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true))
         pad?.resetFirstTouch()
         status = "Loading the game"
-        web.load(URLRequest(url: url))
+        // A fresh start countdown for every load, from the load itself in
+        // case the kit's 'started' never comes.
+        startWatch.load(now: Date())
+        scheduleStartCheck()
+        pageNavigation = web.load(URLRequest(url: url))
     }
 
     /// window.revivalKitHost for the next page start (core/host.js).
@@ -559,7 +569,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         case "event":
             event((message["name"] as? String) ?? "", detail: message["detail"] as? [String: Any])
         case "pageError":
-            telemetry.note(error: "page: " + ((message["message"] as? String) ?? "") + " at " + ((message["where"] as? String) ?? ""))
+            let text = (message["message"] as? String) ?? ""
+            telemetry.note(error: "page: " + text + " at " + ((message["where"] as? String) ?? ""))
+            // Before 'ready', an error that means EmulatorJS can never start
+            // is said at once, as the kit's own 'error' would be.
+            if startWatch.starting && ArcadeStartWatch.isStartError(text) { couldNotStart("emulator") }
         default:
             break
         }
@@ -570,10 +584,13 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         switch name {
         case "started":
             status = "Starting the emulator"
+            startWatch.started(now: Date())
+            scheduleStartCheck()
             wakeAudio(force: true)
         case "ready":
             status = "Playing"
             stopped = nil
+            startWatch.becameReady()
             // Whatever changed while the page was starting reaches it now:
             // the speech choice, the input in use, and its sound.
             evaluate(ArcadeJS.setMode(voiceOverReadsAll ? "native" : defaultSpeechMode))
@@ -588,13 +605,66 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             if let next = detail?["mode"] as? String { setMode(next) }
         case "error":
             let what = (detail?["what"] as? String) ?? "start"
-            status = "The game hit a problem (\(what))"
             if ArcadeJS.cannotStart(what) {
-                speak("The game could not start. Open Settings and choose Report a problem with this game.", urgent: true, flush: true)
+                couldNotStart(what)
+            } else {
+                status = "The game hit a problem (\(what))"
             }
         default:
             break
         }
+    }
+
+    /// The kit's 'error' about a game that never started, or the same
+    /// failure seen by the app (a page error or a missing EmulatorJS file
+    /// before 'ready'): the status says so, and the line is said once per load.
+    private func couldNotStart(_ what: String) {
+        status = "The game hit a problem (\(what))"
+        if startWatch.claim() {
+            speak(ArcadeStartWatch.couldNotStartLine, urgent: true, flush: true)
+        }
+    }
+
+    /// A file the page asked for is not in the packs: it got a 404 (never a
+    /// failed load, which would send EmulatorJS to its public CDN for a
+    /// different build) and the how-it-ran text lists it. Before 'ready', a
+    /// missing EmulatorJS script or core means it can never start: said at once.
+    private func fileMissing(_ path: String) {
+        guard !ended, startWatch.starting,
+              ArcadeStartWatch.isMissingEmulatorFile(path, emulatorData: launch.record.emulatorData) else { return }
+        telemetry.note(error: "start: " + path + " is not in the packs")
+        couldNotStart("emulator")
+    }
+
+    /// Wakes when the start countdown would run out. A countdown started over
+    /// meanwhile has a later deadline, so an older wake finds nothing due.
+    private func scheduleStartCheck() {
+        guard let deadline = startWatch.deadline else { return }
+        let wait = max(0, deadline.timeIntervalSinceNow) + 0.05
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            self?.checkStart()
+        }
+    }
+
+    /// The countdown ran out with no 'ready': the game did not start. Never
+    /// while she is away or the page waits to restart (her return starts the
+    /// countdown over), and never after the page stopped for good.
+    private func checkStart() {
+        guard !ended, startWatch.due(now: Date()) else { return }
+        if suspended || needsReload || stopped != nil { return }
+        guard UIApplication.shared.applicationState == .active else {
+            // Not in front, yet not counted as away: look again shortly.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                self?.checkStart()
+            }
+            return
+        }
+        guard startWatch.claim() else { return }
+        telemetry.note(error: "start: no ready after \(Int(ArcadeStartWatch.limit)) s (status: \(status))")
+        status = ArcadeStartWatch.status
+        speak(ArcadeStartWatch.line, urgent: true, flush: true)
     }
 
     private func setMode(_ next: String) {
@@ -689,6 +759,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private func suspendGame() {
         guard !suspended else { return }
         suspended = true
+        startWatch.away()
         suspendToken += 1
         let token = suspendToken
         pad?.releaseAll()
@@ -712,6 +783,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         suspended = false
         suspendToken += 1
         audio.activate()
+        // A start still under way gets a fresh countdown (a reload below starts its own).
+        startWatch.back(now: Date())
         if needsReload {
             // The page's process ended while she was away: start it now.
             needsReload = false
@@ -721,6 +794,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             loadPage()
             return
         }
+        scheduleStartCheck()
         evaluate(ArcadeJS.resume)
         if pausedForAway {
             pausedForAway = false
@@ -838,18 +912,21 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        loadFailed(error)
+        loadFailed(error, navigation: navigation)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        loadFailed(error)
+        loadFailed(error, navigation: navigation)
     }
 
-    private func loadFailed(_ error: Error) {
+    private func loadFailed(_ error: Error, navigation: WKNavigation?) {
         guard !ended else { return }
         telemetry.note(error: "load: " + error.localizedDescription)
         status = "The game page did not load"
         speak("The game page did not load. Leave the game and try again, or delete the download and get it again.", urgent: true, flush: true)
+        // This load's failure has said its own line: the start countdown has
+        // nothing to add. An older load's failure leaves the current one's alone.
+        if navigation == nil || navigation === pageNavigation { _ = startWatch.claim() }
     }
 
     /// iOS ended the page's process (usually memory). Restart it and say so,
@@ -863,6 +940,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         // background does not count toward giving up.
         if suspended || UIApplication.shared.applicationState != .active {
             suspended = true
+            startWatch.away()
             needsReload = true
             setMode("menu")
             status = "Waiting to restart"
@@ -874,6 +952,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             let line = "The game stopped three times in two minutes, so it was not restarted. Open Settings and choose Report a problem with this game, then leave and try again."
             stopped = line
             status = "Stopped"
+            // Said here; no start countdown speaks over it later.
+            _ = startWatch.claim()
             speak(line, urgent: true, flush: true)
             return
         }
