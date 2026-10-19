@@ -224,6 +224,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private var speaker: AVSpeechSynthesizer?
     private var touchTable = ArcadeTouchTable.standard
     private var gamepadMap = ArcadeGamepadMap.standard
+    /// The plain player's own words for its touch controls (systems.json help.touch).
+    private var playHint: String?
     private var defaultSpeechMode = "clone"
     private var lastSent: [String: String] = [:]
     private var terminations: [Date] = []
@@ -266,8 +268,15 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         readProfile()
     }
 
+    /// A game added from Files with no accessibility pack, in the kit's plain player.
+    var isPlain: Bool { launch.isPlain }
+
     /// The game's own gesture and controller tables, from profile.json in its pack.
     private func readProfile() {
+        if isPlain {
+            readPlainControls()
+            return
+        }
         let path = launch.record.base + "profile.json"
         guard let found = ArcadeMount.locate(path, in: launch.game + launch.kit),
               let data = try? ArcadeBlobReader.read(found.mount.blob, offset: found.file.offset, length: found.file.length),
@@ -282,6 +291,28 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             // older name for the cloned voice into 'clone' (core/speech.js).
             defaultSpeechMode = speech
         }
+    }
+
+    /// Oct 19 2026, the plain player: its controls for this system from the
+    /// kit's games/_plain/systems.json (systems.<id> over the entry it is
+    /// `like`), the ones its spoken help describes: on the left a floating
+    /// control pad and a two-finger tap for Select, on the right A above B,
+    /// held while touched (and the shoulders along the top on the Game Boy
+    /// Advance); a controller's d-pad moves and its Back/View button is
+    /// Select. The fighting game's defaults never apply here. It has no
+    /// cloned voice, so its lines go to VoiceOver (or the phone's speech).
+    private func readPlainControls() {
+        defaultSpeechMode = "native"
+        guard let system = launch.system,
+              let found = ArcadeMount.locate(ArcadePlainControls.systemsPath, in: launch.kit + launch.game),
+              let data = try? ArcadeBlobReader.read(found.mount.blob, offset: found.file.offset, length: found.file.length) else {
+            telemetry.note(error: "the plain player's controls (systems.json) are missing from the kit")
+            return
+        }
+        let tables = ArcadePlainControls.tables(data, system: system.rawValue)
+        if let touch = tables.touch { touchTable = touch }
+        if let gamepad = tables.gamepad { gamepadMap = gamepad }
+        playHint = tables.touchHelp
     }
 
     // MARK: Opening and closing
@@ -426,6 +457,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         self.pad = pad
         pad.hapticsOn = hapticsOn
         pad.setTable(touchTable)
+        pad.setPlayHint(playHint)
         pad.setMode(mode)
         pad.onOutputs = { [weak self] outputs in self?.handle(outputs) }
         // WebKit counts the app's evaluateJavaScript as a user gesture, so the
@@ -930,13 +962,7 @@ struct ArcadeGameView: View {
             leaveControl
             stripButton("Pause", spoken: "Pause", symbol: "pause.fill",
                         hint: "Presses Start, the game's own pause. Magic tap does the same.") { host.pauseGame() }
-            stripButton("Status", spoken: "Status", symbol: "heart.text.square",
-                        hint: "Says your health. The Actions rotor has time, where everyone is, facing and help.") { host.info("health") }
-                .accessibilityValue(host.status)
-                .accessibilityAction(named: "Time") { host.info("time") }
-                .accessibilityAction(named: "Where is everyone") { host.info("where") }
-                .accessibilityAction(named: "Facing") { host.info("facing") }
-                .accessibilityAction(named: "Help") { host.info("help") }
+            statusControl
             stripButton("Repeat", spoken: "Repeat", symbol: "arrow.counterclockwise",
                         hint: "Says the last line again.") { host.info("repeat") }
             stripButton("Settings", spoken: "Settings", symbol: "gearshape",
@@ -948,6 +974,31 @@ struct ArcadeGameView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
         .background(Color(white: 0.12))
+    }
+
+    /// Status: a pack's game says your health, with time, where everyone is,
+    /// facing and help in the Actions rotor. A game with no accessibility pack
+    /// (the plain player) has none of those to read: Status says whether it is
+    /// running and why there is nothing more, and Help says its controls.
+    @ViewBuilder
+    private var statusControl: some View {
+        if host.isPlain {
+            stripButton("Status", spoken: "Status", symbol: "heart.text.square",
+                        hint: "Says whether the game is running. The Actions rotor has help with the controls.") {
+                host.speak(host.status + ". This game has no accessibility pack, so there is no health or position to read.",
+                           urgent: false, flush: true)
+            }
+            .accessibilityValue(host.status)
+            .accessibilityAction(named: "Help") { host.info("help") }
+        } else {
+            stripButton("Status", spoken: "Status", symbol: "heart.text.square",
+                        hint: "Says your health. The Actions rotor has time, where everyone is, facing and help.") { host.info("health") }
+                .accessibilityValue(host.status)
+                .accessibilityAction(named: "Time") { host.info("time") }
+                .accessibilityAction(named: "Where is everyone") { host.info("where") }
+                .accessibilityAction(named: "Facing") { host.info("facing") }
+                .accessibilityAction(named: "Help") { host.info("help") }
+        }
     }
 
     @ViewBuilder

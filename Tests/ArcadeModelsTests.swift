@@ -23,7 +23,7 @@ import CryptoKit
         javascriptAndWords()
         savesKept()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the ROM served at its pack path); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: Saves
@@ -653,6 +653,124 @@ extension ArcadeModelsTests {
         try importStore()
         try matchAnswers()
         try overlayServing()
+        plainControls()
+    }
+
+    // MARK: The plain player's controls (games/_plain/systems.json in the kit)
+
+    /// The kit's systems.json shape (Revival kit 20261019-7ae651dc), cut to two systems.
+    static let systemsJSON = """
+    {"retropad":{"B":0,"Y":1,"SELECT":2,"START":3,"DUP":4,"DDOWN":5,"DLEFT":6,"DRIGHT":7,"A":8,"X":9,"L":10,"R":11},
+     "page":{"defaults":{"sight":"none","speechMode":"reader"}},
+     "systems":{
+      "nes":{"name":"NES","core":"fceumm","extensions":[".nes"],"rom":"rom.nes","pad":"retropad","stick":"dpad",
+        "gamepad":{"fight":[[1,"A"],[3,"A"],[0,"B"],[2,"B"],[8,"SELECT"],[12,"DUP"],[13,"DDOWN"],[14,"DLEFT"],[15,"DRIGHT"]],"always":[[9,"START"]]},
+        "touch":{"fight":{
+          "zones":[{"name":"a","x":[0.5,1],"y":[0,0.5]},{"name":"b","x":[0.5,1],"y":[0.5,1]}],
+          "anywhere":{"tap3":{"pulse":{"buttons":["START"]}}},
+          "left":{"stick1":{"radiusPx":50},"tap2":{"pulse":{"buttons":["SELECT"]}},"hold2":{"info":"help","ms":1500}},
+          "a":{"press1":{"buttons":["A"]}},
+          "b":{"press1":{"buttons":["B"]}}}},
+        "help":{"touch":["The left half of the screen is the control pad.","The upper right is A and the lower right is B."]}},
+      "gb":{"name":"Game Boy","core":"gambatte","extensions":[".gb"],"rom":"rom.gb","pad":"retropad","stick":"dpad","like":"nes"},
+      "gba":{"name":"Game Boy Advance","core":"mgba","extensions":[".gba"],"rom":"rom.gba","pad":"retropad","stick":"dpad",
+        "gamepad":{"fight":[[1,"A"],[0,"B"],[4,"L"],[5,"R"],[8,"SELECT"],[12,"DUP"]],"always":[[9,"START"]]},
+        "touch":{"fight":{
+          "zones":[{"name":"l","x":[0,0.5],"y":[0,0.15]},{"name":"r","x":[0.5,1],"y":[0,0.15]},
+                   {"name":"a","x":[0.5,1],"y":[0.15,0.575]},{"name":"b","x":[0.5,1],"y":[0.575,1]}],
+          "anywhere":{"tap3":{"pulse":{"buttons":["START"]}}},
+          "left":{"stick1":{"radiusPx":50},"tap2":{"pulse":{"buttons":["SELECT"]}}},
+          "l":{"press1":{"buttons":["L"]}},"r":{"press1":{"buttons":["R"]}},
+          "a":{"press1":{"buttons":["A"]}},"b":{"press1":{"buttons":["B"]}}}}}}}
+    """
+
+    static func plainControls() {
+        let data = Data(systemsJSON.utf8)
+        check(ArcadePlainControls.systemsPath == "games/_plain/systems.json", "the kit's systems file")
+        check(ArcadePlainControls.entry(data, system: "gb")?["core"] as? String == "gambatte"
+              && ArcadePlainControls.entry(data, system: "gb")?["touch"] != nil, "Game Boy keeps its own core and takes the NES controls")
+        check(ArcadePlainControls.entry(data, system: "snes") == nil, "no entry, no tables")
+        let gb = ArcadePlainControls.tables(data, system: "gb")
+        guard let touch = gb.touch, let gamepad = gb.gamepad else {
+            check(false, "a Game Boy game gets touch and controller tables")
+            return
+        }
+        check(gb.touchHelp == "The left half of the screen is the control pad. The upper right is A and the lower right is B.",
+              "the pad says the kit's own touch help")
+        check(touch.zones.map { $0.name } == ["a", "b"] && touch.named["a"]?.presses[1] == ArcadePadState(buttons: ["A"]),
+              "the right half is two named zones, each a held button")
+
+        // Touch, in play ('fight', the plain world's mode the whole time): 400 x 800 points.
+        var select = ArcadeTouchRecognizer(table: touch)
+        select.mode = "fight"
+        _ = select.start(id: 1, x: 60, y: 400, width: 400, height: 800, now: 0)
+        _ = select.start(id: 2, x: 120, y: 400, width: 400, height: 800, now: 10)
+        _ = select.end(id: 1, now: 60)
+        check(select.end(id: 2, now: 70) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["SELECT"]))],
+              "a two-finger tap on the left is Select")
+        var a = ArcadeTouchRecognizer(table: touch)
+        a.mode = "fight"
+        check(a.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0)
+              == [.pad(source: "touch-press-a", state: ArcadePadState(buttons: ["A"]))], "the upper right presses A as the finger lands")
+        check(a.advance(to: 2000).isEmpty && a.move(id: 1, x: 330, y: 160, now: 2100).isEmpty, "and holds it, still or moving")
+        check(a.end(id: 1, now: 2200) == [.pad(source: "touch-press-a", state: nil)], "lifting lets A go")
+        var b = ArcadeTouchRecognizer(table: touch)
+        b.mode = "fight"
+        check(b.start(id: 1, x: 300, y: 700, width: 400, height: 800, now: 0)
+              == [.pad(source: "touch-press-b", state: ArcadePadState(buttons: ["B"]))], "the lower right presses B")
+        // Walking on the left while holding B on the right.
+        check(b.start(id: 2, x: 60, y: 400, width: 400, height: 800, now: 100).isEmpty, "a left thumb landing does nothing yet")
+        check(b.move(id: 2, x: 60, y: 375, now: 120) == [.pad(source: "touch-stick-left", state: ArcadePadState(sy: -0.5)), .haptic(.direction)],
+              "the left thumb is the control pad while B is held")
+        check(b.end(id: 2, now: 300) == [.pad(source: "touch-stick-left", state: nil)], "lifting it lets only the pad go")
+        check(b.end(id: 1, now: 400) == [.pad(source: "touch-press-b", state: nil)] && b.isIdle, "then B")
+        // Three fingers across the zones: Start, the buttons pressed on the way only while they were down.
+        var start = ArcadeTouchRecognizer(table: touch)
+        start.mode = "fight"
+        _ = start.start(id: 1, x: 60, y: 400, width: 400, height: 800, now: 0)
+        _ = start.start(id: 2, x: 300, y: 100, width: 400, height: 800, now: 5)
+        _ = start.start(id: 3, x: 300, y: 700, width: 400, height: 800, now: 10)
+        _ = start.end(id: 1, now: 60)
+        check(start.end(id: 2, now: 65) == [.pad(source: "touch-press-a", state: nil)], "A goes as its finger lifts")
+        check(start.end(id: 3, now: 70) == [.pad(source: "touch-press-b", state: nil), .pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"]))],
+              "and a quick three-finger tap across the zones is Start")
+        var menu = ArcadeTouchRecognizer(table: touch)
+        check(menu.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0).isEmpty, "outside play (paused) nothing is pressed")
+        check(menu.releaseAll().isEmpty, "and nothing is held")
+        var released = ArcadeTouchRecognizer(table: touch)
+        released.mode = "fight"
+        _ = released.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0)
+        check(released.releaseAll() == [.pad(source: "touch-press-a", state: nil)], "release all lets a held button go")
+        check(touch.zone(x: 300, y: 100, width: 400, height: 0) == .right && touch.zone(x: 100, y: 100, width: 400, height: 800) == .left,
+              "with no height, or outside every zone, the halves")
+
+        // The Game Boy Advance's shoulders along the top.
+        let gba = ArcadePlainControls.tables(data, system: "gba")
+        if let gbaTouch = gba.touch {
+            var shoulder = ArcadeTouchRecognizer(table: gbaTouch)
+            shoulder.mode = "fight"
+            check(shoulder.start(id: 1, x: 100, y: 40, width: 400, height: 800, now: 0)
+                  == [.pad(source: "touch-press-l", state: ArcadePadState(buttons: ["L"]))], "the top left is the left shoulder")
+            check(shoulder.start(id: 2, x: 300, y: 300, width: 400, height: 800, now: 10)
+                  == [.pad(source: "touch-press-a", state: ArcadePadState(buttons: ["A"]))], "below the top on the right, A")
+        } else {
+            check(false, "a Game Boy Advance game gets its touch table")
+        }
+
+        // A controller: the d-pad moves, Back/View is Select, A and B where the help says.
+        var mapper = ArcadeGamepadMapper(map: gamepad)
+        var pad = ArcadeGamepadSnapshot()
+        pad.pressed[12] = true
+        let up = mapper.apply(pad, mode: "fight")
+        check(up.state.buttons == ["DUP"] && up.info.isEmpty, "the d-pad moves (no information keys)")
+        var buttons = ArcadeGamepadSnapshot()
+        buttons.pressed[1] = true
+        buttons.pressed[0] = true
+        buttons.pressed[8] = true
+        check(mapper.apply(buttons, mode: "fight").state.buttons == ["A", "B", "SELECT"], "the right button is A, the bottom B, Back is Select")
+        var menuStart = ArcadeGamepadSnapshot()
+        menuStart.pressed[9] = true
+        check(mapper.apply(menuStart, mode: "pause").state.buttons == ["START"], "Start works while paused")
     }
 
     static func sha1Hex(_ bytes: [UInt8]) -> String {
@@ -962,9 +1080,27 @@ extension ArcadeModelsTests {
         record.accessPack = ArcadeImportPack(kind: "game", id: "demo", version: "20261019-abcdef12-access",
                                              sha256: String(repeating: "a", count: 64), access: "public")
         check(ArcadeImportStatus.of(record, packOnPhone: true, familyOpen: false) == .pack, "a public pack on the phone")
-        check(ArcadeImportText.rowLabel(title: "Demo", status: .pack) == "Accessibility pack. Demo"
+        // A newer pack, found by a later check: offered as an update.
+        record.match = ArcadeMatchSummary(found: true, gameId: "demo", title: "Demo", version: "20261020-00000000-access",
+                                          size: 5_000_000, access: "public", locked: false, note: nil)
+        check(ArcadeImportStatus.of(record, packOnPhone: true, familyOpen: false) == .packUpdate(size: 5_000_000)
+              && ArcadeImportStatus.packUpdate(size: nil).offersPackDownload && ArcadeImportStatus.packUpdate(size: nil).isPackUpdate,
+              "a newer pack on the server is an update to download")
+        record.match?.access = "family"
+        check(ArcadeImportStatus.of(record, packOnPhone: true, familyOpen: false) == .pack,
+              "a newer family pack is not offered outside the pack")
+        record.match = ArcadeMatchSummary(found: true, gameId: "demo", title: "Demo", version: "20261019-abcdef12-access",
+                                          size: 4_000_000, access: "public", locked: false, note: nil)
+        check(ArcadeImportStatus.of(record, packOnPhone: true, familyOpen: false) == .pack, "the same version is no update")
+        check(ArcadeImportText.rowLabel(title: "Demo", status: .pack) == "Accessibility pack. Play Demo"
               && ArcadeImportText.rowLabel(title: "Demo", status: .locked(ArcadeImportText.familyPack))
-              == "The accessibility pack for this game is on the family shelf. Demo", "the status is said before the title")
+              == "The accessibility pack for this game is on the family shelf. Play Demo",
+              "the status is said before Play and the title")
+        check(ArcadeImportStatus.cannotRun(ArcadeImportText.cannotRun(.gb)).words == "The player can't run Game Boy games yet"
+              && !ArcadeImportStatus.cannotRun("x").offersPackDownload, "a player without the core says so first")
+        check(ArcadeImportText.about.contains("fingerprint") && ArcadeImportText.about.contains("never uploaded")
+              && ArcadeShelf.about.contains("My games"), "the screen says only a fingerprint is checked, and where to add games")
+        check(ArcadeImportProblem.unreadable.spoken.contains("Download Now"), "an iCloud file: how to download it in Files")
 
         // Where it plays, and its saves and reports.
         check(ArcadeImportPlay.plainQuery(record) == "system=gb&rom=local/\(record.localId).gb"
@@ -1019,7 +1155,78 @@ extension ArcadeModelsTests {
               && alias?.pack?.signPath == "/api/kade/arcade/games/demo/20261019-abcdef12-access/pack",
               "an inline file table (unsafe rows dropped), the romPath and the sign path are kept")
         let bad = try decoder.decode(ArcadeMatchAnswer.self, from: Data(#"{"match":{"id":"../x","version":"1"}}"#.utf8))
-        check(bad.answered && bad.match == nil, "a match with an unsafe id is no match")
+        check(bad.answered && bad.match == nil && bad.unreadable, "a match with an unsafe id is not read, and is not 'no pack' either")
+        check(!none.unreadable, "null is an answer: no pack")
+
+        // The fork's exact unlocked answer (router.ts GET /match): no file table, a manifestPath.
+        let server = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"demo","title":"Demo","console":"N64","access":"family","version":"20261019-abcdef12-access","size":4000000,"sha256":"\(sha)","locked":false,"manifestPath":"/api/kade/arcade/games/demo/manifest?version=20261019-abcdef12-access","signPath":"/api/kade/arcade/games/demo/20261019-abcdef12-access/pack"}}
+        """.utf8))
+        let served = server.match
+        check(served?.manifestPath == "/api/kade/arcade/games/demo/manifest?version=20261019-abcdef12-access"
+              && served?.files == nil && served?.pack?.index == nil && served?.access == .family,
+              "the server's match names its manifest and carries no files")
+        let asked = served?.manifestPath.flatMap { ArcadeAccessPlan.manifestRequest($0, gameId: "demo") }
+        check(asked?.path == "api/kade/arcade/games/demo/manifest" && asked?.version == "20261019-abcdef12-access",
+              "the manifest is asked for at its own path with its version")
+        check(ArcadeAccessPlan.manifestRequest("/api/kade/arcade/games/other/manifest?version=v1", gameId: "demo") == nil
+              && ArcadeAccessPlan.manifestRequest("https://elsewhere.example/api/kade/arcade/games/demo/manifest?version=v1", gameId: "demo") == nil
+              && ArcadeAccessPlan.manifestRequest("/api/kade/arcade/games/demo/manifest", gameId: "demo") == nil
+              && ArcadeAccessPlan.manifestRequest("/api/kade/arcade/games/demo/../../x/manifest?version=v1", gameId: "demo") == nil,
+              "no other game, host or path, and never without its version")
+        // The access manifest it names (router.ts /games/:id/manifest?version=<accessVersion>).
+        let kitSha = String(repeating: "d", count: 64)
+        let accessManifest = try decoder.decode(ArcadeManifest.self, from: Data("""
+        {"id":"demo","title":"Demo","console":"N64","access":"family","version":"20261019-abcdef12-access","ready":true,
+         "packs":[{"kind":"kit","id":"kit","version":"20261019-7ae651dc","size":5482214,"sha256":"\(kitSha)","signPath":"/api/kade/arcade/kit/20261019-7ae651dc/pack",
+                   "files":[{"path":"core/app.js","offset":0,"size":16160,"mime":"text/javascript; charset=utf-8","sha256":"\(kitSha)"},
+                            {"path":"emulatorjs/cores/mupen64plus_next-wasm.data","offset":16160,"size":100,"mime":"application/octet-stream"}]},
+                  {"kind":"game","id":"demo","version":"20261019-abcdef12-access","size":4000000,"sha256":"\(sha)","signPath":"/api/kade/arcade/games/demo/20261019-abcdef12-access/pack",
+                   "files":[{"path":"games/demo/play.html","offset":0,"size":3194,"mime":"text/html; charset=utf-8"}]}],
+         "entry":"games/demo/play.html","emulatorData":"emulatorjs/","romPath":"games/demo/local/rom.z64"}
+        """.utf8))
+        check(accessManifest.romPath == "games/demo/local/rom.z64" && accessManifest.problem == nil, "the access manifest carries the romPath")
+        if let match = served, let plan = ArcadeAccessPlan.make(manifest: accessManifest, match: match) {
+            check(plan.accessPack.key == "demo/20261019-abcdef12-access" && plan.accessPack.index?.map { $0.path } == ["games/demo/play.html"]
+                  && plan.accessPack.sha256 == sha && plan.kit.key == "kit/20261019-7ae651dc" && plan.kit.index?.count == 2,
+                  "the plan takes the pack with its files, and the kit, from the one manifest")
+            check(plan.romPath == "games/demo/local/rom.z64" && plan.entry == "games/demo/play.html" && plan.emulatorData == "emulatorjs/",
+                  "and the page, the emulator folder and where the ROM goes")
+            check(ArcadeImportPlay.hasCore(plan.kit.index?.map { $0.path } ?? [], system: .n64)
+                  && !ArcadeImportPlay.hasCore(plan.kit.index?.map { $0.path } ?? [], system: .gb), "the kit's cores are known by name")
+        } else {
+            check(false, "the server's match and its access manifest make a plan")
+        }
+        let older = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"demo","title":"Demo","access":"family","version":"20261020-00000000-access","size":4000000,"sha256":"\(sha)","locked":false,"manifestPath":"/api/kade/arcade/games/demo/manifest?version=20261020-00000000-access"}}
+        """.utf8))
+        check(older.match.flatMap { ArcadeAccessPlan.make(manifest: accessManifest, match: $0) } == nil,
+              "a manifest without the matched version is no plan")
+
+        // The fork's exact locked answer, outside the Family feature pack.
+        let lockedAnswer = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"family-shelf","title":"Family shelf","console":"N64","access":"family","version":"","size":0,"locked":true,"note":"Part of the Family feature pack"}}
+        """.utf8))
+        check(lockedAnswer.answered && !lockedAnswer.unreadable && lockedAnswer.match?.locked == true
+              && lockedAnswer.match?.id == "family-shelf" && lockedAnswer.match?.version == "" && lockedAnswer.match?.pack == nil,
+              "the server's locked answer is read, with nothing to download")
+        if let locked = lockedAnswer.match {
+            var record = ArcadeImportRecord(localId: String(repeating: "e", count: 40), title: "Demo", system: .n64, fileName: "Demo.z64",
+                                            romFile: "rom.z64", sha1: String(repeating: "f", count: 40), crc32: "00000000", size: 8,
+                                            added: Date(timeIntervalSince1970: 0))
+            var summary = locked.summary
+            summary.familyOpen = false
+            record.match = summary
+            check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: false) == .locked(ArcadeImportText.familyPack),
+                  "an outsider hears that the pack is on the family shelf")
+            check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .unchecked,
+                  "a family account on the same iPhone is not told another account's lock")
+            record.match = ArcadeMatchSummary(found: false, locked: false, familyOpen: false)
+            check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .unchecked
+                  && ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: false) == .plain
+                  && ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: nil) == .plain,
+                  "nor another account's 'no pack' (the daily cap), and offline keeps what was heard")
+        }
 
         let config = try decoder.decode(ArcadeConfig.self, from: Data(#"{"catalog":[],"kit":{"version":"20261018-27899e08","size":2382551}}"#.utf8))
         check(config.kitVersion == "20261018-27899e08", "the config names the kit for added games")

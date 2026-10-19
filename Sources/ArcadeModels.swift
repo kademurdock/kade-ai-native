@@ -318,7 +318,7 @@ enum ArcadeShelf {
     /// who each shelf is for. No game is named.
     /// The player, the pad and the page's file server are part of the app;
     /// no game is.
-    static let about = "Classic games you can play by ear. Family shelf games are private to Kade's family and greyed out for everyone else; public games are free for everyone. Games download from Kade's server when you ask, and no game is built into the app."
+    static let about = "Classic games you can play by ear. Family shelf games are private to Kade's family and greyed out for everyone else; public games are free for everyone. Games download from Kade's server when you ask, or you can add your own game files under My games, and no game is built into the app."
     /// Under the list when the shelf has no public game. A plain fact, no promise.
     static let noPublicGames = "There are no public games on the shelf right now."
     /// Said and shown for a game the catalog marks for grown-ups only (4.7.5).
@@ -485,12 +485,16 @@ struct ArcadeManifest: Decodable, Equatable {
     /// The server's `ready`: false while the game is listed but its packs are
     /// not uploaded yet. A manifest without it counts as ready.
     let ready: Bool
+    /// Oct 19 2026, an accessibility pack's manifest (?version=<accessVersion>):
+    /// where the pack's page expects the person's own ROM.
+    let romPath: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, version, entry, page, base, emulatorData, packs, ready, size, bytes, sha256, indexSha256, signPath, index, files
+        case id, version, entry, page, base, emulatorData, packs, ready, size, bytes, sha256, indexSha256, signPath, index, files, romPath
     }
 
-    init(id: String, version: String, entry: String, base: String, emulatorData: String, packs: [ArcadePackRef], ready: Bool = true) {
+    init(id: String, version: String, entry: String, base: String, emulatorData: String, packs: [ArcadePackRef], ready: Bool = true,
+         romPath: String? = nil) {
         self.id = id
         self.version = version
         self.entry = entry
@@ -498,6 +502,7 @@ struct ArcadeManifest: Decodable, Equatable {
         self.emulatorData = emulatorData
         self.packs = packs
         self.ready = ready
+        self.romPath = romPath
     }
 
     init(from decoder: Decoder) throws {
@@ -520,6 +525,7 @@ struct ArcadeManifest: Decodable, Equatable {
         self.base = base
         emulatorData = data
         ready = c.arcadeFlag(.ready) ?? true
+        romPath = c.arcadeText(.romPath).flatMap { ArcadePaths.normalize($0) }
         let listed: [ArcadeLenient<ArcadePackRef>]? = try? c.decodeIfPresent([ArcadeLenient<ArcadePackRef>].self, forKey: .packs)
         var packs: [ArcadePackRef] = listed?.compactMap { $0.value } ?? []
         if packs.isEmpty, let single = try? ArcadePackRef(from: decoder) {
@@ -1011,9 +1017,11 @@ struct ArcadeFlick: Equatable {
     }
 }
 
-/// One table of gestures: tapN, doubleTapN, holdN, flickN, stick1 (N = fingers).
+/// One table of gestures: tapN, doubleTapN, holdN, flickN, stick1, pressN (N = fingers).
 /// A hold may carry its own time, `{"hold1": {"info": "repeat", "ms": 1000}}`;
-/// without one it takes the table's holdMs.
+/// without one it takes the table's holdMs. A press (Oct 19 2026, the kit's
+/// plain player) is a pad state held from the moment the first finger lands
+/// until the last one lifts: `{"press1": {"buttons": ["A"]}}`.
 struct ArcadeGestureSet: Equatable {
     var taps: [Int: ArcadePadAction] = [:]
     var doubleTaps: [Int: ArcadePadAction] = [:]
@@ -1023,13 +1031,18 @@ struct ArcadeGestureSet: Equatable {
     var flicks: [Int: ArcadeFlick] = [:]
     /// Present when one finger is a floating stick; 0 means the table's stickRadiusPx.
     var stickRadius: Double?
+    /// Pad states held while the fingers stay down, by finger count (core/touch.js
+    /// acts only on press1: it fires as the first finger lands).
+    var presses: [Int: ArcadePadState] = [:]
 
     init() {}
 
     init(json: [String: Any]?) {
         guard let json else { return }
         for (key, value) in json {
-            if key.hasPrefix("doubleTap"), let n = Int(key.dropFirst(9)) {
+            if key.hasPrefix("press"), let n = Int(key.dropFirst(5)), let row = value as? [String: Any] {
+                presses[n] = ArcadePadState(json: row)
+            } else if key.hasPrefix("doubleTap"), let n = Int(key.dropFirst(9)) {
                 if let action = ArcadePadAction(json: value) { doubleTaps[n] = action }
             } else if key.hasPrefix("tap"), let n = Int(key.dropFirst(3)) {
                 if let action = ArcadePadAction(json: value) { taps[n] = action }
@@ -1056,12 +1069,52 @@ struct ArcadeGestureSet: Equatable {
         merged.holds.merge(zone.holds) { _, mine in mine }
         merged.flicks.merge(zone.flicks) { _, mine in mine }
         if zone.stickRadius != nil { merged.stickRadius = zone.stickRadius }
+        merged.presses.merge(zone.presses) { _, mine in mine }
         return merged
     }
 }
 
-enum ArcadeZone: String {
-    case left, right
+/// Where a fight gesture is: the left or right half, or (Oct 19 2026) a zone
+/// the table names in `fight.zones` ("a", "b", "l", "r" in the plain player).
+struct ArcadeZone: Hashable {
+    let rawValue: String
+
+    init(_ name: String) { rawValue = name }
+
+    static let left = ArcadeZone("left")
+    static let right = ArcadeZone("right")
+}
+
+/// One of `fight.zones`: a rectangle in fractions of the pad, [from, to) on
+/// each axis (core/touch.js zoneOf: the first that holds the finger wins).
+struct ArcadeTouchZoneRect: Equatable {
+    let name: String
+    let x0: Double
+    let x1: Double
+    let y0: Double
+    let y1: Double
+
+    init(name: String, x0: Double = 0, x1: Double = 1, y0: Double = 0, y1: Double = 1) {
+        self.name = name
+        self.x0 = x0
+        self.x1 = x1
+        self.y0 = y0
+        self.y1 = y1
+    }
+
+    init?(json: [String: Any]) {
+        guard let name = json["name"] as? String, !name.isEmpty else { return nil }
+        func span(_ key: String) -> (Double, Double) {
+            guard let pair = json[key] as? [Any], pair.count >= 2,
+                  let from = arcadeJSONNumber(pair[0]), let to = arcadeJSONNumber(pair[1]) else { return (0, 1) }
+            return (from, to)
+        }
+        let x = span("x")
+        let y = span("y")
+        self.init(name: name, x0: x.0, x1: x.1, y0: y.0, y1: y.1)
+    }
+
+    func holds(fx: Double, fy: Double) -> Bool { fx >= x0 && fx < x1 && fy >= y0 && fy < y1 }
 }
 
 /// profile.input.touch: the numbers and the menu and fight tables.
@@ -1079,6 +1132,10 @@ struct ArcadeTouchTable: Equatable {
     var anywhere = ArcadeGestureSet()
     var left = ArcadeGestureSet()
     var right = ArcadeGestureSet()
+    /// Oct 19 2026: `fight.zones`, checked in order before the two halves, and
+    /// each named zone's own gestures (`fight.<name>`).
+    var zones: [ArcadeTouchZoneRect] = []
+    var named: [String: ArcadeGestureSet] = [:]
 
     init() {}
 
@@ -1102,15 +1159,32 @@ struct ArcadeTouchTable: Equatable {
         anywhere = ArcadeGestureSet(json: fight?["anywhere"] as? [String: Any])
         left = ArcadeGestureSet(json: fight?["left"] as? [String: Any])
         right = ArcadeGestureSet(json: fight?["right"] as? [String: Any])
+        for row in (fight?["zones"] as? [Any]) ?? [] {
+            guard let json = row as? [String: Any], let zone = ArcadeTouchZoneRect(json: json) else { continue }
+            zones.append(zone)
+            if zone.name != "left" && zone.name != "right" {
+                named[zone.name] = ArcadeGestureSet(json: fight?[zone.name] as? [String: Any])
+            }
+        }
     }
 
     func gestures(mode: String, zone: ArcadeZone?) -> ArcadeGestureSet {
         guard mode == "fight" else { return menu }
-        switch zone {
-        case .left: return anywhere.overlaid(by: left)
-        case .right: return anywhere.overlaid(by: right)
-        case nil: return anywhere
+        guard let zone else { return anywhere }
+        if zone == .left { return anywhere.overlaid(by: left) }
+        if zone == .right { return anywhere.overlaid(by: right) }
+        return anywhere.overlaid(by: named[zone.rawValue] ?? ArcadeGestureSet())
+    }
+
+    /// The fight zone a finger landing at (x, y) belongs to: the first of
+    /// `zones` that holds it, else the left or right half (core/touch.js zoneOf).
+    func zone(x: Double, y: Double, width: Double, height: Double) -> ArcadeZone {
+        if !zones.isEmpty, width > 0, height > 0 {
+            let fx = x / width
+            let fy = y / height
+            if let found = zones.first(where: { $0.holds(fx: fx, fy: fy) }) { return ArcadeZone(found.name) }
         }
+        return x < width / 2 ? .left : .right
     }
 
     /// The default fighting-game tables, as the Revival kit's first game
@@ -1201,6 +1275,8 @@ struct ArcadeTouchRecognizer {
         var fired = false
         var stick = false
         var holding = false
+        /// A press (pressN) is held while this gesture's fingers stay down.
+        var pressing = false
         /// The pad source a held action presses (nil for an info hold).
         var heldSource: String?
         var sector: Int?
@@ -1209,6 +1285,7 @@ struct ArcadeTouchRecognizer {
         /// Each half has its own stick and hold sources, so letting go of one never lets go of the other.
         var stickSource: String { zone.map { "touch-stick-" + $0.rawValue } ?? "touch-stick" }
         var holdSource: String { zone.map { "touch-hold-" + $0.rawValue } ?? "touch-hold" }
+        var pressSource: String { zone.map { "touch-press-" + $0.rawValue } ?? "touch-press-all" }
     }
 
     /// Every finger from the first one down to the last one up, across both halves.
@@ -1266,7 +1343,8 @@ struct ArcadeTouchRecognizer {
 
     // MARK: Fingers
 
-    mutating func start(id: Int, x: Double, y: Double, width: Double, now: Double) -> [ArcadeTouchOutput] {
+    /// `height` places the finger in the table's named fight zones (0: the two halves only).
+    mutating func start(id: Int, x: Double, y: Double, width: Double, height: Double = 0, now: Double) -> [ArcadeTouchOutput] {
         var group: Family
         if let existing = family {
             group = existing
@@ -1274,7 +1352,7 @@ struct ArcadeTouchRecognizer {
             serial += 1
             group = Family(serial: serial, t0: now, fight: mode == "fight")
         }
-        let zone: ArcadeZone? = group.fight ? (x < width / 2 ? .left : .right) : nil
+        let zone: ArcadeZone? = group.fight ? table.zone(x: x, y: y, width: width, height: height) : nil
         let name = zone?.rawValue ?? "all"
         var current: Gesture
         if let existing = gestures[name] {
@@ -1285,13 +1363,20 @@ struct ArcadeTouchRecognizer {
         }
         current.touches[id] = Finger(x0: x, y0: y, x: x, y: y)
         current.fingers = max(current.fingers, current.touches.count)
+        var out: [ArcadeTouchOutput] = []
+        // A press is held from the moment the first finger lands (core/touch.js: press1 only).
+        if current.touches.count == 1, let press = table.gestures(mode: current.mode, zone: current.zone).presses[1] {
+            current.pressing = true
+            current.fired = true
+            out.append(.pad(source: current.pressSource, state: press))
+        }
         gestures[name] = current
         owners[id] = name
         group.fingers += 1
         if let zone { group.zones.insert(zone) }
         family = group
         scheduleHold(for: current, now: now)
-        return []
+        return out
     }
 
     mutating func move(id: Int, x: Double, y: Double, now: Double) -> [ArcadeTouchOutput] {
@@ -1300,7 +1385,7 @@ struct ArcadeTouchRecognizer {
         current.touches[id]?.y = y
         var out: [ArcadeTouchOutput] = []
         let wandered = (current.touches[id]?.distance ?? 0) > table.tapSlopPx
-        if current.holding {
+        if current.holding || current.pressing {
             gestures[name] = current
             if wandered { spoil(now: now, into: &out) }
             return out
@@ -1377,8 +1462,13 @@ struct ArcadeTouchRecognizer {
         }
         if current.stick { out.append(.pad(source: current.stickSource, state: nil)) }
         if let held = current.heldSource { out.append(.pad(source: held, state: nil)) }
+        if current.pressing { out.append(.pad(source: current.pressSource, state: nil)) }
         let far = current.touches.values.map { $0.distance }.max() ?? 0
-        let isTap = !current.fired && now - current.t0 <= table.tapMs && far <= table.tapSlopPx
+        let still = now - current.t0 <= table.tapMs && far <= table.tapSlopPx
+        let isTap = !current.fired && still
+        // A quick still press still counts toward a tap across the zones (three
+        // fingers, Start): it only held its own button while it was down.
+        let partOfTap = (!current.fired || current.pressing) && still
         guard var group = family else {
             if isTap { tap(current, now: now, into: &out) }
             return out
@@ -1404,7 +1494,7 @@ struct ArcadeTouchRecognizer {
         // The last finger is up.
         family = nil
         jobs.removeAll { $0.job == .flush(group.serial) }
-        if group.fight, group.zones.count == 2, !group.spoiled, isTap, now - group.t0 <= table.tapMs,
+        if group.fight, group.zones.count >= 2, !group.spoiled, partOfTap, now - group.t0 <= table.tapMs,
            let anywhere = table.anywhere.taps[group.fingers] {
             act(anywhere, now: now, holdSource: current.holdSource, into: &out)
             return out
@@ -1449,6 +1539,7 @@ struct ArcadeTouchRecognizer {
             guard let current = gestures[name] else { continue }
             if current.stick { out.append(.pad(source: current.stickSource, state: nil)) }
             if let held = current.heldSource { out.append(.pad(source: held, state: nil)) }
+            if current.pressing { out.append(.pad(source: current.pressSource, state: nil)) }
         }
         for item in jobs {
             if case .release(let source) = item.job { out.append(.pad(source: source, state: nil)) }

@@ -48,8 +48,12 @@ struct ArcadeLaunch: Identifiable {
     var pageQuery: String? = nil
     /// What Report a problem names, when it is not the pack's game.
     var reportTarget: ArcadeReportTarget? = nil
+    /// An added game's system: the plain player reads its controls for it.
+    var system: ArcadeSystem? = nil
 
     var saveId: String { saveKey ?? record.gameId }
+    /// The kit's plain player: a game added from Files with no accessibility pack.
+    var isPlain: Bool { pageHost == .kit && record.entry == ArcadeImportPlay.plainEntry }
     var hostRoot: String { ArcadeRoute.root(pageHost) }
     var pageURL: URL? { URL(string: hostRoot + record.entry + (pageQuery.map { "?" + $0 } ?? "")) }
 }
@@ -237,15 +241,28 @@ struct ArcadeStore {
     }
 
     /// Removes a game and its own packs. The shared kit pack stays (it is small
-    /// and every game uses it).
+    /// and every game uses it), and so does (Oct 19 2026) an accessibility pack
+    /// a game added from Files uses: it lives in this game's folder tree too
+    /// (Arcade/<id>/<accessVersion>/).
     func delete(gameId: String) {
-        guard ArcadePaths.isSafeName(gameId) else { return }
+        // "imports" is My games' own folder, never a shelf game's.
+        guard ArcadePaths.isSafeName(gameId), gameId != "imports" else { return }
+        let manager = FileManager.default
+        let kept = ArcadeImportStore(root: root.appendingPathComponent("imports", isDirectory: true)).packKeys()
         for record in records(gameId: gameId) {
-            for pack in record.packs where pack.kind != "kit" && pack.id != gameId {
-                if let folder = folder(id: pack.id, version: pack.version) { try? FileManager.default.removeItem(at: folder) }
+            for pack in record.packs where pack.kind != "kit" && pack.id != gameId && !kept.contains(pack.id + "/" + pack.version) {
+                if let folder = folder(id: pack.id, version: pack.version) { try? manager.removeItem(at: folder) }
             }
         }
-        try? FileManager.default.removeItem(at: root.appendingPathComponent(gameId, isDirectory: true))
+        let gameFolder = root.appendingPathComponent(gameId, isDirectory: true)
+        let versions = (try? manager.contentsOfDirectory(at: gameFolder, includingPropertiesForKeys: nil, options: [])) ?? []
+        for folder in versions where !kept.contains(gameId + "/" + folder.lastPathComponent) {
+            try? manager.removeItem(at: folder)
+        }
+        // The game's folder goes once nothing is left in it.
+        if ((try? manager.contentsOfDirectory(atPath: gameFolder.path)) ?? []).isEmpty {
+            try? manager.removeItem(at: gameFolder)
+        }
     }
 }
 
@@ -292,6 +309,9 @@ final class ArcadeService: ObservableObject {
     /// Packs being written right now, across every service: two downloads
     /// never append to the same blob.part.
     private static var packsInFlight: Set<String> = []
+    /// Added games asked about again this session because their answer was
+    /// another account's or a day old (each at most once a session).
+    fileprivate var staleAsked: Set<String> = []
 
     private static var current: ArcadeService?
 
@@ -325,6 +345,7 @@ final class ArcadeService: ObservableObject {
         downloadErrors = [:]
         installed = [:]
         importStatus = [:]
+        staleAsked = []
     }
 
     private func announce(_ text: String) {
@@ -366,6 +387,9 @@ final class ArcadeService: ObservableObject {
             loadError = nil
             refreshInstalled()
             refreshImports()
+            // My games whose answer was another account's, or a day old: asked
+            // again in the background, a few at a time.
+            Task { [weak self] in await self?.recheckStaleImports() }
         } catch is CancellationError {
             return
         } catch {
@@ -676,6 +700,20 @@ struct ArcadeImportOffer: Identifiable {
     let accessPack: ArcadePackRef?
     let match: ArcadeMatch?
     let bytes: Int64
+    /// The pack's page and where it expects the ROM (its manifest's entry and romPath).
+    var entry: String? = nil
+    var romPath: String? = nil
+    /// The player is not on this iPhone yet, so its size is in `bytes` too.
+    var kitMissing = false
+    /// Asked from Play: the question also offers to play without the pack.
+    var fromPlay = false
+}
+
+/// An added file, and why the check for its accessibility pack failed (nil
+/// when the server answered, or no check was needed).
+struct ArcadeAddOutcome {
+    let added: ArcadeImporter.Added
+    let checkProblem: String?
 }
 
 /// What Play on an added game comes to.
@@ -690,7 +728,9 @@ extension ArcadeService {
     private enum MatchCheck {
         case found(ArcadeMatch)
         case noPack
-        case failed
+        /// Not answered (offline, the route not there yet, the server busy):
+        /// the record stays as it was. The words say why.
+        case failed(String)
     }
 
     /// Reads My games from the phone and works out what each row says.
@@ -699,13 +739,25 @@ extension ArcadeService {
         let store = try? ArcadeStore()
         let records = importStore.records()
         let familyOpen: Bool? = shelf.map { $0.familyOpen }
+        var kitFiles: [String: Set<String>] = [:]
         var statuses: [String: ArcadeImportStatus] = [:]
         for record in records {
             var onPhone = false
             if let pack = record.accessPack, let store {
                 onPhone = store.hasPack(id: pack.id, version: pack.version, sha256: pack.sha256)
             }
-            statuses[record.localId] = ArcadeImportStatus.of(record, packOnPhone: onPhone, familyOpen: familyOpen)
+            var status = ArcadeImportStatus.of(record, packOnPhone: onPhone, familyOpen: familyOpen)
+            // The player on this iPhone has no core for the game's system, and
+            // the shelf names no newer player that might.
+            if let kit = record.kit, let store, shelf?.kitVersion == nil || shelf?.kitVersion == kit.version {
+                if kitFiles[kit.key] == nil {
+                    kitFiles[kit.key] = store.mount(id: kit.id, version: kit.version).map { Set($0.index.files.keys) } ?? []
+                }
+                if let files = kitFiles[kit.key], !files.isEmpty, !ArcadeImportPlay.hasCore(files, system: record.system) {
+                    status = .cannotRun(ArcadeImportText.cannotRun(record.system))
+                }
+            }
+            statuses[record.localId] = status
         }
         imports = records
         importStatus = statuses
@@ -713,7 +765,7 @@ extension ArcadeService {
 
     /// Copies a file picked in Files into My games (a zip is unpacked on the
     /// phone), then asks whether an accessibility pack is made for it.
-    func addGame(from url: URL) async -> Result<ArcadeImporter.Added, ArcadeImportProblem> {
+    func addGame(from url: URL) async -> Result<ArcadeAddOutcome, ArcadeImportProblem> {
         guard adding == nil else { return .failure(.busy) }
         adding = url.lastPathComponent
         defer { adding = nil }
@@ -721,48 +773,111 @@ extension ArcadeService {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let result = await Task.detached(priority: .userInitiated) { () -> Result<ArcadeImporter.Added, ArcadeImportProblem> in
-            do {
-                let store = try ArcadeImportStore.standard()
-                return .success(try ArcadeImporter.add(url, store: store))
-            } catch let problem as ArcadeImportProblem {
-                return .failure(problem)
-            } catch {
-                return .failure(.unreadable)
+            // Read under a file coordinator, so a file that is only in iCloud
+            // Drive is downloaded first (the read waits for it).
+            var outcome: Result<ArcadeImporter.Added, ArcadeImportProblem> = .failure(.unreadable)
+            var failure: NSError?
+            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [.withoutChanges],
+                                                             error: &failure) { readable in
+                do {
+                    let store = try ArcadeImportStore.standard()
+                    outcome = .success(try ArcadeImporter.add(readable, store: store))
+                } catch let problem as ArcadeImportProblem {
+                    outcome = .failure(problem)
+                } catch {
+                    outcome = .failure(.unreadable)
+                }
             }
+            // The coordinator could not get the file (not downloaded, gone): never read.
+            if failure != nil { outcome = .failure(.unreadable) }
+            return outcome
         }.value
         refreshImports()
-        if case .success(let added) = result, added.record.match == nil || !added.already {
-            _ = await checkMatch(added.record.localId)
+        switch result {
+        case .failure(let problem):
+            return .failure(problem)
+        case .success(let added):
+            var checkProblem: String?
+            if added.record.match == nil || !added.already {
+                let check = await checkMatch(added.record.localId)
+                if case .failed(let why) = check { checkProblem = why }
+            }
+            return .success(ArcadeAddOutcome(added: added, checkProblem: checkProblem))
         }
-        return result
     }
 
-    /// Asks the server once more whether an accessibility pack is made for this game.
-    func recheckImport(_ localId: String) async -> ArcadeImportStatus? {
-        _ = await checkMatch(localId)
-        return importStatus[localId]
+    /// Asks the server once more whether an accessibility pack is made for
+    /// this game: the row's status, or why the server could not be asked.
+    func recheckImport(_ localId: String) async -> Result<ArcadeImportStatus, ArcadeServiceError> {
+        switch await checkMatch(localId) {
+        case .failed(let why):
+            return .failure(ArcadeServiceError(message: why))
+        case .found, .noPack:
+            return .success(importStatus[localId] ?? .unchecked)
+        }
+    }
+
+    /// After the shelf answers: an added game whose locked or no-pack answer
+    /// was heard under the other side of the family shelf, or over a day ago,
+    /// or never, is asked again. Three a visit at most and each once a
+    /// session, since every ask waits its turn at the account's pacing gate.
+    func recheckStaleImports() async {
+        guard let open = shelf?.familyOpen else { return }
+        let asked = generation
+        let now = Date()
+        var count = 0
+        for record in imports {
+            guard count < 3, asked == generation else { return }
+            let stale: Bool
+            if let match = record.match {
+                guard !match.found || match.locked else { continue }
+                let old = match.asked.map { now.timeIntervalSince($0) > 24 * 60 * 60 } ?? true
+                stale = old || match.askedElsewhere(familyOpen: open)
+            } else {
+                stale = true
+            }
+            guard stale, !staleAsked.contains(record.localId) else { continue }
+            staleAsked.insert(record.localId)
+            count += 1
+            _ = await checkMatch(record.localId)
+        }
     }
 
     /// GET /api/kade/arcade/match?sha1=<No-Intro sha1>. The answer is kept
-    /// on the record for the row; a failure leaves the record as it was.
+    /// on the record for the row, with the account's side of the family shelf
+    /// and the time; a failure leaves the record as it was. A match that came
+    /// but could not be read is a failure, never "no pack".
     private func checkMatch(_ localId: String) async -> MatchCheck {
-        guard let importStore = try? ArcadeImportStore.standard(), let record = importStore.record(localId) else { return .failed }
+        guard let importStore = try? ArcadeImportStore.standard(), let record = importStore.record(localId) else {
+            return .failed(ArcadeImportText.fileMissing)
+        }
         let asked = generation
         do {
             let request = client.request(path: "api/kade/arcade/match", authorized: true,
                                          queryItems: [URLQueryItem(name: "sha1", value: record.sha1)])
             let (data, http) = try await client.send(request)
-            guard asked == generation, http.statusCode == 200,
-                  let answer = try? JSONDecoder().decode(ArcadeMatchAnswer.self, from: data), answer.answered else { return .failed }
+            guard asked == generation else { return .failed(ArcadeImportText.unreachable) }
+            guard http.statusCode == 200 else {
+                // 429 "That is a lot of games to check at once", 503: the server's own words.
+                if http.statusCode == 429 || http.statusCode == 503, let said = readable(data) { return .failed(said) }
+                return .failed(ArcadeImportText.unreachable)
+            }
+            guard let answer = try? JSONDecoder().decode(ArcadeMatchAnswer.self, from: data), answer.answered,
+                  !answer.unreadable else {
+                return .failed("Kade's server answered in a way the Arcade could not read. Try again later.")
+            }
             // Read again: she may have renamed it meanwhile.
-            guard var current = importStore.record(localId) else { return .failed }
-            current.match = answer.match?.summary ?? ArcadeMatchSummary.noMatch
+            guard var current = importStore.record(localId) else { return .failed(ArcadeImportText.fileMissing) }
+            var summary = answer.match?.summary ?? ArcadeMatchSummary.noMatch
+            summary.familyOpen = shelf?.familyOpen
+            summary.asked = Date()
+            current.match = summary
             try? importStore.save(current)
             refreshImports()
             if let match = answer.match { return .found(match) }
             return .noPack
         } catch {
-            return .failed
+            return .failed(ArcadeImportText.unreachable)
         }
     }
 
@@ -789,42 +904,112 @@ extension ArcadeService {
             throw ArcadeServiceError(message: ArcadeImportText.fileMissing)
         }
         var match: ArcadeMatch?
+        var plan: ArcadeAccessPlan?
         if withPack {
-            switch await checkMatch(localId) {
-            case .failed:
-                throw ArcadeServiceError(message: "The accessibility pack could not be checked. Check the connection and try again.")
-            case .noPack:
-                throw ArcadeServiceError(message: "There is no accessibility pack for this game yet. It plays as the original game.")
-            case .found(let found):
-                if found.locked {
-                    throw ArcadeServiceError(message: found.access == .open ? (found.note ?? ArcadeImportText.notOpen) : ArcadeImportText.familyPack)
-                }
-                if found.access == .family && shelf?.familyOpen != true {
-                    throw ArcadeServiceError(message: ArcadeImportText.familyPack)
-                }
-                guard found.pack != nil else {
-                    throw ArcadeServiceError(message: "The accessibility pack is not ready to download yet.")
-                }
-                match = found
+            let found = try await openMatch(localId)
+            let made = try await accessPlan(for: found, localId: localId)
+            match = made.match
+            plan = made.plan
+        }
+        let kit: ArcadePackRef
+        let emulatorData: String
+        if let plan {
+            // The access manifest's own kit: the pack and its player come from one catalog.
+            kit = plan.kit
+            emulatorData = plan.emulatorData
+        } else {
+            let fetched = try await fetchKit()
+            kit = fetched.pack
+            emulatorData = fetched.emulatorData
+            // A kit with no plain player cannot play an added game on its own.
+            if let files = kit.index, !files.contains(where: { $0.path == ArcadeImportPlay.plainEntry }) {
+                throw ArcadeServiceError(message: ArcadeImportText.playerNotReady)
             }
         }
-        let kit = try await fetchKit()
-        // A kit with no plain player cannot play an added game on its own.
-        if match == nil, let files = kit.pack.index, !files.contains(where: { $0.path == ArcadeImportPlay.plainEntry }) {
-            throw ArcadeServiceError(message: ArcadeImportText.playerNotReady)
-        }
         guard let record = importStore.record(localId) else { throw ArcadeServiceError(message: ArcadeImportText.fileMissing) }
+        // Every added game runs on the player's core for its system.
+        if let files = kit.index, !ArcadeImportPlay.hasCore(files.map { $0.path }, system: record.system) {
+            throw ArcadeServiceError(message: ArcadeImportText.cannotRun(record.system) + ". Try again after the next Arcade update.")
+        }
         let store = try ArcadeStore()
-        var packs = [kit.pack]
-        if let pack = match?.pack { packs.append(pack) }
+        var packs = [kit]
+        if let pack = plan?.accessPack { packs.append(pack) }
         let bytes = packs.filter { !store.hasPack($0) }.reduce(Int64(0)) { $0 + $1.size }
-        return ArcadeImportOffer(record: record, kit: kit.pack, emulatorData: kit.emulatorData,
-                                 accessPack: match?.pack, match: match, bytes: bytes)
+        return ArcadeImportOffer(record: record, kit: kit, emulatorData: emulatorData, accessPack: plan?.accessPack,
+                                 match: match, bytes: bytes, entry: plan?.entry, romPath: plan?.romPath,
+                                 kitMissing: !store.hasPack(kit))
     }
 
-    /// The download, in the same one slot as a shelf game's (its news is spoken here).
-    func startImportDownload(_ offer: ArcadeImportOffer) {
-        guard downloading == nil else { return }
+    /// This game's match, when it has a pack this account may download, or why not.
+    private func openMatch(_ localId: String) async throws -> ArcadeMatch {
+        switch await checkMatch(localId) {
+        case .failed(let why):
+            throw ArcadeServiceError(message: why)
+        case .noPack:
+            throw ArcadeServiceError(message: "There is no accessibility pack for this game yet. It plays as the original game.")
+        case .found(let found):
+            if found.locked {
+                throw ArcadeServiceError(message: found.access == .open ? (found.note ?? ArcadeImportText.notOpen) : ArcadeImportText.familyPack)
+            }
+            if found.access == .family && shelf?.familyOpen != true {
+                throw ArcadeServiceError(message: ArcadeImportText.familyPack)
+            }
+            guard found.pack != nil else {
+                throw ArcadeServiceError(message: "The accessibility pack is not ready to download yet.")
+            }
+            return found
+        }
+    }
+
+    /// The accessibility pack's files, its kit, its page and romPath: from the
+    /// match's manifestPath (what the server sends: GET
+    /// /api/kade/arcade/games/<id>/manifest?version=<accessVersion>), or, kept
+    /// as a fallback, a file table inline in the match. A 404 from the manifest
+    /// ("That accessibility pack has changed") asks /match again, once.
+    private func accessPlan(for first: ArcadeMatch, localId: String) async throws -> (match: ArcadeMatch, plan: ArcadeAccessPlan) {
+        var match = first
+        for attempt in 0..<2 {
+            guard let raw = match.manifestPath else {
+                guard let pack = match.pack, pack.index != nil else {
+                    throw ArcadeServiceError(message: "The game's file list is missing from the server's answer.")
+                }
+                let kit = try await fetchKit()
+                return (match, ArcadeAccessPlan(accessPack: pack, kit: kit.pack, emulatorData: kit.emulatorData,
+                                                entry: match.entry ?? "games/\(pack.id)/play.html", romPath: match.romPath))
+            }
+            guard let asked = ArcadeAccessPlan.manifestRequest(raw, gameId: match.id) else {
+                throw ArcadeServiceError(message: "The accessibility pack's details could not be read. Try again later.")
+            }
+            let request = client.request(path: asked.path, authorized: true,
+                                         queryItems: [URLQueryItem(name: "version", value: asked.version)])
+            let (data, http) = try await client.send(request)
+            if http.statusCode == 404 && attempt == 0 {
+                match = try await openMatch(localId)
+                continue
+            }
+            if http.statusCode == 403 {
+                throw ArcadeServiceError(message: readable(data) ?? ArcadeImportText.familyPack)
+            }
+            guard http.statusCode == 200 else {
+                throw ArcadeServiceError(message: readable(data) ?? "The accessibility pack's details could not be fetched. Try again.")
+            }
+            guard let manifest = try? JSONDecoder().decode(ArcadeManifest.self, from: data) else {
+                throw ArcadeServiceError(message: "The accessibility pack's details could not be read. Try again later.")
+            }
+            if let problem = manifest.problem { throw ArcadeServiceError(message: problem) }
+            guard let plan = ArcadeAccessPlan.make(manifest: manifest, match: match) else {
+                throw ArcadeServiceError(message: "The game's file list is missing from the server's answer.")
+            }
+            return (match, plan)
+        }
+        throw ArcadeServiceError(message: "That accessibility pack has changed. Check the game again.")
+    }
+
+    /// The download, in the same one slot as a shelf game's (its news is
+    /// spoken here). False when another download holds the slot: nothing started.
+    @discardableResult
+    func startImportDownload(_ offer: ArcadeImportOffer) -> Bool {
+        guard downloading == nil else { return false }
         let asked = generation
         let key = ArcadeImportText.downloadKey(offer.record.localId)
         downloading = key
@@ -855,6 +1040,7 @@ extension ArcadeService {
                 : "The player is downloaded. \(offer.record.title) is ready to play."
             self.announce(problem ?? done)
         }
+        return true
     }
 
     private func installImport(_ offer: ArcadeImportOffer) async throws {
@@ -878,11 +1064,13 @@ extension ArcadeService {
         record.kit = ArcadeImportPack(kind: "kit", id: offer.kit.id, version: offer.kit.version,
                                       sha256: offer.kit.sha256, access: ArcadeAccess.open.rawValue)
         record.emulatorData = offer.emulatorData
-        if let pack = offer.accessPack, let match = offer.match {
+        if let pack = offer.accessPack {
+            // The pack follows its game's shelf (family when the answer did not say).
             record.accessPack = ArcadeImportPack(kind: "game", id: pack.id, version: pack.version,
-                                                 sha256: pack.sha256, access: match.access.rawValue)
-            record.romPath = ArcadeImportPlay.packROMPath(match.romPath, gameId: pack.id, system: record.system)
-            record.entry = match.entry ?? "games/\(pack.id)/play.html"
+                                                 sha256: pack.sha256, access: (offer.match?.access ?? .family).rawValue)
+            // Where the access manifest says: its romPath and its page.
+            record.romPath = ArcadeImportPlay.packROMPath(offer.romPath, gameId: pack.id, system: record.system)
+            record.entry = offer.entry ?? "games/\(pack.id)/play.html"
         }
         try importStore.save(record)
         // A newer accessibility pack replaces the older one.
@@ -904,12 +1092,23 @@ extension ArcadeService {
         let saveKey = ArcadeImportPlay.saveKey(record)
         let target = ArcadeImportPlay.reportTarget(record)
 
-        if let pack = record.accessPack, let kitRef = record.kit,
+        // The player first: every added game runs on the kit, on its system's core.
+        guard let kitRef = record.kit,
+              store.hasPack(id: kitRef.id, version: kitRef.version, sha256: kitRef.sha256),
+              let kitMount = store.mount(id: kitRef.id, version: kitRef.version) else {
+            return .needsPlayer
+        }
+        // The shelf names a newer player than the one on this iPhone.
+        let newerKit = shelf?.kitVersion.map { $0 != kitRef.version } ?? false
+        guard ArcadeImportPlay.hasCore(kitMount.index.files.keys, system: record.system) else {
+            if newerKit { return .needsPlayer }
+            return .problem(ArcadeImportText.cannotRun(record.system) + ". Try again after the next Arcade update.")
+        }
+
+        if let pack = record.accessPack,
            pack.access == ArcadeAccess.open.rawValue || familyOpen,
            store.hasPack(id: pack.id, version: pack.version, sha256: pack.sha256),
-           store.hasPack(id: kitRef.id, version: kitRef.version, sha256: kitRef.sha256),
            let gameMount = store.mount(id: pack.id, version: pack.version),
-           let kitMount = store.mount(id: kitRef.id, version: kitRef.version),
            let entry = ArcadePaths.normalize(record.entry ?? "games/\(pack.id)/play.html"),
            let emulatorData = ArcadePaths.normalizeFolder(record.emulatorData ?? "emulatorjs/") {
             let romPath = ArcadeImportPlay.packROMPath(record.romPath, gameId: pack.id, system: record.system)
@@ -923,17 +1122,13 @@ extension ArcadeService {
                                               version: pack.version)
             return .ready(ArcadeLaunch(entry: entryRow, record: installed, game: [gameMount], kit: [kitMount],
                                        overlays: [ArcadeOverlay(path: romPath, file: rom, length: romSize)],
-                                       saveKey: saveKey, pageHost: .game, pageQuery: nil, reportTarget: target))
+                                       saveKey: saveKey, pageHost: .game, pageQuery: nil, reportTarget: target,
+                                       system: record.system))
         }
 
-        guard let kitRef = record.kit,
-              store.hasPack(id: kitRef.id, version: kitRef.version, sha256: kitRef.sha256),
-              let kitMount = store.mount(id: kitRef.id, version: kitRef.version) else {
-            return .needsPlayer
-        }
         guard kitMount.index.file(at: ArcadeImportPlay.plainEntry) != nil else {
             // This kit came before the plain player: a newer one may have it.
-            if let latest = shelf?.kitVersion, latest != kitRef.version { return .needsPlayer }
+            if newerKit { return .needsPlayer }
             return .problem(ArcadeImportText.playerNotReady)
         }
         let emulatorData = ArcadePaths.normalizeFolder(record.emulatorData ?? "emulatorjs/") ?? "emulatorjs/"
@@ -946,7 +1141,7 @@ extension ArcadeService {
         return .ready(ArcadeLaunch(entry: entryRow, record: installed, game: [], kit: [kitMount],
                                    overlays: [ArcadeOverlay(path: ArcadeImportPlay.plainROMPath(record), file: rom, length: romSize)],
                                    saveKey: saveKey, pageHost: .kit, pageQuery: ArcadeImportPlay.plainQuery(record),
-                                   reportTarget: target))
+                                   reportTarget: target, system: record.system))
     }
 
     /// A new title from Rename; false when nothing usable was typed.
@@ -962,14 +1157,22 @@ extension ArcadeService {
 
     /// Deletes the added game's file. Its accessibility pack goes too when
     /// nothing else uses it; its saves stay, in case it is added again.
-    func deleteImport(_ localId: String) {
+    /// False, with nothing deleted, while its pack or player is downloading.
+    @discardableResult
+    func deleteImport(_ localId: String) -> Bool {
         guard downloading != ArcadeImportText.downloadKey(localId),
-              let importStore = try? ArcadeImportStore.standard() else { return }
+              let importStore = try? ArcadeImportStore.standard() else { return false }
         let record = importStore.record(localId)
         importStore.delete(localId)
         if let pack = record?.accessPack, let store = try? ArcadeStore() { store.removeIfUnused(pack.key) }
         downloadErrors[ArcadeImportText.downloadKey(localId)] = nil
         refreshImports()
+        return true
+    }
+
+    /// True while an added game's pack or player is downloading.
+    func isDownloadingImport(_ localId: String) -> Bool {
+        downloading == ArcadeImportText.downloadKey(localId)
     }
 }
 

@@ -68,6 +68,12 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
                 answer(key, token: token, url: url, status: status, headers: headers, body: Data())
                 return
             }
+            // Oct 19 2026: a big answer (an added N64 ROM is up to 64 MB, read
+            // twice per boot) goes to WebKit piece by piece, never whole in memory.
+            if length > Self.wholeAnswerBytes {
+                stream(key, token: token, url: url, status: status, headers: headers, blob: blob, offset: offset, length: length)
+                return
+            }
             // Only plain values cross to the reading queue and back: the key, the token, the URL and the bytes.
             queue.async {
                 let result: Result<Data, Error> = Result { try ArcadeBlobReader.read(blob, offset: offset, length: length) }
@@ -98,6 +104,59 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
         answer(key, token: token, url: url, status: 404,
                headers: ["Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*"],
                body: Data("Not in the downloaded game: \(path)".utf8))
+    }
+
+    /// Answers up to this size are read whole; bigger ones go in pieces.
+    private static let wholeAnswerBytes: Int64 = 4 * 1024 * 1024
+    /// One piece of a big answer.
+    private static let pieceBytes: Int64 = 2 * 1024 * 1024
+
+    /// A big answer: the headers (Content-Length already says the whole size)
+    /// at once, then one piece read on the queue at a time, each handed to
+    /// WebKit only while the task is still live under its token, then the end.
+    private func stream(_ key: ObjectIdentifier, token: Int, url: URL, status: Int, headers: [String: String],
+                        blob: URL, offset: Int64, length: Int64) {
+        guard let entry = live[key], entry.token == token else { return }
+        guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers) else {
+            live[key] = nil
+            entry.task.didFailWithError(URLError(.badServerResponse))
+            return
+        }
+        served += 1
+        entry.task.didReceive(response)
+        readPiece(key, token: token, blob: blob, at: offset, left: length)
+    }
+
+    /// Reads the next piece on the queue; only one is ever in flight per task,
+    /// so the pieces reach WebKit in order.
+    private func readPiece(_ key: ObjectIdentifier, token: Int, blob: URL, at position: Int64, left: Int64) {
+        let count = min(left, Self.pieceBytes)
+        queue.async {
+            let result: Result<Data, Error> = Result { try ArcadeBlobReader.read(blob, offset: position, length: count) }
+            Task { @MainActor [weak self] in
+                self?.pieceRead(key, token: token, blob: blob, at: position, left: left, result: result)
+            }
+        }
+    }
+
+    private func pieceRead(_ key: ObjectIdentifier, token: Int, blob: URL, at position: Int64, left: Int64,
+                           result: Result<Data, Error>) {
+        // Stopped meanwhile, or the key now belongs to a newer task: nothing more is sent.
+        guard let entry = live[key], entry.token == token else { return }
+        switch result {
+        case .success(let data):
+            entry.task.didReceive(data)
+            let rest = left - Int64(data.count)
+            if rest > 0 {
+                readPiece(key, token: token, blob: blob, at: position + Int64(data.count), left: rest)
+            } else {
+                live[key] = nil
+                entry.task.didFinish()
+            }
+        case .failure:
+            live[key] = nil
+            entry.task.didFailWithError(URLError(.cannotOpenFile))
+        }
     }
 
     private func answer(_ key: ObjectIdentifier, token: Int, url: URL, status: Int, headers: [String: String], body: Data) {

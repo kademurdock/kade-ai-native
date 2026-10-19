@@ -48,6 +48,8 @@ struct ArcadeView: View {
     @State private var renaming: ArcadeImportRecord?
     @State private var renameText = ""
     @State private var deleting: ArcadeImportRecord?
+    /// The row VoiceOver moves to after Add a game (keyed by local id).
+    @AccessibilityFocusState private var focusedImport: String?
 
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
@@ -390,12 +392,13 @@ extension ArcadeView {
                 importRow(record)
             }
         }
+        // Several files at once: a set unzipped in Files is added in one go.
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes,
-                      allowsMultipleSelection: false) { result in
+                      allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
-                guard let url = urls.first else { return }
-                addGame(url)
+                guard !urls.isEmpty else { return }
+                addGames(urls)
             case .failure:
                 importProblem = "Files could not hand over that file. Try again."
             }
@@ -404,6 +407,7 @@ extension ArcadeView {
                                      renameText: $renameText, deleting: $deleting,
                                      offerMessage: { importOfferMessage($0) },
                                      download: { startImportDownload($0) },
+                                     playWithout: { playImport($0.record, offerPack: false) },
                                      rename: { rename($0) },
                                      delete: { deleteImport($0) }))
     }
@@ -417,16 +421,22 @@ extension ArcadeView {
         .labelStyle(KadeRowLabelStyle(tint: .teal, caption: "From Files, kept on this iPhone"))
         .disabled(service.adding != nil)
         .accessibilityLabel(service.adding == nil ? "Add a game" : "Adding the game")
-        .accessibilityHint("Opens Files. Pick a game file you own, or a zip holding one. It stays on this iPhone and is never uploaded.")
+        .accessibilityHint("Opens Files. Pick game files you own, or zips holding one game each. They stay on this iPhone and are never uploaded.")
     }
 
-    /// The status (or the locked reason) is said FIRST, then the title; the
-    /// system is the value. Play is the button; Rename, Delete and Report a
-    /// problem are in the Actions rotor and the long-press menu.
+    /// The status (or the locked reason) is said FIRST, then "Play" and the
+    /// title, as a shelf row says it; the system is the value. Play is the
+    /// button (asking first when an accessibility pack is ready to download);
+    /// Rename, Delete, Report a problem and Check for an accessibility pack are
+    /// in the Actions rotor and the long-press menu.
     private func importRow(_ record: ArcadeImportRecord) -> some View {
         let status = service.importStatus[record.localId] ?? .unchecked
         let key = ArcadeImportText.downloadKey(record.localId)
         let isDownloading = service.downloading == key
+        let actions = "The Actions rotor has Rename, Delete, Report a problem and Check for an accessibility pack."
+        let hint = status.isPackReady
+            ? "Asks to download its accessibility pack first, or plays it without. " + actions
+            : "Plays it full screen. " + actions
         return VStack(alignment: .leading, spacing: 8) {
             Button { playImport(record) } label: {
                 Label(record.title, systemImage: status == .pack ? "gamecontroller.fill" : "gamecontroller")
@@ -436,9 +446,10 @@ extension ArcadeView {
             .labelStyle(KadeRowLabelStyle(tint: .teal, caption: record.system.name + ", " + status.words))
             .accessibilityLabel(ArcadeImportText.rowLabel(title: record.title, status: status))
             .accessibilityValue(record.system.name)
-            .accessibilityHint("Plays it full screen. The Actions rotor has Rename, Delete and Report a problem.")
+            .accessibilityHint(hint)
+            .accessibilityFocused($focusedImport, equals: record.localId)
             .accessibilityAction(named: "Rename") { startRename(record) }
-            .accessibilityAction(named: "Delete") { deleting = record }
+            .accessibilityAction(named: "Delete") { askDelete(record) }
             .accessibilityAction(named: ArcadeReport.actionName) { reportImport(record) }
             .accessibilityAction(named: "Check for an accessibility pack") { recheck(record) }
             .contextMenu {
@@ -446,7 +457,7 @@ extension ArcadeView {
                 Button { startRename(record) } label: { Label("Rename", systemImage: "pencil") }
                 Button { recheck(record) } label: { Label("Check for an accessibility pack", systemImage: "arrow.clockwise") }
                 Button { reportImport(record) } label: { Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble") }
-                Button(role: .destructive) { deleting = record } label: { Label("Delete", systemImage: "trash") }
+                Button(role: .destructive) { askDelete(record) } label: { Label("Delete", systemImage: "trash") }
             }
             if isDownloading {
                 VStack(alignment: .leading, spacing: 6) {
@@ -456,9 +467,10 @@ extension ArcadeView {
                     Button("Stop download") { service.cancelDownload() }
                         .buttonStyle(KadeCardButtonStyle())
                 }
-            } else if status.isPackReady {
+            } else if status.offersPackDownload {
                 Button { askImportDownload(record, withPack: true) } label: {
-                    Label(checkingImport == record.localId ? "Checking the size" : "Download the accessibility pack",
+                    Label(checkingImport == record.localId ? "Checking the size"
+                              : (status.isPackUpdate ? "Download the accessibility pack update" : "Download the accessibility pack"),
                           systemImage: "arrow.down.circle")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -477,31 +489,71 @@ extension ArcadeView {
 
     // MARK: My games actions
 
-    private func addGame(_ url: URL) {
-        UIAccessibility.post(notification: .announcement, argument: "Adding \(url.lastPathComponent).")
+    /// Adds the picked files one after another on the one adding slot. Once
+    /// Files has gone, VoiceOver moves to the (last) game added, whose label
+    /// starts with its status, and a summary is queued; every refusal is in
+    /// the My games alert with its reason.
+    private func addGames(_ urls: [URL]) {
         Task {
-            switch await service.addGame(from: url) {
-            case .failure(let problem):
-                importProblem = problem.spoken
-            case .success(let added):
-                let status = service.importStatus[added.record.localId] ?? .unchecked
-                let first = added.already
-                    ? "\(added.record.title) is already in My games."
-                    : "Added \(added.record.title), \(added.record.system.name)."
-                UIAccessibility.post(notification: .announcement, argument: first + " " + status.words + ".")
-                if status.isPackReady && service.downloading == nil { askImportDownload(added.record, withPack: true) }
+            var added: [ArcadeAddOutcome] = []
+            var refused: [(name: String, why: String)] = []
+            for url in urls {
+                switch await service.addGame(from: url) {
+                case .success(let outcome):
+                    added.append(outcome)
+                case .failure(let problem):
+                    refused.append((name: url.lastPathComponent, why: problem.spoken))
+                }
+            }
+            // Files has finished closing, so neither the focus move nor the
+            // summary is lost under it.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            var lines: [String] = []
+            if added.count == 1, let one = added.first {
+                let record = one.added.record
+                let status = service.importStatus[record.localId] ?? .unchecked
+                lines.append(one.added.already ? "\(record.title) is already in My games."
+                                               : "Added \(record.title), \(record.system.name).")
+                lines.append(one.checkProblem ?? (status.words + "."))
+            } else if added.count > 1 {
+                lines.append("Added \(added.count) games.")
+                if let problem = added.compactMap({ $0.checkProblem }).first { lines.append(problem) }
+            }
+            if !refused.isEmpty {
+                if !added.isEmpty {
+                    lines.append(refused.count == 1 ? "1 could not be added: " + refused[0].why
+                                                    : "\(refused.count) could not be added.")
+                }
+                importProblem = refused.count == 1 ? refused[0].why
+                    : refused.map { $0.name + ": " + $0.why }.joined(separator: "\n\n")
+            }
+            if let last = added.last { focusedImport = last.added.record.localId }
+            if !lines.isEmpty {
+                UIAccessibility.post(notification: .announcement, argument: NSAttributedString(
+                    string: lines.joined(separator: " "), attributes: [.accessibilitySpeechQueueAnnouncement: NSNumber(value: true)]))
+            }
+            // One new game with a pack ready to download: offer it straight away.
+            if added.count == 1, refused.isEmpty, let one = added.first, service.downloading == nil,
+               (service.importStatus[one.added.record.localId] ?? .unchecked).isPackReady {
+                askImportDownload(one.added.record, withPack: true)
             }
         }
     }
 
-    /// The size first, then the question (or straight on when nothing is missing).
-    private func askImportDownload(_ record: ArcadeImportRecord, withPack: Bool) {
+    /// The size first, then the question (or straight on when nothing is
+    /// missing). Never while another download holds the one slot.
+    private func askImportDownload(_ record: ArcadeImportRecord, withPack: Bool, fromPlay: Bool = false) {
         guard checkingImport == nil else { return }
+        guard service.downloading == nil else {
+            importProblem = ArcadeImportText.otherDownload
+            return
+        }
         checkingImport = record.localId
         Task {
             defer { checkingImport = nil }
             do {
-                let next = try await service.importOffer(for: record.localId, withPack: withPack)
+                var next = try await service.importOffer(for: record.localId, withPack: withPack)
+                next.fromPlay = fromPlay
                 if next.bytes <= 0 {
                     startImportDownload(next)
                 } else {
@@ -517,19 +569,33 @@ extension ArcadeView {
     private func importOfferMessage(_ offer: ArcadeImportOffer) -> String {
         let size = ArcadeText.size(offer.bytes)
         if offer.accessPack != nil {
-            return "\(size), for \(offer.record.title): the voices, sounds and words that make it playable by ear. The game itself stays your own file. Wi-Fi is best."
+            let sized = offer.kitMissing ? size + ", including the player that runs added games" : size
+            let without = offer.fromPlay ? " Or play it now without the pack, as the original game." : ""
+            return "\(sized), for \(offer.record.title): the voices, sounds and words that make it playable by ear. The game itself stays your own file. Wi-Fi is best." + without
         }
         return "\(size), once, for every game you add: the player that runs them. Wi-Fi is best. It stays on this iPhone and is not backed up."
     }
 
+    /// Said only once the download has really started: the one slot may have
+    /// been taken while the question was up.
     private func startImportDownload(_ offer: ArcadeImportOffer) {
         speaker.reset()
-        UIAccessibility.post(notification: .announcement,
-                             argument: offer.accessPack == nil ? "Downloading the player." : "Downloading the accessibility pack.")
-        service.startImportDownload(offer)
+        if service.startImportDownload(offer) {
+            UIAccessibility.post(notification: .announcement,
+                                 argument: offer.accessPack == nil ? "Downloading the player." : "Downloading the accessibility pack.")
+        } else {
+            importProblem = ArcadeImportText.otherDownload
+        }
     }
 
-    private func playImport(_ record: ArcadeImportRecord) {
+    /// Play. With an accessibility pack ready to download (and no other
+    /// download running), the question comes first: Download, or Play without it.
+    private func playImport(_ record: ArcadeImportRecord, offerPack: Bool = true) {
+        let status = service.importStatus[record.localId] ?? .unchecked
+        if offerPack, status.isPackReady, service.downloading == nil {
+            askImportDownload(record, withPack: true, fromPlay: true)
+            return
+        }
         guard ArcadeAudioGuard.check() == .clear else {
             waitingForCall = true
             return
@@ -558,19 +624,46 @@ extension ArcadeView {
         }
     }
 
+    private func downloadingWords(_ record: ArcadeImportRecord) -> String {
+        "\(record.title) is downloading. Stop the download first, then delete it."
+    }
+
+    /// Delete asks first; while the game's pack or player is downloading it
+    /// says why it cannot, instead.
+    private func askDelete(_ record: ArcadeImportRecord) {
+        if service.isDownloadingImport(record.localId) {
+            importProblem = downloadingWords(record)
+        } else {
+            deleting = record
+        }
+    }
+
+    /// "Deleted" only when it was.
     private func deleteImport(_ record: ArcadeImportRecord) {
-        service.deleteImport(record.localId)
-        UIAccessibility.post(notification: .announcement, argument: "Deleted \(record.title).")
+        if service.deleteImport(record.localId) {
+            UIAccessibility.post(notification: .announcement, argument: "Deleted \(record.title).")
+        } else {
+            importProblem = downloadingWords(record)
+        }
     }
 
     private func reportImport(_ record: ArcadeImportRecord) {
         reporting = ArcadeImportPlay.reportTarget(record)
     }
 
+    /// The new status, or why the server could not be asked (offline, the
+    /// server's own words when it is busy): a failed check never sounds like
+    /// an answer.
     private func recheck(_ record: ArcadeImportRecord) {
         Task {
-            let status = await service.recheckImport(record.localId)
-            UIAccessibility.post(notification: .announcement, argument: (status ?? .unchecked).words + ".")
+            let said: String
+            switch await service.recheckImport(record.localId) {
+            case .success(let status):
+                said = status.words + "."
+            case .failure(let error):
+                said = error.message
+            }
+            UIAccessibility.post(notification: .announcement, argument: said)
         }
     }
 }
@@ -584,6 +677,8 @@ private struct ArcadeImportAlerts: ViewModifier {
     @Binding var deleting: ArcadeImportRecord?
     let offerMessage: (ArcadeImportOffer) -> String
     let download: (ArcadeImportOffer) -> Void
+    /// Asked from Play: play the original game now instead.
+    let playWithout: (ArcadeImportOffer) -> Void
     let rename: (ArcadeImportRecord) -> Void
     let delete: (ArcadeImportRecord) -> Void
 
@@ -601,6 +696,9 @@ private struct ArcadeImportAlerts: ViewModifier {
             .alert(offerTitle, isPresented: Binding(get: { offer != nil }, set: { if !$0 { offer = nil } }),
                    presenting: offer) { pending in
                 Button("Download") { download(pending) }
+                if pending.fromPlay && pending.accessPack != nil {
+                    Button("Play without it") { playWithout(pending) }
+                }
                 Button("Not now", role: .cancel) {}
             } message: { pending in
                 Text(offerMessage(pending))

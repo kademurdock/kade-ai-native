@@ -294,7 +294,7 @@ enum ArcadeImportProblem: Error, Equatable {
         case .tooBig:
             return "That file is bigger than 128 MB, the most the Arcade takes."
         case .unreadable:
-            return "That file could not be read. If it is in iCloud Drive, open its folder in Files so it downloads, then try again."
+            return "That file could not be read. If it is in iCloud Drive: in Files, long-press the file (or use its Actions rotor), choose Download Now, then add it again."
         case .busy:
             return "Another game is being added. Wait for it to finish, then try again."
         case .notAZip:
@@ -576,8 +576,22 @@ struct ArcadeMatchSummary: Codable, Equatable {
     var access: String?
     var locked: Bool
     var note: String?
+    /// Whether the asking account had the family shelf open. Two answers
+    /// depend on the account (locked, and no match once an account outside
+    /// the pack passes the server's daily cap), so they are asked again
+    /// under another account.
+    var familyOpen: Bool?
+    /// When the server answered.
+    var asked: Date?
 
     static let noMatch = ArcadeMatchSummary(found: false, locked: false)
+
+    /// An answer that depends on the account (locked, or no match), heard
+    /// under the other side of the family shelf from `familyOpen`.
+    func askedElsewhere(familyOpen now: Bool?) -> Bool {
+        guard !found || locked, let then = familyOpen, let now else { return false }
+        return then != now
+    }
 }
 
 /// One added game, as record.json beside its ROM.
@@ -807,23 +821,33 @@ enum ArcadeImporter {
 // MARK: - GET /api/kade/arcade/match
 
 /// The server's answer for one ROM's No-Intro sha1:
-/// `{match: null}` or `{match: {id, title, console, version, size, sha256,
-/// access, locked?, note?}}` where `version` is the accessibility pack's own
-/// version. Read leniently: `accessVersion`/`accessSize`/`accessSha256`
-/// are taken too, and so are a `signPath`, the pack's file table inline
-/// (`files` or `index`, the manifest's row shape), its `romPath` and its
-/// page (`entry`), when the server sends them.
+/// `{match: null}` or `{match: {id, title, console, access, version, size,
+/// sha256, locked, note?, manifestPath, signPath}}` where `version` is the
+/// accessibility pack's own version. The match carries no file table: the
+/// pack's files, its romPath and its page come from `manifestPath`
+/// (/api/kade/arcade/games/<id>/manifest?version=<accessVersion>). Outside
+/// the Family feature pack a family game answers the locked shelf row,
+/// `{id: "family-shelf", title: "Family shelf", console, access: "family",
+/// version: "", size: 0, locked: true, note}`, with nothing to download.
+/// Read leniently: `accessVersion`/`accessSize`/`accessSha256` are taken
+/// too, and so are an inline file table (`files` or `index`, the manifest's
+/// row shape), a `romPath` and a page (`entry`), when a server sends them.
 struct ArcadeMatch: Decodable, Equatable {
+    /// The id a locked answer stands under (the server's ARCADE_SHELF_ID).
+    static let shelfId = "family-shelf"
+
     let id: String
     let title: String
     let console: String?
-    /// The accessibility pack's version.
+    /// The accessibility pack's version ("" for a locked answer).
     let version: String
     let size: Int64?
     let sha256: String?
     let access: ArcadeAccess
     let locked: Bool
     let note: String?
+    /// The accessibility pack's manifest (unlocked only): its files, romPath and page.
+    let manifestPath: String?
     let signPath: String?
     let files: [ArcadePackFile]?
     let romPath: String?
@@ -831,17 +855,27 @@ struct ArcadeMatch: Decodable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, console, version, accessVersion, size, bytes, accessSize, sha256, accessSha256
-        case access, locked, note, signPath, files, index, romPath, entry, page
+        case access, locked, note, manifestPath, signPath, files, index, romPath, entry, page
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        guard let id = c.arcadeText(.id), ArcadePaths.isSafeName(id),
-              let version = c.arcadeText(.accessVersion) ?? c.arcadeText(.version), ArcadePaths.isSafeName(version) else {
-            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "A match needs a plain id and version")
+        let locked = c.arcadeFlag(.locked) ?? false
+        let givenId = c.arcadeText(.id).flatMap { ArcadePaths.isSafeName($0) ? $0 : nil }
+        let givenVersion = (c.arcadeText(.accessVersion) ?? c.arcadeText(.version)).flatMap { ArcadePaths.isSafeName($0) ? $0 : nil }
+        if locked {
+            // Nothing of a locked answer is downloaded (`pack` is nil), so it
+            // needs no usable id or version, only its reason.
+            id = givenId ?? Self.shelfId
+            version = givenVersion ?? ""
+        } else {
+            guard let givenId, let givenVersion else {
+                throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "A match needs a plain id and version")
+            }
+            id = givenId
+            version = givenVersion
         }
-        self.id = id
-        self.version = version
+        self.locked = locked
         title = c.arcadeText(.title) ?? id
         console = c.arcadeText(.console)
         size = c.arcadeNumber(.accessSize) ?? c.arcadeNumber(.size) ?? c.arcadeNumber(.bytes)
@@ -849,8 +883,8 @@ struct ArcadeMatch: Decodable, Equatable {
         sha256 = sha.flatMap { ArcadeHash.isHex64($0) ? $0 : nil }
         // Anything but an explicit "public" is the family shelf: the safer side.
         access = c.arcadeText(.access)?.lowercased() == "public" ? .open : .family
-        locked = c.arcadeFlag(.locked) ?? false
         note = c.arcadeText(.note)
+        manifestPath = locked ? nil : c.arcadeText(.manifestPath)
         signPath = c.arcadeText(.signPath)
         let primary: [ArcadeLenient<ArcadePackFile>]? = try? c.decodeIfPresent([ArcadeLenient<ArcadePackFile>].self, forKey: .files)
         let alternate: [ArcadeLenient<ArcadePackFile>]? = try? c.decodeIfPresent([ArcadeLenient<ArcadePackFile>].self, forKey: .index)
@@ -878,13 +912,56 @@ struct ArcadeMatchAnswer: Decodable {
     /// The answer had a `match` key at all (null or not).
     let answered: Bool
     let match: ArcadeMatch?
+    /// A match was sent but could not be read. Not the same as `"match": null`
+    /// (no pack): the game stays "Not checked" rather than "Plays as the original".
+    let unreadable: Bool
 
     enum CodingKeys: String, CodingKey { case match }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         answered = c.contains(.match)
-        match = try? c.decodeIfPresent(ArcadeMatch.self, forKey: .match)
+        if answered, (try? c.decodeNil(forKey: .match)) == false {
+            match = try? c.decode(ArcadeMatch.self, forKey: .match)
+            unreadable = match == nil
+        } else {
+            match = nil
+            unreadable = false
+        }
+    }
+}
+
+/// What an accessibility pack's manifest (GET the match's manifestPath) gives
+/// an added game: the pack with its file table, the kit it runs on (from the
+/// same catalog, so the two always fit), and where its page and the ROM are.
+struct ArcadeAccessPlan: Equatable {
+    let accessPack: ArcadePackRef
+    let kit: ArcadePackRef
+    let emulatorData: String
+    let entry: String
+    let romPath: String?
+
+    /// The match's manifestPath as a request: its path, which must be
+    /// exactly api/kade/arcade/games/<match id>/manifest, and its `version`.
+    /// Nil for anything else (another host, another game, no version).
+    static func manifestRequest(_ raw: String, gameId: String) -> (path: String, version: String)? {
+        guard let parts = URLComponents(string: raw), parts.scheme == nil, parts.host == nil,
+              let path = ArcadePaths.normalize(parts.path),
+              path == "api/kade/arcade/games/" + gameId + "/manifest",
+              let version = parts.queryItems?.first(where: { $0.name == "version" })?.value,
+              ArcadePaths.isSafeName(version) else { return nil }
+        return (path, version)
+    }
+
+    /// The plan, or nil when the manifest does not carry the pack the match
+    /// named (that id and version, with its files) and a kit.
+    static func make(manifest: ArcadeManifest, match: ArcadeMatch) -> ArcadeAccessPlan? {
+        guard manifest.id == match.id,
+              let pack = manifest.packs.first(where: { $0.kind != "kit" && $0.id == match.id && $0.version == match.version }),
+              pack.index != nil,
+              let kit = manifest.packs.first(where: { $0.kind == "kit" }) else { return nil }
+        return ArcadeAccessPlan(accessPack: pack, kit: kit, emulatorData: manifest.emulatorData,
+                                entry: manifest.entry, romPath: manifest.romPath ?? match.romPath)
     }
 }
 
@@ -893,21 +970,27 @@ struct ArcadeMatchAnswer: Decodable {
 enum ArcadeImportStatus: Equatable {
     /// Its accessibility pack is on this iPhone.
     case pack
+    /// Its accessibility pack is on this iPhone and a newer one is made.
+    case packUpdate(size: Int64?)
     /// An accessibility pack is made for it and may be downloaded.
     case packReady(size: Int64?)
     /// No accessibility pack: it plays as the original game.
     case plain
     /// A pack exists but is not open here; the reason is said first.
     case locked(String)
+    /// The player on this iPhone has no core for its system; the reason is said first.
+    case cannotRun(String)
     /// The server has not been asked yet (offline, or the ask failed).
     case unchecked
 
     var words: String {
         switch self {
         case .pack: return "Accessibility pack"
+        case .packUpdate: return "Accessibility pack, update ready"
         case .packReady: return "Accessibility pack ready to download"
         case .plain: return "Plays as the original game"
         case .locked(let reason): return reason
+        case .cannotRun(let reason): return reason
         case .unchecked: return "Not checked for an accessibility pack yet"
         }
     }
@@ -917,15 +1000,36 @@ enum ArcadeImportStatus: Equatable {
         return false
     }
 
+    var isPackUpdate: Bool {
+        if case .packUpdate = self { return true }
+        return false
+    }
+
+    /// The row offers a pack download: a first one, or an update.
+    var offersPackDownload: Bool {
+        switch self {
+        case .packReady, .packUpdate: return true
+        default: return false
+        }
+    }
+
     /// `familyOpen` is nil while the Arcade's shelf has not answered (offline).
     static func of(_ record: ArcadeImportRecord, packOnPhone: Bool, familyOpen: Bool?) -> ArcadeImportStatus {
         if let pack = record.accessPack, packOnPhone {
             if pack.access != "public" && familyOpen != true {
                 return .locked(familyOpen == nil ? ArcadeImportText.checkOnline : ArcadeImportText.familyPack)
             }
+            // A newer pack found since (Check for an accessibility pack, or
+            // the check after the Arcade opens), open to this account.
+            if let match = record.match, match.found, !match.locked, let newer = match.version, !newer.isEmpty,
+               newer != pack.version, match.access == "public" || familyOpen == true {
+                return .packUpdate(size: match.size)
+            }
             return .pack
         }
         guard let match = record.match else { return .unchecked }
+        // Heard under the other side of the family shelf: not this account's answer.
+        if match.askedElsewhere(familyOpen: familyOpen) { return .unchecked }
         guard match.found else { return .plain }
         if match.locked {
             return .locked(match.access == "public" ? (match.note ?? ArcadeImportText.notOpen) : ArcadeImportText.familyPack)
@@ -938,13 +1042,18 @@ enum ArcadeImportStatus: Equatable {
 }
 
 enum ArcadeImportText {
-    static let about = "Add a game file you own from Files: NES, Game Boy, Game Boy Color, Game Boy Advance or N64, or a zip holding one. It stays on this iPhone, for you, and is never uploaded. When Kade has made an accessibility pack for that game, it is offered to you."
+    static let about = "Add a game file you own from Files: NES, Game Boy, Game Boy Color, Game Boy Advance or N64, or a zip holding one. It stays on this iPhone, for you, and is never uploaded. Only a fingerprint of the file is checked with Kade's server, to find an accessibility pack. When Kade has made an accessibility pack for that game, it is offered to you."
     static let familyPack = "The accessibility pack for this game is on the family shelf"
     static let notOpen = "The accessibility pack for this game is not open on this account"
     static let checkOnline = "Connect to the internet to use this game's accessibility pack"
     static let fileMissing = "The game file is missing from this iPhone. Delete it from My games and add it again."
     static let playerMissing = "The player for added games is not on this iPhone yet. Connect to the internet and try again."
     static let playerNotReady = "The Arcade's player for added games is not ready yet. Try again after the next Arcade update."
+    static let otherDownload = "Another download is running. Wait for it to finish, then try again."
+    static let unreachable = "Couldn't reach Kade's server. Check the connection and try again."
+
+    /// The player on this iPhone has no core for the game's system.
+    static func cannotRun(_ system: ArcadeSystem) -> String { "The player can't run \(system.name) games yet" }
 
     /// The name a new import starts with: the file's name without its extension.
     static func title(fromFileName name: String) -> String {
@@ -960,9 +1069,10 @@ enum ArcadeImportText {
         return String(trimmed.prefix(80))
     }
 
-    /// What VoiceOver says for a row: the status (or the reason) first, then the title.
+    /// What VoiceOver says for a row: the status (or the reason) first, then
+    /// what the button does, Play and the title (as a shelf row says it).
     static func rowLabel(title: String, status: ArcadeImportStatus) -> String {
-        ArcadeShelf.lockedLabel(title: title, reason: status.words)
+        ArcadeShelf.lockedLabel(title: "Play " + title, reason: status.words)
     }
 
     /// The download slot an added game's packs use in ArcadeService.downloading.
@@ -1015,5 +1125,44 @@ enum ArcadeImportPlay {
         let version = record.accessPack.map { "accessibility pack " + $0.version } ?? "plays as the original game"
         return ArcadeReportTarget(gameId: "import-" + record.system.rawValue + "-" + record.sha1,
                                   title: record.title, version: version)
+    }
+
+    /// The kit's files hold the system's EmulatorJS core
+    /// (emulatorjs/cores/<core>-..., e.g. "gambatte-legacy-wasm.data").
+    static func hasCore<S: Sequence>(_ paths: S, system: ArcadeSystem) -> Bool where S.Element == String {
+        let prefix = "emulatorjs/cores/" + system.core + "-"
+        return paths.contains { $0.hasPrefix(prefix) }
+    }
+}
+
+/// The plain player's controls for one system, from the kit's
+/// games/_plain/systems.json: `systems.<id>` laid over the entry it is
+/// `like` (as the kit's own profile.js does). Its `gamepad` is the
+/// controller map and its `touch` the gesture table (named fight zones
+/// held as presses), so a game with no accessibility pack plays with the
+/// controls the kit's help describes (Select included), not the fighting
+/// game's defaults.
+enum ArcadePlainControls {
+    static let systemsPath = ArcadeImportPlay.plainBase + "systems.json"
+
+    /// `systems.<system>` with its `like` entry under it, or nil.
+    static func entry(_ data: Data, system: String) -> [String: Any]? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let systems = root["systems"] as? [String: Any],
+              var entry = systems[system] as? [String: Any] else { return nil }
+        if let like = entry["like"] as? String, like != system, let base = systems[like] as? [String: Any] {
+            entry = base.merging(entry) { _, own in own }
+        }
+        return entry
+    }
+
+    /// The touch table and controller map for the system (nil for a part the entry lacks).
+    static func tables(_ data: Data, system: String) -> (touch: ArcadeTouchTable?, gamepad: ArcadeGamepadMap?, touchHelp: String?) {
+        guard let entry = entry(data, system: system) else { return (nil, nil, nil) }
+        let touch = (entry["touch"] as? [String: Any]).map { ArcadeTouchTable(json: $0) }
+        let gamepad = (entry["gamepad"] as? [String: Any]).map { ArcadeGamepadMap(json: $0) }
+        let lines = ((entry["help"] as? [String: Any])?["touch"] as? [Any])?.compactMap { $0 as? String } ?? []
+        let help = lines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (touch, gamepad, help.isEmpty ? nil : help)
     }
 }

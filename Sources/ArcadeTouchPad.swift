@@ -21,6 +21,11 @@ import QuartzCore
 ///          tap jumps, hold blocks, two-finger tap B, two-finger hold crouch;
 ///          three-finger tap anywhere pauses. The two halves work side by
 ///          side: the left thumb walks while the right one attacks or blocks.
+///   plain  (Oct 19 2026, a game added with no accessibility pack) the kit's
+///          per-system table: left half a floating control pad, two-finger
+///          tap Select; named zones on the right held as buttons (A above
+///          B, the shoulders along the top on the Game Boy Advance);
+///          three-finger tap Start. The pad's hint is the kit's own help.
 ///
 /// Haptics are made when the game opens, never at app launch (the CI
 /// simulator has no haptic or audio hardware): a light tick per stick
@@ -41,6 +46,10 @@ final class ArcadeTouchPadView: UIView {
     private var nextId = 1
     private var touchedOnce = false
     private var mode = "menu"
+    /// Oct 19 2026: the controls the game's own help describes for play (the
+    /// plain player's per-system touch help), said in place of the fighting
+    /// game's words.
+    private var playHint: String?
     private let lightTick = UIImpactFeedbackGenerator(style: .light)
     private let firmTick = UIImpactFeedbackGenerator(style: .rigid)
     private let softTick = UISelectionFeedbackGenerator()
@@ -73,6 +82,12 @@ final class ArcadeTouchPadView: UIView {
         recognizer.mode = mode
     }
 
+    /// The words for play, when the game's own help has them.
+    func setPlayHint(_ hint: String?) {
+        playHint = hint
+        updateAccessibility()
+    }
+
     /// 'menu', 'fight' or 'pause' from the kit's mode event.
     func setMode(_ newMode: String) {
         guard newMode != mode else { return }
@@ -97,8 +112,9 @@ final class ArcadeTouchPadView: UIView {
     // MARK: VoiceOver
 
     private func updateAccessibility() {
+        let fight = playHint ?? "Left half moves, right half acts."
         accessibilityHint = "Double-tap to take hold of the pad; then touches go straight to the game. "
-            + (mode == "fight" ? "Left half moves, right half acts." : "Flick to move, double-tap to choose, two-finger tap to go back.")
+            + (mode == "fight" ? fight : "Flick to move, double-tap to choose, two-finger tap to go back.")
             + " Touch the strip at the top to get VoiceOver back."
         accessibilityValue = mode == "fight" ? "Fight" : (mode == "pause" ? "Paused" : "Menu")
     }
@@ -133,12 +149,13 @@ final class ArcadeTouchPadView: UIView {
             onFirstTouch?()
         }
         let width = Double(bounds.width)
+        let height = Double(bounds.height)
         for touch in touches {
             let id = nextId
             nextId += 1
             ids[ObjectIdentifier(touch)] = id
             let point = touch.location(in: self)
-            emit(recognizer.start(id: id, x: Double(point.x), y: Double(point.y), width: width, now: now()))
+            emit(recognizer.start(id: id, x: Double(point.x), y: Double(point.y), width: width, height: height, now: now()))
         }
         startLink()
     }
