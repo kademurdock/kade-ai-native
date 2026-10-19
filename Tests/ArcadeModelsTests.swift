@@ -611,6 +611,14 @@ import CryptoKit
         check(full.contains("inputType: \"touch\",") && full.contains("saveData: \"AAEC\",") && full.contains("touch: false,"),
               "the host script names the input, carries the kept save and leaves gestures to the app")
         check(!ArcadeJS.hostScript(base: "b", emulatorData: "d", settings: [:]).contains("saveData"), "no kept save, no saveData")
+        check(ArcadeJS.hostScript(base: "kadearcade://game/games/demo/", emulatorData: "d", settings: [:],
+                                  romPath: "kadearcade://game/games/demo/local/rom.z64")
+              .contains("romPath: \"kadearcade://game/games/demo/local/rom.z64\","),
+              "an added game with its pack: the page is told where her ROM is")
+        check(!full.contains("romPath"), "no romPath unless one is given (the plain player's is in its URL)")
+        check(ArcadeJS.cannotStart("emulator") && ArcadeJS.cannotStart("start") && ArcadeJS.cannotStart("system")
+              && !ArcadeJS.cannotStart("ram") && !ArcadeJS.cannotStart("save"),
+              "a game that never started is said aloud, a system the player lacks included; the kit says its own RAM line")
         check(ArcadeJS.setInputType("gamepad")
               == #"window.revivalKit&&window.revivalKit.setInputType&&window.revivalKit.setInputType("gamepad");void 0"#, "the button words call")
         check(ArcadeJS.saveNowForLeaving.contains("k.saveNow()") && ArcadeJS.saveNowForLeaving.contains("r.state === 'saved'"),
@@ -1108,6 +1116,18 @@ extension ArcadeModelsTests {
         check(ArcadeImportPlay.packROMPath(nil, gameId: "demo", system: .n64) == "games/demo/local/rom.z64"
               && ArcadeImportPlay.packROMPath("/games/demo/local/rom.z64", gameId: "x", system: .gb) == "games/demo/local/rom.z64",
               "a pack's ROM path: its romPath, else the kit's layout")
+        // The kit's core files, exactly as kit 20261019-7ae651dc ships them.
+        let kitCores = ["emulatorjs/cores/fceumm-legacy-wasm.data", "emulatorjs/cores/gambatte-legacy-wasm.data",
+                        "emulatorjs/cores/mgba-legacy-wasm.data", "emulatorjs/cores/mupen64plus_next-wasm.data",
+                        "emulatorjs/cores/reports/fceumm.json", "emulatorjs/cores/reports/mupen64plus_next.json"]
+        check(ArcadeSystem.allCases.allSatisfy { ArcadeImportPlay.hasCore(kitCores, system: $0) },
+              "the kit's cores run every system")
+        check(!ArcadeImportPlay.hasCore(["emulatorjs/cores/fceumm-wasm.data", "emulatorjs/cores/fceumm-thread-legacy-wasm.data",
+                                         "emulatorjs/cores/reports/fceumm.json"], system: .nes)
+              && !ArcadeImportPlay.hasCore(["emulatorjs/cores/mupen64plus_next-legacy-wasm.data",
+                                            "emulatorjs/cores/mupen64plus_next-thread-wasm.data"], system: .n64)
+              && !ArcadeImportPlay.hasCore(["emulatorjs/cores/reports/gambatte.json"], system: .gb),
+              "only the build EmulatorJS loads in the app counts, not another build or the report")
         check(ArcadeImportPlay.saveKey(record) == "import-" + record.localId && ArcadePaths.isSafeName(ArcadeImportPlay.saveKey(record)),
               "saves are keyed by the local id")
         check(ArcadeImportPlay.reportTarget(record).gameId == "import-gb-" + record.sha1, "a report names the game by its No-Intro sha1")

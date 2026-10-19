@@ -446,11 +446,13 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         // Before her first press, the input at hand; after a restart, the one she used last.
         let type = pageInputType ?? ArcadeInput.connectedType()
         pageInputType = type
+        // An added game with its pack: her ROM's URL (the overlay), absolute like base.
         return ArcadeJS.hostScript(base: launch.hostRoot + launch.record.base,
                                    emulatorData: launch.hostRoot + launch.record.emulatorData,
                                    settings: settings,
                                    inputType: type,
-                                   saveData: saves?.base64(gameId: launch.saveId))
+                                   saveData: saves?.base64(gameId: launch.saveId),
+                                   romPath: launch.romPath.map { launch.hostRoot + $0 })
     }
 
     func attach(pad: ArcadeTouchPadView) {
@@ -587,7 +589,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         case "error":
             let what = (detail?["what"] as? String) ?? "start"
             status = "The game hit a problem (\(what))"
-            if what == "emulator" || what == "start" {
+            if ArcadeJS.cannotStart(what) {
                 speak("The game could not start. Open Settings and choose Report a problem with this game.", urgent: true, flush: true)
             }
         default:

@@ -1127,11 +1127,20 @@ enum ArcadeImportPlay {
                                   title: record.title, version: version)
     }
 
-    /// The kit's files hold the system's EmulatorJS core
-    /// (emulatorjs/cores/<core>-..., e.g. "gambatte-legacy-wasm.data").
+    /// The core file EmulatorJS 4.2.3 loads for the system in the app's web
+    /// view: no -thread build (the page is not cross-origin isolated); the
+    /// -legacy build for fceumm, gambatte and mgba (their reports carry no
+    /// defaultWebGL2), the plain build for mupen64plus_next (its report sets
+    /// defaultWebGL2, and the web view has WebGL2).
+    static func coreFile(_ system: ArcadeSystem) -> String {
+        "emulatorjs/cores/" + system.core + (system == .n64 ? "-wasm.data" : "-legacy-wasm.data")
+    }
+
+    /// The kit's files hold the core file the system's games boot with
+    /// (a kit carrying only another build of the core would fail at boot).
     static func hasCore<S: Sequence>(_ paths: S, system: ArcadeSystem) -> Bool where S.Element == String {
-        let prefix = "emulatorjs/cores/" + system.core + "-"
-        return paths.contains { $0.hasPrefix(prefix) }
+        let file = coreFile(system)
+        return paths.contains { $0 == file }
     }
 }
 

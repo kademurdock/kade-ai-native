@@ -50,6 +50,10 @@ struct ArcadeLaunch: Identifiable {
     var reportTarget: ArcadeReportTarget? = nil
     /// An added game's system: the plain player reads its controls for it.
     var system: ArcadeSystem? = nil
+    /// An added game played with its accessibility pack: where the pack's
+    /// page expects the ROM (its romPath, the overlay's path), sent to the
+    /// page as revivalKitHost.romPath. Nil for the plain player (rom= in its URL).
+    var romPath: String? = nil
 
     var saveId: String { saveKey ?? record.gameId }
     /// The kit's plain player: a game added from Files with no accessibility pack.
@@ -1123,7 +1127,7 @@ extension ArcadeService {
             return .ready(ArcadeLaunch(entry: entryRow, record: installed, game: [gameMount], kit: [kitMount],
                                        overlays: [ArcadeOverlay(path: romPath, file: rom, length: romSize)],
                                        saveKey: saveKey, pageHost: .game, pageQuery: nil, reportTarget: target,
-                                       system: record.system))
+                                       system: record.system, romPath: romPath))
         }
 
         guard kitMount.index.file(at: ArcadeImportPlay.plainEntry) != nil else {

@@ -1895,6 +1895,13 @@ enum ArcadeJS {
     var r = k.saveNow(); return (r && r.state === 'saved' && typeof r.data === 'string') ? r.data : null; })()
     """
 
+    /// The page's 'error' events that mean the game never started (the
+    /// emulator's script, its start, or a system the plain player does not
+    /// have): the app says so, as nothing else will.
+    static func cannotStart(_ what: String) -> Bool {
+        what == "emulator" || what == "start" || what == "system"
+    }
+
     /// 'touch', 'gamepad' or 'keyboard': which words the page uses for buttons.
     static func setInputType(_ type: String) -> String {
         "window.revivalKit&&window.revivalKit.setInputType&&window.revivalKit.setInputType(\(literal(type)));void 0"
@@ -1909,8 +1916,11 @@ enum ArcadeJS {
     /// not a 4:3 box under the page's heading and keys list.
     /// `inputType` names the buttons for the input at hand from the first
     /// line on; `saveData` is the save the app kept (base64), put in place at boot.
+    /// `romPath` (a game added from Files, played with its accessibility
+    /// pack): the URL the app serves her own ROM at, which the kit takes over
+    /// the profile's ROM path. The plain player gets none (its rom= is in the URL).
     static func hostScript(base: String, emulatorData: String, settings: [String: String],
-                           inputType: String? = nil, saveData: String? = nil) -> String {
+                           inputType: String? = nil, saveData: String? = nil, romPath: String? = nil) -> String {
         var settingParts: [String] = []
         for key in settings.keys.sorted() {
             if let value = settings[key] { settingParts.append(literal(key) + ":" + literal(value)) }
@@ -1919,6 +1929,7 @@ enum ArcadeJS {
         var optional = ""
         if let inputType, !inputType.isEmpty { optional += "\n    inputType: \(literal(inputType)),"}
         if let saveData, !saveData.isEmpty { optional += "\n    saveData: \(literal(saveData)),"}
+        if let romPath, !romPath.isEmpty { optional += "\n    romPath: \(literal(romPath)),"}
         return """
         (function () {
           if (window.revivalKitHost) { return; }
