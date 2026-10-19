@@ -169,6 +169,10 @@ struct PlayHomeView: View {
                     kadeTile("Debate Room", caption: "Characters talk it out", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 characters, and let them go back and forth. Also reaches the Conversation Hall.", route: .debateRoom)
                     kadeTile("Matchmaker", caption: "Find a character you'd like", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three characters who might be a good fit.", route: .matchmaker)
                 }
+                #if KADE_ARCADE
+                // Oct 18 2026: internal TestFlight builds only (KADE_ARCADE).
+                kadeTile("Arcade", caption: "Classic games, playable by ear", spoken: "The Arcade", icon: "gamecontroller.fill", tint: .purple, hint: "Old console games made to play by ear, by touch, keyboard or controller. Family games are part of the Family feature pack.", route: .arcade)
+                #endif
 
                 Button { nav.open(.marketplace) } label: {
                     Label("Marketplace", systemImage: "storefront")

@@ -362,7 +362,7 @@ struct KadeSearchPlace: Identifiable {
         return false
     }
 
-    static let all: [KadeSearchPlace] = [
+    private static let listed: [KadeSearchPlace] = [
         KadeSearchPlace(title: "Your conversations", caption: "Talk tab", symbol: "bubble.left.and.bubble.right", tint: .blue, route: .conversations, keywords: "chats chat messages history talk list"),
         KadeSearchPlace(title: "Describe", caption: "Photos, videos and papers read to you", symbol: "plus.viewfinder", tint: .teal, route: .describe, keywords: "camera picture photo image document letter mail menu read describe see video"),
         KadeSearchPlace(title: "Transcribe", caption: "Turn your voice into text", symbol: "waveform", tint: .purple, route: .transcribe, keywords: "dictate dictation voice memo record recording text speech notes"),
@@ -390,4 +390,20 @@ struct KadeSearchPlace: Identifiable {
         KadeSearchPlace(title: "Morning brief", caption: "Your daily rundown", symbol: "sun.max", tint: .yellow, route: .brief, keywords: "brief morning daily news rundown"),
         KadeSearchPlace(title: "Help", caption: "How everything works", symbol: "questionmark.circle", tint: .mint, route: .help, keywords: "help how guide instructions where is lost gestures"),
     ]
+
+    #if KADE_ARCADE
+    /// Oct 18 2026: the Arcade (internal TestFlight builds only), right after The Parlor.
+    static let all: [KadeSearchPlace] = {
+        var places = KadeSearchPlace.listed
+        let arcade = KadeSearchPlace(title: "The Arcade", caption: "Classic games, playable by ear", symbol: "gamecontroller.fill", tint: .purple, route: .arcade, keywords: "arcade retro classic old console video games game nintendo n64 emulator controller play by ear")
+        if let parlor = places.firstIndex(where: { $0.title == "The Parlor" }) {
+            places.insert(arcade, at: parlor + 1)
+        } else {
+            places.append(arcade)
+        }
+        return places
+    }()
+    #else
+    static let all: [KadeSearchPlace] = listed
+    #endif
 }

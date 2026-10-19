@@ -17,7 +17,9 @@ jobs:
   check:
     if: github.repository == 'kademurdock/kade-ai-native' && github.event.repository.private == false
     runs-on: macos-26
-    timeout-minutes: 75
+    # Step limits add up to 12 + 10 + 25 + 25 + 45 = 117 minutes; the job
+    # limit sits above them, so a slow gallery never cancels the whole check.
+    timeout-minutes: 125
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       HOMEBREW_NO_AUTO_UPDATE: '1'
@@ -40,6 +42,7 @@ jobs:
           if [ -f run-puppet-tests.sh ]; then bash run-puppet-tests.sh 2>&1 | tail -n 120; fi
           if [ -f run-living-painting-tests.sh ]; then bash run-living-painting-tests.sh 2>&1 | tail -n 60; fi
           if [ -f run-soul-tests.sh ]; then bash run-soul-tests.sh 2>&1 | tail -n 20; fi
+          if [ -f run-arcade-tests.sh ]; then bash run-arcade-tests.sh 2>&1 | tail -n 20; fi
 
       - name: Generate the simulator project
         timeout-minutes: 10
@@ -68,6 +71,35 @@ jobs:
           fi
           exit $status
 
+      # Oct 18 2026: the Arcade compiles only with KADE_ARCADE (internal
+      # TestFlight builds). Build the app a second time with the flag on, so
+      # both flag states are compile-checked. It runs straight after the
+      # first build, before the gallery, so a slow gallery can never cut it
+      # off; it reuses the packages the first build fetched, and its own
+      # derived data leaves the gallery's build untouched. Its result is
+      # reported by the last step, so the gallery still runs either way.
+      - name: Compile the app again with the Arcade flag, unsigned
+        id: compile-arcade
+        if: ${{ steps.compile.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          status=0
+          # $(inherited) keeps each target's own conditions (DEBUG, and
+          # KADE_APP_TARGET for the app only); KADE_ARCADE is added on top.
+          xcodebuild -jobs 3 -project KadeAI.xcodeproj -scheme KadeAI -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/check-arcade -clonedSourcePackagesDirPath build/check/SourcePackages \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
+            'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) KADE_ARCADE' build > build-arcade.log 2>&1 || status=$?
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build-arcade.log | sort -u | head -n 200 || true
+          if [ "$status" -ne 0 ]; then
+            grep -n -E "error|failed|Failed|Stack dump" build-arcade.log | tail -n 60 || true
+            tail -n 40 build-arcade.log || true
+          fi
+          exit $status
+
       - name: Puppet gallery screenshots
         id: gallery
         if: ${{ steps.compile.outcome == 'success' && hashFiles('dev/puppet-gallery.sh') != '' }}
@@ -85,4 +117,8 @@ jobs:
 
       - name: Fail when the model tests failed
         if: ${{ steps.models.outcome == 'failure' }}
+        run: exit 1
+
+      - name: Fail when the Arcade compile failed
+        if: ${{ always() && steps.compile-arcade.outcome == 'failure' }}
         run: exit 1
