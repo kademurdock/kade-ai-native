@@ -243,6 +243,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private var suspendToken = 0
     /// Leaving waits (briefly) for the game's save.
     private var leaveWaiter: (() -> Void)?
+    /// Oct 19 2026: the game's Settings sheet is up (and with it Report a
+    /// problem's text field), so a keyboard's presses are typing, not play:
+    /// no key goes down in the game and Escape does not ask to leave.
+    /// Releases still pass, so nothing stays held.
+    var keysElsewhere = false
 
     init(launch: ArcadeLaunch) {
         self.launch = launch
@@ -299,7 +304,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         input.onPad = { [weak self] state in self?.controllerPad(state) }
         input.onInfo = { [weak self] what in self?.info(what) }
         input.onKey = { [weak self] key, down in self?.key(key, down: down) }
-        input.onEscape = { [weak self] in self?.askingLeave = true }
+        input.onEscape = { [weak self] in
+            guard let self, !self.keysElsewhere else { return }
+            self.askingLeave = true
+        }
         input.onAnnounce = { [weak self] text in self?.speak(text, urgent: false, flush: false) }
         input.mode = mode
         input.start(map: gamepadMap)
@@ -504,6 +512,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func key(_ key: String, down: Bool) {
+        if down && keysElsewhere { return }
         telemetry.keySends += 1
         if down { useInput("keyboard") }
         evaluate(ArcadeJS.press(key: key, down: down))
@@ -856,13 +865,16 @@ struct ArcadeWebSurface: UIViewRepresentable {
 
 struct ArcadeGameView: View {
     @StateObject private var host: ArcadeGameHost
+    /// Oct 19 2026: for Report a problem with this game, in Settings.
+    let apiClient: KadeAPIClient
     let onClose: (String) -> Void
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
     @State private var showSettings = false
 
-    init(launch: ArcadeLaunch, onClose: @escaping (String) -> Void) {
+    init(launch: ArcadeLaunch, apiClient: KadeAPIClient, onClose: @escaping (String) -> Void) {
         _host = StateObject(wrappedValue: ArcadeGameHost(launch: launch))
+        self.apiClient = apiClient
         self.onClose = onClose
     }
 
@@ -902,8 +914,9 @@ struct ArcadeGameView: View {
             Text("The game's own saves stay on this iPhone, ready for next time. A fight still going is not saved.")
         }
         .sheet(isPresented: $showSettings) {
-            ArcadeGameSettingsView(host: host)
+            ArcadeGameSettingsView(host: host, apiClient: apiClient)
         }
+        .onChange(of: showSettings) { _, open in host.keysElsewhere = open }
     }
 
     /// The game's save is taken first (when it is paused or in its menus), then the cover closes.
@@ -932,7 +945,7 @@ struct ArcadeGameView: View {
             stripButton("Practice", spoken: "Pad practice", symbol: "hand.tap",
                         hint: "Learn the pad without playing. Coming in a later build.") { host.padPractice() }
             stripButton("Settings", spoken: "Settings", symbol: "gearshape",
-                        hint: "The picture, speech, haptics, and the test report. Pauses a fight first.") {
+                        hint: "The picture, speech, haptics, the test report, and Report a problem with this game. Pauses a fight first.") {
                 host.pauseIfFighting()
                 showSettings = true
             }
@@ -986,8 +999,15 @@ struct ArcadeGameView: View {
 
 struct ArcadeGameSettingsView: View {
     @ObservedObject var host: ArcadeGameHost
+    let apiClient: KadeAPIClient
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+
+    /// The game open right now, at the version on this iPhone.
+    private var reportTarget: ArcadeReportTarget {
+        ArcadeReportTarget(gameId: host.launch.record.gameId, title: host.launch.entry.title,
+                           version: host.launch.record.version)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1007,6 +1027,18 @@ struct ArcadeGameSettingsView: View {
                     }
                 } footer: {
                     Text("It says how the game ran on this iPhone: speed, restarts, sound and inputs. No account details.")
+                }
+                // Oct 19 2026 (App Store 4.7.1): reports go to Kade through
+                // the app's own feedback path, with this game's id and version.
+                Section {
+                    NavigationLink {
+                        ArcadeReportView(apiClient: apiClient, target: reportTarget,
+                                         place: "Game settings", standalone: false)
+                    } label: {
+                        Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble")
+                    }
+                } footer: {
+                    Text("Something wrong with this game, its sound or its words? Tell Kade in a few words. The game's name and version go with it.")
                 }
                 Section("Tips") {
                     Text("Wired headphones are quicker than AirPods, by about a tenth of a second.")

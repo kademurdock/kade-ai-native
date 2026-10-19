@@ -354,8 +354,20 @@ final class ArcadeService: ObservableObject {
 
     // MARK: Before a download
 
+    /// Oct 19 2026 (App Store 4.7.5): only a row the shelf shows as playable
+    /// may download or launch. A greyed row (an age rule, a family game
+    /// outside the pack, a game not ready) never does, even when its packs
+    /// are already on this iPhone from another account.
+    func isPlayable(_ entry: ArcadeCatalogEntry) -> Bool {
+        guard let rows = shelf?.rows else { return false }
+        return ArcadeShelf.playable(entry.id, in: rows) != nil
+    }
+
+    static let notOpenHere = "This game is not open on this account."
+
     /// The manifest and the bytes still to fetch, for the confirm question.
     func offer(for entry: ArcadeCatalogEntry) async throws -> ArcadeDownloadOffer {
+        guard isPlayable(entry) else { throw ArcadeServiceError(message: Self.notOpenHere) }
         let manifest = try await fetchManifest(entry)
         let store = try ArcadeStore()
         return ArcadeDownloadOffer(entry: entry, manifest: manifest,
@@ -383,7 +395,7 @@ final class ArcadeService: ObservableObject {
     /// The news is spoken here, not by the list, so it is heard wherever she
     /// is in the app when the download ends.
     func startDownload(_ offer: ArcadeDownloadOffer) {
-        guard downloading == nil else { return }
+        guard downloading == nil, isPlayable(offer.entry) else { return }
         let asked = generation
         downloading = offer.entry.id
         progress = 0
@@ -583,7 +595,8 @@ final class ArcadeService: ObservableObject {
     // MARK: Playing and deleting
 
     func launch(for entry: ArcadeCatalogEntry) -> ArcadeLaunch? {
-        guard let store = try? ArcadeStore(), let record = preferredRecord(for: entry, store: store) else { return nil }
+        guard isPlayable(entry), let store = try? ArcadeStore(),
+              let record = preferredRecord(for: entry, store: store) else { return nil }
         var game: [ArcadeMount] = []
         var kit: [ArcadeMount] = []
         for pack in record.packs {

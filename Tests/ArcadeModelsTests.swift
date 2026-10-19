@@ -84,6 +84,47 @@ import Foundation
         check(ArcadeShelf.rows([publicLocked], familyOpen: true, familyNote: note).first == .locked(publicLocked, reason: ArcadeShelf.publicLocked),
               "a locked public game says so in plain words")
 
+        // Oct 19 2026: nothing about a locked game downloads or launches.
+        check(ArcadeShelf.playable("tilt", in: open)?.id == "tilt" && ArcadeShelf.playable("fighter", in: open) != nil,
+              "a playable row opens its game")
+        check(ArcadeShelf.playable("fighter", in: closed) == nil && ArcadeShelf.playable("odd", in: closed) == nil,
+              "a folded family game is never playable")
+        let ageLocked = ArcadeShelf.rows([lockedFamily, publicLocked, unready], familyOpen: true, familyNote: note)
+        check(ArcadeShelf.playable("fighter", in: ageLocked) == nil && ArcadeShelf.playable("tilt", in: ageLocked) == nil,
+              "a game the server locks (an age rule) or that is not ready is never playable")
+        check(ArcadeShelf.playable("missing", in: open) == nil, "an id not on the shelf is not playable")
+        check(ArcadeShelf.lockedLabel(title: "Fighter", reason: "Grown-ups only.") == "Grown-ups only. Fighter",
+              "the reason is spoken first, then the name")
+        check(ArcadeShelf.lockedLabel(title: ArcadeShelf.shelfTitle, reason: note) == "Part of the Family feature pack. Family shelf",
+              "the family shelf says its reason first")
+        check(ArcadeShelf.lockedLabel(title: "Tilt", reason: "  ") == "Tilt" && ArcadeShelf.lockedLabel(title: "", reason: "Locked") == "Locked",
+              "an empty reason or name leaves the other alone")
+        check(ArcadeShelf.hasPublicGame(open) && ArcadeShelf.hasPublicGame([.locked(publicLocked, reason: "x")]),
+              "a public game, playable or greyed, counts as public")
+        check(!ArcadeShelf.hasPublicGame(reviewSeat) && !ArcadeShelf.hasPublicGame(ArcadeShelf.rows([fighter], familyOpen: true, familyNote: note)),
+              "a shelf of family games has no public game")
+        for word in ["play by ear", "Family shelf", "private", "public games are free"] {
+            check(ArcadeShelf.about.contains(word), "the screen's description says: " + word)
+        }
+
+        // Oct 19 2026: Report a problem with this game (App Store 4.7.1).
+        let target = ArcadeReportTarget(gameId: "tilt", title: "Tilt Demo", version: "3")
+        check(!ArcadeReport.canSend("") && !ArcadeReport.canSend(" ab ") && ArcadeReport.canSend("No sound"),
+              "a report needs a few typed words")
+        check(ArcadeReport.subject(target) == "Arcade game report: Tilt Demo" && ArcadeReport.subject(.arcade) == "Arcade report",
+              "the report's title names the game")
+        let long = ArcadeReportTarget(gameId: "x", title: String(repeating: "t", count: 400), version: "1")
+        check(ArcadeReport.subject(long).count == 200, "the title fits the server's 200 characters")
+        let detail = ArcadeReport.detail(note: "  The sound stops after the menu.  ", target: target, from: "Game settings")
+        check(detail == "The sound stops after the menu.\n\nGame: Tilt Demo\nGame id: tilt\nGame version: 3\nSent from: Game settings",
+              "the report carries her words, the game id and version, and where it came from")
+        check(ArcadeReport.detail(note: "Hard to find", target: .arcade, from: "Arcade screen").contains("About: the Arcade itself"),
+              "a report about the whole Arcade says so")
+        check(ArcadeReport.detail(note: "abc", target: ArcadeReportTarget(gameId: "y", title: "Y", version: ""), from: "Arcade list")
+              .contains("Game version: not known"), "a missing version is said plainly")
+        check(ArcadeReport.detail(note: String(repeating: "n", count: 5000), target: target, from: "x").count < 2200,
+              "a very long note is cut to size")
+
         check(ArcadePaths.isSafeName("demo") && ArcadePaths.isSafeName("2026.10.19-b"), "plain names are safe")
         check(!ArcadePaths.isSafeName("../x") && !ArcadePaths.isSafeName("a b") && !ArcadePaths.isSafeName(".hidden") && !ArcadePaths.isSafeName(""),
               "folder-escaping or odd names are refused")

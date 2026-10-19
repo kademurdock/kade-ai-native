@@ -264,6 +264,96 @@ enum ArcadeShelf {
         if !familyOpen && !shelfPlaced { rows.append(.familyShelf(reason: familyNote)) }
         return rows
     }
+
+    /// The one way into a download or a game: the catalog entry with this id,
+    /// only while the shelf shows it as playable. A locked row (an age rule,
+    /// a family game outside the pack, a game not ready) answers nil, so
+    /// nothing about it can download or launch, even with its packs already
+    /// on the phone.
+    static func playable(_ id: String, in rows: [ArcadeShelfRow]) -> ArcadeCatalogEntry? {
+        for row in rows {
+            if case .playable(let entry) = row, entry.id == id, !entry.locked { return entry }
+        }
+        return nil
+    }
+
+    /// What VoiceOver says for a greyed row: the reason FIRST, then the name
+    /// ("Part of the Family feature pack. Family shelf"), so the reason is
+    /// heard even when she swipes on before the end, and with hints off.
+    static func lockedLabel(title: String, reason: String) -> String {
+        var said = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = said.last, last == "." || last == ":" || last == "," { said.removeLast() }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if said.isEmpty { return name }
+        return name.isEmpty ? said : said + ". " + name
+    }
+
+    /// The plain description at the top of the Arcade screen: what it is, and
+    /// who each shelf is for. No game is named.
+    static let about = "Classic games you can play by ear. Family shelf games are private to Kade's family and greyed out for everyone else; public games are free for everyone. Games download from Kade's server when you ask, and nothing is built into the app."
+    /// Under the list when the shelf has no public game yet.
+    static let noPublicGames = "No public games are on the shelf yet. They appear here as they are added."
+
+    /// True when the shelf holds a public game, playable or not.
+    static func hasPublicGame(_ rows: [ArcadeShelfRow]) -> Bool {
+        rows.contains { row in
+            switch row {
+            case .playable(let entry), .locked(let entry, _): return entry.access == .open
+            case .familyShelf: return false
+            }
+        }
+    }
+}
+
+// MARK: - Report a problem with a game (App Store guideline 4.7.1)
+
+/// What a report is about: a game (its id, its listed title and the version
+/// on this iPhone, or the catalog's before any download), or the Arcade
+/// itself when `gameId` is empty.
+struct ArcadeReportTarget: Identifiable, Equatable {
+    let gameId: String
+    let title: String
+    let version: String
+    var id: String { gameId + "@" + version }
+
+    /// The whole Arcade, no one game (the button at the foot of the screen).
+    static let arcade = ArcadeReportTarget(gameId: "", title: "The Arcade", version: "")
+}
+
+/// The words of a game report. It travels the app's one feedback path
+/// (FeedbackReportService, POST /api/kade/feedback, category "bug"), so it
+/// lands on Kade's feedback board beside every other report.
+enum ArcadeReport {
+    static let actionName = "Report a problem with this game"
+    static let arcadeActionName = "Report a problem with the Arcade"
+    static let sentLine = "Report sent. Thank you, Kade will see it."
+    static let minimumNote = 3
+    static let maximumNote = 2000
+
+    static func canSend(_ note: String) -> Bool {
+        note.trimmingCharacters(in: .whitespacesAndNewlines).count >= minimumNote
+    }
+
+    /// The board's short title (the server keeps 200 characters).
+    static func subject(_ target: ArcadeReportTarget) -> String {
+        let title = target.gameId.isEmpty ? "Arcade report" : "Arcade game report: " + target.title
+        return String(title.prefix(200))
+    }
+
+    /// Her words first, then the game's id and version and where it was sent from.
+    static func detail(note: String, target: ArcadeReportTarget, from place: String) -> String {
+        let said = String(note.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maximumNote))
+        var lines = [said, ""]
+        if target.gameId.isEmpty {
+            lines.append("About: the Arcade itself, no one game")
+        } else {
+            lines.append("Game: " + target.title)
+            lines.append("Game id: " + target.gameId)
+            lines.append("Game version: " + (target.version.isEmpty ? "not known" : target.version))
+        }
+        lines.append("Sent from: " + place)
+        return lines.joined(separator: "\n")
+    }
 }
 
 // MARK: - The manifest and packs

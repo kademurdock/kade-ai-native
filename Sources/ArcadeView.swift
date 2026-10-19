@@ -15,6 +15,13 @@ import UIKit
 ///   on a downloaded game has Delete download.
 /// - Play opens the game in one full-screen cover (ArcadeGameView). A phone
 ///   call comes first.
+/// - Oct 19 2026, her decision: in every build, the public App Store one
+///   included. The screen says plainly what the Arcade is and who each shelf
+///   is for (App Store 2.5.19: nothing hidden or undocumented). A greyed row
+///   says its reason first and never downloads or launches (4.7.5). Every
+///   playable game has "Report a problem with this game" in its Actions
+///   rotor and long-press menu, and the game's Settings sheet has it too
+///   (4.7.1); the foot of the screen reports a problem with the Arcade.
 struct ArcadeView: View {
     let apiClient: KadeAPIClient
     @ObservedObject private var service: ArcadeService
@@ -25,6 +32,7 @@ struct ArcadeView: View {
     @State private var waitingForCall = false
     @State private var lastReport: String?
     @State private var speaker = ArcadeProgressSpeaker()
+    @State private var reporting: ArcadeReportTarget?
 
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
@@ -34,7 +42,11 @@ struct ArcadeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Old console games made to play by ear: the game's own sounds placed around you, and its menus read aloud. Play by touch with VoiceOver on, or with a keyboard or a game controller.")
+                // Oct 19 2026: what the Arcade is, in plain words, first on
+                // the screen (App Store 2.5.19). No game is named.
+                Text(ArcadeShelf.about)
+                    .font(.body)
+                Text("The game's own sounds are placed around you, and its menus are read aloud. Play by touch with VoiceOver on, or with a keyboard or a game controller.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -64,6 +76,21 @@ struct ArcadeView: View {
                     Text("In the game, the strip at the top has Leave game, Pause, Status, Repeat and Settings. Everything below it is the game pad: double-tap it once, then touches go to the game.")
                 }
                 .font(.callout)
+
+                // Oct 19 2026 (App Store 4.7.1): always on screen, so a report
+                // is possible even before any game is downloaded.
+                VStack(alignment: .leading, spacing: 6) {
+                    Button { reporting = .arcade } label: {
+                        Label(ArcadeReport.arcadeActionName, systemImage: "exclamationmark.bubble")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(KadeCardButtonStyle())
+                    .accessibilityHint("Tell Kade what went wrong. Each game also has Report a problem with this game in its Actions rotor.")
+                    Text("For one game, use Report a problem with this game in its Actions rotor, its long-press menu, or the game's Settings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
             }
             .padding()
             .frame(maxWidth: 680)
@@ -100,10 +127,14 @@ struct ArcadeView: View {
             Text("The Arcade waits until the call ends.")
         }
         .fullScreenCover(item: $playing, onDismiss: { service.stoppedPlaying() }) { launch in
-            ArcadeGameView(launch: launch) { report in
+            ArcadeGameView(launch: launch, apiClient: apiClient) { report in
                 lastReport = report
                 playing = nil
             }
+        }
+        .sheet(item: $reporting) { target in
+            ArcadeReportView(apiClient: apiClient, target: target,
+                             place: target.gameId.isEmpty ? "Arcade screen" : "Arcade list")
         }
     }
 
@@ -135,6 +166,11 @@ struct ArcadeView: View {
                 ForEach(rows) { row in
                     rowView(row)
                 }
+                if !ArcadeShelf.hasPublicGame(rows) {
+                    Text(ArcadeShelf.noPublicGames)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -151,9 +187,10 @@ struct ArcadeView: View {
         }
     }
 
-    /// Greyed, never hidden: the reason is part of the spoken label (heard even
-    /// with VoiceOver hints off, as the Library's greyed local row does) and
-    /// shown beneath it; the caption is the hint.
+    /// Greyed, never hidden: the reason is part of the spoken label, FIRST
+    /// (heard even with VoiceOver hints off), and shown beneath it; the
+    /// caption is the hint. The button does nothing and is disabled, and it
+    /// has no actions: nothing about a locked game downloads or launches.
     private func greyedRow(title: String, caption: String, reason: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {} label: {
@@ -163,7 +200,7 @@ struct ArcadeView: View {
             .buttonStyle(KadeCardButtonStyle())
             .labelStyle(KadeRowLabelStyle(tint: .gray, caption: caption))
             .disabled(true)
-            .accessibilityLabel("\(title), \(reason)")
+            .accessibilityLabel(ArcadeShelf.lockedLabel(title: title, reason: reason))
             .accessibilityHint(caption)
             Text(reason)
                 .font(.footnote)
@@ -196,7 +233,11 @@ struct ArcadeView: View {
                 .accessibilityValue(needsUpdate ? "Downloaded. An update is ready." : "Downloaded")
                 .accessibilityHint(entry.summary ?? "Opens the game full screen.")
                 .accessibilityAction(named: "Delete download") { deleteDownload(entry) }
+                .accessibilityAction(named: ArcadeReport.actionName) { report(entry) }
                 .contextMenu {
+                    Button { report(entry) } label: {
+                        Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble")
+                    }
                     Button(role: .destructive) { deleteDownload(entry) } label: {
                         Label("Delete download", systemImage: "trash")
                     }
@@ -220,6 +261,12 @@ struct ArcadeView: View {
                 .labelStyle(KadeRowLabelStyle(tint: .purple, caption: caption(entry)))
                 .disabled(checking != nil || service.downloading != nil)
                 .accessibilityHint("Says the size and asks before anything downloads.")
+                .accessibilityAction(named: ArcadeReport.actionName) { report(entry) }
+                .contextMenu {
+                    Button { report(entry) } label: {
+                        Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble")
+                    }
+                }
             }
             if let error = service.downloadErrors[entry.id] {
                 Text(error)
@@ -249,6 +296,12 @@ struct ArcadeView: View {
         }
     }
 
+    /// The version on this iPhone when there is one, else the catalog's.
+    private func report(_ entry: ArcadeCatalogEntry) {
+        reporting = ArcadeReportTarget(gameId: entry.id, title: entry.title,
+                                       version: service.installed[entry.id] ?? entry.version)
+    }
+
     private func deleteDownload(_ entry: ArcadeCatalogEntry) {
         service.delete(entry)
         UIAccessibility.post(notification: .announcement, argument: "Deleted the download of \(entry.title).")
@@ -265,6 +318,10 @@ struct ArcadeView: View {
     }
 
     private func play(_ entry: ArcadeCatalogEntry) {
+        guard service.isPlayable(entry) else {
+            problem = ArcadeService.notOpenHere
+            return
+        }
         guard ArcadeAudioGuard.check() == .clear else {
             waitingForCall = true
             return
