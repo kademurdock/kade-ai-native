@@ -1,6 +1,8 @@
 import Foundation
+import CryptoKit
 
-// The Arcade's pure models (Sources/ArcadeModels.swift), compiled by
+// The Arcade's pure models (Sources/ArcadeModels.swift and, since Oct 19 2026,
+// Sources/ArcadeImport.swift), compiled by
 // run-arcade-tests.sh. No simulator, no WebKit, no network.
 
 @main enum ArcadeModelsTests {
@@ -20,7 +22,8 @@ import Foundation
         controllersAndKeys()
         javascriptAndWords()
         savesKept()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text; not WebKit, VoiceOver, haptics, GameController or a real download.")
+        try addAGame()
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the ROM served at its pack path); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: Saves
@@ -635,5 +638,422 @@ import Foundation
         check(report.contains("fps=58") && report.contains("heap.bytes=268435456") && report.contains("contexts=2 items"), "kit telemetry is flattened")
         check(telemetry.errors.count == 8 && telemetry.errors.last == "page error 11", "only the last eight errors are kept")
         check(telemetry.eventCounts["mode"] == 1 && telemetry.eventCounts["error"] == 1, "events are counted")
+    }
+}
+
+// MARK: - Add a game (Oct 19 2026): Sources/ArcadeImport.swift
+//
+// Every ROM here is a few made-up bytes built in the test; no game is in the repo.
+
+extension ArcadeModelsTests {
+    static func addAGame() throws {
+        identities()
+        detection()
+        try zipReading()
+        try importStore()
+        try matchAnswers()
+        try overlayServing()
+    }
+
+    static func sha1Hex(_ bytes: [UInt8]) -> String {
+        ArcadeROMHasher.hex(Insecure.SHA1.hash(data: Data(bytes)))
+    }
+
+    static func temporaryFolder(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("arcade-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    // MARK: sha1, crc32 and the No-Intro form
+
+    static func identities() {
+        let gba = ArcadeROMKind(system: .gba, n64Order: nil, headerBytes: 0)
+        let abc = ArcadeROMHasher.identify(Data("abc".utf8), kind: gba)
+        check(abc.identity.sha1 == "a9993e364706816aba3e25717850c26c9cd0d89d" && abc.identity.localId == abc.identity.sha1,
+              "sha1 of a whole file is the standard sha1, and the local id is the same when nothing is left out")
+        check(abc.identity.crc32 == "352441c2" && abc.identity.size == 3 && abc.kept == Data("abc".utf8), "crc32 and size, and the bytes kept as they came")
+        var crc = ArcadeCRC32()
+        crc.update(Array("123456789".utf8))
+        check(crc.value == 0xCBF4_3926, "crc32's check value")
+
+        // NES: the 16-byte iNES header is left out of the No-Intro hash, not out of the file kept.
+        let header: [UInt8] = [0x4E, 0x45, 0x53, 0x1A, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        let body: [UInt8] = Array("abc".utf8)
+        let nes = ArcadeROMKind(system: .nes, n64Order: nil, headerBytes: 16)
+        let headed = ArcadeROMHasher.identify(Data(header + body), kind: nes)
+        check(headed.identity.sha1 == "a9993e364706816aba3e25717850c26c9cd0d89d" && headed.identity.crc32 == "352441c2",
+              "an NES file is hashed without its iNES header")
+        check(headed.identity.localId == sha1Hex(header + body) && headed.kept == Data(header + body) && headed.identity.size == 19,
+              "but its local id is the whole file, and the whole file is kept (the emulator needs the header)")
+        var pieces = ArcadeROMHasher(kind: nes)
+        var kept = Data()
+        for start in stride(from: 0, to: 19, by: 5) {
+            kept.append(pieces.update(Data((header + body)[start..<min(start + 5, 19)])))
+        }
+        let piecesEnd = pieces.finish()
+        check(piecesEnd.identity == headed.identity && kept == Data(header + body), "the header is left out across pieces too")
+
+        // N64: all three byte orders hash as the big-endian .z64 file, and are kept that way.
+        let z64: [UInt8] = [0x80, 0x37, 0x12, 0x40, 1, 2, 3, 4, 5, 6, 7, 8]
+        let v64: [UInt8] = [0x37, 0x80, 0x40, 0x12, 2, 1, 4, 3, 6, 5, 8, 7]
+        let n64: [UInt8] = [0x40, 0x12, 0x37, 0x80, 4, 3, 2, 1, 8, 7, 6, 5]
+        let want = sha1Hex(z64)
+        var localIds = Set<String>()
+        let orders: [([UInt8], ArcadeN64Order)] = [(z64, .bigEndian), (v64, .byteSwapped), (n64, .wordSwapped)]
+        for (bytes, order) in orders {
+            let kind = ArcadeROMKind(system: .n64, n64Order: order, headerBytes: 0)
+            let whole = ArcadeROMHasher.identify(Data(bytes), kind: kind)
+            check(whole.identity.sha1 == want && whole.kept == Data(z64), "N64 \(order.rawValue) is hashed and kept in .z64 order")
+            check(whole.identity.localId == sha1Hex(bytes), "N64 \(order.rawValue)'s local id is the file as added")
+            localIds.insert(whole.identity.localId)
+            // Pieces that cut words in half.
+            var hasher = ArcadeROMHasher(kind: kind)
+            var out = Data()
+            for start in stride(from: 0, to: bytes.count, by: 3) {
+                out.append(hasher.update(Data(bytes[start..<min(start + 3, bytes.count)])))
+            }
+            let end = hasher.finish()
+            out.append(end.tail)
+            check(end.identity == whole.identity && out == Data(z64), "N64 \(order.rawValue) in pieces of three bytes")
+        }
+        check(localIds.count == 3, "the three files are three local ids")
+        var odd: [UInt8] = [0x37, 0x80, 0x40, 0x12, 9]
+        ArcadeN64Order.toBigEndian(&odd, from: .byteSwapped)
+        check(odd == [0x80, 0x37, 0x12, 0x40, 9], "a tail shorter than a word is left as it is")
+    }
+
+    static func detection() {
+        func head(_ size: Int, _ set: [Int: UInt8] = [:]) -> Data {
+            var bytes = [UInt8](repeating: 0, count: size)
+            for (index, value) in set { bytes[index] = value }
+            return Data(bytes)
+        }
+        check(ArcadeSystem.from(extension: "GBA") == .gba && ArcadeSystem.from(extension: "v64") == .n64
+              && ArcadeSystem.from(extension: "zip") == nil && ArcadeSystem.from(extension: "smc") == nil,
+              "the v1 extensions, any case; SNES and zips are not systems")
+        check(ArcadeSystem.nes.core == "fceumm" && ArcadeSystem.gbc.core == "gambatte" && ArcadeSystem.gba.core == "mgba"
+              && ArcadeSystem.n64.core == "mupen64plus_next", "the license-clean cores")
+        check(ArcadeSystem.n64.keptExtension == "z64" && ArcadeSystem.gbc.keptExtension == "gbc", "the extension kept on the phone")
+        check(ArcadeROMDetect.kind(fileName: "demo.gb", head: head(0x150, [0x143: 0xC0]))?.system == .gbc,
+              "a handheld file that runs in colour only is Game Boy Color")
+        check(ArcadeROMDetect.kind(fileName: "demo.gb", head: head(0x150, [0x143: 0x80]))?.system == .gb,
+              "one that also runs in black and white stays as named")
+        check(ArcadeROMDetect.kind(fileName: "demo.gbc", head: head(4))?.system == .gbc, "a short file keeps its extension's system")
+        check(ArcadeROMDetect.kind(fileName: "notes.txt", head: head(16)) == nil, "anything else is not a game")
+        let headed = Data([0x4E, 0x45, 0x53, 0x1A] + [UInt8](repeating: 0, count: 12))
+        check(ArcadeROMDetect.kind(fileName: "demo.nes", head: headed)?.headerBytes == 16
+              && ArcadeROMDetect.kind(fileName: "demo.nes", head: head(32))?.headerBytes == 0, "an iNES header is found; a headerless file has none")
+        check(ArcadeROMDetect.kind(fileName: "demo.v64", head: Data([0x80, 0x37, 0x12, 0x40]))?.n64Order == .bigEndian,
+              "the first bytes say an N64 file's order, whatever its extension")
+        check(ArcadeROMDetect.kind(fileName: "demo.z64", head: Data([0x37, 0x80, 0x40, 0x12]))?.n64Order == .byteSwapped
+              && ArcadeROMDetect.kind(fileName: "demo.z64", head: Data([0x40, 0x12, 0x37, 0x80]))?.n64Order == .wordSwapped,
+              "byte-swapped and word-swapped by their first bytes")
+        check(ArcadeROMDetect.kind(fileName: "demo.n64", head: head(8))?.n64Order == .wordSwapped,
+              "unknown first bytes: the extension says the order")
+    }
+
+    // MARK: Zips built here
+
+    static func le16(_ value: Int) -> [UInt8] { [UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF)] }
+
+    static func le32(_ value: UInt32) -> [UInt8] {
+        [UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF), UInt8((value >> 16) & 0xFF), UInt8((value >> 24) & 0xFF)]
+    }
+
+    struct ZipPart {
+        let name: String
+        let plain: [UInt8]
+        /// The bytes as stored in the zip (the same as plain when stored).
+        let body: [UInt8]
+        let method: Int
+        var flags: Int = 0
+        var crc: UInt32? = nil
+    }
+
+    static func stored(_ name: String, _ plain: [UInt8]) -> ZipPart {
+        ZipPart(name: name, plain: plain, body: plain, method: 0)
+    }
+
+    /// Raw DEFLATE made by hand: one final stored block (BFINAL 1, BTYPE 00).
+    static func handDeflated(_ name: String, _ plain: [UInt8]) -> ZipPart {
+        return ZipPart(name: name, plain: plain, body: storedBlock(plain, keep: plain.count), method: 8)
+    }
+
+    /// One final stored DEFLATE block saying `plain.count` bytes, holding the first `keep` of them.
+    static func storedBlock(_ plain: [UInt8], keep: Int) -> [UInt8] {
+        let n = plain.count
+        var block: [UInt8] = [0x01]
+        put(&block, [le16(n), le16(n ^ 0xFFFF), Array(plain.prefix(keep))])
+        return block
+    }
+
+    /// Appends pieces one by one (one long `+` chain is slow to type-check).
+    static func put(_ out: inout [UInt8], _ pieces: [[UInt8]]) {
+        for piece in pieces { out.append(contentsOf: piece) }
+    }
+
+    static func makeZip(_ parts: [ZipPart], comment: String = "") -> Data {
+        var out: [UInt8] = []
+        var central: [UInt8] = []
+        for part in parts {
+            var crc = ArcadeCRC32()
+            crc.update(part.plain)
+            let sum: UInt32 = part.crc ?? crc.value
+            let name: [UInt8] = Array(part.name.utf8)
+            let offset = UInt32(out.count)
+            let sizes: [[UInt8]] = [le32(sum), le32(UInt32(part.body.count)), le32(UInt32(part.plain.count))]
+            put(&out, [[0x50, 0x4B, 0x03, 0x04], le16(20), le16(part.flags), le16(part.method), le16(0), le16(0)])
+            put(&out, sizes)
+            put(&out, [le16(name.count), le16(0), name, part.body])
+            put(&central, [[0x50, 0x4B, 0x01, 0x02], le16(20), le16(20), le16(part.flags), le16(part.method), le16(0), le16(0)])
+            put(&central, sizes)
+            put(&central, [le16(name.count), le16(0), le16(0), le16(0), le16(0), le32(0), le32(offset), name])
+        }
+        let directoryOffset = UInt32(out.count)
+        out.append(contentsOf: central)
+        let note: [UInt8] = Array(comment.utf8)
+        put(&out, [[0x50, 0x4B, 0x05, 0x06], le16(0), le16(0), le16(parts.count), le16(parts.count)])
+        put(&out, [le32(UInt32(central.count)), le32(directoryOffset), le16(note.count), note])
+        return Data(out)
+    }
+
+    static func zipFile(_ folder: URL, _ name: String, _ parts: [ZipPart], comment: String = "") throws -> URL {
+        let url = folder.appendingPathComponent(name)
+        try makeZip(parts, comment: comment).write(to: url)
+        return url
+    }
+
+    static func unpack(_ url: URL) throws -> (entry: ArcadeZipEntry, data: Data) {
+        let entry = try ArcadeZip.gameEntry(in: ArcadeZip.entries(of: url))
+        var data = Data()
+        try ArcadeZip.extract(entry, from: url) { data.append($0) }
+        return (entry, data)
+    }
+
+    static func problem(_ expected: ArcadeImportProblem, _ what: String, _ body: () throws -> Void) {
+        do {
+            try body()
+            check(false, what + " (no problem was raised)")
+        } catch let raised as ArcadeImportProblem {
+            check(raised == expected, what + " (got \(raised))")
+        } catch {
+            check(false, what + " (another error: \(error))")
+        }
+    }
+
+    static func zipReading() throws {
+        let folder = temporaryFolder("zips")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let rom: [UInt8] = (0..<700).map { UInt8(($0 * 7 + 3) & 0xFF) }
+
+        // Stored, with a readme, a folder and a Mac's extras beside the game.
+        let plain = try zipFile(folder, "stored.zip", [
+            stored("readme.txt", Array("homebrew test".utf8)),
+            stored("demo/", []),
+            stored("__MACOSX/demo/._demo.gb", [0, 1, 2]),
+            stored("demo/demo.gb", rom),
+        ], comment: "a comment after the directory")
+        let entries = try ArcadeZip.entries(of: plain)
+        check(entries.count == 4 && entries[3].name == "demo/demo.gb" && entries[3].fileName == "demo.gb", "the central directory is read past a comment")
+        let first = try unpack(plain)
+        check(first.entry.fileName == "demo.gb" && first.data == Data(rom), "the one game is found and unpacked, stored")
+
+        // Deflate: a stored block made by hand, then real compressed data.
+        let byHand = try zipFile(folder, "hand.zip", [handDeflated("demo.nes", rom)])
+        let handOut = try unpack(byHand)
+        check(handOut.data == Data(rom) && handOut.entry.method == 8, "raw DEFLATE (a stored block) is unpacked")
+        let big: [UInt8] = (0..<300_000).map { UInt8(($0 / 3 + $0 % 251) & 0xFF) }
+        let squeezed = try (Data(big) as NSData).compressed(using: .zlib) as Data
+        let deflated = try zipFile(folder, "deflated.zip", [ZipPart(name: "demo.gba", plain: big, body: [UInt8](squeezed), method: 8)])
+        let second = try unpack(deflated)
+        check(squeezed.count < big.count && second.data == Data(big), "real raw DEFLATE is unpacked, past many output buffers")
+
+        // What is refused, each with its own reason.
+        let two = try zipFile(folder, "two.zip", [stored("a.gb", rom), stored("b.gba", rom)])
+        problem(.zipSeveralGames, "two games in one zip") { _ = try unpack(two) }
+        let none = try zipFile(folder, "none.zip", [stored("readme.txt", rom), stored("._hidden.gb", rom)])
+        problem(.zipNoGame, "a zip with no game (a Mac's ._ file is not one)") { _ = try unpack(none) }
+        var locked = stored("demo.gb", rom)
+        locked.flags = 1
+        let lockedZip = try zipFile(folder, "locked.zip", [locked])
+        problem(.zipLocked, "a zip with a password") { _ = try unpack(lockedZip) }
+        let odd = try zipFile(folder, "method.zip", [ZipPart(name: "demo.gb", plain: rom, body: rom, method: 12)])
+        problem(.zipMethod, "a zip packed another way") { _ = try unpack(odd) }
+        var wrong = stored("demo.gb", rom)
+        wrong.crc = 0x1234_5678
+        let damaged = try zipFile(folder, "damaged.zip", [wrong])
+        problem(.zipDamaged, "a game whose crc32 does not match") { _ = try unpack(damaged) }
+        let cut = ZipPart(name: "demo.gb", plain: rom, body: storedBlock(rom, keep: 100), method: 8)
+        let cutZip = try zipFile(folder, "cut.zip", [cut])
+        problem(.zipDamaged, "a deflated game cut short") { _ = try unpack(cutZip) }
+        let notZip = folder.appendingPathComponent("not.zip")
+        try Data(rom).write(to: notZip)
+        problem(.notAZip, "a file that is not a zip") { _ = try ArcadeZip.entries(of: notZip) }
+    }
+
+    // MARK: The import store
+
+    static func importStore() throws {
+        let folder = temporaryFolder("imports")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = ArcadeImportStore(root: folder.appendingPathComponent("imports", isDirectory: true))
+        let when = Date(timeIntervalSince1970: 1_000)
+        var rom = [UInt8](repeating: 0, count: 0x150)
+        rom[0x143] = 0x80
+        rom.append(contentsOf: Array("homebrew bytes".utf8))
+
+        let file = folder.appendingPathComponent("Demo Quest (Homebrew).gb")
+        try Data(rom).write(to: file)
+        let added = try ArcadeImporter.add(file, store: store, now: when)
+        check(!added.already && added.record.system == .gb && added.record.title == "Demo Quest (Homebrew)"
+              && added.record.romFile == "rom.gb" && added.record.localId == sha1Hex(rom) && added.record.sha1 == sha1Hex(rom),
+              "a game file is added under its local id, titled by its file name")
+        check(store.record(added.record.localId) == added.record && store.records().map { $0.localId } == [added.record.localId],
+              "its record reads back and it is listed")
+        let kept = store.romURL(added.record).flatMap { try? Data(contentsOf: $0) }
+        check(kept == Data(rom), "the ROM is kept as it came")
+        let again = try ArcadeImporter.add(file, store: store, now: when)
+        check(again.already, "the same file again is the same game")
+        let zipped = try zipFile(folder, "demo.zip", [handDeflated("inside.gb", rom)])
+        let fromZip = try ArcadeImporter.add(zipped, store: store, now: when)
+        check(fromZip.already && fromZip.record.localId == added.record.localId, "the same ROM from a zip is the same game too")
+
+        // N64 is kept in .z64 order.
+        let v64: [UInt8] = [0x37, 0x80, 0x40, 0x12, 2, 1, 4, 3]
+        let n64File = folder.appendingPathComponent("demo.v64")
+        try Data(v64).write(to: n64File)
+        let n64 = try ArcadeImporter.add(n64File, store: store, now: when)
+        let n64Kept = store.romURL(n64.record).flatMap { try? Data(contentsOf: $0) }
+        check(n64.record.system == .n64 && n64.record.romFile == "rom.z64" && n64Kept == Data([0x80, 0x37, 0x12, 0x40, 1, 2, 3, 4])
+              && n64.record.sha1 == sha1Hex([0x80, 0x37, 0x12, 0x40, 1, 2, 3, 4]) && n64.record.localId == sha1Hex(v64),
+              "an N64 file is kept and hashed in .z64 order, its local id the file as added")
+        check(store.records().count == 2, "two games in My games")
+
+        // Refused files, each with its reason.
+        let text = folder.appendingPathComponent("notes.txt")
+        try Data("hello".utf8).write(to: text)
+        problem(.notAGame, "a text file") { _ = try ArcadeImporter.add(text, store: store) }
+        let empty = folder.appendingPathComponent("empty.gba")
+        try Data().write(to: empty)
+        problem(.empty, "an empty file") { _ = try ArcadeImporter.add(empty, store: store) }
+        problem(.unreadable, "a file that is not there") {
+            _ = try ArcadeImporter.add(folder.appendingPathComponent("gone.gb"), store: store)
+        }
+        check(ArcadeImportProblem.zipSeveralGames.spoken.contains("more than one game") && ArcadeImportProblem.tooBig.spoken.contains("128 MB"),
+              "every problem has its own words")
+
+        // Titles, statuses and the words VoiceOver says.
+        check(ArcadeImportText.cleanTitle("  Two\nlines ") == "Two lines" && ArcadeImportText.cleanTitle(" \n ") == nil
+              && ArcadeImportText.title(fromFileName: "Demo.gba") == "Demo", "titles are one trimmed line, never empty")
+        var record = added.record
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .unchecked, "not asked yet")
+        record.match = ArcadeMatchSummary.noMatch
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .plain, "no pack: plays as the original game")
+        record.match = ArcadeMatchSummary(found: true, gameId: "demo", title: "Demo", version: "20261019-abcdef12-access",
+                                          size: 4_000_000, access: "family", locked: false, note: nil)
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .packReady(size: 4_000_000), "a family pack inside the pack")
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: false) == .locked(ArcadeImportText.familyPack),
+              "a family pack outside the pack is locked with the family reason")
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: nil) == .locked(ArcadeImportText.checkOnline), "offline")
+        record.match?.locked = true
+        check(ArcadeImportStatus.of(record, packOnPhone: false, familyOpen: true) == .locked(ArcadeImportText.familyPack),
+              "the server's own lock is kept")
+        record.accessPack = ArcadeImportPack(kind: "game", id: "demo", version: "20261019-abcdef12-access",
+                                             sha256: String(repeating: "a", count: 64), access: "public")
+        check(ArcadeImportStatus.of(record, packOnPhone: true, familyOpen: false) == .pack, "a public pack on the phone")
+        check(ArcadeImportText.rowLabel(title: "Demo", status: .pack) == "Accessibility pack. Demo"
+              && ArcadeImportText.rowLabel(title: "Demo", status: .locked(ArcadeImportText.familyPack))
+              == "The accessibility pack for this game is on the family shelf. Demo", "the status is said before the title")
+
+        // Where it plays, and its saves and reports.
+        check(ArcadeImportPlay.plainQuery(record) == "system=gb&rom=local/\(record.localId).gb"
+              && ArcadeImportPlay.plainROMPath(record) == "games/_plain/local/\(record.localId).gb", "the plain player's address and ROM path")
+        check(ArcadeImportPlay.packROMPath(nil, gameId: "demo", system: .n64) == "games/demo/local/rom.z64"
+              && ArcadeImportPlay.packROMPath("/games/demo/local/rom.z64", gameId: "x", system: .gb) == "games/demo/local/rom.z64",
+              "a pack's ROM path: its romPath, else the kit's layout")
+        check(ArcadeImportPlay.saveKey(record) == "import-" + record.localId && ArcadePaths.isSafeName(ArcadeImportPlay.saveKey(record)),
+              "saves are keyed by the local id")
+        check(ArcadeImportPlay.reportTarget(record).gameId == "import-gb-" + record.sha1, "a report names the game by its No-Intro sha1")
+
+        store.delete(added.record.localId)
+        check(store.records().map { $0.localId } == [n64.record.localId], "Delete removes it")
+        var withPacks = n64.record
+        withPacks.kit = ArcadeImportPack(kind: "kit", id: "kit", version: "20261018-27899e08", sha256: String(repeating: "b", count: 64))
+        withPacks.accessPack = record.accessPack
+        try store.save(withPacks)
+        check(store.packKeys() == ["kit/20261018-27899e08", "demo/20261019-abcdef12-access"], "the packs an added game uses are known")
+    }
+
+    // MARK: /match
+
+    static func matchAnswers() throws {
+        let decoder = JSONDecoder()
+        let none = try decoder.decode(ArcadeMatchAnswer.self, from: Data(#"{"match":null}"#.utf8))
+        check(none.answered && none.match == nil, "no pack for this game")
+        let silent = try decoder.decode(ArcadeMatchAnswer.self, from: Data(#"{"error":"not here"}"#.utf8))
+        check(!silent.answered, "an answer without match is not an answer")
+        let sha = String(repeating: "c", count: 64)
+        let open = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"demo","title":"Demo","console":"N64","version":"20261019-abcdef12-access","size":4000000,"sha256":"\(sha)","access":"public"}}
+        """.utf8))
+        let pack = open.match?.pack
+        check(pack?.kind == "game" && pack?.id == "demo" && pack?.version == "20261019-abcdef12-access" && pack?.size == 4_000_000
+              && pack?.sha256 == sha && pack?.index == nil, "an open match is a pack to download")
+        check(open.match?.summary == ArcadeMatchSummary(found: true, gameId: "demo", title: "Demo", version: "20261019-abcdef12-access",
+                                                        size: 4_000_000, access: "public", locked: false, note: nil), "and its summary")
+        let family = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"demo","title":"Demo","version":"v1-access","size":10,"sha256":"\(sha)","access":"family","locked":true,"note":"Part of the Family feature pack"}}
+        """.utf8))
+        check(family.match?.locked == true && family.match?.access == .family && family.match?.pack == nil,
+              "a locked family match has no pack to download")
+        let aliased = try decoder.decode(ArcadeMatchAnswer.self, from: Data("""
+        {"match":{"id":"demo","version":"20261019-full","accessVersion":"20261019-abcdef12-access","accessSize":"77","accessSha256":"\(sha.uppercased())",
+         "access":"members","signPath":"/api/kade/arcade/games/demo/20261019-abcdef12-access/pack","romPath":"games/demo/local/rom.z64",
+         "files":[{"path":"games/demo/play.html","offset":0,"length":7,"type":"text/html; charset=utf-8"},{"path":"../x","offset":0,"length":1}]}}
+        """.utf8))
+        let alias = aliased.match
+        check(alias?.version == "20261019-abcdef12-access" && alias?.size == 77 && alias?.sha256 == sha && alias?.access == .family,
+              "the access fields win, and an unknown shelf is family")
+        check(alias?.files?.map { $0.path } == ["games/demo/play.html"] && alias?.romPath == "games/demo/local/rom.z64"
+              && alias?.pack?.signPath == "/api/kade/arcade/games/demo/20261019-abcdef12-access/pack",
+              "an inline file table (unsafe rows dropped), the romPath and the sign path are kept")
+        let bad = try decoder.decode(ArcadeMatchAnswer.self, from: Data(#"{"match":{"id":"../x","version":"1"}}"#.utf8))
+        check(bad.answered && bad.match == nil, "a match with an unsafe id is no match")
+
+        let config = try decoder.decode(ArcadeConfig.self, from: Data(#"{"catalog":[],"kit":{"version":"20261018-27899e08","size":2382551}}"#.utf8))
+        check(config.kitVersion == "20261018-27899e08", "the config names the kit for added games")
+        let noKit = try decoder.decode(ArcadeConfig.self, from: Data(#"{"catalog":[],"kit":null}"#.utf8))
+        check(noKit.kitVersion == nil, "no kit yet")
+    }
+
+    // MARK: The ROM served where the page expects it
+
+    static func overlayServing() throws {
+        let folder = temporaryFolder("overlay")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let romFile = folder.appendingPathComponent("rom.gb")
+        try Data([UInt8](0..<10)).write(to: romFile)
+        let overlay = ArcadeOverlay(path: "games/_plain/local/demo.gb", file: romFile, length: 10)
+        let ranged = ArcadeServePlan.make(url: URL(string: "kadearcade://kit/games/_plain/local/demo.gb")!, rangeHeader: "bytes=2-5",
+                                          game: [], kit: [], overlays: [overlay])
+        if case .serve(let blob, let offset, let length, let status, let headers) = ranged {
+            check(blob == romFile && offset == 2 && length == 4 && status == 206 && headers["Content-Range"] == "bytes 2-5/10"
+                  && headers["Content-Type"] == "application/octet-stream", "the added ROM is served in ranges from its own file")
+        } else {
+            check(false, "the added ROM is served")
+        }
+        let whole = ArcadeServePlan.make(url: URL(string: "kadearcade://game/games/_plain/local/demo.gb")!, rangeHeader: nil,
+                                         game: [], kit: [], overlays: [overlay])
+        if case .serve(_, let offset, let length, let status, let headers) = whole {
+            check(offset == 0 && length == 10 && status == 200 && headers["Content-Length"] == "10", "on either host, whole")
+        } else {
+            check(false, "the added ROM is served on the game host too")
+        }
+        check(ArcadeServePlan.make(url: URL(string: "kadearcade://kit/games/_plain/local/other.gb")!, rangeHeader: nil,
+                                   game: [], kit: [], overlays: [overlay]) == .notFound("games/_plain/local/other.gb"),
+              "only the overlay's own path")
+        check(ArcadeServePlan.make(url: URL(string: "kadearcade://kit/games/_plain/local/demo.gb")!, rangeHeader: "bytes=20-",
+                                   game: [], kit: [], overlays: [overlay]) == .unsatisfiable(total: 10), "past its end")
     }
 }

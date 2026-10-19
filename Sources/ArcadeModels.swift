@@ -195,12 +195,25 @@ struct ArcadeCatalogEntry: Decodable, Identifiable, Equatable {
 struct ArcadeConfig: Decodable {
     let catalog: [ArcadeCatalogEntry]
     let message: String?
+    /// Oct 19 2026: the kit's version (`kit.version`), for games added from
+    /// Files: they need the kit (the player) but no shelf game's manifest.
+    let kitVersion: String?
 
-    enum CodingKeys: String, CodingKey { case catalog, games, message }
+    enum CodingKeys: String, CodingKey { case catalog, games, message, kit }
 
-    init(catalog: [ArcadeCatalogEntry], message: String? = nil) {
+    private struct KitRow: Decodable {
+        let version: String?
+        enum CodingKeys: String, CodingKey { case version }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            version = c.arcadeText(.version)
+        }
+    }
+
+    init(catalog: [ArcadeCatalogEntry], message: String? = nil, kitVersion: String? = nil) {
         self.catalog = catalog
         self.message = message
+        self.kitVersion = kitVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -217,6 +230,12 @@ struct ArcadeConfig: Decodable {
         }
         catalog = entries
         message = c.arcadeText(.message)
+        let kit = try? c.decodeIfPresent(KitRow.self, forKey: .kit)
+        if let version = kit?.version, ArcadePaths.isSafeName(version) {
+            kitVersion = version
+        } else {
+            kitVersion = nil
+        }
     }
 }
 
@@ -690,6 +709,17 @@ struct ArcadeInstallRecord: Codable, Equatable {
     let emulatorData: String
     let packs: [Pack]
 
+    init(gameId: String, version: String, title: String, entry: String, base: String,
+         emulatorData: String, packs: [Pack]) {
+        self.gameId = gameId
+        self.version = version
+        self.title = title
+        self.entry = entry
+        self.base = base
+        self.emulatorData = emulatorData
+        self.packs = packs
+    }
+
     init(manifest: ArcadeManifest, title: String) {
         gameId = manifest.id
         version = manifest.version
@@ -790,29 +820,45 @@ enum ArcadeServePlan: Equatable {
     case unsatisfiable(total: Int64)
     case serve(blob: URL, offset: Int64, length: Int64, status: Int, headers: [String: String])
 
-    static func make(url: URL, rangeHeader: String?, game: [ArcadeMount], kit: [ArcadeMount]) -> ArcadeServePlan {
+    /// `overlays` (Oct 19 2026): a game added from Files, served at the path
+    /// its page expects, on either host, before anything in the packs.
+    static func make(url: URL, rangeHeader: String?, game: [ArcadeMount], kit: [ArcadeMount],
+                     overlays: [ArcadeOverlay] = []) -> ArcadeServePlan {
         guard let route = ArcadeRoute.resolve(url) else { return .notFound(url.absoluteString) }
-        let mounts = route.host == .kit ? kit : game + kit
-        guard let found = ArcadeMount.locate(route.path, in: mounts) else { return .notFound(route.path) }
-        let file = found.file
-        let mime = file.mime ?? ArcadeMime.type(for: route.path)
+        let blob: URL
+        let start: Int64
+        let total: Int64
+        let mime: String
+        if let overlay = overlays.first(where: { $0.path == route.path }) {
+            blob = overlay.file
+            start = 0
+            total = overlay.length
+            mime = overlay.mime ?? ArcadeMime.type(for: route.path)
+        } else {
+            let mounts = route.host == .kit ? kit : game + kit
+            guard let found = ArcadeMount.locate(route.path, in: mounts) else { return .notFound(route.path) }
+            blob = found.mount.blob
+            start = found.file.offset
+            total = found.file.length
+            mime = found.file.mime ?? ArcadeMime.type(for: route.path)
+        }
         var headers: [String: String] = [
             "Content-Type": mime,
             "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "no-cache",
         ]
-        switch ArcadeByteRange.parse(rangeHeader, total: file.length) {
+        switch ArcadeByteRange.parse(rangeHeader, total: total) {
         case .whole:
-            headers["Content-Length"] = String(file.length)
-            return .serve(blob: found.mount.blob, offset: file.offset, length: file.length, status: 200, headers: headers)
-        case .part(let start, let end):
-            let length = end - start + 1
+            headers["Content-Length"] = String(total)
+            return .serve(blob: blob, offset: start, length: total, status: 200, headers: headers)
+        case .part(let first, let last):
+            let length = last - first + 1
             headers["Content-Length"] = String(length)
-            headers["Content-Range"] = "bytes \(start)-\(end)/\(file.length)"
-            return .serve(blob: found.mount.blob, offset: file.offset + start, length: length, status: 206, headers: headers)
+            headers["Content-Range"] = "bytes \(first)-\(last)/\(total)"
+            return .serve(blob: blob, offset: start + first, length: length, status: 206, headers: headers)
         case .unsatisfiable:
-            return .unsatisfiable(total: file.length)
+            return .unsatisfiable(total: total)
         }
     }
 }

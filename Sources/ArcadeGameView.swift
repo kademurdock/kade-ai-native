@@ -371,7 +371,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        let handler = ArcadeSchemeHandler(game: launch.game, kit: launch.kit)
+        let handler = ArcadeSchemeHandler(game: launch.game, kit: launch.kit, overlays: launch.overlays)
         config.setURLSchemeHandler(handler, forURLScheme: ArcadeRoute.scheme)
         config.userContentController.add(ArcadeScriptRelay(self), name: "arcade")
         // The document-start script is written by loadPage, fresh for every load.
@@ -398,7 +398,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     /// fresh document-start script, so every start sees the current "VoiceOver
     /// reads every line" choice, the input in use and the latest save.
     private func loadPage() {
-        guard !ended, let web = webView, let url = URL(string: ArcadeRoute.root(.game) + launch.record.entry) else { return }
+        guard !ended, let web = webView, let url = launch.pageURL else { return }
         lastSent.removeAll()
         let content = web.configuration.userContentController
         content.removeAllUserScripts()
@@ -415,11 +415,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         // Before her first press, the input at hand; after a restart, the one she used last.
         let type = pageInputType ?? ArcadeInput.connectedType()
         pageInputType = type
-        return ArcadeJS.hostScript(base: ArcadeRoute.root(.game) + launch.record.base,
-                                   emulatorData: ArcadeRoute.root(.game) + launch.record.emulatorData,
+        return ArcadeJS.hostScript(base: launch.hostRoot + launch.record.base,
+                                   emulatorData: launch.hostRoot + launch.record.emulatorData,
                                    settings: settings,
                                    inputType: type,
-                                   saveData: saves?.base64(gameId: launch.record.gameId))
+                                   saveData: saves?.base64(gameId: launch.saveId))
     }
 
     func attach(pad: ArcadeTouchPadView) {
@@ -586,7 +586,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     /// The game's save from the page (base64), kept for the next page start.
     private func keepSave(_ base64: String) {
-        if saves?.keep(base64: base64, gameId: launch.record.gameId) != true {
+        if saves?.keep(base64: base64, gameId: launch.saveId) != true {
             telemetry.note(error: "a save from the game could not be kept")
         }
     }
@@ -998,10 +998,11 @@ struct ArcadeGameSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
 
-    /// The game open right now, at the version on this iPhone.
+    /// The game open right now, at the version on this iPhone (a game added
+    /// from Files names itself by its No-Intro sha1).
     private var reportTarget: ArcadeReportTarget {
-        ArcadeReportTarget(gameId: host.launch.record.gameId, title: host.launch.entry.title,
-                           version: host.launch.record.version)
+        host.launch.reportTarget ?? ArcadeReportTarget(gameId: host.launch.record.gameId, title: host.launch.entry.title,
+                                                       version: host.launch.record.version)
     }
 
     var body: some View {

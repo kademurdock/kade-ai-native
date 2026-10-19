@@ -27,6 +27,8 @@ import WebKit
 final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
     private let game: [ArcadeMount]
     private let kit: [ArcadeMount]
+    /// A game added from Files, served at the path its page expects (Oct 19 2026).
+    private let overlays: [ArcadeOverlay]
     private let queue = DispatchQueue(label: "com.kademurdock.kadeai.arcade.scheme", qos: .userInitiated)
     /// Tasks WebKit has started and not stopped, by identity, with the token of their start.
     private var live: [ObjectIdentifier: (token: Int, task: WKURLSchemeTask)] = [:]
@@ -35,9 +37,10 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
     private(set) var served = 0
     private(set) var missing: [String] = []
 
-    init(game: [ArcadeMount], kit: [ArcadeMount]) {
+    init(game: [ArcadeMount], kit: [ArcadeMount], overlays: [ArcadeOverlay] = []) {
         self.game = game
         self.kit = kit
+        self.overlays = overlays
         super.init()
     }
 
@@ -53,7 +56,7 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
         }
         let range = request.value(forHTTPHeaderField: "Range")
         let isHead = request.httpMethod?.uppercased() == "HEAD"
-        switch ArcadeServePlan.make(url: url, rangeHeader: range, game: game, kit: kit) {
+        switch ArcadeServePlan.make(url: url, rangeHeader: range, game: game, kit: kit, overlays: overlays) {
         case .notFound(let path):
             answerMissing(key, token: token, url: url, path: path)
         case .unsatisfiable(let total):
