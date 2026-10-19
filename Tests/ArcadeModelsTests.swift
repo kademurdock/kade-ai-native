@@ -20,7 +20,7 @@ import Foundation
         controllersAndKeys()
         javascriptAndWords()
         savesKept()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves and the test report; not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, kept saves, game reports and the how-it-ran text; not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: Saves
@@ -103,9 +103,22 @@ import Foundation
               "a public game, playable or greyed, counts as public")
         check(!ArcadeShelf.hasPublicGame(reviewSeat) && !ArcadeShelf.hasPublicGame(ArcadeShelf.rows([fighter], familyOpen: true, familyNote: note)),
               "a shelf of family games has no public game")
-        for word in ["play by ear", "Family shelf", "private", "public games are free"] {
+        for word in ["play by ear", "Family shelf", "private", "public games are free", "no game is built into the app"] {
             check(ArcadeShelf.about.contains(word), "the screen's description says: " + word)
         }
+        check(!ArcadeShelf.noPublicGames.contains("as they are added") && !ArcadeShelf.noPublicGames.contains("yet"),
+              "an empty public shelf is said as a plain fact, with no promise")
+
+        // Oct 19 2026 (App Store 4.7.5): a grown-ups-only game says so.
+        let grown = try decoder.decode(ArcadeConfig.self, from: Data(#"""
+        {"catalog":[{"id":"late","title":"Late Show","console":"NES","access":"public","size":2100000,"version":"1","grownUpsOnly":true},
+                    {"id":"early","title":"Early Show","access":"public","version":"1","grownUpsOnly":"no"},
+                    {"id":"plain","title":"Plain","access":"public","version":"1"}]}
+        """#.utf8))
+        check(grown.catalog.map { $0.grownUpsOnly } == [true, false, false], "grownUpsOnly is read, and absent means false")
+        check(ArcadeShelf.caption(grown.catalog[0]) == "Grown-ups only, NES, 2.1 MB", "a grown-ups-only game says so first in its caption")
+        check(ArcadeShelf.caption(grown.catalog[2]) == "A classic game" && ArcadeShelf.caption(tilt) == "NES, 2.1 MB",
+              "other captions are the console and size, or a plain line")
 
         // Oct 19 2026: Report a problem with this game (App Store 4.7.1).
         let target = ArcadeReportTarget(gameId: "tilt", title: "Tilt Demo", version: "3")
@@ -124,6 +137,14 @@ import Foundation
               .contains("Game version: not known"), "a missing version is said plainly")
         check(ArcadeReport.detail(note: String(repeating: "n", count: 5000), target: target, from: "x").count < 2200,
               "a very long note is cut to size")
+        let withRun = ArcadeReport.detail(note: "It froze.", target: target, from: "Game settings", ran: "Kade AI Arcade: how the game ran\nPage loads: 1.")
+        check(withRun == "It froze.\n\nGame: Tilt Demo\nGame id: tilt\nGame version: 3\nSent from: Game settings\n\nHow the game ran:\nKade AI Arcade: how the game ran\nPage loads: 1.",
+              "from a running game, how it ran goes with the report")
+        check(ArcadeReport.detail(note: "abc", target: target, from: "x", ran: "  ") == ArcadeReport.detail(note: "abc", target: target, from: "x"),
+              "an empty run text adds nothing")
+        let huge = ArcadeReport.detail(note: String(repeating: "n", count: 5000), target: target, from: "Game settings",
+                                       ran: String(repeating: "r", count: 9000))
+        check(huge.count < 6300, "a very long run text is cut too, well inside the server's 8,000 characters")
 
         check(ArcadePaths.isSafeName("demo") && ArcadePaths.isSafeName("2026.10.19-b"), "plain names are safe")
         check(!ArcadePaths.isSafeName("../x") && !ArcadePaths.isSafeName("a b") && !ArcadePaths.isSafeName(".hidden") && !ArcadePaths.isSafeName(""),

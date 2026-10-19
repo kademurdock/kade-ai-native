@@ -20,7 +20,7 @@ import CryptoKit
 //   - the controller mapper, a port of core/input.js pollGamepad (profile.input.gamepad)
 //   - the JavaScript the app sends to window.revivalKit, and the
 //     window.revivalKitHost script injected at document start (core/host.js)
-//   - telemetry counters and the "Copy test report" text
+//   - telemetry counters and the "how the game ran" text
 //
 // Oct 19 2026, her decision: the Arcade is part of every build, the public
 // App Store one included, and visible to every account. The family shelf
@@ -146,11 +146,16 @@ struct ArcadeCatalogEntry: Decodable, Identifiable, Equatable {
     let locked: Bool
     let note: String?
     let summary: String?
+    /// Oct 19 2026 (App Store 4.7.5): the catalog marks this game for grown-ups
+    /// only. A child account never gets the row (the server leaves it out);
+    /// for everyone else the row says "Grown-ups only". Absent means false.
+    let grownUpsOnly: Bool
 
-    enum CodingKeys: String, CodingKey { case id, title, console, access, size, version, locked, note, summary }
+    enum CodingKeys: String, CodingKey { case id, title, console, access, size, version, locked, note, summary, grownUpsOnly }
 
     init(id: String, title: String, console: String? = nil, access: ArcadeAccess, size: Int64? = nil,
-         version: String, locked: Bool = false, note: String? = nil, summary: String? = nil) {
+         version: String, locked: Bool = false, note: String? = nil, summary: String? = nil,
+         grownUpsOnly: Bool = false) {
         self.id = id
         self.title = title
         self.console = console
@@ -160,6 +165,7 @@ struct ArcadeCatalogEntry: Decodable, Identifiable, Equatable {
         self.locked = locked
         self.note = note
         self.summary = summary
+        self.grownUpsOnly = grownUpsOnly
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +183,7 @@ struct ArcadeCatalogEntry: Decodable, Identifiable, Equatable {
         locked = c.arcadeFlag(.locked) ?? false
         note = c.arcadeText(.note)
         summary = c.arcadeText(.summary)
+        grownUpsOnly = c.arcadeFlag(.grownUpsOnly) ?? false
     }
 
     /// The version can name a folder on the phone.
@@ -290,9 +297,23 @@ enum ArcadeShelf {
 
     /// The plain description at the top of the Arcade screen: what it is, and
     /// who each shelf is for. No game is named.
-    static let about = "Classic games you can play by ear. Family shelf games are private to Kade's family and greyed out for everyone else; public games are free for everyone. Games download from Kade's server when you ask, and nothing is built into the app."
-    /// Under the list when the shelf has no public game yet.
-    static let noPublicGames = "No public games are on the shelf yet. They appear here as they are added."
+    /// The player, the pad and the page's file server are part of the app;
+    /// no game is.
+    static let about = "Classic games you can play by ear. Family shelf games are private to Kade's family and greyed out for everyone else; public games are free for everyone. Games download from Kade's server when you ask, and no game is built into the app."
+    /// Under the list when the shelf has no public game. A plain fact, no promise.
+    static let noPublicGames = "There are no public games on the shelf right now."
+    /// Said and shown for a game the catalog marks for grown-ups only (4.7.5).
+    static let grownUpsOnly = "Grown-ups only"
+
+    /// The small line under a game's name: grown-ups only first when it is,
+    /// then the console and the download size.
+    static func caption(_ entry: ArcadeCatalogEntry) -> String {
+        var parts: [String] = []
+        if entry.grownUpsOnly { parts.append(grownUpsOnly) }
+        if let console = entry.console { parts.append(console) }
+        if let size = entry.size { parts.append(ArcadeText.size(size)) }
+        return parts.isEmpty ? "A classic game" : parts.joined(separator: ", ")
+    }
 
     /// True when the shelf holds a public game, playable or not.
     static func hasPublicGame(_ rows: [ArcadeShelfRow]) -> Bool {
@@ -329,6 +350,9 @@ enum ArcadeReport {
     static let sentLine = "Report sent. Thank you, Kade will see it."
     static let minimumNote = 3
     static let maximumNote = 2000
+    /// How the game ran (ArcadeTelemetry.report), when the report comes from
+    /// a running game's Settings. The server keeps 8,000 characters in all.
+    static let maximumRun = 4000
 
     static func canSend(_ note: String) -> Bool {
         note.trimmingCharacters(in: .whitespacesAndNewlines).count >= minimumNote
@@ -340,8 +364,10 @@ enum ArcadeReport {
         return String(title.prefix(200))
     }
 
-    /// Her words first, then the game's id and version and where it was sent from.
-    static func detail(note: String, target: ArcadeReportTarget, from place: String) -> String {
+    /// Her words first, then the game's id and version and where it was sent
+    /// from, then (from a running game) how the game ran, cut to size. That
+    /// text holds no account details.
+    static func detail(note: String, target: ArcadeReportTarget, from place: String, ran: String? = nil) -> String {
         let said = String(note.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maximumNote))
         var lines = [said, ""]
         if target.gameId.isEmpty {
@@ -352,6 +378,12 @@ enum ArcadeReport {
             lines.append("Game version: " + (target.version.isEmpty ? "not known" : target.version))
         }
         lines.append("Sent from: " + place)
+        let run = (ran ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !run.isEmpty {
+            lines.append("")
+            lines.append("How the game ran:")
+            lines.append(String(run.prefix(maximumRun)))
+        }
         return lines.joined(separator: "\n")
     }
 }
@@ -1817,8 +1849,9 @@ struct ArcadeProgressSpeaker {
 
 // MARK: - Telemetry
 
-/// Counters for one game session, and the "Copy test report" text she can
-/// paste to Claude. No account data, no file paths, no links.
+/// Counters for one game session, and the "how the game ran" text: copied
+/// with Copy how the game ran, and sent with Report a problem with this game
+/// from the game's Settings. No account data, no file paths, no links.
 struct ArcadeTelemetry {
     var title = ""
     var gameId = ""
@@ -1884,7 +1917,7 @@ struct ArcadeTelemetry {
     func report(now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(openedAt)))
         var lines: [String] = []
-        lines.append("Kade AI Arcade test report")
+        lines.append("Kade AI Arcade: how the game ran")
         lines.append("Game: \(title) (\(gameId) \(version))")
         lines.append("Open for \(seconds / 60) min \(seconds % 60) s")
         lines.append("Page loads: \(pageLoads). Web content stopped: \(terminations). Restarted: \(recoveries).")

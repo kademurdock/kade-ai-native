@@ -31,7 +31,7 @@ final class ArcadeSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Tasks WebKit has started and not stopped, by identity, with the token of their start.
     private var live: [ObjectIdentifier: (token: Int, task: WKURLSchemeTask)] = [:]
     private var nextToken = 0
-    /// Files served, for the test report.
+    /// Files served, for the how-the-game-ran text.
     private(set) var served = 0
     private(set) var missing: [String] = []
 

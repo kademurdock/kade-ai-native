@@ -943,6 +943,7 @@ struct ContentView: View {
     ///   kadeai://talk            kadeai://talk?agent=<agent id>
     ///   kadeai://library         kadeai://library/continue
     ///   kadeai://search
+    ///   kadeai://arcade          (the Arcade, Play tab; Oct 19 2026)
     ///   kadeai://jobs            (a job card: just open the app where it was)
     /// An exact-agent Talk link waits through sign-in/session restoration.
     private func handleOpenURL(_ url: URL) {
@@ -985,6 +986,8 @@ struct ContentView: View {
             }
         case "search":
             go(.search)
+        case "arcade":
+            go(.arcade)
         case "jobs":
             // The lock-screen progress card (KadeWidgets): an upload opens
             // the Library, a described video its own screen, a song or scene

@@ -9,7 +9,7 @@ import CallKit
 // One full-screen cover per game (never a new navigationDestination: the
 // build-121 rule). It holds:
 //   - a top strip of ordinary VoiceOver buttons: Leave game, Pause, Status,
-//     Repeat, Pad practice, Settings. Magic tap pauses; the escape scrub asks
+//     Repeat, Settings. Magic tap pauses; the escape scrub asks
 //     "Leave game?". Exit always lives here, because VoiceOver gestures do not
 //     work inside the direct-touch pad;
 //   - the game page in a WKWebView, served from the downloaded packs by
@@ -501,10 +501,6 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if mode == "fight" { pauseGame() }
     }
 
-    func padPractice() {
-        speak("Pad practice comes in a later build. For now, the game's own practice mode is the place to learn the pad.", urgent: false, flush: true)
-    }
-
     private func controllerPad(_ state: ArcadePadState?) {
         telemetry.controllerSends += 1
         if state != nil { useInput("gamepad") }
@@ -560,7 +556,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             let what = (detail?["what"] as? String) ?? "start"
             status = "The game hit a problem (\(what))"
             if what == "emulator" || what == "start" {
-                speak("The game could not start. Open Settings and copy the test report for Claude.", urgent: true, flush: true)
+                speak("The game could not start. Open Settings and choose Report a problem with this game.", urgent: true, flush: true)
             }
         default:
             break
@@ -782,7 +778,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         ]
     }
 
-    /// The text "Copy test report" puts on the clipboard.
+    /// How the game ran: what "Copy how the game ran" puts on the clipboard,
+    /// and what Report a problem with this game sends from Settings.
     func reportText() -> String {
         telemetry.environment = environment()
         var text = telemetry.report(now: Date())
@@ -840,7 +837,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         let now = Date()
         terminations = terminations.filter { now.timeIntervalSince($0) < 120 } + [now]
         if terminations.count >= 3 {
-            let line = "The game stopped three times in two minutes, so it was not restarted. Open Settings to copy the test report, then leave and try again."
+            let line = "The game stopped three times in two minutes, so it was not restarted. Open Settings and choose Report a problem with this game, then leave and try again."
             stopped = line
             status = "Stopped"
             speak(line, urgent: true, flush: true)
@@ -942,10 +939,8 @@ struct ArcadeGameView: View {
                 .accessibilityAction(named: "Help") { host.info("help") }
             stripButton("Repeat", spoken: "Repeat", symbol: "arrow.counterclockwise",
                         hint: "Says the last line again.") { host.info("repeat") }
-            stripButton("Practice", spoken: "Pad practice", symbol: "hand.tap",
-                        hint: "Learn the pad without playing. Coming in a later build.") { host.padPractice() }
             stripButton("Settings", spoken: "Settings", symbol: "gearshape",
-                        hint: "The picture, speech, haptics, the test report, and Report a problem with this game. Pauses a fight first.") {
+                        hint: "The picture, speech, haptics, and Report a problem with this game. Pauses a fight first.") {
                 host.pauseIfFighting()
                 showSettings = true
             }
@@ -1019,26 +1014,28 @@ struct ArcadeGameSettingsView: View {
                 } footer: {
                     Text("With VoiceOver reading every line, the game's cloned voice stays quiet and VoiceOver says everything in your own voice and speed.")
                 }
-                Section {
-                    Button(copied ? "Test report copied" : "Copy test report") {
-                        UIPasteboard.general.string = host.reportText()
-                        copied = true
-                        UIAccessibility.post(notification: .announcement, argument: "Test report copied. Paste it to Claude.")
-                    }
-                } footer: {
-                    Text("It says how the game ran on this iPhone: speed, restarts, sound and inputs. No account details.")
-                }
                 // Oct 19 2026 (App Store 4.7.1): reports go to Kade through
-                // the app's own feedback path, with this game's id and version.
+                // the app's own feedback path, with this game's id and
+                // version and how it ran (read when Send is pressed).
                 Section {
                     NavigationLink {
                         ArcadeReportView(apiClient: apiClient, target: reportTarget,
-                                         place: "Game settings", standalone: false)
+                                         place: "Game settings", standalone: false,
+                                         ran: { host.reportText() })
                     } label: {
                         Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble")
                     }
                 } footer: {
-                    Text("Something wrong with this game, its sound or its words? Tell Kade in a few words. The game's name and version go with it.")
+                    Text("Something wrong with this game, its sound or its words? Tell Kade in a few words. The game's name and version, and how it ran on this iPhone (no account details), go with it.")
+                }
+                Section {
+                    Button(copied ? "Copied" : "Copy how the game ran") {
+                        UIPasteboard.general.string = host.reportText()
+                        copied = true
+                        UIAccessibility.post(notification: .announcement, argument: "Copied.")
+                    }
+                } footer: {
+                    Text("How the game ran on this iPhone: speed, restarts, sound and inputs. No account details.")
                 }
                 Section("Tips") {
                     Text("Wired headphones are quicker than AirPods, by about a tenth of a second.")

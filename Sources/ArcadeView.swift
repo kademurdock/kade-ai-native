@@ -56,9 +56,9 @@ struct ArcadeView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
                             UIPasteboard.general.string = lastReport
-                            UIAccessibility.post(notification: .announcement, argument: "Test report copied. Paste it to Claude.")
+                            UIAccessibility.post(notification: .announcement, argument: "Copied.")
                         } label: {
-                            Label("Copy test report", systemImage: "doc.on.clipboard")
+                            Label("Copy how the game ran", systemImage: "doc.on.clipboard")
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(KadeCardButtonStyle())
@@ -209,11 +209,9 @@ struct ArcadeView: View {
         }
     }
 
+    /// Grown-ups only first when the catalog says so (App Store 4.7.5).
     private func caption(_ entry: ArcadeCatalogEntry) -> String {
-        var parts: [String] = []
-        if let console = entry.console { parts.append(console) }
-        if let size = entry.size { parts.append(ArcadeText.size(size)) }
-        return parts.isEmpty ? "A classic game" : parts.joined(separator: ", ")
+        ArcadeShelf.caption(entry)
     }
 
     private func playableRow(_ entry: ArcadeCatalogEntry) -> some View {
@@ -221,6 +219,8 @@ struct ArcadeView: View {
         let isInstalled = installedVersion != nil
         let isDownloading = service.downloading == entry.id
         let needsUpdate = isInstalled && installedVersion != entry.version
+        let downloaded: String = needsUpdate ? "Downloaded. An update is ready." : "Downloaded"
+        let playValue: String = entry.grownUpsOnly ? ArcadeShelf.grownUpsOnly + ". " + downloaded : downloaded
         return VStack(alignment: .leading, spacing: 8) {
             if isInstalled {
                 Button { play(entry) } label: {
@@ -230,7 +230,7 @@ struct ArcadeView: View {
                 .buttonStyle(KadeCardButtonStyle())
                 .labelStyle(KadeRowLabelStyle(tint: .purple, caption: caption(entry) + (needsUpdate ? ", update ready" : ", downloaded")))
                 .accessibilityLabel("Play \(entry.title)")
-                .accessibilityValue(needsUpdate ? "Downloaded. An update is ready." : "Downloaded")
+                .accessibilityValue(playValue)
                 .accessibilityHint(entry.summary ?? "Opens the game full screen.")
                 .accessibilityAction(named: "Delete download") { deleteDownload(entry) }
                 .accessibilityAction(named: ArcadeReport.actionName) { report(entry) }
@@ -248,8 +248,15 @@ struct ArcadeView: View {
                     ProgressView(value: service.progress)
                         .accessibilityLabel("Downloading \(entry.title)")
                         .accessibilityValue(service.verifying ? "Checking the download" : "\(Int(service.progress * 100)) percent")
+                    // A download going wrong can be reported while it runs.
                     Button("Stop download") { service.cancelDownload() }
                         .buttonStyle(KadeCardButtonStyle())
+                        .accessibilityAction(named: ArcadeReport.actionName) { report(entry) }
+                        .contextMenu {
+                            Button { report(entry) } label: {
+                                Label(ArcadeReport.actionName, systemImage: "exclamationmark.bubble")
+                            }
+                        }
                 }
             } else if !isInstalled || needsUpdate {
                 Button { askToDownload(entry) } label: {

@@ -21,13 +21,26 @@ struct ArcadeReportView: View {
     let place: String
     /// False when pushed inside a sheet that already has its own navigation
     /// (the game's Settings): then Back returns to Settings.
-    var standalone = true
+    let standalone: Bool
+    /// From a running game's Settings: how the game ran (no account details),
+    /// read when Send is pressed and sent with the report, so a game that
+    /// failed to start reaches Kade without any copying.
+    let ran: (@MainActor () -> String)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var note = ""
     @State private var isSending = false
     @State private var errorMessage: String?
     @AccessibilityFocusState private var errorFocused: Bool
+
+    init(apiClient: KadeAPIClient, target: ArcadeReportTarget, place: String,
+         standalone: Bool = true, ran: (@MainActor () -> String)? = nil) {
+        self.apiClient = apiClient
+        self.target = target
+        self.place = place
+        self.standalone = standalone
+        self.ran = ran
+    }
 
     var body: some View {
         if standalone {
@@ -48,7 +61,8 @@ struct ArcadeReportView: View {
         if target.gameId.isEmpty {
             return "Tell Kade what went wrong in the Arcade. It goes straight to her with your name on it, so she can follow up."
         }
-        return "Tell Kade what went wrong with \(target.title). The report carries the game's name and version, and your name, so she can follow up."
+        let base = "Tell Kade what went wrong with \(target.title). The report carries the game's name and version, and your name, so she can follow up."
+        return ran == nil ? base : base + " How the game has run on this iPhone goes with it too, with no account details."
     }
 
     private var form: some View {
@@ -67,6 +81,12 @@ struct ArcadeReportView: View {
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("What went wrong, in a few words")
                         .disabled(isSending)
+                    // Like Report a problem. Not over a running game (its
+                    // Settings): the recorder would take the game's sound.
+                    if standalone {
+                        DictationButton(apiClient: apiClient, text: $note, fieldName: "report")
+                            .disabled(isSending)
+                    }
                 }
 
                 if let errorMessage {
@@ -95,16 +115,18 @@ struct ArcadeReportView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    @MainActor
     private func send() async {
         guard ArcadeReport.canSend(note), !isSending else { return }
         isSending = true
         errorMessage = nil
         defer { isSending = false }
+        let howItRan: String? = ran?()
         do {
             try await FeedbackReportService(apiClient: apiClient).submit(
                 category: "bug",
                 subject: ArcadeReport.subject(target),
-                detail: ArcadeReport.detail(note: note, target: target, from: place)
+                detail: ArcadeReport.detail(note: note, target: target, from: place, ran: howItRan)
             )
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()

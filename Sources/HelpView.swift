@@ -294,7 +294,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Getting around", entries: [
             HelpEntry(
                 title: "The five tabs",
-                body: "The bar along the bottom has five tabs. Talk holds Call your Spotter, Talk to your main character, Describe, Transcribe, and all your conversations. Library holds books read aloud, tapes, radio and the family archive. Create holds the Sound Booth, My Creations, the Wall of Fame, Agent Builder and the Prompt Library. Play holds The Parlor's games, Kade's Clubhouse, the Debate Room, the Matchmaker and the Marketplace. More holds search, Alerts, Announcements, Agent work, Bookmarks, Settings, this help, a way to tell Kade how it's going, the web app, and Sign out. With VoiceOver each one reads as, for example, Library, tab, 2 of 5. The bar hides inside a conversation, where the message box needs the room."
+                body: "The bar along the bottom has five tabs. Talk holds Call your Spotter, Talk to your main character, Describe, Transcribe, and all your conversations. Library holds books read aloud, tapes, radio and the family archive. Create holds the Sound Booth, My Creations, the Wall of Fame, Agent Builder and the Prompt Library. Play holds The Parlor's games, Kade's Clubhouse, the Debate Room, the Matchmaker, the Arcade and the Marketplace. More holds search, Alerts, Announcements, Agent work, Bookmarks, Settings, this help, a way to tell Kade how it's going, the web app, and Sign out. With VoiceOver each one reads as, for example, Library, tab, 2 of 5. The bar hides inside a conversation, where the message box needs the room."
             ),
             HelpEntry(
                 title: "Search everything",
@@ -560,6 +560,12 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "The Game Room",
                 body: "Family standings from every finished game: who's won the most, recent results, and highlights like the biggest Blackjack win. It lives inside The Parlor, on the menu right under the games. Walking away from a table mid-game doesn't count against you; only played-out games land there."
+            ),
+            // Oct 19 2026: the Arcade is in every build, so Help says what it
+            // is, who each shelf is for, and where Report a problem lives.
+            HelpEntry(
+                title: "The Arcade",
+                body: "The Arcade on the Play tab has classic games you can play by ear: the game's own sounds are placed around you, and its menus are read aloud. Play by touch with VoiceOver on, or with a keyboard or a game controller. No game is built into the app. A game downloads from Kade's server only after the Arcade says its size and you choose Download, and Delete download in its Actions rotor takes it off this iPhone. Public games are free for everyone. Family shelf games are private to Kade's family: outside the Family feature pack the Family shelf stays on the list, greyed out, and says why first. Something wrong? Report a problem with this game is in each game's Actions rotor, its long-press menu and the game's Settings, and Report a problem with the Arcade is at the foot of the Arcade screen."
             ),
         ]),
         HelpSection(title: "Kade's Clubhouse", entries: [
