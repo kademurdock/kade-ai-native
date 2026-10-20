@@ -747,16 +747,19 @@ extension ArcadeModelsTests {
             default: break
             }
         }
-        let spoken: [String: Any] = ["text": "Pad on.", "cls": "answer", "route": "native", "cutBy": "none"]
-        let tick: [String: Any] = ["fps": 60, "speech": [spoken]]
-        telemetry.note(event: "telemetry", detail: tick)
+        let spoken: [String: Any] = ["t": 1200, "text": "Pad on.", "cls": "answer", "route": "native", "start": true]
+        let mode: [String: Any] = ["t": 1300, "k": "mode", "mode": "fight", "screen": "fight"]
+        telemetry.note(event: "telemetry", detail: ["fps": 60, "trace": [spoken]])
+        telemetry.note(event: "telemetry", detail: ["fps": 59, "trace": [mode]])
         telemetry.note(error: "a page error")
         let report = telemetry.report(now: Date(timeIntervalSince1970: 60))
         check(report.contains("Pad: taken 1, let go 0. VoiceOver's activate on the pad: 2. Pad isn't held lines: 1.")
               && report.contains("Pad times: on 3.50 s (first touch).") && report.contains("Gestures: tap1 1."),
               "the pad's summary")
-        check(report.contains("Gesture trace (the last 2):") && report.contains("tap1: weak punch") && report.contains("Kit speech trace (the last 1):")
-              && report.contains("cls=answer cutBy=none route=native text=Pad on."), "the gesture and speech traces")
+        check(report.contains("Gesture trace (the last 2):") && report.contains("tap1: weak punch")
+              && report.contains("Kit trace, speech and events (the last 2):")
+              && report.contains("cls=answer route=native start=true t=1200 text=Pad on.") && report.contains("k=mode mode=fight screen=fight t=1300"),
+              "the gesture trace, and the kit's trace gathered tick by tick")
         if let summary = report.range(of: "Pad: taken"), let errors = report.range(of: "Last errors:"), let trace = report.range(of: "Gesture trace") {
             check(summary.lowerBound < errors.lowerBound && errors.lowerBound < trace.lowerBound,
                   "the summary leads and the traces go last, so a report cut to size keeps the summary")

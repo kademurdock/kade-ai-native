@@ -3303,8 +3303,8 @@ struct ArcadeTelemetry {
             var flat: [String: String] = [:]
             Self.flatten(detail, prefix: "", into: &flat, depth: 0)
             kit = flat
-            // Touch v2: the kit's speech trace rides along with its telemetry.
-            if let speech = (detail?["speech"] as? [Any]) ?? (detail?["trace"] as? [Any]) { touch.keepKitSpeech(speech) }
+            // Touch v2: each tick carries the kit's new trace entries (speech lines and events).
+            if let trace = detail?["trace"] as? [Any] { touch.appendKitTrace(trace) }
         case "error":
             var flat: [String: String] = [:]
             Self.flatten(detail, prefix: "", into: &flat, depth: 0)

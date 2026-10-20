@@ -1132,14 +1132,17 @@ struct ArcadeTouchLog {
         if padTimes.count > 40 { padTimes.removeFirst(padTimes.count - 40) }
     }
 
-    /// The kit's speech trace, as its telemetry carries it (the last 300 entries, replaced each time).
-    mutating func keepKitSpeech(_ entries: [Any]) {
-        kitSpeech = entries.suffix(Self.limit).map { (entry: Any) -> String in
+    /// The kit's trace as its telemetry ticks carry it (`trace`: the speech
+    /// lines and the mode, screen and pad events since the last tick), kept
+    /// to the last 300.
+    mutating func appendKitTrace(_ entries: [Any]) {
+        kitSpeech += entries.map { (entry: Any) -> String in
             guard let row = entry as? [String: Any] else { return String(String(describing: entry).prefix(160)) }
             return row.keys.sorted().map { (key: String) -> String in
                 key + "=" + String(String(describing: row[key] ?? "").prefix(80))
             }.joined(separator: " ")
         }
+        if kitSpeech.count > Self.limit { kitSpeech.removeFirst(kitSpeech.count - Self.limit) }
     }
 
     private mutating func add(_ line: String) {
@@ -1167,7 +1170,7 @@ struct ArcadeTouchLog {
             lines += trace
         }
         if !kitSpeech.isEmpty {
-            lines.append("Kit speech trace (the last \(kitSpeech.count)):")
+            lines.append("Kit trace, speech and events (the last \(kitSpeech.count)):")
             lines += kitSpeech
         }
         return lines
