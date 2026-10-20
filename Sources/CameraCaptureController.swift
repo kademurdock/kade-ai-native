@@ -55,6 +55,16 @@ final class CameraCaptureController: ObservableObject {
     private let sampler = FrameSampler()
     private var currentDevice: AVCaptureDevice?
     private var currentPosition: AVCaptureDevice.Position = .front
+    /// Oct 20 2026 (Kade: Spotters "having a lot of problems telling left and
+    /// right"): frames used to be locked to portrait, so a phone held upside
+    /// down -- easy when you can't see the screen -- sent an upside-down
+    /// picture, which swaps left and right in every answer, and a sideways
+    /// phone turned left/right into up/down. The rotation coordinator reads
+    /// the phone's real position from its motion sensors (orientation lock
+    /// or not) and gives the angle that keeps the horizon level; each frame
+    /// is captured at that angle, so the Spotter always sees the room upright.
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
 
     init() {
         // ROOT-CAUSE FIX (session 21, Kade: Spotter calls "can still hear me
@@ -145,14 +155,25 @@ final class CameraCaptureController: ObservableObject {
         output.setSampleBufferDelegate(sampler, queue: queue)
         output.alwaysDiscardsLateVideoFrames = true
         if session.canAddOutput(output) { session.addOutput(output) }
-        // Video orientation matters for a portrait-held phone; without this
-        // frames sent to the agent would be sideways relative to what the
-        // camera preview shows on screen.
-        if let connection = output.connection(with: .video), connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
+        // Frames follow the phone's real position (see rotationCoordinator):
+        // upright whether it is held upright, upside down or sideways. Starts
+        // at portrait (90) until the coordinator reports.
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
+        rotationCoordinator = coordinator
+        if let connection = output.connection(with: .video) {
+            applyRotation(coordinator.videoRotationAngleForHorizonLevelCapture, to: connection)
             connection.isVideoMirrored = (facing == .front)
         }
         session.commitConfiguration()
+        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] coord, _ in
+            let angle = coord.videoRotationAngleForHorizonLevelCapture
+            let which = ObjectIdentifier(coord)
+            Task { @MainActor in
+                guard let self, let current = self.rotationCoordinator, ObjectIdentifier(current) == which,
+                      let connection = self.output.connection(with: .video) else { return }
+                self.applyRotation(angle, to: connection)
+            }
+        }
         torchAvailable = device.hasTorch
         torchManuallySet = false
         applyTorch(false)
@@ -163,7 +184,15 @@ final class CameraCaptureController: ObservableObject {
         }
     }
 
+    private func applyRotation(_ angle: CGFloat, to connection: AVCaptureConnection) {
+        let target = connection.isVideoRotationAngleSupported(angle) ? angle : 90
+        guard connection.isVideoRotationAngleSupported(target), connection.videoRotationAngle != target else { return }
+        connection.videoRotationAngle = target
+    }
+
     func stop() {
+        rotationObservation = nil
+        rotationCoordinator = nil
         let s = session
         queue.async { s.stopRunning() }
         isRunning = false
