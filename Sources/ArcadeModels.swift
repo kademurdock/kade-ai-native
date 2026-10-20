@@ -16,7 +16,11 @@ import CryptoKit
 //     the same gesture tables (profile.input.touch), with the two halves of a
 //     fight working side by side and holds that may carry their own time
 //     (core/touch.js still runs one gesture for the whole pad)
-//   - the game's own save file, kept between page starts (ArcadeSaveStore)
+//   - the game's own save file, kept between page starts (ArcadeSaveStore),
+//     and since Oct 19 2026 the kit's own settings beside it
+//   - where the sound goes (ArcadeAudioRoute, the kit's six route words),
+//     the settings given back to the kit (ArcadeKitSettings) and the
+//     screen's text (ArcadeScreenText)
 //   - the controller mapper, a port of core/input.js pollGamepad (profile.input.gamepad)
 //   - the JavaScript the app sends to window.revivalKit, and the
 //     window.revivalKitHost script injected at document start (core/host.js)
@@ -1106,6 +1110,242 @@ struct ArcadeSaveStore {
               !bytes.isEmpty, bytes.count <= Self.maxBytes else { return nil }
         return bytes.base64EncodedString()
     }
+
+    // Oct 19 2026: the kit's own settings for the game, beside its save. With
+    // storage: false the page keeps nothing itself: it sends 'settings' (all
+    // of them, its per-route choices included) whenever they change, and the
+    // app gives them back as revivalKitHost.settings at the next start
+    // (ArcadeKitSettings.hostSettings puts the app's own switches over them).
+
+    /// A few kilobytes in practice; anything far bigger is not the kit's settings.
+    static let maxSettingsBytes = 64 * 1024
+
+    func settingsFile(gameId: String) -> URL? {
+        guard ArcadePaths.isSafeName(gameId) else { return nil }
+        return root.appendingPathComponent(gameId + ".settings.json")
+    }
+
+    /// Keeps the kit's latest 'settings' as it sent them. False when they
+    /// are not JSON, too big, or the game id is not a plain name.
+    @discardableResult
+    func keepSettings(_ settings: [String: Any], gameId: String) -> Bool {
+        guard let file = settingsFile(gameId: gameId), JSONSerialization.isValidJSONObject(settings),
+              let data = try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]),
+              data.count <= Self.maxSettingsBytes else { return false }
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try data.write(to: file, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The kept settings; nil when there are none (or the file is not a JSON object).
+    func settings(gameId: String) -> [String: Any]? {
+        guard let file = settingsFile(gameId: gameId), let data = try? Data(contentsOf: file),
+              !data.isEmpty, data.count <= Self.maxSettingsBytes else { return nil }
+        return ArcadeKitSettings.parse(data)
+    }
+}
+
+// MARK: - Where the sound goes, the kit's settings and the screen's text (Oct 19 2026)
+//
+// Kade, Oct 19 2026: 3D sound is optional, and someone may well play on the
+// iPhone's own speaker in a car, so nothing may depend on 3D; at the very
+// least the game's voice says where everyone is. Her decisions for the
+// kit's sound worlds ('3d', 'stereo', 'off') and position calls ('all',
+// 'urgent', 'off'):
+//   - headphones (and Bluetooth): Stereo, with 3D as her own choice
+//     ("3D sound, uses more battery");
+//   - the phone speaker: the game's own sound plus position calls;
+//   - a TV (AirPlay, HDMI): Stereo plus calls;
+//   - calls default to all.
+// The kit (core/app.js setOutput) chooses per route, keeps her own choices
+// per route in settings.routes, and says a route change once. The app's
+// part: tell it the route (ArcadeAudioRoute), keep its settings
+// (ArcadeSaveStore), and start headphones on Stereo.
+
+/// One output of the phone's audio route: AVAudioSession's port type (its
+/// raw value, "Speaker", "Headphones", "BluetoothA2DPOutput", ...) and the
+/// port's own name, which tells a USB adapter for a TV from one for headphones.
+struct ArcadeAudioPort: Equatable {
+    let type: String
+    let name: String
+
+    init(type: String, name: String = "") {
+        self.type = type
+        self.name = name
+    }
+}
+
+/// The kit's words for where the sound goes (revivalKit.setOutput({route})).
+enum ArcadeAudioRoute: String, CaseIterable {
+    case speaker, headphones, bluetooth, airplay, hdmi, other
+
+    /// What the phone is playing through, said in the game's Settings.
+    var spoken: String {
+        switch self {
+        case .speaker: return "Phone speaker"
+        case .headphones: return "Headphones"
+        case .bluetooth: return "Bluetooth"
+        case .airplay: return "AirPlay"
+        case .hdmi: return "TV or display"
+        case .other: return "Another output"
+        }
+    }
+
+    /// One port's route. The built-in speaker and the earpiece are the
+    /// speaker; wired headphones (a headset's microphone is an input, never
+    /// an output) are headphones; A2DP, LE and hands-free Bluetooth are
+    /// Bluetooth; HDMI and DisplayPort are a TV, and so is a USB audio
+    /// output whose name says it is a display. A USB adapter for headphones
+    /// is headphones; a car, a line out and anything else are 'other'
+    /// (the kit plays Stereo plus calls there, and keeps her own choice).
+    static func of(_ port: ArcadeAudioPort) -> ArcadeAudioRoute {
+        switch port.type.lowercased() {
+        case "speaker", "receiver": return .speaker
+        case "headphones": return .headphones
+        case "bluetootha2dpoutput", "bluetoothle", "bluetoothhfp": return .bluetooth
+        case "airplay": return .airplay
+        case "hdmioutput", "displayport": return .hdmi
+        case "usbaudio":
+            let words = Set(port.name.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+            if !words.isDisjoint(with: ["hdmi", "displayport", "display", "monitor", "tv", "av"]) { return .hdmi }
+            if !words.isDisjoint(with: ["headphone", "headphones", "headset", "earpods", "earbuds"]) { return .headphones }
+            return .other
+        default: return .other
+        }
+    }
+
+    /// The route of all the outputs at once: a TV first (everyone in the
+    /// room hears it), then Bluetooth, headphones, anything else, and the
+    /// speaker last. Nil with no output at all (between two routes): the
+    /// kit is told nothing until there is one.
+    static func of(_ ports: [ArcadeAudioPort]) -> ArcadeAudioRoute? {
+        let found: Set<ArcadeAudioRoute> = Set(ports.map { (port: ArcadeAudioPort) in ArcadeAudioRoute.of(port) })
+        return [ArcadeAudioRoute.hdmi, .airplay, .bluetooth, .headphones, .other, .speaker].first { found.contains($0) }
+    }
+}
+
+/// The kit's settings object, as the app keeps it and gives it back.
+enum ArcadeKitSettings {
+    /// The sound worlds in the order the Settings sheet offers them.
+    static let soundWorlds = ["stereo", "3d", "off"]
+    static let callChoices = ["all", "urgent", "off"]
+
+    /// A sound world in the kit's own spelling ("3D" -> "3d"); nil when it is none of the three.
+    static func soundWorld(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.lowercased(), soundWorlds.contains(text) else { return nil }
+        return text
+    }
+
+    /// A position-calls choice in the kit's own spelling; nil when it is none of the three.
+    static func calls(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.lowercased(), callChoices.contains(text) else { return nil }
+        return text
+    }
+
+    /// revivalKitHost.settings for the next page start: the kit's last
+    /// 'settings' for this game exactly as it sent them (its per-route
+    /// choices in `routes`, the route in use in `output`), under the app's
+    /// own switches:
+    ///   - speechMode: 'native' while VoiceOver reads every line, and
+    ///     otherwise left to the game's default (the app sets it again at
+    ///     'ready'), as before the kit kept settings;
+    ///   - picture: 'full' while Show the game picture is on, otherwise none
+    ///     (the kit then draws a small picture in No-vision mode);
+    ///   - a game with a sound world (not the plain player): headphones
+    ///     start on Stereo (`headphonesWorld`, which the kit takes for
+    ///     headphones and Bluetooth until she chooses), the first start is
+    ///     Stereo, and calls default to all. A choice she made is never
+    ///     replaced.
+    static func hostSettings(saved: [String: Any]?, readsAll: Bool, showPicture: Bool,
+                             hasSoundWorld: Bool) -> [String: Any] {
+        var settings = saved ?? [:]
+        if readsAll { settings["speechMode"] = "native" } else { settings.removeValue(forKey: "speechMode") }
+        if showPicture { settings["picture"] = "full" } else { settings.removeValue(forKey: "picture") }
+        if hasSoundWorld {
+            if soundWorld(settings["headphonesWorld"]) == nil { settings["headphonesWorld"] = "stereo" }
+            if soundWorld(settings["soundWorld"]) == nil { settings["soundWorld"] = "stereo" }
+            if calls(settings["calls"]) == nil { settings["calls"] = "all" }
+        }
+        return settings
+    }
+
+    /// The change Show the game picture sends (revivalKit.setSettings):
+    /// the full picture, or none (null, which the kit reads as not 'full').
+    static func picture(full: Bool) -> [String: Any] {
+        let value: Any = full ? ("full" as Any) : (NSNull() as Any)
+        return ["picture": value]
+    }
+
+    /// A JSON object with its keys sorted; "{}" for anything that is not one.
+    static func json(_ settings: [String: Any]) -> String {
+        guard JSONSerialization.isValidJSONObject(settings),
+              let data = try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
+    }
+
+    static func parse(_ data: Data) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+}
+
+/// The sound world, position calls and route the kit is using, from its
+/// 'settings' event or setOutput's answer. Nil when the kit names no sound
+/// world (an older game player, which has none to choose).
+struct ArcadeKitSound: Equatable {
+    var soundWorld: String
+    var calls: String
+    var output: ArcadeAudioRoute?
+
+    init?(_ settings: [String: Any]?) {
+        guard let settings, let world = ArcadeKitSettings.soundWorld(settings["soundWorld"]) else { return nil }
+        soundWorld = world
+        calls = ArcadeKitSettings.calls(settings["calls"]) ?? "all"
+        output = (settings["output"] as? String).flatMap { ArcadeAudioRoute(rawValue: $0.lowercased()) }
+    }
+}
+
+/// The game screen's text, from the kit's 'lines' event ({screen, lines}),
+/// sent whenever the screen's text changes: the Screen text sheet lists it.
+struct ArcadeScreenText: Equatable {
+    static let emptyLine = "No screen text."
+    static let defaultTitle = "Screen text"
+    /// More than any game screen holds; a runaway list is cut here.
+    static let maxLines = 400
+
+    /// The kit's name for the screen ("main menu"); "" when it has none.
+    let screen: String
+    let lines: [String]
+
+    init(screen: String, lines: [String]) {
+        self.screen = screen
+        self.lines = lines
+    }
+
+    /// Nil when the event carries no detail. Lines that are not text, or
+    /// are only spaces, are left out.
+    init?(detail: [String: Any]?) {
+        guard let detail else { return nil }
+        screen = ((detail["screen"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = (detail["lines"] as? [Any]) ?? []
+        lines = Array(list.compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(Self.maxLines))
+    }
+
+    /// The sheet's title: the game's own name for the screen (its profile's
+    /// screenNames, as the kit says it), else the screen with a capital
+    /// first letter, else "Screen text".
+    func title(names: [String: String]) -> String {
+        guard !screen.isEmpty else { return Self.defaultTitle }
+        if let name = names[screen], !name.isEmpty { return name }
+        return screen.prefix(1).uppercased() + screen.dropFirst()
+    }
 }
 
 // MARK: - The pad: state, actions and gesture tables (profile.input.touch)
@@ -2060,6 +2300,24 @@ enum ArcadeJS {
         "window.revivalKit&&window.revivalKit.setInputType&&window.revivalKit.setInputType(\(literal(type)));void 0"
     }
 
+    /// Oct 19 2026: revivalKit.setOutput({route}), where the sound goes. The
+    /// result is the sound world, calls and route the kit chose (read into
+    /// ArcadeKitSound), or null on an older game player without it.
+    static func setOutput(_ route: ArcadeAudioRoute) -> String {
+        """
+        (function () { var k = window.revivalKit; if (!k || !k.setOutput) { return null; } \
+        var s = k.setOutput({ route: \(literal(route.rawValue)) }); if (!s) { return null; } \
+        return { soundWorld: String(s.soundWorld || ''), calls: String(s.calls || ''), output: String(s.output || '') }; })()
+        """
+    }
+
+    /// revivalKit.setSettings(partial): a sound world or calls choice (kept
+    /// by the kit for the route in use), or the picture. Nothing on an older
+    /// game player without it.
+    static func setSettings(_ partial: [String: Any]) -> String {
+        "window.revivalKit&&window.revivalKit.setSettings&&window.revivalKit.setSettings(\(ArcadeKitSettings.json(partial)));void 0"
+    }
+
     /// The document-start script: window.revivalKitHost exactly as the kit's
     /// core/host.js reads it. Every line with no cloned clip comes back
     /// through the 'native' speech route; every kit event comes back too
@@ -2072,13 +2330,12 @@ enum ArcadeJS {
     /// `romPath` (a game added from Files, played with its accessibility
     /// pack): the URL the app serves her own ROM at, which the kit takes over
     /// the profile's ROM path. The plain player gets none (its rom= is in the URL).
-    static func hostScript(base: String, emulatorData: String, settings: [String: String],
+    /// `settings` (Oct 19 2026: any JSON, the kit's own kept settings with
+    /// their nested per-route choices; ArcadeKitSettings.hostSettings) is
+    /// written as one JSON object with sorted keys.
+    static func hostScript(base: String, emulatorData: String, settings: [String: Any],
                            inputType: String? = nil, saveData: String? = nil, romPath: String? = nil) -> String {
-        var settingParts: [String] = []
-        for key in settings.keys.sorted() {
-            if let value = settings[key] { settingParts.append(literal(key) + ":" + literal(value)) }
-        }
-        let settingsObject = "{" + settingParts.joined(separator: ",") + "}"
+        let settingsObject = ArcadeKitSettings.json(settings)
         var optional = ""
         if let inputType, !inputType.isEmpty { optional += "\n    inputType: \(literal(inputType)),"}
         if let saveData, !saveData.isEmpty { optional += "\n    saveData: \(literal(saveData)),"}

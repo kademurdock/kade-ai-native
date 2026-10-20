@@ -23,9 +23,10 @@ import CryptoKit
         javascriptAndWords()
         startWatched()
         savesKept()
+        soundAndScreenText()
         updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, several outputs at once, the setOutput and setSettings calls) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given), the screen's text and its title, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -275,6 +276,154 @@ import CryptoKit
         check(!store.keep(base64: "not base64!", gameId: "fighter") && !store.keep(base64: save.base64EncodedString(), gameId: "../x"),
               "text that is not a save, or a game id that is not a plain name, is refused")
         check(store.base64(gameId: "fighter") == save.base64EncodedString(), "and the kept save is untouched")
+    }
+
+    // MARK: Where the sound goes, the kit's settings and the screen's text (Oct 19 2026)
+
+    static func soundAndScreenText() {
+        // Every AVAudioSession output port type (its raw value) to the kit's six words.
+        check(ArcadeAudioRoute.allCases.map { $0.rawValue } == ["speaker", "headphones", "bluetooth", "airplay", "hdmi", "other"],
+              "the app sends only the kit's six route words")
+        func route(_ type: String, _ name: String = "") -> ArcadeAudioRoute {
+            ArcadeAudioRoute.of(ArcadeAudioPort(type: type, name: name))
+        }
+        check(route("Speaker") == .speaker && route("Receiver") == .speaker, "the built-in speaker and the earpiece are the speaker")
+        check(route("Headphones", "Headphones") == .headphones, "wired headphones")
+        check(route("BluetoothA2DPOutput") == .bluetooth && route("BluetoothLE") == .bluetooth && route("BluetoothHFP") == .bluetooth,
+              "A2DP, LE and hands-free Bluetooth")
+        check(route("AirPlay", "Living Room") == .airplay, "AirPlay")
+        check(route("HDMIOutput") == .hdmi && route("DisplayPort") == .hdmi, "HDMI and DisplayPort are a TV")
+        check(route("USBAudio", "USB-C Digital AV Multiport Adapter") == .hdmi && route("USBAudio", "HDMI") == .hdmi
+              && route("USBAudio", "LG TV") == .hdmi, "a USB output named as a display is a TV")
+        check(route("USBAudio", "USB-C to 3.5 mm Headphone Jack Adapter") == .headphones, "a USB headphone adapter is headphones")
+        check(route("USBAudio", "USB Audio CODEC") == .other && route("USBAudio") == .other, "any other USB output is other")
+        check(route("CarAudio", "My car") == .other && route("LineOut") == .other && route("Virtual") == .other && route("") == .other,
+              "a car, a line out and anything unknown are other (Stereo plus calls)")
+        check(route("speaker") == .speaker && route("HEADPHONES") == .headphones && route("airplay") == .airplay, "port types in any case")
+        check(ArcadeAudioRoute.of([]) == nil, "no output at all (between two routes): nothing to tell the kit")
+        check(ArcadeAudioRoute.of([ArcadeAudioPort(type: "Speaker"), ArcadeAudioPort(type: "HDMIOutput")]) == .hdmi,
+              "a TV wins over the speaker")
+        check(ArcadeAudioRoute.of([ArcadeAudioPort(type: "Speaker"), ArcadeAudioPort(type: "Headphones")]) == .headphones,
+              "the speaker comes last")
+        check(ArcadeAudioRoute.of([ArcadeAudioPort(type: "BluetoothA2DPOutput", name: "Earbuds")]) == .bluetooth, "one Bluetooth output")
+        check(ArcadeAudioRoute.speaker.spoken == "Phone speaker" && ArcadeAudioRoute.headphones.spoken == "Headphones"
+              && ArcadeAudioRoute.hdmi.spoken == "TV or display", "routes in words for Settings")
+
+        // The calls the page gets.
+        let output = ArcadeJS.setOutput(.headphones)
+        check(output.contains("k.setOutput({ route: \"headphones\" })") && output.contains("if (!k || !k.setOutput) { return null; }"),
+              "setOutput with the route word, nothing on an older game player")
+        check(output.contains("soundWorld: String(s.soundWorld || '')") && output.contains("output: String(s.output || '')")
+              && !output.contains("\n"), "and its answer is the kit's choice, as one line of script")
+        check(ArcadeJS.setSettings(["soundWorld": "3d"])
+              == #"window.revivalKit&&window.revivalKit.setSettings&&window.revivalKit.setSettings({"soundWorld":"3d"});void 0"#,
+              "a sound world choice")
+        check(ArcadeJS.setSettings(["calls": "urgent"]).contains(#"setSettings({"calls":"urgent"})"#), "a calls choice")
+        check(ArcadeJS.setSettings(ArcadeKitSettings.picture(full: true)).contains(#"setSettings({"picture":"full"})"#)
+              && ArcadeJS.setSettings(ArcadeKitSettings.picture(full: false)).contains(#"setSettings({"picture":null})"#),
+              "Show the game picture: the full picture, or none")
+
+        // The kit's spellings.
+        check(ArcadeKitSettings.soundWorld("3D") == "3d" && ArcadeKitSettings.soundWorld("Stereo") == "stereo"
+              && ArcadeKitSettings.soundWorld("off") == "off", "sound worlds in the kit's own spelling")
+        check(ArcadeKitSettings.soundWorld("loud") == nil && ArcadeKitSettings.soundWorld(3) == nil && ArcadeKitSettings.soundWorld(nil) == nil,
+              "anything else is no sound world")
+        check(ArcadeKitSettings.calls("Urgent") == "urgent" && ArcadeKitSettings.calls("all") == "all" && ArcadeKitSettings.calls("some") == nil,
+              "calls in the kit's own spelling")
+        check(ArcadeKitSettings.soundWorlds == ["stereo", "3d", "off"] && ArcadeKitSettings.callChoices == ["all", "urgent", "off"],
+              "the Settings sheet's order, Stereo first")
+
+        // The settings given back at the next start.
+        let first = ArcadeKitSettings.hostSettings(saved: nil, readsAll: false, showPicture: false, hasSoundWorld: true)
+        check(ArcadeKitSettings.json(first) == #"{"calls":"all","headphonesWorld":"stereo","soundWorld":"stereo"}"#,
+              "the first start: headphones on Stereo (3D is her choice), calls on")
+        let switches = ArcadeKitSettings.hostSettings(saved: nil, readsAll: true, showPicture: true, hasSoundWorld: true)
+        check(ArcadeKitSettings.json(switches)
+              == #"{"calls":"all","headphonesWorld":"stereo","picture":"full","soundWorld":"stereo","speechMode":"native"}"#,
+              "VoiceOver reads every line, and the full picture")
+        check(ArcadeKitSettings.json(ArcadeKitSettings.hostSettings(saved: nil, readsAll: false, showPicture: false, hasSoundWorld: false)) == "{}"
+              && ArcadeKitSettings.json(ArcadeKitSettings.hostSettings(saved: nil, readsAll: true, showPicture: false, hasSoundWorld: false))
+              == #"{"speechMode":"native"}"#,
+              "the plain player gets what it got before: speechMode only while VoiceOver reads every line")
+        let keptJSON = #"""
+        {"calls":"urgent","gameVolume":0.6,"headphonesWorld":"3d","madeSounds":false,"opponents":true,"output":"speaker","picture":"full",
+         "routes":{"headphones":{"calls":"all","soundWorld":"3d"},"speaker":{"calls":"urgent","soundWorld":"off"}},
+         "sight":"none","soundWorld":"off","speechMode":"native"}
+        """#
+        let kept = ArcadeKitSettings.parse(Data(keptJSON.utf8)) ?? [:]
+        check(kept.count == 11, "the kit's settings read")
+        let back = ArcadeKitSettings.hostSettings(saved: kept, readsAll: false, showPicture: false, hasSoundWorld: true)
+        check(back["speechMode"] == nil && back["picture"] == nil,
+              "the app's switches win: no VoiceOver reading every line, no full picture")
+        check(ArcadeKitSettings.json((back["routes"] as? [String: Any]) ?? [:])
+              == #"{"headphones":{"calls":"all","soundWorld":"3d"},"speaker":{"calls":"urgent","soundWorld":"off"}}"#,
+              "the kit's per-route choices go back as given")
+        check((back["headphonesWorld"] as? String) == "3d" && (back["soundWorld"] as? String) == "off"
+              && (back["calls"] as? String) == "urgent" && (back["output"] as? String) == "speaker",
+              "a choice she made is never replaced by the app's defaults")
+        check((back["madeSounds"] as? Bool) == false && (back["opponents"] as? Bool) == true
+              && abs(((back["gameVolume"] as? Double) ?? 0) - 0.6) < 0.000_001
+              && (back["sight"] as? String) == "none", "every other setting goes back as the kit sent it")
+        let backJSON = ArcadeKitSettings.json(back)
+        check(backJSON.contains(#""madeSounds":false"#) && backJSON.contains(#""opponents":true"#), "true and false stay true and false, not 1 and 0")
+        let readsAll = ArcadeKitSettings.hostSettings(saved: kept, readsAll: true, showPicture: true, hasSoundWorld: true)
+        check((readsAll["speechMode"] as? String) == "native" && (readsAll["picture"] as? String) == "full", "and the switches on")
+        let odd = ArcadeKitSettings.hostSettings(saved: ["soundWorld": "loud", "calls": 3, "headphonesWorld": ""], readsAll: false,
+                                                 showPicture: false, hasSoundWorld: true)
+        check(ArcadeKitSettings.json(odd) == #"{"calls":"all","headphonesWorld":"stereo","soundWorld":"stereo"}"#,
+              "a sound world or calls the kit would not know starts as the defaults")
+        check(ArcadeKitSettings.json(["when": Date()]) == "{}", "anything that is not JSON is an empty object")
+        let script = ArcadeJS.hostScript(base: "b", emulatorData: "d", settings: back)
+        check(script.contains(#""routes":{"headphones":{"calls":"all","soundWorld":"3d"},"speaker":{"calls":"urgent","soundWorld":"off"}}"#)
+              && script.contains(#"settings: {"calls":"urgent","#), "the host script carries the kit's own settings, routes and all")
+
+        // Kept beside the save.
+        let root = temporaryFolder("settings")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ArcadeSaveStore(root: root.appendingPathComponent("ArcadeSaves", isDirectory: true))
+        check(store.settings(gameId: "fighter") == nil, "no settings yet")
+        check(store.keepSettings(kept, gameId: "fighter"), "the kit's 'settings' are kept")
+        check(store.settings(gameId: "fighter").map(ArcadeKitSettings.json) == ArcadeKitSettings.json(kept), "and given back exactly")
+        check(!store.keepSettings(kept, gameId: "../x") && !store.keepSettings(["when": Date()], gameId: "fighter"),
+              "a game id that is not a plain name, or settings that are not JSON, are refused")
+        check(store.settings(gameId: "fighter").map(ArcadeKitSettings.json) == ArcadeKitSettings.json(kept), "and the kept settings are untouched")
+        check(!store.keepSettings(["text": String(repeating: "a", count: ArcadeSaveStore.maxSettingsBytes)], gameId: "big"),
+              "far too big is not the kit's settings")
+        check(store.base64(gameId: "fighter") == nil, "the settings are not a save")
+        if let broken = store.settingsFile(gameId: "broken") {
+            try? Data("not json".utf8).write(to: broken)
+            check(store.settings(gameId: "broken") == nil, "a file that is not a JSON object reads as none")
+        } else {
+            check(false, "a plain game id has a settings file")
+        }
+
+        // What the Settings sheet shows.
+        let sound = ArcadeKitSound(["soundWorld": "3D", "calls": "Urgent", "output": "speaker"])
+        check(sound?.soundWorld == "3d" && sound?.calls == "urgent" && sound?.output == .speaker, "the kit's sound, read")
+        check(ArcadeKitSound(["calls": "all"]) == nil && ArcadeKitSound(nil) == nil, "no sound world named (an older player): no choices")
+        let quiet = ArcadeKitSound(["soundWorld": "off", "calls": "", "output": ""])
+        check(quiet?.calls == "all" && quiet?.output == nil, "calls default to all; no route yet")
+        check(ArcadeKitSound(kept) == ArcadeKitSound(["soundWorld": "off", "calls": "urgent", "output": "speaker"]), "from the whole settings too")
+
+        // The screen's text.
+        let text = ArcadeScreenText(detail: ["screen": "main menu", "lines": ["Quest", "  ", 7, "Practice "] as [Any]])
+        check(text?.screen == "main menu" && text?.lines == ["Quest", "Practice"], "the lines, without blanks or anything not text")
+        check(text?.title(names: ["main menu": "Main menu"]) == "Main menu", "titled with the game's own name for the screen")
+        check(ArcadeScreenText(screen: "game options", lines: []).title(names: [:]) == "Game options", "else the screen with a capital")
+        let none = ArcadeScreenText(detail: ["screen": "", "lines": [String]()])
+        check(none?.lines.isEmpty == true && none?.title(names: [:]) == "Screen text", "a screen with no text and no name")
+        check(ArcadeScreenText(detail: ["screen": "roster"])?.lines.isEmpty == true, "no lines given, none listed")
+        check(ArcadeScreenText(detail: nil) == nil, "no detail, nothing")
+        check(ArcadeScreenText(detail: ["screen": "credits", "lines": Array(repeating: "Name", count: 1_000)])?.lines.count
+              == ArcadeScreenText.maxLines, "a runaway list is cut")
+        check(ArcadeScreenText.emptyLine == "No screen text.", "the empty state, as the kit says it")
+
+        // The kit's telemetry (Oct 19 2026: its frame time and the emulator's dropouts).
+        var telemetry = ArcadeTelemetry()
+        telemetry.note(event: "telemetry", detail: ["js": 0.25, "jsMax": 1.5, "underruns": 3, "audioQ": 0, "fps": 59])
+        let report = telemetry.report(now: telemetry.openedAt)
+        check(report.contains("js=0.25") && report.contains("jsMax=1.5") && report.contains("underruns=3") && report.contains("audioQ=0"),
+              "the kit's frame time and the emulator's dropouts reach the how-it-ran text")
     }
 
     // MARK: Catalog and shelf
