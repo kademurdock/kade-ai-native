@@ -818,6 +818,52 @@ enum ArcadeUpdate: Equatable {
         "A newer game player is ready, \(ArcadeText.size(bytes)). Download it first?"
     }
 
+    /// Oct 19 2026 review: Play asks first on every update, not only a newer
+    /// game player. A newer game launched on its old record ran the old
+    /// player too (the old record names the old kit), which is build 340
+    /// over again when the game and its player change together.
+    static func question(_ update: ArcadeUpdate, bytes: Int64) -> String {
+        switch update {
+        case .player: return playerQuestion(bytes: bytes)
+        case .game: return "A newer version of this game is ready, \(ArcadeText.size(bytes)). Download it first?"
+        case .current: return "\(ArcadeText.size(bytes)) to download. Download it first?"
+        }
+    }
+
+    /// Said as Play starts checking the update's size: the paced client
+    /// takes a moment or more, and Play has no other sign of it.
+    var checkingLine: String {
+        switch self {
+        case .player: return "Checking the newer game player's size."
+        case .game: return "Checking the update's size."
+        case .current: return "Checking the size."
+        }
+    }
+
+    /// A second press while the same game's size is being checked.
+    static let stillChecking = "Still checking the size."
+    /// A press while another game's size is being checked (one at a time).
+    static let otherChecking = "Another game is being checked. Try again in a moment."
+
+    /// Oct 19 2026 review: the kit versions ("<id>/<version>") on the phone
+    /// that nothing needs any more. An old kit used to be let go only by the
+    /// update that replaced it (held in memory while the open game read it)
+    /// or by prune, so the app killed before that game closed, a deleted
+    /// added game or a deleted shelf game left it for good, about 7 MB a kit.
+    /// `onPhone`: each kit version folder, true when it is whole (a checked
+    /// pack and no stopped download in it, which stays so it can resume).
+    /// Only whole ones go, and only when no install record or added game
+    /// uses them (`used`) and nothing asks to keep them (`keep`: the shelf's
+    /// kit, the open game's, a download's).
+    static func sweptKits(id: String, onPhone: [String: Bool], used: Set<String>, keep: Set<String>) -> Set<String> {
+        var swept = Set<String>()
+        for (version, whole) in onPhone where whole {
+            let key = id + "/" + version
+            if !used.contains(key) && !keep.contains(key) { swept.insert(key) }
+        }
+        return swept
+    }
+
     /// What an install let go of (`retired`, from ArcadeInstallRecord.retired(by:))
     /// comes to: what goes now, and what waits for the open game to close.
     /// Anything an install on the phone still uses (`used`: every record's

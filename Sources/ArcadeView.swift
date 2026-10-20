@@ -34,14 +34,18 @@ import UniformTypeIdentifiers
 ///   is the same. The row says "update ready: a newer game player" and has
 ///   Download the update; Play asks first ("A newer game player is ready,
 ///   7.0 MB. Download it first?": Download, Play anyway, Not now); and a
-///   start that fails on the old player says the newer one is ready.
+///   start that fails on the old player says the newer one is ready. Since
+///   the review Play asks on a newer game too ("A newer version of this game
+///   is ready"), since its old record names the old player as well; the
+///   check is said as it starts; and kits nothing uses are swept on load.
 struct ArcadeView: View {
     let apiClient: KadeAPIClient
     @ObservedObject private var service: ArcadeService
     @State private var playing: ArcadeLaunch?
     @State private var offer: ArcadeDownloadOffer?
-    /// Oct 19 2026: Play's question while only a newer game player is ready.
-    @State private var playerOffer: ArcadeDownloadOffer?
+    /// Oct 19 2026: Play's question while an update is ready (a newer game
+    /// player, or since the review a newer game too), and which one it is.
+    @State private var updateOffer: ArcadePlayUpdate?
     @State private var checking: String?
     @State private var problem: String?
     @State private var waitingForCall = false
@@ -143,15 +147,15 @@ struct ArcadeView: View {
         } message: { pending in
             Text(offerMessage(pending))
         }
-        // Oct 19 2026: Play asks first while a newer game player is ready.
-        .alert(playerOffer.map { $0.entry.title } ?? "A newer game player",
-               isPresented: Binding(get: { playerOffer != nil }, set: { if !$0 { playerOffer = nil } }),
-               presenting: playerOffer) { pending in
-            Button("Download") { startDownload(pending) }
-            Button("Play anyway") { play(pending.entry, askFirst: false) }
+        // Oct 19 2026: Play asks first while an update is ready.
+        .alert(updateOffer.map { $0.offer.entry.title } ?? ArcadeUpdate.buttonTitle,
+               isPresented: Binding(get: { updateOffer != nil }, set: { if !$0 { updateOffer = nil } }),
+               presenting: updateOffer) { pending in
+            Button("Download") { startDownload(pending.offer) }
+            Button("Play anyway") { play(pending.offer.entry, askFirst: false) }
             Button("Not now", role: .cancel) {}
         } message: { pending in
-            Text(ArcadeUpdate.playerQuestion(bytes: pending.bytes))
+            Text(ArcadeUpdate.question(pending.update, bytes: pending.offer.bytes))
         }
         .alert("Not yet", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK", role: .cancel) { problem = nil }
@@ -270,7 +274,7 @@ struct ArcadeView: View {
                 .buttonStyle(KadeCardButtonStyle())
                 .labelStyle(KadeRowLabelStyle(tint: .purple, caption: caption(entry) + update.captionTail))
                 .accessibilityLabel("Play \(entry.title)")
-                .accessibilityValue(playValue)
+                .accessibilityValue(checking == entry.id ? "Checking the size" : playValue)
                 .accessibilityHint(entry.summary ?? "Opens the game full screen.")
                 .accessibilityAction(named: "Delete download") { deleteDownload(entry) }
                 .accessibilityAction(named: ArcadeReport.actionName) { report(entry) }
@@ -368,16 +372,19 @@ struct ArcadeView: View {
         service.startDownload(offer)
     }
 
-    /// Play. Oct 19 2026: while only a newer game player is ready (and no
-    /// other download holds the slot), the question comes first: Download,
-    /// Play anyway (on the player it has), or Not now.
+    /// Play. Oct 19 2026: while an update is ready (and no other download
+    /// holds the slot), the question comes first: Download, Play anyway (the
+    /// version and player it has), or Not now. Since the review that is any
+    /// update, not only a newer game player: launch uses the installed
+    /// record, so a newer game played without asking ran its old player too.
     private func play(_ entry: ArcadeCatalogEntry, askFirst: Bool = true) {
         guard service.isPlayable(entry) else {
             problem = ArcadeService.notOpenHere
             return
         }
-        if askFirst, service.downloading == nil, service.update(for: entry) == .player {
-            askPlayerUpdate(entry)
+        let update = service.update(for: entry)
+        if askFirst, service.downloading == nil, update.isUpdate {
+            askUpdate(entry, update: update)
             return
         }
         guard ArcadeAudioGuard.check() == .clear else {
@@ -392,19 +399,29 @@ struct ArcadeView: View {
         playing = launch
     }
 
-    /// The newer player's size, then the question. Already on this iPhone
-    /// (another game brought it): put to use and played at once. The size
-    /// could not be checked (offline, the server busy): played on the player
-    /// it has, whose start failure line then names the update.
-    private func askPlayerUpdate(_ entry: ArcadeCatalogEntry) {
-        guard checking == nil else { return }
+    /// The update's size, then the question. Already on this iPhone (another
+    /// game brought the newer player): put to use and played at once. The
+    /// size could not be checked (offline, the server busy): played on what
+    /// it has, whose start failure line then names a newer player. The check
+    /// is said as it starts, and a press while a size is being checked is
+    /// answered, never dropped.
+    private func askUpdate(_ entry: ArcadeCatalogEntry, update: ArcadeUpdate) {
+        if let busy = checking {
+            if busy == entry.id {
+                UIAccessibility.post(notification: .announcement, argument: ArcadeUpdate.stillChecking)
+            } else {
+                problem = ArcadeUpdate.otherChecking
+            }
+            return
+        }
         checking = entry.id
+        UIAccessibility.post(notification: .announcement, argument: update.checkingLine)
         Task {
             defer { checking = nil }
             do {
                 let next = try await service.offer(for: entry)
                 if next.bytes > 0 {
-                    playerOffer = next
+                    updateOffer = ArcadePlayUpdate(offer: next, update: update)
                 } else {
                     _ = service.installFromPhone(next)
                     play(entry, askFirst: false)
@@ -488,18 +505,29 @@ extension ArcadeView {
         let key = ArcadeImportText.downloadKey(record.localId)
         let isDownloading = service.downloading == key
         let actions = "The Actions rotor has Rename, Delete, Report a problem and Check for an accessibility pack."
-        let hint = status.isPackReady
-            ? "Asks to download its accessibility pack first, or plays it without. " + actions
-            : "Plays it full screen. " + actions
+        // Oct 19 2026 review: a newer game player is said on the row too, as
+        // a shelf game's is, and Play's hint says it asks first. The set is
+        // worked out in refreshImports, never by reading the disk here.
+        let newerPlayer = service.importsWithNewerPlayer.contains(record.localId)
+        let hint: String
+        if status.isPackReady {
+            hint = "Asks to download its accessibility pack first, or plays it without. " + actions
+        } else if newerPlayer {
+            hint = "Asks to download a newer game player first, or plays it anyway. " + actions
+        } else {
+            hint = "Plays it full screen. " + actions
+        }
+        let tail = newerPlayer ? ArcadeUpdate.player.captionTail : ""
+        let value = newerPlayer ? record.system.name + ". Update ready: a newer game player." : record.system.name
         return VStack(alignment: .leading, spacing: 8) {
             Button { playImport(record) } label: {
                 Label(record.title, systemImage: status == .pack ? "gamecontroller.fill" : "gamecontroller")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(KadeCardButtonStyle())
-            .labelStyle(KadeRowLabelStyle(tint: .teal, caption: record.system.name + ", " + status.words))
+            .labelStyle(KadeRowLabelStyle(tint: .teal, caption: record.system.name + ", " + status.words + tail))
             .accessibilityLabel(ArcadeImportText.rowLabel(title: record.title, status: status))
-            .accessibilityValue(record.system.name)
+            .accessibilityValue(checkingImport == record.localId ? "Checking the size" : value)
             .accessibilityHint(hint)
             .accessibilityFocused($focusedImport, equals: record.localId)
             .accessibilityAction(named: "Rename") { startRename(record) }
@@ -597,19 +625,40 @@ extension ArcadeView {
     /// The size first, then the question (or straight on when nothing is
     /// missing). Never while another download holds the one slot.
     private func askImportDownload(_ record: ArcadeImportRecord, withPack: Bool, fromPlay: Bool = false) {
-        guard checkingImport == nil else { return }
+        guard checkingImport == nil else {
+            // Oct 19 2026 review: Play pressed while a size is being checked is answered.
+            if fromPlay {
+                if checkingImport == record.localId {
+                    UIAccessibility.post(notification: .announcement, argument: ArcadeUpdate.stillChecking)
+                } else {
+                    importProblem = ArcadeUpdate.otherChecking
+                }
+            }
+            return
+        }
         guard service.downloading == nil else {
             importProblem = ArcadeImportText.otherDownload
             return
         }
         checkingImport = record.localId
+        // Play's newer-player check is said as it starts (the paced client takes a moment).
+        if fromPlay && !withPack {
+            UIAccessibility.post(notification: .announcement, argument: ArcadeUpdate.player.checkingLine)
+        }
         Task {
             var playInstead = false
             do {
                 var next = try await service.importOffer(for: record.localId, withPack: withPack)
                 next.fromPlay = fromPlay
                 if next.bytes <= 0 {
-                    startImportDownload(next)
+                    // Oct 19 2026 review: Play's newer player already on this
+                    // iPhone is put to use and played, as a shelf game's is,
+                    // not said as downloading with Play to press again.
+                    if fromPlay && next.playerUpdate && service.installImportFromPhone(next) {
+                        playInstead = true
+                    } else {
+                        startImportDownload(next)
+                    }
                 } else {
                     importOffer = next
                 }
@@ -625,7 +674,9 @@ extension ArcadeView {
                 }
             }
             checkingImport = nil
-            // After the slot is free: a player missing after all asks again, and says why.
+            // After the slot is free: a player missing after all asks again,
+            // and says why. Played on the newer player once it was put to use,
+            // or on the one it has when the question could not be asked.
             if playInstead { playImport(record, offerPack: false, offerPlayer: false) }
         }
     }
@@ -738,6 +789,13 @@ extension ArcadeView {
             UIAccessibility.post(notification: .announcement, argument: said)
         }
     }
+}
+
+/// Oct 19 2026: Play's question while an update is ready, and which update
+/// it is, for its words (ArcadeUpdate.question).
+private struct ArcadePlayUpdate {
+    let offer: ArcadeDownloadOffer
+    let update: ArcadeUpdate
 }
 
 /// My games' questions, kept apart so the Arcade screen's own alerts stay as they were.

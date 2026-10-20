@@ -25,7 +25,7 @@ import CryptoKit
         savesKept()
         updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, and the start failure line naming it), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -186,6 +186,37 @@ import CryptoKit
               == "A newer game player is ready, 7.0 MB. Download it first?", "Play's one question, with the size")
         check(newManifest.bytesMissing(installed: onPhone.union([newKitKey])) == 0,
               "a player another game already brought: nothing to download, put to use at once")
+
+        // Oct 19 2026 review: Play asks first on every update. A newer game
+        // started on its old record would run the old player as well.
+        check(ArcadeUpdate.question(.player, bytes: 7_000_000) == ArcadeUpdate.playerQuestion(bytes: 7_000_000),
+              "a newer game player keeps its own question")
+        check(ArcadeUpdate.question(.game, bytes: 52_200_000)
+              == "A newer version of this game is ready, 52 MB. Download it first?",
+              "a newer game asks too, in its own words, before Play starts the old one on its old player")
+        check(ArcadeUpdate.question(.game, bytes: 7_000_000).hasPrefix("A newer version of this game is ready, 7.0 MB."),
+              "with the size")
+        check(ArcadeUpdate.player.checkingLine == "Checking the newer game player's size."
+              && ArcadeUpdate.game.checkingLine == "Checking the update's size.",
+              "Play says it is checking, since the button gives no other sign")
+        check(ArcadeUpdate.stillChecking == "Still checking the size."
+              && ArcadeUpdate.otherChecking == "Another game is being checked. Try again in a moment.",
+              "a press while a size is checked is answered, never dropped")
+
+        // Oct 19 2026 review: kits nothing uses go once the shelf answers, so
+        // one left by a killed app or a deleted game does not stay for good.
+        let kitMid = "20261019-7ae651dc"
+        let kitsOnPhone: [String: Bool] = [kitOld: true, kitMid: true, kitNew: true, "20261017-00000000": false]
+        check(ArcadeUpdate.sweptKits(id: "kit", onPhone: kitsOnPhone, used: [oldKitKey, "demo/g1"], keep: [newKitKey])
+              == ["kit/" + kitMid],
+              "only a whole kit no install uses and nothing keeps goes")
+        check(ArcadeUpdate.sweptKits(id: "kit", onPhone: kitsOnPhone, used: [], keep: [newKitKey]) == [oldKitKey, "kit/" + kitMid],
+              "an old kit left behind when nothing reads it any more goes")
+        check(!ArcadeUpdate.sweptKits(id: "kit", onPhone: kitsOnPhone, used: [], keep: []).contains("kit/20261017-00000000"),
+              "a stopped download stays, so it can resume")
+        check(ArcadeUpdate.sweptKits(id: "kit", onPhone: [kitNew: true], used: [], keep: [newKitKey]).isEmpty,
+              "the shelf's own kit stays, used or not")
+        check(ArcadeUpdate.sweptKits(id: "kit", onPhone: [:], used: [], keep: []).isEmpty, "no kits, nothing to do")
 
         // One record per game version: the new one is written over the old,
         // and the old player is let go once nothing uses it.

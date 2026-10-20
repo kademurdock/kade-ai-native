@@ -272,6 +272,40 @@ struct ArcadeStore {
         return keys
     }
 
+    /// The kit pack's id: every kit version lives in Arcade/kit/<version>
+    /// (ARCADE_CONTRACT: {"kind": "kit", "id": "kit", ...}).
+    static let kitId = "kit"
+
+    /// Oct 19 2026 review: kit versions nothing on the phone uses any more
+    /// go (ArcadeUpdate.sweptKits), whatever left them: the app killed while
+    /// a game was open on the old kit after its update (retire waits in
+    /// memory), a deleted added game, a deleted shelf game. A folder with a
+    /// stopped download in it (blob.part) stays, so the download can resume.
+    /// The answer is what went.
+    @discardableResult
+    func sweepKits(keep: Set<String>) -> Set<String> {
+        let manager = FileManager.default
+        let kits = root.appendingPathComponent(Self.kitId, isDirectory: true)
+        let versions = (try? manager.contentsOfDirectory(at: kits, includingPropertiesForKeys: nil,
+                                                          options: [.skipsHiddenFiles])) ?? []
+        var onPhone: [String: Bool] = [:]
+        for folder in versions {
+            let version = folder.lastPathComponent
+            guard ArcadePaths.isSafeName(version) else { continue }
+            let checked = manager.fileExists(atPath: folder.appendingPathComponent("verified.json").path)
+            let partial = manager.fileExists(atPath: folder.appendingPathComponent("blob.part").path)
+            onPhone[version] = checked && !partial
+        }
+        guard !onPhone.isEmpty else { return [] }
+        let swept = ArcadeUpdate.sweptKits(id: Self.kitId, onPhone: onPhone, used: recordKeys(), keep: keep)
+        for key in swept {
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let folder = folder(id: parts[0], version: parts[1]) else { continue }
+            try? manager.removeItem(at: folder)
+        }
+        return swept
+    }
+
     /// Removes one pack folder ("<id>/<version>") once nothing on the phone uses it.
     func removeIfUnused(_ key: String) {
         guard !recordKeys().contains(key) else { return }
@@ -336,6 +370,9 @@ final class ArcadeService: ObservableObject {
     /// Oct 19 2026: games added from Files (My games), by title, and what each row says.
     @Published private(set) var imports: [ArcadeImportRecord] = []
     @Published private(set) var importStatus: [String: ArcadeImportStatus] = [:]
+    /// Oct 19 2026 review: added games (local ids) whose player is older than
+    /// the shelf's, worked out in refreshImports so a row never reads the disk.
+    @Published private(set) var importsWithNewerPlayer: Set<String> = []
     /// The file being added right now.
     @Published private(set) var adding: String?
 
@@ -392,6 +429,7 @@ final class ArcadeService: ObservableObject {
         installed = [:]
         installedKits = [:]
         importStatus = [:]
+        importsWithNewerPlayer = []
         staleAsked = []
     }
 
@@ -433,6 +471,7 @@ final class ArcadeService: ObservableObject {
                           familyOpen: open, message: config.message, kitVersion: config.kitVersion)
             loadError = nil
             refreshInstalled()
+            sweepKits()
             refreshImports()
             // My games whose answer was another account's, or a day old: asked
             // again in the background, a few at a time.
@@ -601,6 +640,20 @@ final class ArcadeService: ObservableObject {
     private func retire(_ keys: Set<String>) {
         guard !keys.isEmpty, let store = try? ArcadeStore() else { return }
         retirePending.formUnion(store.retire(keys, protecting: inUse.union(Self.packsInFlight)))
+    }
+
+    /// Oct 19 2026 review: retirePending lives only in memory, so a kit it
+    /// held (or one a deleted game left) is swept once the shelf answers
+    /// (ArcadeStore.sweepKits). Never while a game is open or a download
+    /// runs (a kit just checked has no record yet until its download ends),
+    /// nor while the shelf names no kit: the one to keep is not known.
+    private func sweepKits() {
+        guard inUse.isEmpty, downloading == nil, Self.packsInFlight.isEmpty,
+              let kitVersion = shelf?.kitVersion, !kitVersion.isEmpty,
+              let store = try? ArcadeStore() else { return }
+        var keep = retirePending
+        keep.insert(ArcadeStore.kitId + "/" + kitVersion)
+        store.sweepKits(keep: keep)
     }
 
     /// An update leaves one version on the phone: the old one and the packs
@@ -846,7 +899,11 @@ extension ArcadeService {
         let familyOpen: Bool? = shelf.map { $0.familyOpen }
         var kitFiles: [String: Set<String>] = [:]
         var statuses: [String: ArcadeImportStatus] = [:]
+        var newerPlayer = Set<String>()
         for record in records {
+            if ArcadeUpdate.isNewerKit(shelf: shelf?.kitVersion, installed: record.kit?.version) {
+                newerPlayer.insert(record.localId)
+            }
             var onPhone = false
             if let pack = record.accessPack, let store {
                 onPhone = store.hasPack(id: pack.id, version: pack.version, sha256: pack.sha256)
@@ -866,6 +923,7 @@ extension ArcadeService {
         }
         imports = records
         importStatus = statuses
+        importsWithNewerPlayer = newerPlayer
     }
 
     /// Copies a file picked in Files into My games (a zip is unpacked on the
@@ -1171,6 +1229,33 @@ extension ArcadeService {
             progress = Double(done) / Double(total)
         }
         let importStore = try ArcadeImportStore.standard()
+        try applyImportOffer(offer, importStore: importStore)
+        progress = 1
+    }
+
+    /// Oct 19 2026 review: Play's newer game player that is already on this
+    /// iPhone (a shelf game or another added game brought it): put to use at
+    /// once, with nothing said as downloading, so Play goes straight on, as a
+    /// shelf game's installFromPhone does. False when it could not be (a
+    /// download holds the slot, a pack is missing, a file problem): the
+    /// caller then starts the download as before.
+    func installImportFromPhone(_ offer: ArcadeImportOffer) -> Bool {
+        guard downloading == nil, let store = try? ArcadeStore(), store.hasPack(offer.kit),
+              offer.accessPack.map({ store.hasPack($0) }) ?? true,
+              let importStore = try? ArcadeImportStore.standard() else { return false }
+        do {
+            try applyImportOffer(offer, importStore: importStore)
+        } catch {
+            return false
+        }
+        downloadErrors[ArcadeImportText.downloadKey(offer.record.localId)] = nil
+        refreshImports()
+        return true
+    }
+
+    /// Every pack the offer names is on the phone: the added game's record
+    /// now runs on them, and what it let go of goes.
+    private func applyImportOffer(_ offer: ArcadeImportOffer, importStore: ArcadeImportStore) throws {
         guard var record = importStore.record(offer.record.localId) else {
             throw ArcadeServiceError(message: "That game was deleted while its download ran.")
         }
@@ -1195,7 +1280,6 @@ extension ArcadeService {
         if let previousPack, previousPack.key != record.accessPack?.key { letGo.insert(previousPack.key) }
         if let previousKit, previousKit.key != record.kit?.key { letGo.insert(previousKit.key) }
         retire(letGo)
-        progress = 1
     }
 
     /// Play: with its accessibility pack when that is on the phone and open
