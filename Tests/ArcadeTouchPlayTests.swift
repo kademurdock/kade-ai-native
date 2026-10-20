@@ -547,7 +547,8 @@ extension ArcadeModelsTests {
         check(queue.finished(text: nil, ok: true, now: 2000).isEmpty && queue.isIdle, "the app's own line needs no answer")
         _ = queue.add(first, now: 3000)
         _ = queue.add(second, now: 3010)
-        check(queue.quiet() == [.stop] && queue.isIdle && queue.quiet().isEmpty, "quiet stops and clears everything")
+        check(queue.quiet() == [.silence] && queue.isIdle && queue.quiet().isEmpty,
+              "quiet stops everything, VoiceOver's line too, and clears the rest")
         check(queue.add(own, now: 3100) == [.post(own)], "and the next line is said at once")
         var cut = ArcadeSpeechQueue()
         _ = cut.add(ArcadeSpeechItem(id: "7", text: "Your foe attacks.", cls: "alert"), now: 0)
@@ -555,6 +556,43 @@ extension ArcadeModelsTests {
         let hers = ArcadeSpeechItem(id: nil, text: "Playing.", cls: "answer", interrupts: true)
         check(cut.add(hers, now: 10) == [.ack(id: "7", ok: false), .ack(id: "8", ok: false), .stop, .post(hers)],
               "her own action cuts the line being said and drops what waits")
+
+        // The same words again at once (Pad practice's say-backs): the cut one's end is its own.
+        var same = ArcadeSpeechQueue()
+        let tapBack = ArcadeSpeechItem(id: nil, text: "Tap: hear it.", cls: "answer", interrupts: true)
+        _ = same.add(tapBack, now: 0)
+        check(same.add(tapBack, now: 100) == [.stop, .post(tapBack)] && same.cutTexts == ["Tap: hear it."],
+              "a say-back cut by the same say-back")
+        check(same.finished(text: "Tap: hear it.", ok: false, now: 150).isEmpty && same.current == tapBack && same.cutTexts.isEmpty,
+              "VoiceOver's end for the cut one (not spoken) is not the new one's: no retry, no stutter")
+        check(same.finished(text: "Tap: hear it.", ok: true, now: 900).isEmpty && same.isIdle, "the new one ends on its own end")
+
+        // The kit's answers (urgent, with an id) cut the line being said here; an older kit keeps its flush.
+        check(ArcadeSpeechQueue.kitInterrupts(flush: false, urgent: true, id: "k3")
+              && !ArcadeSpeechQueue.kitInterrupts(flush: false, urgent: false, id: "k4")
+              && !ArcadeSpeechQueue.kitInterrupts(flush: false, urgent: true, id: nil)
+              && ArcadeSpeechQueue.kitInterrupts(flush: true, urgent: false, id: nil),
+              "her answers cut, as the kit has already cut its own line")
+
+        // The kit cut its line for her answer (a clip, say): its lines here go, the app's own stays.
+        var kit = ArcadeSpeechQueue()
+        let menuLine = ArcadeSpeechItem(id: "k4", text: "Main menu.", cls: "screen")
+        let mine = ArcadeSpeechItem(id: nil, text: "Low Power Mode is on.", cls: "flow")
+        _ = kit.add(menuLine, now: 0)
+        _ = kit.add(ArcadeSpeechItem(id: "k5", text: "Quest.", cls: "screen"), now: 1)
+        _ = kit.add(mine, now: 2)
+        check(kit.cutKit(now: 10) == [.silence, .post(mine)] && kit.current == mine && kit.waiting.isEmpty
+              && kit.cutTexts == ["Main menu."], "the kit's cut: its line being said stops, its waiting lines go")
+        check(kit.cutKit(now: 20).isEmpty && kit.current == mine, "the app's own line is not the kit's to cut")
+
+        // A restarted page numbers its lines from the start again: the old page's items go, unanswered.
+        var reload = ArcadeSpeechQueue()
+        let restart = ArcadeSpeechItem(id: nil, text: "The game restarted while you were away.", cls: "screen")
+        _ = reload.add(ArcadeSpeechItem(id: "k9", text: "Round two.", cls: "flow"), now: 0)
+        _ = reload.add(restart, now: 1)
+        _ = reload.add(ArcadeSpeechItem(id: "k10", text: "Fight.", cls: "flow"), now: 2)
+        check(reload.dropKit(now: 10) == [.post(restart)] && reload.current == restart && reload.waiting.isEmpty,
+              "a new page: the old page's items go with no answer, the app's own line is said")
     }
 
     static func touchPadHeld() {
@@ -563,16 +601,19 @@ extension ArcadeModelsTests {
               && ArcadePadWords.value(mode: "pause") == "Paused" && ArcadePadWords.value(mode: "demo") == "Demo"
               && ArcadePadWords.value(mode: "other") == "Menu", "the pad's value from the kit's mode")
         var hold = ArcadePadHold()
-        check(hold.focus(now: 0).isEmpty && hold.focused && !hold.held, "focus waits for the hold")
+        check(hold.focus(now: 0) == [.focusedNotHeld] && hold.focused && !hold.held,
+              "focus waits for the hold, and the kit's voice may go once VoiceOver has read the pad")
         check(hold.touch(now: 10, voiceOver: false).isEmpty && !hold.held, "with VoiceOver off there is nothing to take")
         check(hold.touch(now: 20, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false), .say("Pad on.", cls: "answer")] && hold.held,
               "the first touch takes the pad: rising chime, buzz, the kit's voice back, Pad on.")
-        check(hold.touch(now: 30, voiceOver: true).isEmpty, "touches while held change nothing")
+        check(hold.touch(now: 30, voiceOver: true).isEmpty && hold.focus(now: 35).isEmpty, "touches while held change nothing")
+        hold.setMode("fight")
         check(hold.lostFocus(now: 40, mode: "fight", pauseOnLeave: true) == [.fallingChime, .holdSpeech(true), .pauseGame]
               && !hold.held && hold.autoPaused, "VoiceOver back mid-fight: falling chime, the kit's voice held, the fight paused")
-        check(hold.touch(now: 50, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false),
-                                                       .say("Paused. Two-finger double-tap to fight.", cls: "screen")],
-              "taken again: Pad on. only once a session, and the paused line")
+        hold.setMode("pause")
+        check(hold.autoPaused && hold.touch(now: 50, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false),
+                                                                          .say("Paused. Two-finger double-tap to fight.", cls: "screen")],
+              "taken again on the pause screen: Pad on. only once a session, and the paused line")
         check(hold.lostFocus(now: 60, mode: "menu", pauseOnLeave: true) == [.fallingChime, .holdSpeech(true)], "in a menu nothing pauses")
         check(hold.lostFocus(now: 70, mode: "fight", pauseOnLeave: true) == [.holdSpeech(true)], "focus leaving a pad not held only holds the voice")
         var off = ArcadePadHold()
@@ -584,6 +625,32 @@ extension ArcadeModelsTests {
         paused.forgetPause()
         check(!paused.touch(now: 20, voiceOver: true).contains(.say(ArcadeTouchLines.pausedReturn, cls: "screen")),
               "a fight left some other way says nothing on return")
+        var resumed = ArcadePadHold()
+        _ = resumed.touch(now: 0, voiceOver: true)
+        resumed.setMode("fight")
+        _ = resumed.lostFocus(now: 10, mode: "fight", pauseOnLeave: true)
+        resumed.setMode("pause")
+        resumed.setMode("fight")   // resumed from the strip's Pause, or the magic tap on the pad not held
+        check(!resumed.autoPaused && !resumed.touch(now: 20, voiceOver: true).contains(.say(ArcadeTouchLines.pausedReturn, cls: "screen")),
+              "a fight resumed some other way: no paused line in a live fight")
+        var neverPaused = ArcadePadHold()
+        _ = neverPaused.touch(now: 0, voiceOver: true)
+        neverPaused.setMode("fight")
+        _ = neverPaused.lostFocus(now: 10, mode: "fight", pauseOnLeave: true)
+        check(!neverPaused.touch(now: 20, voiceOver: true).contains(.say(ArcadeTouchLines.pausedReturn, cls: "screen")) && !neverPaused.autoPaused,
+              "the pause never came (the game still fighting): no paused line")
+        var spot = ArcadePadHold()
+        check(!spot.offPad(voiceOver: true), "before VoiceOver has been on the pad, nothing says it is off it")
+        _ = spot.focus(now: 0)
+        check(!spot.offPad(voiceOver: true), "on the pad")
+        _ = spot.lostFocus(now: 10, mode: "menu", pauseOnLeave: true)
+        check(spot.offPad(voiceOver: true) && !spot.offPad(voiceOver: false), "off the pad (for the strip): the kit's voice stays held")
+        check(ArcadePadHold.isVoiceOverTap(sinceActivateMs: 40, fingers: 1, offset: 0.5)
+              && !ArcadePadHold.isVoiceOverTap(sinceActivateMs: 200, fingers: 1, offset: 0)
+              && !ArcadePadHold.isVoiceOverTap(sinceActivateMs: 40, fingers: 1, offset: 30)
+              && !ArcadePadHold.isVoiceOverTap(sinceActivateMs: 40, fingers: 2, offset: 0)
+              && !ArcadePadHold.isVoiceOverTap(sinceActivateMs: nil, fingers: 1, offset: 0),
+              "VoiceOver's own tap after its activate: one finger at the pad's middle within 150 ms, and nothing else")
         var activated = ArcadePadHold()
         check(activated.activate(now: 0) == [.risingChime, .takenBuzz, .holdSpeech(false), .say("Pad on.", cls: "answer")]
               && activated.activates == 1, "VoiceOver's activate takes the pad")
@@ -658,18 +725,23 @@ extension ArcadeModelsTests {
         check(ArcadePadPractice.makeLessons(table: v1Table, voiceOver: false)[0].steps.contains { $0.line == "Two-finger tap: B." },
               "and says its own words where they differ")
 
-        var practice = ArcadePadPractice(lessons: lessons, endLine: "In the game, Practice on the main menu is a safe first fight.")
-        check(practice.startLines() == [ArcadePadPractice.opening, "Lesson 1, the pad.", lessons[0].steps[0].line], "the opening")
-        check(practice.padHeld() == ["Good.", lessons[0].steps[1].line], "the pad taken")
-        check(practice.padHeld().isEmpty, "taking it again is not the step")
-        check(practice.padReleased() == ["Good.", lessons[0].steps[2].line], "VoiceOver back")
-        check(practice.padHeld() == ["Good.", "Lesson done.", "Lesson 2, menus.", "Flick right for the next item."] && practice.mode == "menu",
-              "Lesson 1 done")
+        var practice = ArcadePadPractice(lessons: lessons, endLine: ArcadePadPractice.practiceModeLine)
         func feed(_ mode: String, _ steps: [[String: Any]]) -> [String] {
             var lines: [String] = []
             for output in run(mode, steps).raw { lines += practice.handle(output) }
             return lines
         }
+        check(practice.startLines() == [ArcadePadPractice.opening, "Lesson 1, the pad.", lessons[0].steps[0].line], "the opening")
+        check(feed("menu", [step(up: 100)]).isEmpty, "a touch in Lesson 1 is not said back: only the pad moves its steps")
+        check(practice.padHeld() == ["Good.", lessons[0].steps[1].line], "the pad taken")
+        check(feed("menu", [step(up: 100)]).isEmpty, "the touch that took the pad is not an attempt (its say-back would cut the step)")
+        check(practice.padHeld().isEmpty, "taking it again is not the step")
+        check(practice.padReleased() == ["Good.", lessons[0].steps[2].line], "VoiceOver back")
+        check(lessons[0].steps[2].line.hasPrefix("Touch the pad below the buttons, then double-tap"),
+              "VoiceOver is on a strip button then: she touches the pad before the double-tap")
+        check(practice.padHeld() == ["Good.", "Lesson done.", "Lesson 2, menus.", "Flick right for the next item."] && practice.mode == "menu",
+              "Lesson 1 done")
+        check(feed("menu", [step(up: 100)]).isEmpty, "the touch once after taking the pad does not cut Lesson 2's first line")
         let right = [step(path: [[60, 30, 0]], up: 80)]
         check(feed("menu", right) == ["Flick right: next."], "every attempt is said back")
         check(feed("menu", right) == ["Flick right: next.", "Good.", "Flick left for the one before."], "two clean in a row pass")
@@ -685,8 +757,28 @@ extension ArcadeModelsTests {
               "two fingers when one was wanted")
         _ = feed("fight", [step(up: 150)])
         check(practice.taps.count == 1 && practice.drifts.count == 1, "her one-finger taps are measured while a tap is wanted")
-        check(practice.nextLesson() == [ArcadePadPractice.finishedLine, "In the game, Practice on the main menu is a safe first fight."]
-              && practice.finished && practice.current == nil, "the end points her to the game's own practice")
+        check(!practice.keepsFit && practice.nextLesson() == [ArcadePadPractice.doneLine, ArcadePadPractice.practiceModeLine]
+              && practice.finished && practice.current == nil && practice.repeatLines() == [ArcadePadPractice.doneLine],
+              "too few taps to fit: plain Done, never 'tuned', then the pointer to the game's own practice")
+
+        // A slow double-tap: said back and corrected once (not by its late second tap too), and the
+        // gap measured as the recognizer judges it, from the first lift to the second landing.
+        let choose = ArcadePracticeStep(line: "Double-tap to choose.", want: .gesture(key: "doubleTap1", direction: nil, fromHold: false),
+                                        mode: "menu", say: "choose")
+        var twice = ArcadePadPractice(lessons: [ArcadePracticeLesson(title: "menus", intro: "Menus.", steps: [choose])])
+        func feedTwice(_ steps: [[String: Any]]) -> [String] {
+            var lines: [String] = []
+            for output in run("menu", steps).raw { lines += twice.handle(output) }
+            return lines
+        }
+        check(feedTwice([step(up: 100), step(at: 600, up: 100)]) == ["Tap: hear it.", "The second tap came late. Tap twice, a little quicker."],
+              "a slow double-tap: one say-back and one correction")
+        check(twice.gaps == [500], "the gap from the first lift (100 ms) to the second landing (600 ms)")
+        check(feedTwice([step(up: 100), step(at: 350, up: 100)]) == ["Double-tap: choose."] && twice.gaps == [500, 250],
+              "a double-tap in time, and its 250 ms gap")
+        _ = feedTwice([step(up: 120)])
+        check(twice.taps.count == 5 && twice.keepsFit && twice.nextLesson() == [ArcadePadPractice.finishedLine],
+              "enough taps measured: the end says the pad is tuned to her touch")
 
         let kickStep: [String: Any] = ["key": "flick1", "dir": "right", "mode": "fight", "line": "Flick right.", "say": "kick"]
         let kicks: [String: Any] = ["title": "kicks", "intro": "Kicks.", "steps": [kickStep]]
@@ -714,26 +806,40 @@ extension ArcadeModelsTests {
               "an item's id goes back as it came")
         check(ArcadeJS.holdSpeech(true).contains("holdSpeech(true)") && ArcadeJS.speechGo.contains("speechGo()")
               && ArcadeJS.hasSpeechQueue.contains("window.revivalKit.spoken"), "hold, go and the queue check")
+        check(ArcadeJS.holdSpeech(true).contains("else { window.__arcadeHold = true; }")
+              && ArcadeJS.holdSpeech(false).contains("k.holdSpeech(false)"),
+              "a hold sent before the kit is there is kept for it")
         let script = ArcadeJS.hostScript(base: "b", emulatorData: "d", settings: [:])
         check(script.contains("speechGate: true,") && script.contains("id: (o && o.id != null) ? String(o.id) : null")
               && script.contains("cls: (o && o.cls) ? String(o.cls) : null") && script.contains("detail.route === 'native'"),
               "the host script gates the kit's voice and carries each native line's id and class")
+        check(script.contains("window.__arcadeHold = null; }") && script.contains("held();")
+              && ArcadeJS.hostScript(base: "b", emulatorData: "d", settings: [:], holdSpeech: true).contains("window.__arcadeHold = true; }"),
+              "the kit's voice held from its first event while the offer or Pad practice is up")
+        check(script.contains("if (name === 'say' && detail && detail.cls === 'answer') { post({ t: 'event', name: 'cut', detail: null }); }"),
+              "every answer the kit queues is a cut of the line being said, sent as 'cut'")
         check(ArcadeKitSettings.calls("alerts") == "alerts", "the kit's 'alerts' calls")
         check(ArcadeSpeakerWarnings.buzzAndWords.calls == "alerts" && ArcadeSpeakerWarnings.buzzOnly.calls == "off"
               && ArcadeSpeakerWarnings.everyCall.calls == "all" && ArcadeSpeakerWarnings.off.calls == "off"
               && ArcadeSpeakerWarnings.buzzOnly.buzz && !ArcadeSpeakerWarnings.off.buzz, "Warnings on the phone speaker")
 
         let none = ArcadeTouchChoices(settings: nil)
-        check(none == ArcadeTouchChoices() && none.fightControls == "easy" && none.walkIn && none.skipDemo && none.lessDamage == nil
-              && none.lessDamageShown, "the touch defaults: Easy, walk in, skip the demo, less damage in Easy")
+        check(none == ArcadeTouchChoices() && none.fightControls == "easy" && none.walkIn && none.skipDemo == nil && none.lessDamage == nil
+              && none.lessDamageShown && none.skipDemoShown(touch: true) && !none.skipDemoShown(touch: false),
+              "the touch defaults: Easy, walk in, less damage in Easy, and the demo skipped for touch input only")
         let chosen = ArcadeTouchChoices(settings: ["fightControls": "full", "walkIn": false, "lessDamage": false, "skipDemo": false])
-        check(chosen.fightControls == "full" && !chosen.walkIn && !chosen.skipDemo && !chosen.lessDamageShown, "her own choices")
+        check(chosen.fightControls == "full" && !chosen.walkIn && chosen.skipDemo == false && !chosen.skipDemoShown(touch: true)
+              && !chosen.lessDamageShown, "her own choices")
         check(ArcadeTouchChoices(settings: ["fightControls": "hard"]).fightControls == "easy", "an unknown tier is Easy")
         check(ArcadeTouchChoices(settings: ["fightControls": "full"]).lessDamageShown == false, "less damage is on by default only in Easy")
         var kept: [String: Any] = ["fightControls": "full", "walkIn": false]
-        ArcadeTouchChoices.fillDefaults(&kept, pauseOnLeave: false)
+        ArcadeTouchChoices.fillDefaults(&kept, pauseOnLeave: false, touch: true)
         check((kept["fightControls"] as? String) == "full" && (kept["walkIn"] as? Bool) == false && (kept["skipDemo"] as? Bool) == true
               && (kept["pauseOnLeave"] as? Bool) == false, "defaults fill only what she has not chosen")
+        var keys: [String: Any] = [:]
+        ArcadeTouchChoices.fillDefaults(&keys, pauseOnLeave: true, touch: false)
+        check((keys["fightControls"] as? String) == "easy" && (keys["walkIn"] as? Bool) == true && keys["skipDemo"] == nil
+              && keys["pauseOnLeave"] == nil, "a keyboard or controller player keeps the demo fight: no touch-only defaults")
 
         var telemetry = ArcadeTelemetry()
         telemetry.openedAt = Date(timeIntervalSince1970: 0)

@@ -33,10 +33,12 @@ final class ArcadePracticeController: NSObject, ObservableObject, AVSpeechSynthe
         // Practice teaches the Easy fight controls when the game has them.
         let easy = table.fights["easy"] != nil ? table.onTier("easy") : table
         self.table = easy
+        // The end points a game with fight tiers to its own safe first fight (the line names no game).
+        let pointer: String? = table.hasTiers ? ArcadePadPractice.practiceModeLine : nil
         if let custom = ArcadePadPractice.makeLessons(json: practice, voiceOver: voiceOver) {
-            engine = ArcadePadPractice(lessons: custom.lessons, endLine: custom.end)
+            engine = ArcadePadPractice(lessons: custom.lessons, endLine: custom.end ?? pointer)
         } else {
-            engine = ArcadePadPractice(lessons: ArcadePadPractice.makeLessons(table: easy, voiceOver: voiceOver))
+            engine = ArcadePadPractice(lessons: ArcadePadPractice.makeLessons(table: easy, voiceOver: voiceOver), endLine: pointer)
         }
         self.hapticsOn = hapticsOn
         self.chimesOn = chimesOn
@@ -46,7 +48,7 @@ final class ArcadePracticeController: NSObject, ObservableObject, AVSpeechSynthe
 
     /// Her measurements, when there are enough to fit (else nothing is kept).
     var fitToKeep: ArcadeTouchFit? {
-        engine.taps.count >= ArcadeTouchFit.minimumSamples ? engine.fit : nil
+        engine.keepsFit ? engine.fit : nil
     }
 
     func attach(pad: ArcadeTouchPadView) {
@@ -74,10 +76,17 @@ final class ArcadePracticeController: NSObject, ObservableObject, AVSpeechSynthe
             let ok = (note.userInfo?[UIAccessibility.announcementWasSuccessfulUserInfoKey] as? Bool) ?? true
             Task { @MainActor in self?.ended(text: text, ok: ok) }
         }
-        // After VoiceOver has said the new screen's first button.
+        // Once the cover is up, VoiceOver goes to the pad, not to Done (the
+        // first button): the first step asks for a double-tap, which presses
+        // whatever has focus. The opening follows once VoiceOver has read the pad.
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            try? await Task.sleep(nanoseconds: 700_000_000)
             guard let self, self.started else { return }
+            if UIAccessibility.isVoiceOverRunning, let pad = self.pad {
+                UIAccessibility.post(notification: .screenChanged, argument: pad)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard self.started else { return }
+            }
             self.announce(self.engine.startLines(), cut: false)
         }
     }
@@ -139,6 +148,9 @@ final class ArcadePracticeController: NSObject, ObservableObject, AVSpeechSynthe
             case .post(let item): post(item)
             case .ack: break
             case .stop: speaker?.stopSpeaking(at: .immediate)
+            case .silence:
+                speaker?.stopSpeaking(at: .immediate)
+                ArcadeVoiceOverCut.now()
             }
         }
         scheduleCheck()
@@ -190,9 +202,10 @@ final class ArcadePracticeController: NSObject, ObservableObject, AVSpeechSynthe
         Task { @MainActor [weak self] in self?.ended(text: text, ok: true) }
     }
 
+    /// Cancelled: cut by the queue itself, which knows it as its own cut.
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         let text = utterance.speechString
-        Task { @MainActor [weak self] in self?.ended(text: text, ok: true) }
+        Task { @MainActor [weak self] in self?.ended(text: text, ok: false) }
     }
 }
 

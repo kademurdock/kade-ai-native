@@ -2551,7 +2551,8 @@ struct ArcadeTouchRecognizer {
                 screen = nil
                 let owner = all.serial
                 jobs.removeAll { $0.job == .screenHold(owner) }
-                let top = numbers(mode: "menu")
+                // self.: the gesture's own `numbers` is declared further down this function.
+                let top = self.numbers(mode: "menu")
                 if !all.fired && all.most >= 3 && all.zones.count > 1 && now - all.t0 <= top.tapMs {
                     let far = all.touches.values.map { $0.distance }.max() ?? 0
                     let anywhere = all.mode == "fight" ? table.active.anywhere : table.menu
@@ -3024,9 +3025,12 @@ enum ArcadeJS {
     }
 
     /// revivalKit.holdSpeech(on): while VoiceOver is off the pad, the kit
-    /// holds everything but answers.
+    /// holds everything but answers. A page whose kit is not there yet keeps
+    /// it (window.__arcadeHold) and the host script hands it to the kit with
+    /// its first event, before its first line can play.
     static func holdSpeech(_ on: Bool) -> String {
-        "window.revivalKit&&window.revivalKit.holdSpeech&&window.revivalKit.holdSpeech(\(on ? "true" : "false"));void 0"
+        let value = on ? "true" : "false"
+        return "(function () { var k = window.revivalKit; if (k && k.holdSpeech) { window.__arcadeHold = null; k.holdSpeech(\(value)); } else { window.__arcadeHold = \(value); } })();void 0"
     }
 
     /// revivalKit.speechGo(): the boot gate opens (host speechGate), 1.8 s
@@ -3056,8 +3060,15 @@ enum ArcadeJS {
     /// the kit's `id` and class (`cls`) so the app can say it in turn and
     /// answer revivalKit.spoken(id). A 'say' event that is a native item
     /// ({id, route: 'native'}) comes the same way; the app keeps one per id.
+    /// A 'say' event of class 'answer' (her own action, queued: the kit has
+    /// just cut its own line for it) also comes as the event 'cut', so the
+    /// app stops the line it is saying too, whether the answer is a clip or not.
+    /// `holdSpeech: true` (the first-open offer or Pad practice is up): the
+    /// kit's voice is held from its first event, as revivalKit.holdSpeech
+    /// sent before the kit is there (window.__arcadeHold) is.
     static func hostScript(base: String, emulatorData: String, settings: [String: Any],
-                           inputType: String? = nil, saveData: String? = nil, romPath: String? = nil) -> String {
+                           inputType: String? = nil, saveData: String? = nil, romPath: String? = nil,
+                           holdSpeech: Bool = false) -> String {
         let settingsObject = ArcadeKitSettings.json(settings)
         var optional = ""
         if let inputType, !inputType.isEmpty { optional += "\n    inputType: \(literal(inputType)),"}
@@ -3068,6 +3079,11 @@ enum ArcadeJS {
           if (window.revivalKitHost) { return; }
           var post = function (m) { try { window.webkit.messageHandlers.arcade.postMessage(m); } catch (e) {} };
           var plain = function (v) { try { return v === undefined ? null : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } };
+          if (window.__arcadeHold == null) { window.__arcadeHold = \(holdSpeech ? "true" : "null"); }
+          var held = function () {
+            var k = window.revivalKit;
+            if (window.__arcadeHold != null && k && k.holdSpeech) { var h = window.__arcadeHold; window.__arcadeHold = null; k.holdSpeech(h); }
+          };
           window.revivalKitHost = {
             base: \(literal(base)),
             emulatorData: \(literal(emulatorData)),
@@ -3085,6 +3101,8 @@ enum ArcadeJS {
               }
             },
             onEvent: function (name, detail) {
+              held();
+              if (name === 'say' && detail && detail.cls === 'answer') { post({ t: 'event', name: 'cut', detail: null }); }
               if (name === 'say' && detail && detail.id != null && detail.route === 'native') {
                 post({ t: 'say', text: String(detail.text == null ? '' : detail.text), urgent: false, flush: false,
                        id: String(detail.id), cls: detail.cls ? String(detail.cls) : null });

@@ -59,6 +59,8 @@ final class ArcadeTouchPadView: UIView {
     private(set) var hold = ArcadePadHold()
     /// When a touch last reached the pad (ms on the pad's clock), for the watchdog.
     private(set) var lastTouch: Double?
+    /// When VoiceOver last called the pad's activate (ms on the pad's clock).
+    private var lastActivate: Double?
     private let selectionTick = UISelectionFeedbackGenerator()
     private let lightTick = UIImpactFeedbackGenerator(style: .light)
     private let mediumTick = UIImpactFeedbackGenerator(style: .medium)
@@ -121,8 +123,10 @@ final class ArcadeTouchPadView: UIView {
         guard newMode != mode else { return }
         mode = newMode
         recognizer.mode = newMode
-        // Back in a menu (or a demo), a fight that paused itself is over: nothing to say on return.
-        if newMode == "menu" || newMode == "demo" { hold.forgetPause() }
+        // A fight that paused itself as she left is remembered only while the
+        // game is on its pause screen: resumed some other way, or left for a
+        // menu or a demo, there is nothing to say on return.
+        hold.setMode(newMode)
         play([ArcadeBuzz(style: .soft, intensity: 0.5)])
         updateAccessibility()
     }
@@ -225,6 +229,7 @@ final class ArcadeTouchPadView: UIView {
     /// VoiceOver goes on as it would.
     override func accessibilityActivate() -> Bool {
         onActivate?()
+        lastActivate = now()
         let wasHeld = hold.held
         apply(hold.activate(now: now()))
         if !wasHeld && hold.held { onPadLog?(true, "activate") }
@@ -254,6 +259,19 @@ final class ArcadeTouchPadView: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         let t = now()
+        // VoiceOver's own tap after its activate (at the activation point, the
+        // pad's middle) is not hers: not played, and not a touch reaching the
+        // pad, so two activates with nothing between still mean Direct Touch is off.
+        if let activated = lastActivate, touches.count == 1, let touch = touches.first {
+            let point = touch.location(in: self)
+            let dx = Double(point.x - bounds.midX)
+            let dy = Double(point.y - bounds.midY)
+            let fingers = event?.allTouches?.count ?? 1
+            if ArcadePadHold.isVoiceOverTap(sinceActivateMs: t - activated, fingers: fingers, offset: (dx * dx + dy * dy).squareRoot()) {
+                lastActivate = nil
+                return
+            }
+        }
         lastTouch = t
         if !touchedOnce {
             touchedOnce = true
@@ -277,9 +295,9 @@ final class ArcadeTouchPadView: UIView {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         let t = now()
-        lastTouch = t
         for touch in touches {
             guard let id = ids[ObjectIdentifier(touch)] else { continue }
+            lastTouch = t
             let point = touch.location(in: self)
             emit(recognizer.move(id: id, x: Double(point.x), y: Double(point.y), now: t))
         }
@@ -295,9 +313,9 @@ final class ArcadeTouchPadView: UIView {
 
     private func finish(_ touches: Set<UITouch>) {
         let t = now()
-        lastTouch = t
         for touch in touches {
             guard let id = ids.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
+            lastTouch = t
             emit(recognizer.end(id: id, now: t))
         }
         startLink()

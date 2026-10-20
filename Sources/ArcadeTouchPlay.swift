@@ -262,6 +262,10 @@ enum ArcadePadEffect: Equatable {
     case holdSpeech(Bool)
     /// The game's own pause (a fight left while the pad was held).
     case pauseGame
+    /// VoiceOver focus is back on the pad, not held: the kit's voice may go
+    /// again once VoiceOver has read the pad (the host waits, then lets it go
+    /// if focus is still there), as it is held only while focus is off the pad.
+    case focusedNotHeld
 }
 
 /// The pad's held state with VoiceOver: iOS says nothing when a direct touch
@@ -276,18 +280,51 @@ enum ArcadePadEffect: Equatable {
 /// direct touch is off for the app: said once.
 struct ArcadePadHold {
     private(set) var focused = false
+    /// VoiceOver focus has been on the pad at least once (until then, nothing says where it is).
+    private(set) var focusedOnce = false
     private(set) var held = false
     private(set) var autoPaused = false
     private(set) var saidPadOn = false
     private(set) var saidDirectTouch = false
     /// VoiceOver's activate came at least once (for the report).
     private(set) var activates = 0
+    /// The kit's mode, as the pad has it ('menu', 'fight', 'pause', 'demo').
+    private(set) var mode = "menu"
     private var lastActivate: Double?
     private var touchedSinceActivate = true
 
+    /// VoiceOver's own tap after its activate: accessibilityActivate returns
+    /// false, so VoiceOver follows it with a tap of its own at the pad's
+    /// activation point (its middle). One finger within 150 ms of the
+    /// activate and within 2 points of that point is that tap, not hers: it
+    /// is not played and does not count as a touch reaching the pad (so the
+    /// Direct Touch check can still see two activates with no touch between).
+    static func isVoiceOverTap(sinceActivateMs: Double?, fingers: Int, offset: Double) -> Bool {
+        guard let since = sinceActivateMs, since >= 0, since <= 150 else { return false }
+        return fingers == 1 && offset <= 2
+    }
+
+    /// Focus on the pad. Not held, the kit's voice may go again once
+    /// VoiceOver has read the pad (speech rule R10: held only while focus is off it).
     mutating func focus(now: Double) -> [ArcadePadEffect] {
         focused = true
-        return []
+        focusedOnce = true
+        return held ? [] : [.focusedNotHeld]
+    }
+
+    /// VoiceOver focus has left the pad for the strip, a sheet or an alert
+    /// (known only once it has been on the pad): the kit's voice stays held.
+    func offPad(voiceOver: Bool) -> Bool {
+        voiceOver && focusedOnce && !focused
+    }
+
+    /// The kit's mode. A fight that paused itself as she left the pad is
+    /// remembered only while the game is on its pause screen: resumed some
+    /// other way (the strip's Pause, the magic tap) or left for a menu, there
+    /// is nothing to say on return.
+    mutating func setMode(_ next: String) {
+        mode = next
+        if next != "pause" { autoPaused = false }
     }
 
     mutating func activate(now: Double) -> [ArcadePadEffect] {
@@ -336,7 +373,8 @@ struct ArcadePadHold {
         }
         if autoPaused {
             autoPaused = false
-            out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen"))
+            // Only while the game is still paused: the line asks for the two-finger double-tap that resumes it.
+            if mode == "pause" { out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen")) }
         }
         return out
     }
@@ -373,8 +411,12 @@ enum ArcadeSpeechStep: Equatable {
     case post(ArcadeSpeechItem)
     /// revivalKit.spoken(id, ok).
     case ack(id: String, ok: Bool)
-    /// Stop the phone's own speech now.
+    /// Stop the phone's own speech now (a line that interrupts is posted
+    /// next, and that cuts VoiceOver's line by itself).
     case stop
+    /// Stop what is being said now with nothing in its place: the phone's
+    /// own speech, and VoiceOver's announcement too (Quiet, or the kit's cut).
+    case silence
 }
 
 /// The app's side of the kit's one queue (speech rule R1): exactly one line
@@ -388,10 +430,21 @@ struct ArcadeSpeechQueue {
     private(set) var waiting: [ArcadeSpeechItem] = []
     /// When the current line is given up on (ms, the caller's clock).
     private(set) var deadline: Double?
+    /// Lines this queue cut partway: VoiceOver (or AVSpeech) still reports
+    /// their end, as not spoken, and that end is theirs, never the end of a
+    /// new line with the same words (Pad practice says the same say-back twice in a row).
+    private(set) var cutTexts: [String] = []
 
     static func timeoutMs(_ text: String) -> Double {
         let words = text.split(whereSeparator: { $0.isWhitespace }).count
         return min(8000, 800 + 400 * Double(words))
+    }
+
+    /// Whether the kit's native item cuts the line being said: her answers
+    /// do (the kit marks them urgent and has already cut its own line, R2),
+    /// and an older kit's own flush. An older kit (no id) keeps its flush alone.
+    static func kitInterrupts(flush: Bool, urgent: Bool, id: String?) -> Bool {
+        flush || (id != nil && urgent)
     }
 
     var isIdle: Bool { current == nil && waiting.isEmpty }
@@ -404,7 +457,10 @@ struct ArcadeSpeechQueue {
             for dropped in [current].compactMap({ $0 }) + waiting {
                 if let id = dropped.id { steps.append(.ack(id: id, ok: false)) }
             }
-            if current != nil { steps.append(.stop) }
+            if let cut = current {
+                noteCut(cut.text)
+                steps.append(.stop)
+            }
             current = nil
             deadline = nil
             waiting = []
@@ -414,10 +470,16 @@ struct ArcadeSpeechQueue {
     }
 
     /// The current line ended (text: what VoiceOver says it finished; nil
-    /// matches the current line). Another line's end is ignored.
+    /// matches the current line). Another line's end is ignored, and so is
+    /// the end of a line this queue cut itself.
     mutating func finished(text: String?, ok: Bool, now: Double) -> [ArcadeSpeechStep] {
+        let said = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !ok, let said, let index = cutTexts.firstIndex(of: said) {
+            cutTexts.remove(at: index)
+            return []
+        }
         guard var item = current else { return [] }
-        if let text, text.trimmingCharacters(in: .whitespacesAndNewlines) != item.text { return [] }
+        if let said, said != item.text { return [] }
         if !ok && item.tries < 1 {
             item.tries += 1
             current = item
@@ -441,13 +503,45 @@ struct ArcadeSpeechQueue {
         return steps + startNext(now: now)
     }
 
-    /// The kit's 'quiet' (her two-finger tap): stop, and drop everything.
+    /// The kit's 'quiet' (her two-finger tap): stop, VoiceOver's line too, and drop everything.
     mutating func quiet() -> [ArcadeSpeechStep] {
-        let speaking = current != nil
+        let speaking = current?.text
         current = nil
         deadline = nil
         waiting = []
-        return speaking ? [.stop] : []
+        guard let text = speaking else { return [] }
+        noteCut(text)
+        return [.silence]
+    }
+
+    /// The kit cut its own line for her answer (R2): its items here are gone
+    /// in the kit already, so they go here too, unacknowledged, and the one
+    /// being said stops. The app's own lines stay.
+    mutating func cutKit(now: Double) -> [ArcadeSpeechStep] {
+        waiting.removeAll { $0.id != nil }
+        guard let item = current, item.id != nil else { return [] }
+        current = nil
+        deadline = nil
+        noteCut(item.text)
+        return [.silence] + startNext(now: now)
+    }
+
+    /// A new page (the game restarted): the old page's items go, and its ids
+    /// mean nothing to the new page (which numbers its own from the start
+    /// again), so none is acknowledged. The app's own lines stay, and a line
+    /// already being said is said to its end.
+    mutating func dropKit(now: Double) -> [ArcadeSpeechStep] {
+        waiting.removeAll { $0.id != nil }
+        if let item = current, item.id != nil {
+            current = nil
+            deadline = nil
+        }
+        return startNext(now: now)
+    }
+
+    private mutating func noteCut(_ text: String) {
+        cutTexts.append(text)
+        if cutTexts.count > 8 { cutTexts.removeFirst(cutTexts.count - 8) }
     }
 
     private mutating func startNext(now: Double) -> [ArcadeSpeechStep] {
@@ -666,7 +760,12 @@ struct ArcadePadPractice {
     static let opening = "Pad practice. Nothing here plays the game. The buttons along the top are Done, Next lesson and Repeat."
     static let good = "Good."
     static let lessonDone = "Lesson done."
+    /// The end when her taps were measured enough to fit (Fitted to me is kept).
     static let finishedLine = "Done. The pad is tuned to your touch."
+    /// The end when they were not (Next lesson skipped them): nothing was tuned.
+    static let doneLine = "Done."
+    /// The end's pointer for a game with fight tiers (it names no game).
+    static let practiceModeLine = "In the game, Practice on the main menu is a safe first fight."
     static let cleanToPass = 2
 
     let lessons: [ArcadePracticeLesson]
@@ -680,6 +779,14 @@ struct ArcadePadPractice {
     private(set) var drifts: [Double] = []
     private(set) var flicks: [Double] = []
     private var lastTapLift: Double?
+    /// The pad was just taken: the touch that took it (or, when VoiceOver's
+    /// activate took it, the one touch Lesson 1 asks for after the
+    /// double-tap) is not an attempt, and its say-back would cut the step's
+    /// own line.
+    private var skipTakingTouch = false
+    /// A double-tap step's second tap came late: its own tap report is part
+    /// of the same attempt, which has been said back and corrected once.
+    private var skipLateTap = false
 
     init(lessons: [ArcadePracticeLesson], endLine: String? = nil) {
         self.lessons = lessons.filter { !$0.steps.isEmpty }
@@ -698,6 +805,12 @@ struct ArcadePadPractice {
     /// Fitted to her, from everything measured so far.
     var fit: ArcadeTouchFit { .fitted(taps: taps, gaps: gaps, drifts: drifts, flicks: flicks) }
 
+    /// Enough taps were measured for Fitted to me to be kept.
+    var keepsFit: Bool { taps.count >= ArcadeTouchFit.minimumSamples }
+
+    /// The end's first words: tuned only when the fit is kept.
+    var endWords: String { keepsFit ? Self.finishedLine : Self.doneLine }
+
     func startLines() -> [String] {
         var lines = [Self.opening]
         if lesson < lessons.count, !finished {
@@ -708,11 +821,18 @@ struct ArcadePadPractice {
     }
 
     func repeatLines() -> [String] {
-        current.map { [$0.line] } ?? [Self.finishedLine]
+        current.map { [$0.line] } ?? [endWords]
     }
 
-    mutating func padHeld() -> [String] { pad(.held) }
-    mutating func padReleased() -> [String] { pad(.released) }
+    mutating func padHeld() -> [String] {
+        skipTakingTouch = true
+        return pad(.held)
+    }
+
+    mutating func padReleased() -> [String] {
+        skipTakingTouch = false
+        return pad(.released)
+    }
 
     private mutating func pad(_ event: ArcadePracticeStep.Want) -> [String] {
         guard let current, current.want == event else { return [] }
@@ -733,15 +853,37 @@ struct ArcadePadPractice {
             sample(lift)
             return []
         case .dud(let dud):
-            guard current != nil else { return [] }
+            guard let current else { return [] }
+            if skipTakingTouch {
+                skipTakingTouch = false
+                return []
+            }
+            // Lesson 1's steps move only with the pad itself: a touch there is not judged.
+            guard case .gesture(let key, _, _) = current.want else { return [] }
+            if dud.reason == .lateDouble {
+                // The late tap still counts as a tap, and its own report says what it was (and, when a
+                // double-tap is wanted, that the second tap came late), so the attempt is corrected once.
+                if ArcadeGestureWords.split(key).kind == "doubleTap" { skipLateTap = true }
+                return []
+            }
             clean = 0
             return [Self.correction(for: dud.reason)]
         case .gesture(let report):
             guard !finished, !report.repeatStep else { return [] }
             let kind = ArcadeGestureWords.split(report.key).kind
             if kind == "stick" { return [] }
+            if skipTakingTouch {
+                skipTakingTouch = false
+                return []
+            }
+            if skipLateTap {
+                skipLateTap = false
+                if kind == "tap" { return [] }
+            }
+            // Lesson 1's steps move only with the pad itself: a touch there is not said back, so it
+            // never cuts the step's own line.
+            guard let current, case .gesture(let key, let direction, let fromHold) = current.want else { return [] }
             var lines = [ArcadeGestureWords.sayBack(report)]
-            guard let current, case .gesture(let key, let direction, let fromHold) = current.want else { return lines }
             if report.key == key && (direction == nil || report.direction == direction) && (!fromHold || report.fromHold) {
                 lines += pass(needed: Self.cleanToPass)
             } else if kind == "release" || (fromHold && kind == "hold") {
@@ -817,14 +959,15 @@ struct ArcadePadPractice {
         clean = 0
         if lesson >= lessons.count {
             finished = true
-            return [Self.finishedLine] + (endLine.map { [$0] } ?? [])
+            return [endWords] + (endLine.map { [$0] } ?? [])
         }
         return [lessons[lesson].intro] + (current.map { [$0.line] } ?? [])
     }
 
     /// Her measurements: still one-finger lifts while a step asks for a tap
     /// or a double-tap (slow ones too) for the tap time and drift, and the
-    /// gaps between them while it asks for a double-tap; the travel of
+    /// gaps between them while it asks for a double-tap (from one tap's lift
+    /// to the next one landing, the recognizer's own rule); the travel of
     /// one-finger flicks while a step asks for a flick.
     private mutating func sample(_ lift: ArcadeLiftReport) {
         let wantKind: String
@@ -837,7 +980,7 @@ struct ArcadePadPractice {
             && lift.far <= ArcadeTouchFit.slopBounds.upperBound && lift.ms <= 1000 {
             taps.append(lift.ms)
             drifts.append(lift.far)
-            if wantKind == "doubleTap", let last = lastTapLift, lift.t1 - last <= 1500 { gaps.append(lift.t1 - last) }
+            if wantKind == "doubleTap", let last = lastTapLift, lift.t0 >= last, lift.t0 - last <= 1500 { gaps.append(lift.t0 - last) }
             lastTapLift = lift.t1
         } else {
             lastTapLift = nil
@@ -888,7 +1031,10 @@ struct ArcadePadPractice {
                                    want: .held, mode: "menu"),
                 ArcadePracticeStep(line: "Now touch the very top of the screen. A falling chime means VoiceOver is back.",
                                    want: .released, mode: "menu"),
-                ArcadePracticeStep(line: "Double-tap the pad again and touch once to take it back.", want: .held, mode: "menu"),
+                // VoiceOver is on a strip button now: a double-tap there would press it, so she
+                // touches the pad first (VoiceOver moves to it), then takes it.
+                ArcadePracticeStep(line: "Touch the pad below the buttons, then double-tap and touch once to take it back.",
+                                   want: .held, mode: "menu"),
             ]))
         }
         let standardMenu = ArcadeTouchTable.standard.menu
@@ -1036,7 +1182,9 @@ struct ArcadeTouchChoices: Equatable {
     var walkIn = true
     /// Nil: the kit's own default (on in Easy until she turns it off).
     var lessDamage: Bool?
-    var skipDemo = true
+    /// Nil: the kit's own default (on for touch input only, so keyboard and
+    /// controller players keep the demo fight).
+    var skipDemo: Bool?
 
     init() {}
 
@@ -1051,10 +1199,16 @@ struct ArcadeTouchChoices: Equatable {
     /// Less damage as the Settings switch shows it: her choice, else on in Easy.
     var lessDamageShown: Bool { lessDamage ?? (fightControls == "easy") }
 
-    /// The defaults for touch play, filled only where the kit's kept settings have none.
-    static func fillDefaults(_ settings: inout [String: Any], pauseOnLeave: Bool) {
+    /// Skip the demo fight as the Settings switch shows it: her choice, else on for touch input.
+    func skipDemoShown(touch: Bool) -> Bool { skipDemo ?? touch }
+
+    /// The defaults, filled only where the kit's kept settings have none:
+    /// Easy and Walk in for me for every input (as the kit does); Skip the
+    /// demo fight and Pause when I leave the pad only for touch input.
+    static func fillDefaults(_ settings: inout [String: Any], pauseOnLeave: Bool, touch: Bool) {
         if settings["fightControls"] == nil { settings["fightControls"] = "easy" }
         if settings["walkIn"] == nil { settings["walkIn"] = true }
+        guard touch else { return }
         if settings["skipDemo"] == nil { settings["skipDemo"] = true }
         settings["pauseOnLeave"] = pauseOnLeave
     }
