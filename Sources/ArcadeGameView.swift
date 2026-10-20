@@ -18,6 +18,13 @@ import CallKit
 //     own cloned voice, and lines with no clip come back here as VoiceOver
 //     announcements, or AVSpeechSynthesizer with VoiceOver off);
 //   - the game pad (ArcadeTouchPad.swift) over everything below the strip.
+// Touch play (Oct 20 2026): the strip is at least 64 points tall and reaches
+// the very top of the screen (touching there brings VoiceOver back), and
+// adds How to play and Pad practice; the kit's lines with no clip are said
+// one at a time and acknowledged (ArcadeSpeechQueue); the app's own lines go
+// through the kit's one queue; the kit's voice waits until 1.8 s after
+// VoiceOver lands on the pad (speechGo); its game cues buzz; and while the
+// pad is held in a fight the screen edges' own gestures wait.
 // The host keeps the page's contract (Revival kit core/host.js and app.js):
 // window.revivalKitHost is injected at document start; the app drives
 // window.revivalKit (pad, info, press, setMode, suspend, resume, and since
@@ -29,6 +36,14 @@ private enum ArcadeKeysStore {
     static let picture = "kade.arcade.showPicture"
     static let haptics = "kade.arcade.haptics"
     static let readAll = "kade.arcade.voiceOverReadsAll"
+    // Oct 20 2026, touch play: the app's own touch switches, for every game
+    // (her touch timing is ArcadeTouchTimingStore.key; the kit's own touch
+    // choices are kept with its settings).
+    static let chimes = "kade.arcade.padChimes"
+    static let pauseOnLeave = "kade.arcade.pauseOnLeave"
+    static let holdAtOnce = "kade.arcade.padTakesHoldAtOnce"
+    static let speakerWarnings = "kade.arcade.speakerWarnings"
+    static let practiceOffered = "kade.arcade.padPracticeOffered"
 }
 
 // MARK: - Before the game starts
@@ -235,6 +250,46 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             evaluate(ArcadeJS.setMode(voiceOverReadsAll ? "native" : defaultSpeechMode))
         }
     }
+    /// Oct 20 2026: the pad is held (VoiceOver's direct touch is on it):
+    /// while it is, in a fight, the screen edges' own gestures wait.
+    @Published private(set) var padHeld = false
+    /// Pad chimes: the rising and falling chimes when the pad is taken and let go.
+    @Published var chimesOn: Bool {
+        didSet {
+            UserDefaults.standard.set(chimesOn, forKey: ArcadeKeysStore.chimes)
+            pad?.chimesOn = chimesOn
+        }
+    }
+    /// Pause when I leave the pad: a live fight pauses as VoiceOver leaves the pad.
+    @Published var pauseOnLeave: Bool {
+        didSet {
+            UserDefaults.standard.set(pauseOnLeave, forKey: ArcadeKeysStore.pauseOnLeave)
+            pad?.pauseOnLeave = pauseOnLeave && !isPlain
+            if pageReady && !isPlain { evaluate(ArcadeJS.setSettings(["pauseOnLeave": pauseOnLeave])) }
+        }
+    }
+    /// Pad takes hold: at once (true), or after VoiceOver's double-tap (false, the default).
+    @Published var takesHoldAtOnce: Bool {
+        didSet {
+            UserDefaults.standard.set(takesHoldAtOnce, forKey: ArcadeKeysStore.holdAtOnce)
+            pad?.takesHoldAtOnce = takesHoldAtOnce
+        }
+    }
+    /// Warnings on the phone speaker (the kit's calls there, and the telegraph buzz).
+    @Published var speakerWarnings: ArcadeSpeakerWarnings {
+        didSet {
+            UserDefaults.standard.set(speakerWarnings.rawValue, forKey: ArcadeKeysStore.speakerWarnings)
+            applySpeakerCalls()
+        }
+    }
+    /// Her touch timing (Fitted to me, Relaxed, Quick), for every game.
+    @Published private(set) var timing: ArcadeTouchTimingStore
+    /// The kit's own touch choices (Fight controls, Walk in for me, Less damage, Skip the demo fight).
+    @Published private(set) var touchChoices = ArcadeTouchChoices()
+    /// The first-open offer of Pad practice is up.
+    @Published var offeringPractice = false
+    /// Pad practice is open.
+    @Published var practicing = false
 
     let launch: ArcadeLaunch
     private(set) var telemetry = ArcadeTelemetry()
@@ -299,6 +354,28 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     /// Show the game picture as the page last had it: the value its
     /// document-start script carried, or the last one sent to it.
     private var pictureSent: Bool?
+    /// Oct 20 2026: the lines said here, one at a time (speech rule R1).
+    private var speech = ArcadeSpeechQueue()
+    /// The one wake for the line being said, in case it never ends.
+    private var speechCheck: Task<Void, Never>?
+    /// The kit's native items already taken (a line may come both as the native route and as a 'say' event).
+    private var speechIds: [String] = []
+    /// VoiceOver landed on the pad and the kit was told it may speak (speechGo).
+    private var speechOpen = false
+    /// The start-up warnings went to the kit's queue (once per open).
+    private var warningsSent = false
+    /// The pad isn't held line was said in this fight.
+    private var watchdogWarned = false
+    /// The last Start the app pressed to pause a fight: a second one before
+    /// the kit says 'pause' would unpause it.
+    private var lastPausePress: Date?
+    /// The pack's own Pad practice table (input.touch.practice), when it has one.
+    private(set) var practiceJSON: [String: Any]?
+    /// Pad practice was opened and has not been closed yet.
+    private var practiceShown = false
+
+    /// She plays by touch (the page names buttons for touch).
+    var isTouchPlayer: Bool { pageInputType == "touch" }
 
     init(launch: ArcadeLaunch) {
         self.launch = launch
@@ -306,6 +383,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         showPicture = (defaults.object(forKey: ArcadeKeysStore.picture) as? Bool) ?? false
         hapticsOn = (defaults.object(forKey: ArcadeKeysStore.haptics) as? Bool) ?? true
         voiceOverReadsAll = defaults.bool(forKey: ArcadeKeysStore.readAll)
+        chimesOn = (defaults.object(forKey: ArcadeKeysStore.chimes) as? Bool) ?? true
+        pauseOnLeave = (defaults.object(forKey: ArcadeKeysStore.pauseOnLeave) as? Bool) ?? true
+        takesHoldAtOnce = defaults.bool(forKey: ArcadeKeysStore.holdAtOnce)
+        speakerWarnings = ArcadeSpeakerWarnings(rawValue: defaults.string(forKey: ArcadeKeysStore.speakerWarnings) ?? "") ?? .buzzAndWords
+        timing = ArcadeTouchTimingStore.decode(defaults.data(forKey: ArcadeTouchTimingStore.key))
         input = ArcadeInput()
         audio = ArcadeAudioSession()
         calls = ArcadeCallWatch()
@@ -317,7 +399,19 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         telemetry.player = launch.record.kitVersion ?? ""
         telemetry.newerPlayerReady = launch.newerPlayer != nil
         kitSettings = settingsKey.flatMap { saves?.settings(gameId: $0) }
+        touchChoices = ArcadeTouchChoices(settings: kitSettings)
         readProfile()
+    }
+
+    /// The gesture tables in use (How to play, Pad practice).
+    var touchTableInUse: ArcadeTouchTable { touchTable }
+
+    /// Whether this game offers Easy and Full fight controls (a pack with touch v2 tables).
+    var hasFightTiers: Bool { !isPlain && touchTable.hasTiers }
+
+    /// How to play: the controls for menus and the fight tier in use, from the table's own words.
+    var howToPlay: [ArcadeHowToPlaySection] {
+        ArcadeHowToPlay.sections(table: touchTable, plainHelp: playHint)
     }
 
     /// The Screen text sheet's title: the game's own name for the screen.
@@ -346,9 +440,14 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
               let data = try? ArcadeBlobReader.read(found.mount.blob, offset: found.file.offset, length: found.file.length),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         if let inputs = root["input"] as? [String: Any] {
-            if let touch = inputs["touch"] as? [String: Any] { touchTable = ArcadeTouchTable(json: touch) }
+            if let touch = inputs["touch"] as? [String: Any] {
+                touchTable = ArcadeTouchTable(json: touch)
+                practiceJSON = touch["practice"] as? [String: Any]
+            }
             if let gamepad = inputs["gamepad"] as? [String: Any] { gamepadMap = ArcadeGamepadMap(json: gamepad) }
         }
+        // Oct 20 2026: the fight tier she chose (the kit keeps it), Easy by default.
+        touchTable.tier = touchChoices.fightControls
         if let names = root["screenNames"] as? [String: Any] {
             screenNames = names.compactMapValues { $0 as? String }
         }
@@ -420,23 +519,148 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             center.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.thermalChanged() }
             },
+            // Oct 20 2026: a line said here ends when VoiceOver says so.
+            center.addObserver(forName: UIAccessibility.announcementDidFinishNotification, object: nil, queue: .main) { [weak self] note in
+                let text = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String
+                let ok = (note.userInfo?[UIAccessibility.announcementWasSuccessfulUserInfoKey] as? Bool) ?? true
+                Task { @MainActor in self?.speechEnded(text: text, ok: ok) }
+            },
         ]
         telemetry.openedAt = Date()
         telemetry.environment = environment()
         // VoiceOver starts on the pad, not on Leave: the first double-tap
-        // takes hold of the pad. After the cover has finished opening.
+        // takes hold of the pad. After the cover has finished opening. Oct 20
+        // 2026: the first time a touch player opens any game, Pad practice is
+        // offered first; the kit's voice waits for the answer.
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 700_000_000)
-            guard let self, !self.ended, UIAccessibility.isVoiceOverRunning, let pad = self.pad else { return }
-            UIAccessibility.post(notification: .screenChanged, argument: pad)
-        }
-        // After VoiceOver has said the new screen, not over it.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
             guard let self, !self.ended else { return }
-            let lines = self.warnings()
-            if !lines.isEmpty { self.speak(lines.joined(separator: " "), urgent: false, flush: false) }
+            if self.shouldOfferPractice() {
+                UserDefaults.standard.set(true, forKey: ArcadeKeysStore.practiceOffered)
+                self.evaluate(ArcadeJS.holdSpeech(true))
+                self.offeringPractice = true
+                return
+            }
+            self.focusPad()
         }
+        // The start-up warnings join the kit's queue at 'ready', as screen
+        // lines after its first line (sendWarnings), never over VoiceOver.
+    }
+
+    /// The first time a touch player opens any game (no controller or keyboard).
+    private func shouldOfferPractice() -> Bool {
+        !UserDefaults.standard.bool(forKey: ArcadeKeysStore.practiceOffered) && ArcadeInput.connectedType() == "touch"
+    }
+
+    /// First time with the game pad?: learn it now, or play.
+    func answerOffer(learn: Bool) {
+        offeringPractice = false
+        if learn { openPractice() } else { focusPad() }
+    }
+
+    /// VoiceOver focus to the pad, then the kit may speak 1.8 s later (at
+    /// once with VoiceOver off), so VoiceOver reading the pad and the game's
+    /// first line never overlap.
+    func focusPad() {
+        guard !ended else { return }
+        if UIAccessibility.isVoiceOverRunning, let pad {
+            UIAccessibility.post(notification: .screenChanged, argument: pad)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                self?.openSpeech()
+            }
+        } else {
+            openSpeech()
+        }
+    }
+
+    /// revivalKit.speechGo(), and its voice let go; said again at 'ready' (the page may not have been there yet).
+    private func openSpeech() {
+        guard !ended, !practicing, !offeringPractice else { return }
+        speechOpen = true
+        evaluate(ArcadeJS.speechGo)
+        evaluate(ArcadeJS.holdSpeech(false))
+    }
+
+    /// Pad practice (the strip, Settings or the first-open offer): a fight is
+    /// paused first, the kit's voice waits and the game is frozen while it is open.
+    func openPractice() {
+        guard !ended, !practicing else { return }
+        offeringPractice = false
+        pauseFight()
+        evaluate(ArcadeJS.holdSpeech(true))
+        runSpeech(speech.quiet())
+        practiceShown = true
+        practicing = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard let self, self.practicing else { return }
+            self.evaluate(ArcadeJS.suspend)
+        }
+    }
+
+    /// From Settings: once its sheet has gone.
+    func openPracticeSoon() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            self?.openPractice()
+        }
+    }
+
+    /// Pad practice closed (its Done, or the cover gone): the game goes on,
+    /// and VoiceOver lands on the pad again. Once per opening.
+    func practiceClosed() {
+        guard practiceShown else { return }
+        practiceShown = false
+        practicing = false
+        if !suspended { evaluate(ArcadeJS.resume) }
+        focusPad()
+    }
+
+    /// Pad practice fitted her touch: kept as Fitted to me, and used from now on.
+    func keepFit(_ fit: ArcadeTouchFit) {
+        timing.fitted = fit
+        timing.choice = .fitted
+        applyTiming()
+    }
+
+    /// Touch timing from Settings.
+    func chooseTiming(_ choice: ArcadeTouchTiming) {
+        guard choice != timing.choice else { return }
+        timing.choice = choice
+        applyTiming()
+    }
+
+    private func applyTiming() {
+        if let data = timing.encoded() { UserDefaults.standard.set(data, forKey: ArcadeTouchTimingStore.key) }
+        pad?.setFit(timing.overlay)
+        if pageReady && !isPlain { evaluate(ArcadeJS.setSettings(["touchTiming": timing.kitValue])) }
+    }
+
+    /// Fight controls from Settings ('easy' or 'full'): the pad's table and the kit both change.
+    func chooseFightControls(_ tier: String) {
+        guard tier == "easy" || tier == "full", tier != touchChoices.fightControls else { return }
+        setKitTouch("fightControls", tier)
+    }
+
+    /// One of the kit's own touch choices (fightControls, walkIn, lessDamage, skipDemo).
+    func setKitTouch(_ key: String, _ value: Any) {
+        guard !isPlain else { return }
+        var settings = kitSettings ?? [:]
+        settings[key] = value
+        touchChoices = ArcadeTouchChoices(settings: settings)
+        if touchTable.tier != touchChoices.fightControls {
+            touchTable.tier = touchChoices.fightControls
+            pad?.setTable(touchTable)
+        }
+        if pageReady { evaluate(ArcadeJS.setSettings([key: value])) }
+    }
+
+    /// Teach me again: the kit's teach pause comes back at the next Easy fight.
+    func teachAgain() {
+        guard !isPlain, pageReady else { return }
+        evaluate(ArcadeJS.setSettings(["coached": [String: Any]()]))
+        speak("The lesson comes back at your next fight.", urgent: false, flush: true)
     }
 
     /// Leave game: the page is unloaded (its sound stops at once), every
@@ -461,6 +685,9 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         webView = nil
         audio.stop()
         calls.onChange = nil
+        speechCheck?.cancel()
+        speechCheck = nil
+        speech = ArcadeSpeechQueue()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
         speaker?.stopSpeaking(at: .immediate)
@@ -530,8 +757,15 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         // The kit's own settings as it last sent them (its per-route choices
         // included), under the app's switches: VoiceOver reads every line,
         // Show the game picture, and headphones starting on Stereo.
-        let settings = ArcadeKitSettings.hostSettings(saved: kitSettings, readsAll: voiceOverReadsAll,
+        var settings = ArcadeKitSettings.hostSettings(saved: kitSettings, readsAll: voiceOverReadsAll,
                                                       showPicture: showPicture, hasSoundWorld: !isPlain)
+        // Oct 20 2026: the touch defaults (Easy, Walk in for me, Skip the
+        // demo fight) where she has not chosen, her Pause when I leave the
+        // pad, and her touch timing. The plain player keeps none.
+        if !isPlain {
+            ArcadeTouchChoices.fillDefaults(&settings, pauseOnLeave: pauseOnLeave)
+            settings["touchTiming"] = timing.kitValue
+        }
         // The picture this page starts with: 'ready' sends it again if she
         // changed it while the page was starting.
         pictureSent = showPicture
@@ -550,16 +784,83 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     func attach(pad: ArcadeTouchPadView) {
         self.pad = pad
         pad.hapticsOn = hapticsOn
+        pad.chimesOn = chimesOn
+        pad.pauseOnLeave = pauseOnLeave && !isPlain
+        pad.takesHoldAtOnce = takesHoldAtOnce
         pad.setTable(touchTable)
-        pad.setPlayHint(playHint)
+        pad.setFit(timing.overlay)
         pad.setMode(mode)
         pad.onOutputs = { [weak self] outputs in self?.handle(outputs) }
         // WebKit counts the app's evaluateJavaScript as a user gesture, so the
         // first touch after each (re)load also wakes any audio context left suspended.
-        pad.onFirstTouch = { [weak self] in self?.evaluate(ArcadeJS.resume) }
-        // The escape scrub and magic tap on the pad itself, not only on the strip.
-        pad.onEscape = { [weak self] in self?.askingLeave = true }
-        pad.onMagicTap = { [weak self] in self?.pauseGame() }
+        pad.onFirstTouch = { [weak self] in
+            guard let self, !self.practicing else { return }
+            self.evaluate(ArcadeJS.resume)
+        }
+        // The escape scrub and magic tap on the pad itself (focused, not
+        // held): Back in menus and pause in fights; Start. Leave game is
+        // only on the strip.
+        pad.onEscape = { [weak self] in self?.padEscape() }
+        pad.onMagicTap = { [weak self] in self?.padMagicTap() }
+        pad.onHold = { [weak self] effects in self?.padHold(effects) }
+        pad.onPadLog = { [weak self] on, how in self?.padLog(on: on, how: how) }
+        pad.onActivate = { [weak self] in self?.telemetry.touch.activates += 1 }
+    }
+
+    // MARK: The pad held (Oct 20 2026)
+
+    private func padEscape() {
+        if mode == "fight" {
+            pauseFight()
+            pad?.play(ArcadeFeel.start)
+        } else {
+            pulse("B")
+            pad?.play(ArcadeFeel.back)
+        }
+    }
+
+    private func padMagicTap() {
+        pauseGame()
+        pad?.play(ArcadeFeel.start)
+    }
+
+    /// The held state's effects: lines through the kit's queue, its voice held or let go, a fight paused.
+    private func padHold(_ effects: [ArcadePadEffect]) {
+        for effect in effects {
+            switch effect {
+            case .say(let text, let cls):
+                say(text, cls: cls)
+            case .holdSpeech(let on):
+                // While the offer or Pad practice is up the kit's voice stays held.
+                if on || (!practicing && !offeringPractice) { evaluate(ArcadeJS.holdSpeech(on)) }
+            case .pauseGame:
+                if pauseFight() { telemetry.touch.autoPauses += 1 }
+            default:
+                break
+            }
+        }
+        padHeld = pad?.hold.held ?? false
+    }
+
+    private func padLog(on: Bool, how: String) {
+        telemetry.touch.note(pad: on, seconds: Date().timeIntervalSince(telemetry.openedAt), how: how)
+        padHeld = pad?.hold.held ?? false
+    }
+
+    /// The kit's 'idleHurt': she lost health with no presses. Said only when
+    /// the pad itself had no touches in those five seconds, once per fight.
+    private func watchdog() {
+        guard !isPlain, let pad else { return }
+        guard ArcadeWatchdog.shouldWarn(mode: mode, lastTouch: pad.lastTouch, now: pad.clock,
+                                        warnedThisFight: watchdogWarned) else { return }
+        watchdogWarned = true
+        telemetry.touch.watchdogFires += 1
+        say(ArcadeTouchLines.watchdog, cls: "teach")
+    }
+
+    /// The telegraph buzz on the speaker follows Warnings on the phone speaker.
+    private var telegraphBuzz: Bool {
+        kitSound?.output == .speaker ? speakerWarnings.buzz : true
     }
 
     // MARK: Driving the page
@@ -590,7 +891,15 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             case .info(let what):
                 useInput("touch")
                 info(what)
-            case .haptic:
+                // Quiet stops the app's own speech at once too (the kit's 'quiet' follows).
+                if what == "quiet" { runSpeech(speech.quiet()) }
+            case .gesture(let report):
+                telemetry.touch.note(gesture: report, seconds: Date().timeIntervalSince(telemetry.openedAt),
+                                     held: pad?.hold.held ?? false, tier: touchTable.tier)
+            case .dud(let dud):
+                telemetry.touch.note(dud: dud, seconds: Date().timeIntervalSince(telemetry.openedAt),
+                                     held: pad?.hold.held ?? false, tier: touchTable.tier)
+            case .haptic, .lifted:
                 break
             }
         }
@@ -624,7 +933,19 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     /// screen Start does something else): before Settings or "Leave game?",
     /// so she is not being hit while she reads them.
     func pauseIfFighting() {
-        if mode == "fight" { pauseGame() }
+        pauseFight()
+    }
+
+    /// Oct 20 2026: the pause pressed once. Leaving the pad pauses a fight
+    /// and so may the strip's next button; a second Start before the kit
+    /// says 'pause' would unpause it, so one within 1.5 s is not pressed.
+    @discardableResult
+    private func pauseFight() -> Bool {
+        guard mode == "fight" else { return false }
+        if let last = lastPausePress, Date().timeIntervalSince(last) < 1.5 { return false }
+        lastPausePress = Date()
+        pauseGame()
+        return true
     }
 
     private func controllerPad(_ state: ArcadePadState?) {
@@ -646,8 +967,17 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         guard !ended, let message = body as? [String: Any], let kind = message["t"] as? String else { return }
         switch kind {
         case "say":
-            speak((message["text"] as? String) ?? "", urgent: (message["urgent"] as? Bool) ?? false,
-                  flush: (message["flush"] as? Bool) ?? false)
+            // Oct 20 2026: the kit's native item, with its id and class, said
+            // in turn and acknowledged; an older kit's line (no id) in turn too.
+            let id = message["id"] as? String
+            if let id {
+                if speechIds.contains(id) { return }
+                speechIds.append(id)
+                if speechIds.count > 64 { speechIds.removeFirst(speechIds.count - 64) }
+            }
+            let urgent = (message["urgent"] as? Bool) ?? false
+            nativeLine((message["text"] as? String) ?? "", id: id, cls: (message["cls"] as? String) ?? (urgent ? "alert" : "flow"),
+                       interrupts: (message["flush"] as? Bool) ?? false)
         case "event":
             event((message["name"] as? String) ?? "", detail: message["detail"] as? [String: Any])
         case "pageError":
@@ -687,8 +1017,26 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             if pictureSent != showPicture { sendPicture() }
             // Where the sound goes, once per page (then on every route change).
             sendRoute()
+            // Oct 20 2026: the touch choices; the kit's voice gate (it may
+            // have missed speechGo while it was starting); the warnings as
+            // screen lines in its queue.
+            sendTouchSettings()
+            if offeringPractice || practicing {
+                evaluate(ArcadeJS.holdSpeech(true))
+            } else if speechOpen {
+                evaluate(ArcadeJS.speechGo)
+            }
+            sendWarnings()
         case "settings":
             if let detail { keepKitSettings(detail) }
+        case "cue":
+            // Oct 20 2026: the kit's game cues are haptics (on the speaker they never compete with speech).
+            let cue = (detail?["k"] as? String) ?? ""
+            if cue != "telegraph" || telegraphBuzz { pad?.feel(cue: cue) }
+        case "idleHurt":
+            watchdog()
+        case "quiet":
+            runSpeech(speech.quiet())
         case "lines":
             screenText = ArcadeScreenText(detail: detail)
         case "audio":
@@ -821,6 +1169,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         mode = next
         pad?.setMode(next)
         input.mode = next
+        // A new fight gets its own pad isn't held line.
+        if next == "menu" || next == "demo" { watchdogWarned = false }
     }
 
     /// The page's sound can sit suspended until a user gesture even with
@@ -854,6 +1204,12 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if let sound = ArcadeKitSound(settings) { kitSound = sound }
         guard let key = settingsKey else { return }
         kitSettings = settings
+        // Oct 20 2026: the kit's own touch choices, and the fight tier the pad uses.
+        touchChoices = ArcadeTouchChoices(settings: settings)
+        if touchTable.tier != touchChoices.fightControls {
+            touchTable.tier = touchChoices.fightControls
+            pad?.setTable(touchTable)
+        }
         if saves?.keepSettings(settings, gameId: key) != true {
             telemetry.note(error: "the game's settings could not be kept")
         }
@@ -895,7 +1251,38 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             guard let self, !self.ended, let state = result as? [String: Any],
                   let sound = ArcadeKitSound(state) else { return }
             self.kitSound = sound
+            self.applySpeakerCalls()
         }
+    }
+
+    /// Oct 20 2026: the touch choices for a ready page: the kit's own (kept,
+    /// or the defaults), Pause when I leave the pad and her touch timing.
+    private func sendTouchSettings() {
+        guard !isPlain else { return }
+        var partial: [String: Any] = ["pauseOnLeave": pauseOnLeave, "touchTiming": timing.kitValue]
+        if touchTable.hasTiers {
+            partial["fightControls"] = touchChoices.fightControls
+            partial["walkIn"] = touchChoices.walkIn
+            partial["skipDemo"] = touchChoices.skipDemo
+            if let lessDamage = touchChoices.lessDamage { partial["lessDamage"] = lessDamage }
+        }
+        evaluate(ArcadeJS.setSettings(partial))
+    }
+
+    /// Warnings on the phone speaker: the kit keeps calls per route, so her
+    /// choice is given to it while a touch player is on the speaker.
+    private func applySpeakerCalls() {
+        guard !isPlain, pageReady, pageInputType == "touch", let sound = kitSound, sound.output == .speaker,
+              sound.calls != speakerWarnings.calls else { return }
+        chooseCalls(speakerWarnings.calls)
+    }
+
+    /// The start-up warnings, once per open, as screen lines in the kit's queue (after its first line).
+    private func sendWarnings() {
+        guard !warningsSent else { return }
+        warningsSent = true
+        let lines = warnings()
+        if !lines.isEmpty { say(lines.joined(separator: " "), cls: "screen") }
     }
 
     /// Sound world from the game's Settings: 'stereo', '3d' or 'off'. The
@@ -943,26 +1330,95 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         waiter()
     }
 
-    /// A line with no cloned clip: VoiceOver says it in her own voice and
-    /// rate (queued, or at once when urgent or a menu move); with VoiceOver
-    /// off the phone's own speech does.
+    /// The app's own line said here, not by the game's voice: VoiceOver in
+    /// her own voice and rate, or the phone's own speech with VoiceOver off,
+    /// one at a time (ArcadeSpeechQueue). Oct 20 2026: `urgent` no longer
+    /// jumps ahead (the kit orders the game's lines); `flush` (her own
+    /// action) cuts the line being said.
     func speak(_ text: String, urgent: Bool, flush: Bool) {
+        nativeLine(text, id: nil, cls: urgent ? "alert" : "screen", interrupts: flush)
+    }
+
+    /// The app's own line (warnings, Pad on., the watchdog): through the
+    /// kit's one queue when the page has it, so it never talks over the
+    /// game's voice; else said here in turn.
+    func say(_ text: String, cls: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, !ended else { return }
-        if UIAccessibility.isVoiceOverRunning {
-            if urgent {
-                KadeAnnounce.high(clean)
-            } else {
-                UIAccessibility.post(notification: .announcement, argument: NSAttributedString(
-                    string: clean, attributes: [.accessibilitySpeechQueueAnnouncement: NSNumber(value: !flush)]))
+        guard pageReady, let web = webView else {
+            nativeLine(clean, id: nil, cls: cls, interrupts: false)
+            return
+        }
+        web.evaluateJavaScript(ArcadeJS.say(clean, cls: cls)) { [weak self] result, _ in
+            guard let self, !self.ended else { return }
+            if (result as? Bool) != true { self.nativeLine(clean, id: nil, cls: cls, interrupts: false) }
+        }
+    }
+
+    /// One line into the queue (the kit's native item with its id, or the app's own).
+    private func nativeLine(_ text: String, id: String?, cls: String, interrupts: Bool) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !ended else {
+            // Nothing to say: done at once, so the kit's queue moves on.
+            if let id { evaluate(ArcadeJS.spoken(id: id, ok: true)) }
+            return
+        }
+        runSpeech(speech.add(ArcadeSpeechItem(id: id, text: clean, cls: cls, interrupts: interrupts), now: speechClock))
+    }
+
+    private var speechClock: Double { ProcessInfo.processInfo.systemUptime * 1000 }
+
+    private func runSpeech(_ steps: [ArcadeSpeechStep]) {
+        for step in steps {
+            switch step {
+            case .post(let item): postSpeech(item)
+            case .ack(let id, let ok): evaluate(ArcadeJS.spoken(id: id, ok: ok))
+            case .stop: speaker?.stopSpeaking(at: .immediate)
             }
+        }
+        scheduleSpeechCheck()
+    }
+
+    private func postSpeech(_ item: ArcadeSpeechItem) {
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement, argument: NSAttributedString(
+                string: item.text, attributes: [.accessibilitySpeechQueueAnnouncement: NSNumber(value: !item.interrupts)]))
         } else {
-            let synthesizer = speaker ?? AVSpeechSynthesizer()
-            speaker = synthesizer
-            if urgent || flush { synthesizer.stopSpeaking(at: .immediate) }
-            let utterance = AVSpeechUtterance(string: clean)
+            let synthesizer: AVSpeechSynthesizer
+            if let speaker {
+                synthesizer = speaker
+            } else {
+                synthesizer = AVSpeechSynthesizer()
+                synthesizer.delegate = self
+                speaker = synthesizer
+            }
+            if item.interrupts { synthesizer.stopSpeaking(at: .immediate) }
+            let utterance = AVSpeechUtterance(string: item.text)
             utterance.prefersAssistiveTechnologySettings = true
             synthesizer.speak(utterance)
+        }
+    }
+
+    /// The line being said ended (VoiceOver or the phone's speech).
+    fileprivate func speechEnded(text: String?, ok: Bool) {
+        guard !ended else { return }
+        runSpeech(speech.finished(text: text, ok: ok, now: speechClock))
+    }
+
+    /// The one wake for a line that never ends.
+    private func scheduleSpeechCheck() {
+        speechCheck?.cancel()
+        speechCheck = nil
+        guard let deadline = speech.deadline else { return }
+        let wait = max(0, deadline - speechClock) / 1000 + 0.02
+        speechCheck = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, !self.ended else { return }
+            self.runSpeech(self.speech.expire(now: self.speechClock))
         }
     }
 
@@ -988,7 +1444,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         input.releaseAll()
         if mode == "fight" {
             pausedForAway = true
-            pauseGame()
+            pauseFight()
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard let self, self.suspended, self.suspendToken == token else { return }
@@ -1019,14 +1475,14 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         scheduleStartCheck()
         // A start failure that came while she was away is said now.
         sayHeldStartLine()
-        evaluate(ArcadeJS.resume)
+        // Pad practice keeps the game frozen until it closes.
+        if !practicing { evaluate(ArcadeJS.resume) }
         // The route may have changed while she was away (headphones taken
         // off on a call): the kit hears of it now.
         routeChanged()
         if pausedForAway {
             pausedForAway = false
-            speak("The game is paused. Press Pause on the strip, or tap the pad with three fingers, to play on.",
-                  urgent: false, flush: false)
+            say("The game is paused. Press Pause on the strip, or two-finger double-tap the pad, to play on.", cls: "screen")
         }
     }
 
@@ -1040,7 +1496,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     private func headphonesGone() {
         let fighting = mode == "fight"
-        if fighting { pauseGame() }
+        if fighting { pauseFight() }
         // Oct 19 2026: a game page told the route (its kit answered
         // setOutput) with its own words for it says the new route itself, in
         // the game's voice, once the route settles, and reads its pause
@@ -1237,6 +1693,10 @@ struct ArcadeGameView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
     @State private var showSettings = false
     @State private var showScreenText = false
+    @State private var showHowToPlay = false
+    /// Oct 20 2026: the strip reaches the very top of the screen (the
+    /// status bar is hidden), so touching there brings VoiceOver back.
+    @State private var stripTop: CGFloat = 0
 
     init(launch: ArcadeLaunch, apiClient: KadeAPIClient, onClose: @escaping (String) -> Void) {
         _host = StateObject(wrappedValue: ArcadeGameHost(launch: launch))
@@ -1244,30 +1704,49 @@ struct ArcadeGameView: View {
         self.onClose = onClose
     }
 
+    /// While the pad is held in a fight, an edge flick plays rather than opening Control Center or going Home.
+    private var defersEdges: Bool {
+        host.mode == "fight" && (host.padHeld || !voiceOverOn)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            strip
-            ZStack(alignment: .top) {
-                Color.black
-                ArcadeWebSurface(host: host)
-                    .frame(width: host.showPicture ? nil : 96, height: host.showPicture ? nil : 72)
-                    .aspectRatio(4.0 / 3.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity, alignment: host.showPicture ? .center : .trailing)
-                    .accessibilityHidden(true)
-                ArcadeTouchPadSurface(host: host)
-                if let stopped = host.stopped {
-                    Text(stopped)
-                        .font(.callout)
-                        .foregroundStyle(.white)
-                        .padding()
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                strip
+                ZStack(alignment: .top) {
+                    Color.black
+                    ArcadeWebSurface(host: host)
+                        .frame(width: host.showPicture ? nil : 96, height: host.showPicture ? nil : 72)
+                        .aspectRatio(4.0 / 3.0, contentMode: .fit)
+                        .frame(maxWidth: .infinity, alignment: host.showPicture ? .center : .trailing)
                         .accessibilityHidden(true)
-                        .allowsHitTesting(false)
+                    ArcadeTouchPadSurface(host: host)
+                    if let stopped = host.stopped {
+                        Text(stopped)
+                            .font(.callout)
+                            .foregroundStyle(.white)
+                            .padding()
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            .accessibilityHidden(true)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .alert(ArcadeTouchLines.offerTitle, isPresented: $host.offeringPractice) {
+                    Button(ArcadeTouchLines.offerLearn) { host.answerOffer(learn: true) }
+                    Button(ArcadeTouchLines.offerPlay, role: .cancel) { host.answerOffer(learn: false) }
+                } message: {
+                    Text("Pad practice teaches the game pad with nothing at stake. It is also in the game's Settings.")
                 }
             }
+            .ignoresSafeArea(.container, edges: .top)
+            .onAppear { stripTop = proxy.safeAreaInsets.top }
+            .onChange(of: proxy.safeAreaInsets.top) { _, top in stripTop = top }
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .statusBarHidden(true)
+        .defersSystemGestures(on: defersEdges ? .vertical : [])
+        .persistentSystemOverlays(defersEdges ? .hidden : .automatic)
         .accessibilityAction(.magicTap) { host.pauseGame() }
         .accessibilityAction(.escape) { host.askingLeave = true }
         .onAppear { host.begin() }
@@ -1285,9 +1764,21 @@ struct ArcadeGameView: View {
         .sheet(isPresented: $showScreenText) {
             ArcadeScreenTextView(host: host)
         }
+        .sheet(isPresented: $showHowToPlay) {
+            ArcadeHowToPlayView(host: host)
+        }
+        .fullScreenCover(isPresented: $host.practicing, onDismiss: { host.practiceClosed() }) {
+            ArcadePadPracticeView(host: host)
+        }
         // While a sheet covers the game, a keyboard's presses are not play.
-        .onChange(of: showSettings) { _, open in host.keysElsewhere = open || showScreenText }
-        .onChange(of: showScreenText) { _, open in host.keysElsewhere = open || showSettings }
+        .onChange(of: showSettings) { _, _ in updateKeysElsewhere() }
+        .onChange(of: showScreenText) { _, _ in updateKeysElsewhere() }
+        .onChange(of: showHowToPlay) { _, _ in updateKeysElsewhere() }
+        .onChange(of: host.practicing) { _, _ in updateKeysElsewhere() }
+    }
+
+    private func updateKeysElsewhere() {
+        host.keysElsewhere = showSettings || showScreenText || showHowToPlay || host.practicing
     }
 
     /// The game's save is taken first (when it is paused or in its menus), then the cover closes.
@@ -1316,14 +1807,23 @@ struct ArcadeGameView: View {
                     showScreenText = true
                 }
             }
+            // Oct 20 2026: the controls in plain text, and Pad practice.
+            stripButton("How to play", spoken: "How to play", symbol: "hand.tap",
+                        hint: "Lists the pad's gestures for menus and fights. Pauses a fight first.") {
+                host.pauseIfFighting()
+                showHowToPlay = true
+            }
+            stripButton("Pad practice", spoken: "Pad practice", symbol: "graduationcap",
+                        hint: "Practise every gesture with nothing at stake, about three minutes. Pauses a fight first.") {
+                host.openPractice()
+            }
             stripButton("Settings", spoken: "Settings", symbol: "gearshape",
-                        hint: "The picture, sound, speech, haptics, and Report a problem with this game. Pauses a fight first.") {
+                        hint: "The picture, sound, touch, speech, haptics, and Report a problem with this game. Pauses a fight first.") {
                 host.pauseIfFighting()
                 showSettings = true
             }
         }
         .padding(.horizontal, 4)
-        .padding(.vertical, 4)
         .background(Color(white: 0.12))
     }
 
@@ -1361,7 +1861,6 @@ struct ArcadeGameView: View {
         } else {
             // With VoiceOver off the whole screen is for playing: leaving takes a one-second hold.
             stripLabel("Hold to leave", symbol: "xmark")
-                .contentShape(Rectangle())
                 .onLongPressGesture(minimumDuration: 1) { leave() }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Leave game")
@@ -1370,6 +1869,8 @@ struct ArcadeGameView: View {
         }
     }
 
+    /// At least 64 points tall below the top inset, and reaching the very
+    /// top of the screen, so the whole strip is a target for her finger.
     private func stripLabel(_ title: String, symbol: String) -> some View {
         VStack(spacing: 2) {
             Image(systemName: symbol)
@@ -1377,10 +1878,12 @@ struct ArcadeGameView: View {
             Text(title)
                 .font(.caption2)
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.5)
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, minHeight: 48)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, minHeight: 64 + stripTop, alignment: .bottom)
+        .contentShape(Rectangle())
     }
 
     private func stripButton(_ title: String, spoken: String, symbol: String, hint: String,
@@ -1391,6 +1894,37 @@ struct ArcadeGameView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(spoken)
         .accessibilityHint(hint)
+    }
+}
+
+/// Oct 20 2026: How to play, the pad's gestures in plain VoiceOver text, from
+/// the game's own table and its words: menus, then the fight controls in use.
+struct ArcadeHowToPlayView: View {
+    @ObservedObject var host: ArcadeGameHost
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(Array(host.howToPlay.enumerated()), id: \.offset) { _, section in
+                    Section(section.title) {
+                        ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
+                            Text(row)
+                        }
+                    }
+                }
+                Section {
+                    Text("Touch the very top of the screen to get VoiceOver back. Double-tap the pad, then touch once, to take it again.")
+                }
+            }
+            .navigationTitle("How to play")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -1418,6 +1952,7 @@ struct ArcadeGameSettingsView: View {
                     Text("With VoiceOver reading every line, the game's cloned voice stays quiet and VoiceOver says everything in your own voice and speed.")
                 }
                 if !host.isPlain { soundSection }
+                touchSection
                 // Oct 19 2026 (App Store 4.7.1): reports go to Kade through
                 // the app's own feedback path, with this game's id and
                 // version and how it ran (read when Send is pressed).
@@ -1458,6 +1993,63 @@ struct ArcadeGameSettingsView: View {
         }
     }
 
+    /// Oct 20 2026: the game pad. The kit's own choices (Fight controls,
+    /// Walk in for me, Less damage, Skip the demo fight, Teach me again) for
+    /// a game with fight tiers; the app's own (warnings on the speaker, touch
+    /// timing, how the pad takes hold, pausing on leaving the pad, the
+    /// chimes) for every game; and Pad practice.
+    @ViewBuilder
+    private var touchSection: some View {
+        Section {
+            if host.hasFightTiers {
+                Picker("Fight controls", selection: Binding(
+                    get: { host.touchChoices.fightControls },
+                    set: { host.chooseFightControls($0) })) {
+                    Text("Easy").tag("easy")
+                    Text("Full").tag("full")
+                }
+                Toggle("Walk in for me", isOn: Binding(
+                    get: { host.touchChoices.walkIn }, set: { host.setKitTouch("walkIn", $0) }))
+                Toggle("Less damage", isOn: Binding(
+                    get: { host.touchChoices.lessDamageShown }, set: { host.setKitTouch("lessDamage", $0) }))
+                Toggle("Skip the demo fight", isOn: Binding(
+                    get: { host.touchChoices.skipDemo }, set: { host.setKitTouch("skipDemo", $0) }))
+            }
+            if !host.isPlain {
+                Picker("Warnings on the phone speaker", selection: $host.speakerWarnings) {
+                    ForEach(ArcadeSpeakerWarnings.allCases, id: \.self) { choice in
+                        Text(choice.label).tag(choice)
+                    }
+                }
+            }
+            Picker("Touch timing", selection: Binding(
+                get: { host.timing.choice }, set: { host.chooseTiming($0) })) {
+                ForEach(ArcadeTouchTiming.allCases, id: \.self) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            Picker("Pad takes hold", selection: $host.takesHoldAtOnce) {
+                Text("After a double-tap").tag(false)
+                Text("At once").tag(true)
+            }
+            if !host.isPlain {
+                Toggle("Pause when I leave the pad", isOn: $host.pauseOnLeave)
+            }
+            Toggle("Pad chimes", isOn: $host.chimesOn)
+            if host.hasFightTiers {
+                Button("Teach me again") { host.teachAgain() }
+            }
+            Button("Pad practice") {
+                dismiss()
+                host.openPracticeSoon()
+            }
+        } header: {
+            Text("Touch")
+        } footer: {
+            Text("Fitted to me comes from Pad practice; until then it is the same as Relaxed. Quick is the old quarter-second timing. Teach me again brings the lesson back at your next fight.")
+        }
+    }
+
     /// Oct 19 2026: the kit's sound world and position calls, for whatever
     /// she is listening on now (the kit keeps a choice per route, and each
     /// picker names it). Shown once the page is ready and has been told the
@@ -1476,12 +2068,18 @@ struct ArcadeGameSettingsView: View {
                     Text("3D sound, uses more battery").tag("3d")
                     Text("The game's own sound").tag("off")
                 }
-                Picker(sound.label("Position calls"), selection: Binding(
-                    get: { host.kitSound?.calls ?? "all" },
-                    set: { host.chooseCalls($0) })) {
-                    Text("All").tag("all")
-                    Text("Urgent only").tag("urgent")
-                    Text("Off").tag("off")
+                if sound.output == .speaker && host.isTouchPlayer {
+                    // Oct 20 2026: on the speaker, Touch's Warnings on the phone speaker sets the calls.
+                    LabeledContent("Position calls", value: host.speakerWarnings.label)
+                } else {
+                    Picker(sound.label("Position calls"), selection: Binding(
+                        get: { host.kitSound?.calls ?? "all" },
+                        set: { host.chooseCalls($0) })) {
+                        Text("All").tag("all")
+                        Text("Urgent only").tag("urgent")
+                        Text("Attacks only").tag("alerts")
+                        Text("Off").tag("off")
+                    }
                 }
             } else {
                 Text(host.pageReady ? "This version of the game player has no sound choices."
@@ -1523,5 +2121,18 @@ struct ArcadeScreenTextView: View {
                 }
             }
         }
+    }
+}
+
+/// Oct 20 2026: with VoiceOver off, the phone's own speech ends a line.
+extension ArcadeGameHost: AVSpeechSynthesizerDelegate {
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let text = utterance.speechString
+        Task { @MainActor [weak self] in self?.speechEnded(text: text, ok: true) }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        let text = utterance.speechString
+        Task { @MainActor [weak self] in self?.speechEnded(text: text, ok: true) }
     }
 }

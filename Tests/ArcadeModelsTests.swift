@@ -19,6 +19,7 @@ import CryptoKit
         try packIndexAndScheme()
         try touchMenus()
         try touchFights()
+        try touchPlay()
         controllersAndKeys()
         javascriptAndWords()
         startWatched()
@@ -26,7 +27,7 @@ import CryptoKit
         soundAndScreenText()
         updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, USB-C earphones by any of theirs, several outputs at once, the setOutput and setSettings calls, the app's line when headphones go only where the game does not say the new route itself) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given, each Sound picker naming the route its choice is kept for, an added game's plain player keeping none so its settings and its pack's never cross), the screen's text, its title and why the list is empty, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), touch play (Oct 20 2026: the v2 tables with Easy and Full fight tiers, the first-timer vectors and the seeded random sets, VoiceOver-style menus, the scrub, flicks out of a block, repeats, duds with their reasons, Relaxed, Quick and Fitted to me timing, a haptic for every gesture and game cue, the one speech queue with its acknowledgements and time-outs, the pad's held state, words and watchdog, How to play, Pad practice, the chimes and the touch trace), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, USB-C earphones by any of theirs, several outputs at once, the setOutput and setSettings calls, the app's line when headphones go only where the game does not say the new route itself) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given, each Sound picker naming the route its choice is kept for, an added game's plain player keeping none so its settings and its pack's never cross), the screen's text, its title and why the list is empty, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -349,7 +350,7 @@ import CryptoKit
               "anything else is no sound world")
         check(ArcadeKitSettings.calls("Urgent") == "urgent" && ArcadeKitSettings.calls("all") == "all" && ArcadeKitSettings.calls("some") == nil,
               "calls in the kit's own spelling")
-        check(ArcadeKitSettings.soundWorlds == ["stereo", "3d", "off"] && ArcadeKitSettings.callChoices == ["all", "urgent", "off"],
+        check(ArcadeKitSettings.soundWorlds == ["stereo", "3d", "off"] && ArcadeKitSettings.callChoices == ["all", "urgent", "alerts", "off"],
               "the Settings sheet's order, Stereo first")
 
         // The settings given back at the next start.
@@ -750,7 +751,7 @@ import CryptoKit
     // MARK: Touch: menus
 
     static func touchMenus() throws {
-        let table = ArcadeTouchTable.standard
+        let table = v1Table
         check(table.flickPx == 20 && table.doubleMs == 300 && table.stickRadiusPx == 60, "the standard numbers")
         check(table.menu.doubleTaps[1] == .pulse(ArcadePadState(buttons: ["A"])) && table.menu.flicks[1]?.repeats == true, "the standard menu table")
         check(table.gestures(mode: "fight", zone: .left).taps[3] == .pulse(ArcadePadState(buttons: ["START"])), "fight halves include 'anywhere'")
@@ -772,14 +773,14 @@ import CryptoKit
               "a half's own hold brings its own time, or none, over the 'anywhere' one")
 
         // Touch and hold one second in a menu repeats the screen; lifting lets nothing go.
-        var still = ArcadeTouchRecognizer()
+        var still = legacyPad()
         _ = still.start(id: 1, x: 100, y: 100, width: 400, now: 0)
         check(still.advance(to: 999).isEmpty, "a menu hold waits its own second, not the 250 ms of a block")
         check(still.advance(to: 1000) == [.info("repeat"), .haptic(.hold)], "touch and hold for a second repeats")
         check(still.end(id: 1, now: 1500).isEmpty && still.isIdle, "lifting after it does nothing more")
 
         // A flick fires as soon as it travels flickPx, and the pulse lets go after pulseMs.
-        var r = ArcadeTouchRecognizer()
+        var r = legacyPad()
         check(r.start(id: 1, x: 100, y: 100, width: 400, now: 0).isEmpty, "a finger landing does nothing yet")
         check(r.move(id: 1, x: 100, y: 85, now: 20).isEmpty, "15 points is not a flick")
         check(r.move(id: 1, x: 100, y: 79, now: 30) == [.pad(source: "touch-p1", state: ArcadePadState(sy: -1))], "flick up steps up")
@@ -791,7 +792,7 @@ import CryptoKit
         check(r.advance(to: 5000).isEmpty && r.isIdle, "nothing repeats after the finger lifts")
 
         // Double-tap accepts; a single tap waits, then does nothing (menus have no tap1).
-        var d = ArcadeTouchRecognizer()
+        var d = legacyPad()
         _ = d.start(id: 1, x: 50, y: 50, width: 400, now: 1000)
         check(d.end(id: 1, now: 1080).isEmpty, "the first tap waits for a second")
         _ = d.start(id: 2, x: 52, y: 50, width: 400, now: 1200)
@@ -802,14 +803,14 @@ import CryptoKit
         check(d.advance(to: 3400).isEmpty, "a lone tap does nothing in menus")
 
         // Two fingers: tap is B after the double-tap window; double is Start and never B.
-        var b = ArcadeTouchRecognizer()
+        var b = legacyPad()
         _ = b.start(id: 1, x: 100, y: 100, width: 400, now: 0)
         _ = b.start(id: 2, x: 150, y: 100, width: 400, now: 10)
         check(b.end(id: 1, now: 60).isEmpty, "the gesture waits for every finger")
         check(b.end(id: 2, now: 70).isEmpty, "a two-finger tap waits for a second one")
         check(b.advance(to: 369).isEmpty, "not before 300 ms")
         check(b.advance(to: 370) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["B"]))], "two-finger tap is B")
-        var s = ArcadeTouchRecognizer()
+        var s = legacyPad()
         for (t, base) in [(0.0, 0), (200.0, 10)] {
             _ = s.start(id: base + 1, x: 100, y: 100, width: 400, now: t)
             _ = s.start(id: base + 2, x: 150, y: 100, width: 400, now: t + 5)
@@ -820,18 +821,18 @@ import CryptoKit
         check(!s.advance(to: 1000).contains(.pad(source: "touch-p1", state: ArcadePadState(buttons: ["B"]))), "and B never fires with it")
 
         // Three-finger flick is a C button; three-finger tap is Start at once.
-        var c = ArcadeTouchRecognizer()
+        var c = legacyPad()
         for id in 1...3 { _ = c.start(id: id, x: Double(100 + id * 30), y: 200, width: 400, now: 0) }
         check(c.move(id: 1, x: 130, y: 230, now: 20).isEmpty, "one finger of three moving 30 points is 10 on average")
         check(c.move(id: 2, x: 160, y: 230, now: 21) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["CD"]))],
               "three-finger flick down is C-down once the average travels 20")
         check(c.move(id: 3, x: 190, y: 230, now: 22).isEmpty, "and fires once")
-        var t = ArcadeTouchRecognizer()
+        var t = legacyPad()
         for id in 1...3 { _ = t.start(id: id, x: Double(100 + id * 30), y: 200, width: 400, now: 0) }
         _ = t.end(id: 1, now: 40)
         _ = t.end(id: 2, now: 45)
         check(t.end(id: 3, now: 50) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"]))], "three-finger tap is Start")
-        var slow = ArcadeTouchRecognizer()
+        var slow = legacyPad()
         _ = slow.start(id: 1, x: 50, y: 50, width: 400, now: 0)
         check(slow.end(id: 1, now: 400).isEmpty && slow.advance(to: 1000).isEmpty, "a slow touch is not a tap")
     }
@@ -840,7 +841,7 @@ import CryptoKit
 
     static func touchFights() throws {
         // Left half: the floating stick, with a tick per direction and a bump at full push.
-        var stick = ArcadeTouchRecognizer()
+        var stick = legacyPad()
         stick.mode = "fight"
         _ = stick.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         check(stick.move(id: 1, x: 50, y: 320, now: 20) == [.pad(source: "touch-stick-left", state: ArcadePadState(sy: 0.34)), .haptic(.direction)],
@@ -850,36 +851,36 @@ import CryptoKit
         check(stick.move(id: 1, x: 110, y: 380, now: 60).contains(.haptic(.direction)), "a new direction ticks again")
         check(stick.advance(to: 1000).isEmpty, "a moving stick is never a hold")
         check(stick.end(id: 1, now: 1100) == [.pad(source: "touch-stick-left", state: nil)], "lifting lets the stick go")
-        var target = ArcadeTouchRecognizer()
+        var target = legacyPad()
         target.mode = "fight"
         _ = target.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         check(target.end(id: 1, now: 100) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["A"]))], "a quick left tap changes target")
 
         // Right half: attacks fire on travel, a tap jumps, a hold blocks.
-        var attack = ArcadeTouchRecognizer()
+        var attack = legacyPad()
         attack.mode = "fight"
         _ = attack.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         check(attack.move(id: 1, x: 279, y: 300, now: 30) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["CL"]))],
               "flick left is the weak punch, before the finger lifts")
         check(attack.move(id: 1, x: 250, y: 260, now: 40).isEmpty, "one flick, one attack")
-        var jump = ArcadeTouchRecognizer()
+        var jump = legacyPad()
         jump.mode = "fight"
         _ = jump.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         check(jump.end(id: 1, now: 90) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["R"]))], "a quick right tap jumps")
-        var block = ArcadeTouchRecognizer()
+        var block = legacyPad()
         block.mode = "fight"
         _ = block.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         check(block.advance(to: 249).isEmpty, "no block before 250 ms")
         check(block.advance(to: 250) == [.pad(source: "touch-hold-right", state: ArcadePadState(buttons: ["block"])), .haptic(.hold)], "holding still blocks")
         check(block.move(id: 1, x: 340, y: 300, now: 300).isEmpty, "moving while blocking does not attack")
         check(block.end(id: 1, now: 900) == [.pad(source: "touch-hold-right", state: nil)], "lifting stops the block")
-        var crouch = ArcadeTouchRecognizer()
+        var crouch = legacyPad()
         crouch.mode = "fight"
         _ = crouch.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         _ = crouch.start(id: 2, x: 340, y: 320, width: 400, now: 20)
         check(crouch.advance(to: 260).isEmpty, "the hold clock restarts when the second finger lands")
         check(crouch.advance(to: 270) == [.pad(source: "touch-hold-right", state: ArcadePadState(buttons: ["Z"])), .haptic(.hold)], "a two-finger hold crouches")
-        var surprise = ArcadeTouchRecognizer()
+        var surprise = legacyPad()
         surprise.mode = "fight"
         _ = surprise.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         _ = surprise.start(id: 2, x: 340, y: 300, width: 400, now: 10)
@@ -887,13 +888,13 @@ import CryptoKit
         check(surprise.end(id: 2, now: 70) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["B"]))], "a two-finger right tap is B at once")
 
         // Left half, two fingers: information.
-        var info = ArcadeTouchRecognizer()
+        var info = legacyPad()
         info.mode = "fight"
         _ = info.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = info.start(id: 2, x: 90, y: 300, width: 400, now: 5)
         check(info.move(id: 1, x: 50, y: 270, now: 30).isEmpty, "half the fingers moving is not yet a flick")
         check(info.move(id: 2, x: 90, y: 270, now: 35) == [.info("health")], "two-finger flick up asks for health")
-        var pause = ArcadeTouchRecognizer()
+        var pause = legacyPad()
         pause.mode = "fight"
         for (id, x) in [(1, 50.0), (2, 100.0), (3, 350.0)] { _ = pause.start(id: id, x: x, y: 300, width: 400, now: 0) }
         _ = pause.end(id: 1, now: 30)
@@ -901,11 +902,11 @@ import CryptoKit
         check(pause.end(id: 3, now: 40) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"]))], "three fingers anywhere pause")
 
         // The mode is read when a gesture starts, and everything can be let go at once.
-        var change = ArcadeTouchRecognizer()
+        var change = legacyPad()
         _ = change.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         change.mode = "fight"
         check(change.move(id: 1, x: 279, y: 300, now: 30) == [.pad(source: "touch-p1", state: ArcadePadState(sx: -1))], "a menu gesture stays a menu gesture")
-        var held = ArcadeTouchRecognizer()
+        var held = legacyPad()
         held.mode = "fight"
         _ = held.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         _ = held.advance(to: 300)
@@ -915,7 +916,7 @@ import CryptoKit
         check(ArcadeTouchRecognizer.quantize(0.333) == 0.34 && ArcadeTouchRecognizer.quantize(-0.004) == 0, "stick steps of 0.02")
 
         // The two halves side by side: the left thumb holds the stick while the right one attacks.
-        var both = ArcadeTouchRecognizer()
+        var both = legacyPad()
         both.mode = "fight"
         _ = both.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         check(both.move(id: 1, x: 50, y: 330, now: 20) == [.pad(source: "touch-stick-left", state: ArcadePadState(sy: 0.5)), .haptic(.direction)],
@@ -932,7 +933,7 @@ import CryptoKit
         check(both.end(id: 1, now: 300) == [.pad(source: "touch-stick-left", state: nil)], "lifting the left thumb lets the stick go")
 
         // A block held on the right while the left thumb walks.
-        var guarded = ArcadeTouchRecognizer()
+        var guarded = legacyPad()
         guarded.mode = "fight"
         _ = guarded.start(id: 1, x: 300, y: 300, width: 400, now: 0)
         check(guarded.advance(to: 250) == [.pad(source: "touch-hold-right", state: ArcadePadState(buttons: ["block"])), .haptic(.hold)],
@@ -945,7 +946,7 @@ import CryptoKit
               "lifting the right thumb stops the block")
 
         // Two thumbs tapping together are a left tap and a right tap, never a two-finger tap.
-        var thumbs = ArcadeTouchRecognizer()
+        var thumbs = legacyPad()
         thumbs.mode = "fight"
         _ = thumbs.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = thumbs.start(id: 2, x: 300, y: 300, width: 400, now: 10)
@@ -955,14 +956,14 @@ import CryptoKit
               "then both taps happen: change target and jump")
 
         // A held-back tap goes out once the three-finger tap is no longer possible.
-        var waiting = ArcadeTouchRecognizer()
+        var waiting = legacyPad()
         waiting.mode = "fight"
         _ = waiting.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = waiting.start(id: 2, x: 300, y: 300, width: 400, now: 50)
         check(waiting.end(id: 2, now: 100).isEmpty, "a right tap beside a resting left thumb waits a moment")
         check(waiting.advance(to: 249).isEmpty, "at most until the tap time from the first finger")
         check(waiting.advance(to: 250) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["R"]))], "then the jump goes out")
-        var moved = ArcadeTouchRecognizer()
+        var moved = legacyPad()
         moved.mode = "fight"
         _ = moved.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = moved.start(id: 2, x: 300, y: 300, width: 400, now: 50)
@@ -972,7 +973,7 @@ import CryptoKit
               "or at once when the left thumb starts to move")
 
         // A still two-finger hold on the left repeats the last line (its own one-second time).
-        var again = ArcadeTouchRecognizer()
+        var again = legacyPad()
         again.mode = "fight"
         _ = again.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = again.start(id: 2, x: 90, y: 300, width: 400, now: 5)
@@ -981,7 +982,7 @@ import CryptoKit
         check(again.end(id: 1, now: 1100).isEmpty && again.end(id: 2, now: 1110).isEmpty, "and lifting lets nothing go")
 
         // The stick's direction ticks have some give at each edge.
-        var edge = ArcadeTouchRecognizer()
+        var edge = legacyPad()
         edge.mode = "fight"
         _ = edge.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         check(edge.move(id: 1, x: 89.47, y: 285.64, now: 10).contains(.haptic(.direction)), "20 degrees up from right: the right-hand direction")
@@ -1159,20 +1160,20 @@ extension ArcadeModelsTests {
               "the right half is two named zones, each a held button")
 
         // Touch, in play ('fight', the plain world's mode the whole time): 400 x 800 points.
-        var select = ArcadeTouchRecognizer(table: touch)
+        var select = plainPad(touch)
         select.mode = "fight"
         _ = select.start(id: 1, x: 60, y: 400, width: 400, height: 800, now: 0)
         _ = select.start(id: 2, x: 120, y: 400, width: 400, height: 800, now: 10)
         _ = select.end(id: 1, now: 60)
         check(select.end(id: 2, now: 70) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["SELECT"]))],
               "a two-finger tap on the left is Select")
-        var a = ArcadeTouchRecognizer(table: touch)
+        var a = plainPad(touch)
         a.mode = "fight"
         check(a.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0)
               == [.pad(source: "touch-press-a", state: ArcadePadState(buttons: ["A"]))], "the upper right presses A as the finger lands")
         check(a.advance(to: 2000).isEmpty && a.move(id: 1, x: 330, y: 160, now: 2100).isEmpty, "and holds it, still or moving")
         check(a.end(id: 1, now: 2200) == [.pad(source: "touch-press-a", state: nil)], "lifting lets A go")
-        var b = ArcadeTouchRecognizer(table: touch)
+        var b = plainPad(touch)
         b.mode = "fight"
         check(b.start(id: 1, x: 300, y: 700, width: 400, height: 800, now: 0)
               == [.pad(source: "touch-press-b", state: ArcadePadState(buttons: ["B"]))], "the lower right presses B")
@@ -1183,7 +1184,7 @@ extension ArcadeModelsTests {
         check(b.end(id: 2, now: 300) == [.pad(source: "touch-stick-left", state: nil)], "lifting it lets only the pad go")
         check(b.end(id: 1, now: 400) == [.pad(source: "touch-press-b", state: nil)] && b.isIdle, "then B")
         // Three fingers across the zones: Start, the buttons pressed on the way only while they were down.
-        var start = ArcadeTouchRecognizer(table: touch)
+        var start = plainPad(touch)
         start.mode = "fight"
         _ = start.start(id: 1, x: 60, y: 400, width: 400, height: 800, now: 0)
         _ = start.start(id: 2, x: 300, y: 100, width: 400, height: 800, now: 5)
@@ -1192,10 +1193,10 @@ extension ArcadeModelsTests {
         check(start.end(id: 2, now: 65) == [.pad(source: "touch-press-a", state: nil)], "A goes as its finger lifts")
         check(start.end(id: 3, now: 70) == [.pad(source: "touch-press-b", state: nil), .pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"]))],
               "and a quick three-finger tap across the zones is Start")
-        var menu = ArcadeTouchRecognizer(table: touch)
+        var menu = plainPad(touch)
         check(menu.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0).isEmpty, "outside play (paused) nothing is pressed")
         check(menu.releaseAll().isEmpty, "and nothing is held")
-        var released = ArcadeTouchRecognizer(table: touch)
+        var released = plainPad(touch)
         released.mode = "fight"
         _ = released.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0)
         check(released.releaseAll() == [.pad(source: "touch-press-a", state: nil)], "release all lets a held button go")
@@ -1205,7 +1206,7 @@ extension ArcadeModelsTests {
         // The Game Boy Advance's shoulders along the top.
         let gba = ArcadePlainControls.tables(data, system: "gba")
         if let gbaTouch = gba.touch {
-            var shoulder = ArcadeTouchRecognizer(table: gbaTouch)
+            var shoulder = plainPad(gbaTouch)
             shoulder.mode = "fight"
             check(shoulder.start(id: 1, x: 100, y: 40, width: 400, height: 800, now: 0)
                   == [.pad(source: "touch-press-l", state: ArcadePadState(buttons: ["L"]))], "the top left is the left shoulder")

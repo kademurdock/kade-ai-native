@@ -1,74 +1,101 @@
 import SwiftUI
 import UIKit
 import QuartzCore
+import AVFoundation
 
-/// THE GAME PAD (Oct 18 2026). Everything below the Arcade's top strip is this
-/// one view. With VoiceOver on it is one element, "Game pad", and a VoiceOver
-/// direct touch area (iOS 17's UIAccessibility.DirectTouchOptions):
-/// requiresActivation, so a double-tap takes hold of it first, and
+/// THE GAME PAD (Oct 18 2026; touch v2 Oct 20 2026). Everything below the
+/// Arcade's top strip is this one view. With VoiceOver on it is one element,
+/// "Game pad", hint "Double-tap to play.", value Menu, Fight, Paused or Demo,
+/// and a VoiceOver direct touch area (iOS 17's
+/// UIAccessibility.DirectTouchOptions): requiresActivation, so a double-tap
+/// takes hold of it first (Settings, Pad takes hold: At once drops that), and
 /// silentOnTouch, so from then on every touch goes straight to the game with
-/// VoiceOver quiet (never reading the pad's label over the game), until focus
-/// moves to the strip. With VoiceOver off the pad simply takes touches. While
-/// it has VoiceOver focus but is not held, the escape scrub asks "Leave
-/// game?" and the magic tap pauses, the same as on the strip.
+/// VoiceOver quiet, until focus moves to the strip. With VoiceOver off the
+/// pad simply takes touches.
+///
+/// Held or not (ArcadePadHold): iOS says nothing when the pad is taken, so
+/// the pad does. VoiceOver's activate (if iOS calls it on the activating
+/// double-tap) or else the first touch that reaches the pad takes it: a
+/// rising chime and a success buzz, and the first touch is played as a
+/// normal gesture. Focus leaving the pad: a falling chime, the kit's voice
+/// held, and a live fight pauses itself. While it has focus but is not held,
+/// the escape scrub is Back in menus and pause in fights, and the magic tap
+/// is Start (Leave game is only on the strip).
 ///
 /// The gestures are the game's own tables (profile.input.touch), run by
-/// ArcadeTouchRecognizer, the rules of the kit's core/touch.js:
-///   menus  flick = one step; double-tap = A; two-finger tap = B;
-///          two-finger double-tap = Start; three-finger flick = C buttons
-///   fights left half = a floating stick (tap: change target; two-finger
-///          flicks: health, where, facing, time); right half = flick attacks,
-///          tap jumps, hold blocks, two-finger tap B, two-finger hold crouch;
-///          three-finger tap anywhere pauses. The two halves work side by
-///          side: the left thumb walks while the right one attacks or blocks.
-///   plain  (Oct 19 2026, a game added with no accessibility pack) the kit's
-///          per-system table: left half a floating control pad, two-finger
-///          tap Select; named zones on the right held as buttons (A above
-///          B, the shoulders along the top on the Game Boy Advance);
-///          three-finger tap Start. The pad's hint is the kit's own help.
+/// ArcadeTouchRecognizer, the kit's core/touch.js v2: in menus VoiceOver's
+/// own grammar (flick, tap to hear it, double-tap to choose, two-finger
+/// scrub back, two-finger tap quiet, two-finger double-tap Start); in
+/// fights the tier in use (Easy: the whole pad one zone; Full: the two
+/// halves); the plain player's per-system zones (Oct 19 2026).
 ///
-/// Haptics are made when the game opens, never at app launch (the CI
-/// simulator has no haptic or audio hardware): a light tick per stick
-/// direction, a firm one at full push, one when a hold takes effect, and a
-/// soft one when the game switches between menus and fights.
+/// Every gesture acted on gets a haptic by its action and every touch that
+/// did nothing a warning buzz (ArcadeFeel); the kit's game cues (a foe's
+/// wind-up, a hit, a block) buzz too. Haptics and chimes are made when the
+/// game opens, never at app launch (the CI simulator has no haptic or audio
+/// hardware), and follow the Pad haptics and Pad chimes switches.
 final class ArcadeTouchPadView: UIView {
-    /// Pad states, info keys: for the page. Called on the main thread.
+    /// Pad states, info keys and the v2 reports: for the page (or Pad practice). Called on the main thread.
     var onOutputs: (@MainActor ([ArcadeTouchOutput]) -> Void)?
     /// The first touch since the page (re)loaded (the page may need a gesture for sound).
     var onFirstTouch: (@MainActor () -> Void)?
     /// VoiceOver's escape scrub and magic tap while the pad has focus.
     var onEscape: (@MainActor () -> Void)?
     var onMagicTap: (@MainActor () -> Void)?
+    /// The held state's effects for the host: lines, the kit's voice held or
+    /// let go, the game's pause (the chimes and the buzz are the pad's own).
+    var onHold: (@MainActor ([ArcadePadEffect]) -> Void)?
+    /// The pad taken (true) or let go, and how, for the report.
+    var onPadLog: (@MainActor (Bool, String) -> Void)?
+    /// VoiceOver called the pad's activate (for the report).
+    var onActivate: (@MainActor () -> Void)?
 
     private var recognizer = ArcadeTouchRecognizer()
     private var link: CADisplayLink?
     private var ids: [ObjectIdentifier: Int] = [:]
     private var nextId = 1
     private var touchedOnce = false
-    private var mode = "menu"
-    /// Oct 19 2026: the controls the game's own help describes for play (the
-    /// plain player's per-system touch help), said in place of the fighting
-    /// game's words.
-    private var playHint: String?
+    private(set) var mode = "menu"
+    private(set) var hold = ArcadePadHold()
+    /// When a touch last reached the pad (ms on the pad's clock), for the watchdog.
+    private(set) var lastTouch: Double?
+    private let selectionTick = UISelectionFeedbackGenerator()
     private let lightTick = UIImpactFeedbackGenerator(style: .light)
-    private let firmTick = UIImpactFeedbackGenerator(style: .rigid)
-    private let softTick = UISelectionFeedbackGenerator()
+    private let mediumTick = UIImpactFeedbackGenerator(style: .medium)
+    private let heavyTick = UIImpactFeedbackGenerator(style: .heavy)
+    private let rigidTick = UIImpactFeedbackGenerator(style: .rigid)
+    private let softTick = UIImpactFeedbackGenerator(style: .soft)
+    private let notice = UINotificationFeedbackGenerator()
+    private let risingChime: AVAudioPlayer?
+    private let fallingChime: AVAudioPlayer?
     var hapticsOn = true
+    var chimesOn = true
+    /// Pause when I leave the pad (Settings): a live fight pauses as focus leaves.
+    var pauseOnLeave = true
+    /// Pad takes hold: At once (no double-tap first).
+    var takesHoldAtOnce = false {
+        didSet { if takesHoldAtOnce != oldValue { updateDirectTouch() } }
+    }
 
     override init(frame: CGRect) {
+        risingChime = try? AVAudioPlayer(data: ArcadeChime.wav(rising: true))
+        fallingChime = try? AVAudioPlayer(data: ArcadeChime.wav(rising: false))
         super.init(frame: frame)
         isMultipleTouchEnabled = true
         isExclusiveTouch = false
         backgroundColor = .clear
         isAccessibilityElement = true
-        accessibilityLabel = "Game pad"
+        accessibilityLabel = ArcadePadWords.label
+        accessibilityHint = ArcadePadWords.hint
         // A direct touch area that VoiceOver lets go of only after a
         // double-tap, and stays silent in (iOS 17, the app's deployment target).
         accessibilityTraits = .allowsDirectInteraction
-        accessibilityDirectTouchOptions = [.silentOnTouch, .requiresActivation]
-        lightTick.prepare()
-        firmTick.prepare()
-        softTick.prepare()
+        updateDirectTouch()
+        for generator in [lightTick, mediumTick, heavyTick, rigidTick, softTick] { generator.prepare() }
+        selectionTick.prepare()
+        notice.prepare()
+        risingChime?.prepareToPlay()
+        fallingChime?.prepareToPlay()
         updateAccessibility()
     }
 
@@ -78,22 +105,25 @@ final class ArcadeTouchPadView: UIView {
 
     func setTable(_ table: ArcadeTouchTable) {
         emit(recognizer.releaseAll())
+        let fit = recognizer.fit
         recognizer = ArcadeTouchRecognizer(table: table)
         recognizer.mode = mode
+        recognizer.fit = fit
     }
 
-    /// The words for play, when the game's own help has them.
-    func setPlayHint(_ hint: String?) {
-        playHint = hint
-        updateAccessibility()
+    /// Her touch timing over the table's numbers (nil: Relaxed, the table's own).
+    func setFit(_ fit: ArcadeTouchFit?) {
+        recognizer.fit = fit
     }
 
-    /// 'menu', 'fight' or 'pause' from the kit's mode event.
+    /// 'menu', 'fight', 'pause' or 'demo' from the kit's mode event.
     func setMode(_ newMode: String) {
         guard newMode != mode else { return }
         mode = newMode
         recognizer.mode = newMode
-        if hapticsOn { softTick.selectionChanged() }
+        // Back in a menu (or a demo), a fight that paused itself is over: nothing to say on return.
+        if newMode == "menu" || newMode == "demo" { hold.forgetPause() }
+        play([ArcadeBuzz(style: .soft, intensity: 0.5)])
         updateAccessibility()
     }
 
@@ -109,30 +139,106 @@ final class ArcadeTouchPadView: UIView {
         touchedOnce = false
     }
 
-    // MARK: VoiceOver
-
-    private func updateAccessibility() {
-        let fight = playHint ?? "Left half moves, right half acts."
-        accessibilityHint = "Double-tap to take hold of the pad; then touches go straight to the game. "
-            + (mode == "fight" ? fight : "Flick to move, double-tap to choose, two-finger tap to go back.")
-            + " Touch the strip at the top to get VoiceOver back."
-        accessibilityValue = mode == "fight" ? "Fight" : (mode == "pause" ? "Paused" : "Menu")
+    /// The kit's game cue ('telegraph', 'hurt', 'landed', 'blocked', 'reach', 'ko').
+    func feel(cue kind: String) {
+        play(ArcadeFeel.cue(kind))
     }
 
-    /// Focus moved to the strip (or anywhere else): nothing stays held down.
+    /// Haptics, if Pad haptics is on; later ones after their delay.
+    func play(_ buzzes: [ArcadeBuzz]) {
+        guard hapticsOn else { return }
+        for buzz in buzzes {
+            if buzz.afterMs > 0 {
+                let wait = UInt64(buzz.afterMs * 1_000_000)
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: wait)
+                    self?.buzzNow(buzz)
+                }
+            } else {
+                buzzNow(buzz)
+            }
+        }
+    }
+
+    private func buzzNow(_ buzz: ArcadeBuzz) {
+        guard hapticsOn else { return }
+        let strength = CGFloat(max(0, min(1, buzz.intensity)))
+        switch buzz.style {
+        case .selection: selectionTick.selectionChanged()
+        case .light: lightTick.impactOccurred(intensity: strength)
+        case .medium: mediumTick.impactOccurred(intensity: strength)
+        case .heavy: heavyTick.impactOccurred(intensity: strength)
+        case .rigid: rigidTick.impactOccurred(intensity: strength)
+        case .soft: softTick.impactOccurred(intensity: strength)
+        case .success: notice.notificationOccurred(.success)
+        case .warning: notice.notificationOccurred(.warning)
+        }
+    }
+
+    private func chime(rising: Bool) {
+        guard chimesOn, let player = rising ? risingChime : fallingChime else { return }
+        player.currentTime = 0
+        player.play()
+    }
+
+    // MARK: VoiceOver
+
+    private func updateDirectTouch() {
+        accessibilityDirectTouchOptions = takesHoldAtOnce ? [.silentOnTouch] : [.silentOnTouch, .requiresActivation]
+    }
+
+    private func updateAccessibility() {
+        accessibilityValue = ArcadePadWords.value(mode: mode)
+    }
+
+    /// The held state's effects: chimes and the buzz here, the rest for the host.
+    private func apply(_ effects: [ArcadePadEffect]) {
+        var forHost: [ArcadePadEffect] = []
+        for effect in effects {
+            switch effect {
+            case .risingChime: chime(rising: true)
+            case .fallingChime: chime(rising: false)
+            case .takenBuzz: play(ArcadeFeel.taken)
+            default: forHost.append(effect)
+            }
+        }
+        if !forHost.isEmpty { onHold?(forHost) }
+    }
+
+    override func accessibilityElementDidBecomeFocused() {
+        super.accessibilityElementDidBecomeFocused()
+        apply(hold.focus(now: now()))
+    }
+
+    /// Focus moved to the strip (or anywhere else): nothing stays held down,
+    /// a falling chime if the pad was held, the kit's voice waits, and a live fight pauses.
     override func accessibilityElementDidLoseFocus() {
         super.accessibilityElementDidLoseFocus()
         releaseAll()
+        let wasHeld = hold.held
+        apply(hold.lostFocus(now: now(), mode: mode, pauseOnLeave: pauseOnLeave))
+        if wasHeld { onPadLog?(false, "VoiceOver back") }
     }
 
-    /// The escape scrub on the pad (focused, not held): the strip's question, "Leave game?".
+    /// VoiceOver's activate on the pad: logged, and if iOS calls it on the
+    /// activating double-tap, the pad is taken here. It returns false, so
+    /// VoiceOver goes on as it would.
+    override func accessibilityActivate() -> Bool {
+        onActivate?()
+        let wasHeld = hold.held
+        apply(hold.activate(now: now()))
+        if !wasHeld && hold.held { onPadLog?(true, "activate") }
+        return false
+    }
+
+    /// The escape scrub on the pad (focused, not held): Back in menus, pause in fights.
     override func accessibilityPerformEscape() -> Bool {
         guard let onEscape else { return false }
         onEscape()
         return true
     }
 
-    /// The magic tap on the pad: pause, as on the strip.
+    /// The magic tap on the pad: Start (pause in fights).
     override func accessibilityPerformMagicTap() -> Bool {
         guard let onMagicTap else { return false }
         onMagicTap()
@@ -143,11 +249,20 @@ final class ArcadeTouchPadView: UIView {
 
     private func now() -> Double { CACurrentMediaTime() * 1000 }
 
+    /// Now on the pad's clock (the watchdog compares it with lastTouch).
+    var clock: Double { now() }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let t = now()
+        lastTouch = t
         if !touchedOnce {
             touchedOnce = true
             onFirstTouch?()
         }
+        // The first touch after focus takes the pad, and is still played.
+        let wasHeld = hold.held
+        apply(hold.touch(now: t, voiceOver: UIAccessibility.isVoiceOverRunning))
+        if !wasHeld && hold.held { onPadLog?(true, "first touch") }
         let width = Double(bounds.width)
         let height = Double(bounds.height)
         for touch in touches {
@@ -155,16 +270,18 @@ final class ArcadeTouchPadView: UIView {
             nextId += 1
             ids[ObjectIdentifier(touch)] = id
             let point = touch.location(in: self)
-            emit(recognizer.start(id: id, x: Double(point.x), y: Double(point.y), width: width, height: height, now: now()))
+            emit(recognizer.start(id: id, x: Double(point.x), y: Double(point.y), width: width, height: height, now: t))
         }
         startLink()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let t = now()
+        lastTouch = t
         for touch in touches {
             guard let id = ids[ObjectIdentifier(touch)] else { continue }
             let point = touch.location(in: self)
-            emit(recognizer.move(id: id, x: Double(point.x), y: Double(point.y), now: now()))
+            emit(recognizer.move(id: id, x: Double(point.x), y: Double(point.y), now: t))
         }
     }
 
@@ -177,9 +294,11 @@ final class ArcadeTouchPadView: UIView {
     }
 
     private func finish(_ touches: Set<UITouch>) {
+        let t = now()
+        lastTouch = t
         for touch in touches {
             guard let id = ids.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
-            emit(recognizer.end(id: id, now: now()))
+            emit(recognizer.end(id: id, now: t))
         }
         startLink()
     }
@@ -208,18 +327,26 @@ final class ArcadeTouchPadView: UIView {
         if newWindow == nil { releaseAll() }
     }
 
+    /// Haptics for the stick, every gesture by its action and every dud;
+    /// everything but the stick's own cues goes on (the reports too).
     private func emit(_ outputs: [ArcadeTouchOutput]) {
         guard !outputs.isEmpty else { return }
         var forPage: [ArcadeTouchOutput] = []
         for output in outputs {
-            if case .haptic(let cue) = output {
-                guard hapticsOn else { continue }
+            switch output {
+            case .haptic(let cue):
                 switch cue {
-                case .direction: lightTick.impactOccurred(intensity: 0.6)
-                case .fullPush: firmTick.impactOccurred()
-                case .hold: firmTick.impactOccurred(intensity: 0.7)
+                case .direction: play([ArcadeBuzz(style: .light, intensity: 0.6)])
+                case .fullPush: play([ArcadeBuzz(style: .rigid)])
+                case .hold: break   // the hold's own gesture report buzzes
                 }
-            } else {
+            case .gesture(let report):
+                play(ArcadeFeel.of(report))
+                forPage.append(output)
+            case .dud:
+                play(ArcadeFeel.dud)
+                forPage.append(output)
+            default:
                 forPage.append(output)
             }
         }
