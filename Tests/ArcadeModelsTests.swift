@@ -26,7 +26,7 @@ import CryptoKit
         soundAndScreenText()
         updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, several outputs at once, the setOutput and setSettings calls) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given), the screen's text and its title, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, USB-C earphones by any of theirs, several outputs at once, the setOutput and setSettings calls, the app's line when headphones go only where the game does not say the new route itself) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given, each Sound picker naming the route its choice is kept for, an added game's plain player keeping none so its settings and its pack's never cross), the screen's text, its title and why the list is empty, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -296,6 +296,9 @@ import CryptoKit
         check(route("USBAudio", "USB-C Digital AV Multiport Adapter") == .hdmi && route("USBAudio", "HDMI") == .hdmi
               && route("USBAudio", "LG TV") == .hdmi, "a USB output named as a display is a TV")
         check(route("USBAudio", "USB-C to 3.5 mm Headphone Jack Adapter") == .headphones, "a USB headphone adapter is headphones")
+        let earphones = ["Samsung Type-C Earphones", "USB-C Earphone", "Type-C Earbud", "USB-C earbuds", "Wired Buds"]
+        check(earphones.allSatisfy { route("USBAudio", $0) == ArcadeAudioRoute.headphones },
+              "USB-C earphones, earbuds and buds by any of their names are headphones")
         check(route("USBAudio", "USB Audio CODEC") == .other && route("USBAudio") == .other, "any other USB output is other")
         check(route("CarAudio", "My car") == .other && route("LineOut") == .other && route("Virtual") == .other && route("") == .other,
               "a car, a line out and anything unknown are other (Stereo plus calls)")
@@ -308,6 +311,22 @@ import CryptoKit
         check(ArcadeAudioRoute.of([ArcadeAudioPort(type: "BluetoothA2DPOutput", name: "Earbuds")]) == .bluetooth, "one Bluetooth output")
         check(ArcadeAudioRoute.speaker.spoken == "Phone speaker" && ArcadeAudioRoute.headphones.spoken == "Headphones"
               && ArcadeAudioRoute.hdmi.spoken == "TV or display", "routes in words for Settings")
+        check(ArcadeAudioRoute.speaker.inSentence == "the phone speaker" && ArcadeAudioRoute.headphones.inSentence == "headphones"
+              && ArcadeAudioRoute.hdmi.inSentence == "a TV or display" && ArcadeAudioRoute.allCases.allSatisfy { !$0.inSentence.isEmpty },
+              "and inside a sentence")
+
+        // Headphones (or AirPlay, or a TV) going away.
+        check(ArcadeAudioRoute.lostLine(fighting: true, gameSaysRoute: false) == "Headphones disconnected, so the game is paused."
+              && ArcadeAudioRoute.lostLine(fighting: false, gameSaysRoute: false) == "Headphones disconnected.",
+              "the plain player and an older game player hear the app's own line")
+        check(ArcadeAudioRoute.lostLine(fighting: true, gameSaysRoute: true) == nil
+              && ArcadeAudioRoute.lostLine(fighting: false, gameSaysRoute: true) == nil,
+              "a game that says the new route itself gets no app line on top of it (and its pause screen)")
+        check(ArcadeAudioRoute.gameSaysRoutes(page: ["outputLines": ["_doc": "said once", "speaker": "Phone speaker: positions are called out."]]),
+              "a game with its own words for a route change says it")
+        check(!ArcadeAudioRoute.gameSaysRoutes(page: ["outputLines": ["_doc": "said once", "speaker": "  "]])
+              && !ArcadeAudioRoute.gameSaysRoutes(page: ["defaults": ["sight": "none"]]) && !ArcadeAudioRoute.gameSaysRoutes(page: nil),
+              "only notes, blank lines or no words at all: the app says it")
 
         // The calls the page gets.
         let output = ArcadeJS.setOutput(.headphones)
@@ -397,6 +416,36 @@ import CryptoKit
             check(false, "a plain game id has a settings file")
         }
 
+        // An added game: its plain player and its accessibility pack share the
+        // save's id (the same cartridge save), never their settings.
+        let shared = "import-0123abcd"
+        check(ArcadeKitSettings.storeKey(saveId: shared, isPlain: false) == shared
+              && ArcadeKitSettings.storeKey(saveId: shared, isPlain: true) == nil,
+              "a game's page keeps its settings under the save's id; the plain player keeps none")
+        func startSettings(plain: Bool, readsAll: Bool = false) -> [String: Any] {
+            let saved = ArcadeKitSettings.storeKey(saveId: shared, isPlain: plain).flatMap { store.settings(gameId: $0) }
+            return ArcadeKitSettings.hostSettings(saved: saved, readsAll: readsAll, showPicture: false, hasSoundWorld: !plain)
+        }
+        func keepAs(plain: Bool, _ settings: [String: Any]) {
+            if let key = ArcadeKitSettings.storeKey(saveId: shared, isPlain: plain) { store.keepSettings(settings, gameId: key) }
+        }
+        // The plain player's 'settings' as its kit sends them at 'ready'
+        // (its own defaults, game volume 0.8, then setMode and setOutput).
+        keepAs(plain: true, ["sight": "none", "speechMode": "native", "gameVolume": 0.8, "soundWorld": "off", "calls": "all",
+                             "output": "speaker"])
+        check(store.settings(gameId: shared) == nil, "the plain player's settings are never kept")
+        let packFirst = startSettings(plain: false)
+        check(packFirst["gameVolume"] == nil && packFirst["output"] == nil
+              && ArcadeKitSettings.json(packFirst) == #"{"calls":"all","headphonesWorld":"stereo","soundWorld":"stereo"}"#,
+              "so its game volume never reaches the pack's page, which starts on its own defaults")
+        keepAs(plain: false, ["gameVolume": 0.6, "soundWorld": "3d", "calls": "urgent", "output": "headphones", "headphonesWorld": "3d"])
+        let packAgain = startSettings(plain: false)
+        check(abs(((packAgain["gameVolume"] as? Double) ?? 0) - 0.6) < 0.000_001 && (packAgain["soundWorld"] as? String) == "3d",
+              "the pack's page gets its own settings back")
+        check(ArcadeKitSettings.json(startSettings(plain: true)) == "{}"
+              && ArcadeKitSettings.json(startSettings(plain: true, readsAll: true)) == #"{"speechMode":"native"}"#,
+              "and the plain player never gets the pack's: exactly what it got before")
+
         // What the Settings sheet shows.
         let sound = ArcadeKitSound(["soundWorld": "3D", "calls": "Urgent", "output": "speaker"])
         check(sound?.soundWorld == "3d" && sound?.calls == "urgent" && sound?.output == .speaker, "the kit's sound, read")
@@ -404,6 +453,14 @@ import CryptoKit
         let quiet = ArcadeKitSound(["soundWorld": "off", "calls": "", "output": ""])
         check(quiet?.calls == "all" && quiet?.output == nil, "calls default to all; no route yet")
         check(ArcadeKitSound(kept) == ArcadeKitSound(["soundWorld": "off", "calls": "urgent", "output": "speaker"]), "from the whole settings too")
+        check(sound?.label("Sound world") == "Sound world on the phone speaker"
+              && ArcadeKitSound(["soundWorld": "3d", "output": "headphones"])?.label("Position calls") == "Position calls on headphones"
+              && ArcadeKitSound(["soundWorld": "stereo", "output": "hdmi"])?.label("Sound world") == "Sound world on a TV or display",
+              "each picker names the way of listening its choice is kept for")
+        check(quiet?.label("Sound world") == "Sound world", "no route yet: the plain name")
+        check(ArcadeKitSound.footer.hasPrefix("Each way of listening keeps its own choice.")
+              && ArcadeKitSound.footer.contains("On the phone speaker the game starts with its own sound plus position calls."),
+              "the footer says why a choice is not there on another output")
 
         // The screen's text.
         let text = ArcadeScreenText(detail: ["screen": "main menu", "lines": ["Quest", "  ", 7, "Practice "] as [Any]])
@@ -417,6 +474,13 @@ import CryptoKit
         check(ArcadeScreenText(detail: ["screen": "credits", "lines": Array(repeating: "Name", count: 1_000)])?.lines.count
               == ArcadeScreenText.maxLines, "a runaway list is cut")
         check(ArcadeScreenText.emptyLine == "No screen text.", "the empty state, as the kit says it")
+        check(ArcadeScreenText.sheetLine(text, pageReady: true) == nil && ArcadeScreenText.sheetLine(text, pageReady: false) == nil,
+              "lines to list: the sheet lists them")
+        check(ArcadeScreenText.sheetLine(none, pageReady: true) == ArcadeScreenText.emptyLine, "an empty 'lines' event: no screen text")
+        check(ArcadeScreenText.sheetLine(nil, pageReady: true) == ArcadeScreenText.olderPlayerLine
+              && ArcadeScreenText.olderPlayerLine.hasPrefix("This version of the game player cannot list the screen's text."),
+              "ready with no 'lines' event: a game player older than the list, not an empty screen")
+        check(ArcadeScreenText.sheetLine(nil, pageReady: false) == ArcadeScreenText.notStartedLine, "not started yet")
 
         // The kit's telemetry (Oct 19 2026: its frame time and the emulator's dropouts).
         var telemetry = ArcadeTelemetry()

@@ -208,8 +208,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         didSet {
             UserDefaults.standard.set(showPicture, forKey: ArcadeKeysStore.picture)
             // Oct 19 2026: the kit draws a small picture in No-vision mode
-            // unless told the full one is wanted (a sighted watcher).
-            if showPicture != oldValue { evaluate(ArcadeJS.setSettings(ArcadeKitSettings.picture(full: showPicture))) }
+            // unless told the full one is wanted (a sighted watcher). Only a
+            // ready page is told: one still starting may not have
+            // window.revivalKit yet, and its 'ready' sends the picture if it
+            // differs from the one it started with (pictureSent).
+            if showPicture != oldValue && pageReady { sendPicture() }
         }
     }
     /// Oct 19 2026: the sound world, position calls and route the kit is
@@ -290,6 +293,12 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private var routeCheck: Task<Void, Never>?
     /// The game's own names for its screens (profile.screenNames), for the Screen text title.
     private var screenNames: [String: String] = [:]
+    /// The game has its own words for a route change (profile
+    /// page.outputLines), which a kit told the route says itself.
+    private var gameSaysRoutes = false
+    /// Show the game picture as the page last had it: the value its
+    /// document-start script carried, or the last one sent to it.
+    private var pictureSent: Bool?
 
     init(launch: ArcadeLaunch) {
         self.launch = launch
@@ -307,7 +316,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         telemetry.version = launch.record.version
         telemetry.player = launch.record.kitVersion ?? ""
         telemetry.newerPlayerReady = launch.newerPlayer != nil
-        kitSettings = saves?.settings(gameId: launch.saveId)
+        kitSettings = settingsKey.flatMap { saves?.settings(gameId: $0) }
         readProfile()
     }
 
@@ -318,6 +327,13 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     /// A game added from Files with no accessibility pack, in the kit's plain player.
     var isPlain: Bool { launch.isPlain }
+
+    /// Where the kit's settings are kept: under the save's id for a game's
+    /// page, nowhere for the plain player (an added game's plain player and
+    /// its accessibility pack share the save's id, not their settings).
+    private var settingsKey: String? {
+        ArcadeKitSettings.storeKey(saveId: launch.saveId, isPlain: isPlain)
+    }
 
     /// The game's own gesture and controller tables, from profile.json in its pack.
     private func readProfile() {
@@ -336,6 +352,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if let names = root["screenNames"] as? [String: Any] {
             screenNames = names.compactMapValues { $0 as? String }
         }
+        gameSaysRoutes = ArcadeAudioRoute.gameSaysRoutes(page: root["page"] as? [String: Any])
         if let page = root["page"] as? [String: Any], let defaults = page["defaults"] as? [String: Any],
            let speech = defaults["speechMode"] as? String, !speech.isEmpty, speech != "native" {
             // Passed on as the profile has it: the kit's own setMode turns its
@@ -515,6 +532,9 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         // Show the game picture, and headphones starting on Stereo.
         let settings = ArcadeKitSettings.hostSettings(saved: kitSettings, readsAll: voiceOverReadsAll,
                                                       showPicture: showPicture, hasSoundWorld: !isPlain)
+        // The picture this page starts with: 'ready' sends it again if she
+        // changed it while the page was starting.
+        pictureSent = showPicture
         // Before her first press, the input at hand; after a restart, the one she used last.
         let type = pageInputType ?? ArcadeInput.connectedType()
         pageInputType = type
@@ -662,8 +682,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             evaluate(ArcadeJS.setMode(voiceOverReadsAll ? "native" : defaultSpeechMode))
             if let type = pageInputType { evaluate(ArcadeJS.setInputType(type)) }
             wakeAudio(force: true)
-            // Where the sound goes, once per page (then on every route change).
             pageReady = true
+            // Show the game picture, if she changed it while the page was starting.
+            if pictureSent != showPicture { sendPicture() }
+            // Where the sound goes, once per page (then on every route change).
             sendRoute()
         case "settings":
             if let detail { keepKitSettings(detail) }
@@ -826,12 +848,21 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     /// The kit's 'settings' (all of them, whenever they change): kept as
     /// given, routes included, for the next start, and shown in Settings.
+    /// The plain player's are only read for how the game ran: it keeps none
+    /// (settingsKey), so it starts every time with the app's switches alone.
     private func keepKitSettings(_ settings: [String: Any]) {
-        kitSettings = settings
         if let sound = ArcadeKitSound(settings) { kitSound = sound }
-        if saves?.keepSettings(settings, gameId: launch.saveId) != true {
+        guard let key = settingsKey else { return }
+        kitSettings = settings
+        if saves?.keepSettings(settings, gameId: key) != true {
             telemetry.note(error: "the game's settings could not be kept")
         }
+    }
+
+    /// Show the game picture to a ready page (revivalKit.setSettings).
+    private func sendPicture() {
+        pictureSent = showPicture
+        evaluate(ArcadeJS.setSettings(ArcadeKitSettings.picture(full: showPicture)))
     }
 
     /// The audio route changed (headphones in or out, AirPlay, a car): the
@@ -869,15 +900,18 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
 
     /// Sound world from the game's Settings: 'stereo', '3d' or 'off'. The
     /// kit keeps it for the route in use; its 'settings' event confirms.
+    /// Only on a ready page, which has been told the route: before that the
+    /// kit would keep the choice for the route of the last session.
     func chooseSoundWorld(_ world: String) {
-        guard let world = ArcadeKitSettings.soundWorld(world), kitSound != nil, kitSound?.soundWorld != world else { return }
+        guard pageReady, let world = ArcadeKitSettings.soundWorld(world), kitSound != nil,
+              kitSound?.soundWorld != world else { return }
         kitSound?.soundWorld = world
         evaluate(ArcadeJS.setSettings(["soundWorld": world]))
     }
 
     /// Position calls from the game's Settings: 'all', 'urgent' or 'off'.
     func chooseCalls(_ calls: String) {
-        guard let calls = ArcadeKitSettings.calls(calls), kitSound != nil, kitSound?.calls != calls else { return }
+        guard pageReady, let calls = ArcadeKitSettings.calls(calls), kitSound != nil, kitSound?.calls != calls else { return }
         kitSound?.calls = calls
         evaluate(ArcadeJS.setSettings(["calls": calls]))
     }
@@ -1005,8 +1039,18 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func headphonesGone() {
-        if mode == "fight" { pauseGame() }
-        speak("Headphones disconnected" + (mode == "fight" ? ", so the game is paused." : "."), urgent: true, flush: true)
+        let fighting = mode == "fight"
+        if fighting { pauseGame() }
+        // Oct 19 2026: a game page told the route (its kit answered
+        // setOutput) with its own words for it says the new route itself, in
+        // the game's voice, once the route settles, and reads its pause
+        // screen: the app's line would be said on top of both, and it said
+        // "Headphones" when AirPlay or a TV went too. The plain player and an
+        // older game player still hear the app's line.
+        let gameSaysRoute = !isPlain && pageReady && kitSound != nil && gameSaysRoutes
+        if let line = ArcadeAudioRoute.lostLine(fighting: fighting, gameSaysRoute: gameSaysRoute) {
+            speak(line, urgent: true, flush: true)
+        }
     }
 
     private func mediaReset() {
@@ -1415,23 +1459,24 @@ struct ArcadeGameSettingsView: View {
     }
 
     /// Oct 19 2026: the kit's sound world and position calls, for whatever
-    /// she is listening on now (the kit keeps a choice per route). Shown as
-    /// the running page says them; an older game player has neither.
+    /// she is listening on now (the kit keeps a choice per route, and each
+    /// picker names it). Shown once the page is ready and has been told the
+    /// route, as the running page says them; an older game player has neither.
     @ViewBuilder
     private var soundSection: some View {
         Section {
-            if let sound = host.kitSound {
+            if host.pageReady, let sound = host.kitSound {
                 if let output = sound.output {
                     LabeledContent("Listening on", value: output.spoken)
                 }
-                Picker("Sound world", selection: Binding(
+                Picker(sound.label("Sound world"), selection: Binding(
                     get: { host.kitSound?.soundWorld ?? "stereo" },
                     set: { host.chooseSoundWorld($0) })) {
                     Text("Stereo").tag("stereo")
                     Text("3D sound, uses more battery").tag("3d")
                     Text("The game's own sound").tag("off")
                 }
-                Picker("Position calls", selection: Binding(
+                Picker(sound.label("Position calls"), selection: Binding(
                     get: { host.kitSound?.calls ?? "all" },
                     set: { host.chooseCalls($0) })) {
                     Text("All").tag("all")
@@ -1445,14 +1490,16 @@ struct ArcadeGameSettingsView: View {
         } header: {
             Text("Sound")
         } footer: {
-            Text("On the phone speaker, the game's own sound plus position calls is used automatically.")
+            Text(ArcadeKitSound.footer)
         }
     }
 }
 
 /// Oct 19 2026: every line of the game's screen, from the kit's latest
 /// 'lines' event, as plain rows to swipe through with VoiceOver; the title is
-/// the screen's name. It follows the game while it is open.
+/// the screen's name. It follows the game while it is open. With no rows it
+/// says why: not started yet, a game player older than the list, or a
+/// screen with no text (ArcadeScreenText.sheetLine).
 struct ArcadeScreenTextView: View {
     @ObservedObject var host: ArcadeGameHost
     @Environment(\.dismiss) private var dismiss
@@ -1460,12 +1507,12 @@ struct ArcadeScreenTextView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let text = host.screenText, !text.lines.isEmpty {
+                if let line = ArcadeScreenText.sheetLine(host.screenText, pageReady: host.pageReady) {
+                    Text(line)
+                } else if let text = host.screenText {
                     ForEach(Array(text.lines.enumerated()), id: \.offset) { _, line in
                         Text(line)
                     }
-                } else {
-                    Text(ArcadeScreenText.emptyLine)
                 }
             }
             .navigationTitle(host.screenTitle)

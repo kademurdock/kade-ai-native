@@ -1195,6 +1195,42 @@ enum ArcadeAudioRoute: String, CaseIterable {
         }
     }
 
+    /// The same inside a sentence ("Sound world on headphones"): the kit
+    /// keeps a sound world and calls choice for each of these.
+    var inSentence: String {
+        switch self {
+        case .speaker: return "the phone speaker"
+        case .headphones: return "headphones"
+        case .bluetooth: return "Bluetooth"
+        case .airplay: return "AirPlay"
+        case .hdmi: return "a TV or display"
+        case .other: return "another output"
+        }
+    }
+
+    /// The game page's own words for a route change (profile page.outputLines,
+    /// one each for the speaker, headphones in each sound world, a TV and
+    /// anything else; keys starting "_" are notes): true when it has any,
+    /// so a kit told the route (setOutput) says the new one itself.
+    static func gameSaysRoutes(page: [String: Any]?) -> Bool {
+        guard let lines = page?["outputLines"] as? [String: Any] else { return false }
+        return lines.contains { (entry: (key: String, value: Any)) -> Bool in
+            let line = ((entry.value as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return !entry.key.hasPrefix("_") && !line.isEmpty
+        }
+    }
+
+    /// What the app says when the device the sound was going to goes away
+    /// (headphones unplugged, AirPlay or a TV gone; a fight is paused first).
+    /// Nil when the game itself says the new route in its own voice (a kit
+    /// told the route whose game has the words for it) and reads its own
+    /// pause screen: a line from the app on top of both would overlap them.
+    /// The plain player and an older game player still get the app's line.
+    static func lostLine(fighting: Bool, gameSaysRoute: Bool) -> String? {
+        if gameSaysRoute { return nil }
+        return "Headphones disconnected" + (fighting ? ", so the game is paused." : ".")
+    }
+
     /// One port's route. The built-in speaker and the earpiece are the
     /// speaker; wired headphones (a headset's microphone is an input, never
     /// an output) are headphones; A2DP, LE and hands-free Bluetooth are
@@ -1213,7 +1249,10 @@ enum ArcadeAudioRoute: String, CaseIterable {
             let words = Set(port.name.lowercased()
                 .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
             if !words.isDisjoint(with: ["hdmi", "displayport", "display", "monitor", "tv", "av"]) { return .hdmi }
-            if !words.isDisjoint(with: ["headphone", "headphones", "headset", "earpods", "earbuds"]) { return .headphones }
+            // USB-C earphones name themselves in several ways ("Type-C
+            // Earphones", "USB-C Earbud", "... Buds"): all of them are headphones.
+            if !words.isDisjoint(with: ["headphone", "headphones", "headset", "earpods", "earbuds",
+                                        "earphone", "earphones", "earbud", "buds"]) { return .headphones }
             return .other
         default: return .other
         }
@@ -1245,6 +1284,19 @@ enum ArcadeKitSettings {
     static func calls(_ value: Any?) -> String? {
         guard let text = (value as? String)?.lowercased(), callChoices.contains(text) else { return nil }
         return text
+    }
+
+    /// The name a player's kit settings are kept under (ArcadeSaveStore
+    /// keepSettings and settings), or nil when they are not kept at all.
+    /// A game's page keeps them under its save's id. The plain player keeps
+    /// none: a game added from Files runs in it and in its accessibility
+    /// pack under the same save id (the game's own save is the same
+    /// cartridge), but the plain player's settings (its game volume 0.8,
+    /// its sound world) must never reach the pack's page, nor the pack's
+    /// reach the plain player, which has no choices of its own to keep and
+    /// so starts every time with exactly the app's switches.
+    static func storeKey(saveId: String, isPlain: Bool) -> String? {
+        isPlain ? nil : saveId
     }
 
     /// revivalKitHost.settings for the next page start: the kit's last
@@ -1308,13 +1360,40 @@ struct ArcadeKitSound: Equatable {
         calls = ArcadeKitSettings.calls(settings["calls"]) ?? "all"
         output = (settings["output"] as? String).flatMap { ArcadeAudioRoute(rawValue: $0.lowercased()) }
     }
+
+    /// A Sound picker's label naming the way of listening its choice is
+    /// kept for ("Sound world on headphones"), as the kit keeps one per
+    /// route; the plain name before the route is known.
+    func label(_ name: String) -> String {
+        guard let output else { return name }
+        return name + " on " + output.inSentence
+    }
+
+    /// The Sound section's footer: why a choice made on one way of
+    /// listening is not there on another, and what the speaker does.
+    static let footer = "Each way of listening keeps its own choice. On the phone speaker the game starts with its own sound plus position calls."
 }
 
 /// The game screen's text, from the kit's 'lines' event ({screen, lines}),
 /// sent whenever the screen's text changes: the Screen text sheet lists it.
 struct ArcadeScreenText: Equatable {
     static let emptyLine = "No screen text."
+    /// The page is up but its game player never sent 'lines' (the kit
+    /// sends them on its first frame after 'ready'): it is older than the
+    /// Screen text list, not a screen with nothing on it.
+    static let olderPlayerLine = "This version of the game player cannot list the screen's text. Update the game to get it."
+    static let notStartedLine = "The screen's text appears once the game has started."
     static let defaultTitle = "Screen text"
+
+    /// What the sheet says instead of rows, or nil when it has rows to
+    /// list: before the page is ready, not started yet; ready with no
+    /// 'lines' event, an older game player; an empty 'lines' event, a
+    /// screen with no text.
+    static func sheetLine(_ text: ArcadeScreenText?, pageReady: Bool) -> String? {
+        if let text { return text.lines.isEmpty ? emptyLine : nil }
+        return pageReady ? olderPlayerLine : notStartedLine
+    }
+
     /// More than any game screen holds; a runaway list is cut here.
     static let maxLines = 400
 
