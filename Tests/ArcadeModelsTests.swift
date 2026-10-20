@@ -27,7 +27,7 @@ import CryptoKit
         soundAndScreenText()
         updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), touch play (Oct 20 2026: the v2 tables with Easy and Full fight tiers, the first-timer vectors and the seeded random sets, VoiceOver-style menus, the scrub, flicks out of a block, repeats, duds with their reasons, Relaxed, Quick and Fitted to me timing, a haptic for every gesture and game cue, the one speech queue with its acknowledgements and time-outs, the pad's held state, words and watchdog, How to play, Pad practice, the chimes and the touch trace), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, USB-C earphones by any of theirs, several outputs at once, the setOutput and setSettings calls, the app's line when headphones go only where the game does not say the new route itself) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given, each Sound picker naming the route its choice is kept for, an added game's plain player keeping none so its settings and its pack's never cross), the screen's text, its title and why the list is empty, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), touch play (Oct 20 2026: the v2 tables with Easy and Full fight tiers, the recognizer as a step-for-step port of the kit's v2 run on the kit's own shared vectors (the first-timer set and menus, and its whole file with KIT_TOUCH_VECTORS) and seeded random sets, its 'touch-finger' source, VoiceOver-style menus, the scrub, flicks out of a block, repeats, duds with their reasons, Relaxed, Quick and Fitted to me timing, a haptic for every gesture and game cue, the one speech queue with its acknowledgements and time-outs, the pad's held state, words and watchdog, How to play, Pad practice, the chimes and the touch trace), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, Play's question for a newer game too, kits nothing uses swept, and the start failure line naming it), kept saves, where the sound goes (every port type to the kit's six route words, a USB output by its name, USB-C earphones by any of theirs, several outputs at once, the setOutput and setSettings calls, the app's line when headphones go only where the game does not say the new route itself) and the kit's settings kept beside the save and given back under the app's own switches (headphones starting on Stereo, its per-route choices kept as given, each Sound picker naming the route its choice is kept for, an added game's plain player keeping none so its settings and its pack's never cross), the screen's text, its title and why the list is empty, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -758,7 +758,8 @@ import CryptoKit
         let customMenu: [String: Any] = ["tap1": ["info": "repeat"]]
         let customJSON: [String: Any] = ["flickPx": 30, "menu": customMenu]
         let custom = ArcadeTouchTable(json: customJSON)
-        check(custom.flickPx == 30 && custom.tapMs == 250 && custom.menu.taps[1] == .info("repeat"), "a game's own table overrides the defaults")
+        check(custom.flickPx == 30 && custom.tapMs == 450 && custom.menu.taps[1] == .info("repeat"),
+              "a game's own table overrides the defaults (the kit's v2 numbers since Oct 20 2026)")
         check(table.menu.holds[1] == .info("repeat") && table.menu.holdTimes[1] == 1000, "the menu's repeat hold has its own second")
         let crouchState: [String: Any] = ["buttons": ["Z"]]
         let timedHold: [String: Any] = ["hold": crouchState, "ms": 400]
@@ -945,32 +946,25 @@ import CryptoKit
         check(guarded.end(id: 1, now: 500) == [.pad(source: "touch-hold-right", state: nil)] && guarded.isIdle,
               "lifting the right thumb stops the block")
 
-        // Two thumbs tapping together are a left tap and a right tap, never a two-finger tap.
+        // Two thumbs tapping together are a left tap and a right tap, never a two-finger tap. Since the
+        // kit's recognizer v2 (Oct 20 2026) each goes out as it lifts: only three or more fingers over
+        // the zones are one whole-screen gesture.
         var thumbs = legacyPad()
         thumbs.mode = "fight"
         _ = thumbs.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = thumbs.start(id: 2, x: 300, y: 300, width: 400, now: 10)
-        check(thumbs.end(id: 1, now: 60).isEmpty, "a left tap waits while it might be part of a three-finger pause")
-        check(thumbs.end(id: 2, now: 70) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["A"])),
-                                             .pad(source: "touch-p2", state: ArcadePadState(buttons: ["R"]))],
-              "then both taps happen: change target and jump")
+        check(thumbs.end(id: 1, now: 60) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["A"]))], "the left tap changes target")
+        check(thumbs.end(id: 2, now: 70) == [.pad(source: "touch-p2", state: ArcadePadState(buttons: ["R"]))], "and the right one jumps")
 
-        // A held-back tap goes out once the three-finger tap is no longer possible.
+        // A right tap beside a resting left thumb jumps at once, and the thumb still walks after it.
         var waiting = legacyPad()
         waiting.mode = "fight"
         _ = waiting.start(id: 1, x: 50, y: 300, width: 400, now: 0)
         _ = waiting.start(id: 2, x: 300, y: 300, width: 400, now: 50)
-        check(waiting.end(id: 2, now: 100).isEmpty, "a right tap beside a resting left thumb waits a moment")
-        check(waiting.advance(to: 249).isEmpty, "at most until the tap time from the first finger")
-        check(waiting.advance(to: 250) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["R"]))], "then the jump goes out")
-        var moved = legacyPad()
-        moved.mode = "fight"
-        _ = moved.start(id: 1, x: 50, y: 300, width: 400, now: 0)
-        _ = moved.start(id: 2, x: 300, y: 300, width: 400, now: 50)
-        _ = moved.end(id: 2, now: 100)
-        check(moved.move(id: 1, x: 50, y: 330, now: 120) == [.pad(source: "touch-stick-left", state: ArcadePadState(sy: 0.5)), .haptic(.direction),
-                                                             .pad(source: "touch-p1", state: ArcadePadState(buttons: ["R"]))],
-              "or at once when the left thumb starts to move")
+        check(waiting.end(id: 2, now: 100) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["R"]))],
+              "a right tap beside a resting left thumb jumps as it lifts")
+        check(waiting.move(id: 1, x: 50, y: 330, now: 120) == [.pad(source: "touch-stick-left", state: ArcadePadState(sy: 0.5)), .haptic(.direction)],
+              "and the left thumb walks after it")
 
         // A still two-finger hold on the left repeats the last line (its own one-second time).
         var again = legacyPad()
@@ -1191,8 +1185,8 @@ extension ArcadeModelsTests {
         _ = start.start(id: 3, x: 300, y: 700, width: 400, height: 800, now: 10)
         _ = start.end(id: 1, now: 60)
         check(start.end(id: 2, now: 65) == [.pad(source: "touch-press-a", state: nil)], "A goes as its finger lifts")
-        check(start.end(id: 3, now: 70) == [.pad(source: "touch-press-b", state: nil), .pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"]))],
-              "and a quick three-finger tap across the zones is Start")
+        check(start.end(id: 3, now: 70) == [.pad(source: "touch-p1", state: ArcadePadState(buttons: ["START"])), .pad(source: "touch-press-b", state: nil)],
+              "and a quick three-finger tap across the zones is Start (the kit's order: the whole-screen tap, then B lets go)")
         var menu = plainPad(touch)
         check(menu.start(id: 1, x: 300, y: 100, width: 400, height: 800, now: 0).isEmpty, "outside play (paused) nothing is pressed")
         check(menu.releaseAll().isEmpty, "and nothing is held")

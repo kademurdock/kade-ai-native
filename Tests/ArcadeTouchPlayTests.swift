@@ -1,11 +1,13 @@
 import Foundation
 
-// Touch play (Oct 20 2026): the game pad's v2 recognizer (the Easy fight
-// tier, VoiceOver-style menus, the scrub, flicks out of a block, duds with
-// their reasons, her touch timing), the haptics for every gesture, the one
-// speech queue, the pad's held state and words, the watchdog, How to play,
-// Pad practice, the chimes and the touch trace. Compiled with the Arcade's
-// other checks by run-arcade-tests.sh.
+// Touch play (Oct 20 2026): the game pad's v2 recognizer (a port of the
+// kit's core/touch.js v2, run against the kit's shared vectors: the Easy
+// fight tier, VoiceOver-style menus, the scrub, flicks out of a block, duds
+// with their reasons, her touch timing), the haptics for every gesture, the
+// one speech queue, the pad's held state and words, the watchdog, How to
+// play, Pad practice, the chimes and the touch trace. Compiled with the
+// Arcade's other checks by run-arcade-tests.sh. With KIT_TOUCH_VECTORS set to
+// the kit's core/test/touch_vectors.json, every vector in it runs too.
 
 extension ArcadeModelsTests {
     // MARK: Helpers
@@ -30,174 +32,238 @@ extension ArcadeModelsTests {
 
     static let v1Table = ArcadeTouchTable(json: (try? JSONSerialization.jsonObject(with: Data(v1JSON.utf8))) as? [String: Any])
 
-    /// The Oct 18 recognizer's outputs: the v1 table, no reports.
+    /// The Oct 18 recognizer's outputs: the v1 table, no reports, no finger source.
     static func legacyPad() -> ArcadeTouchRecognizer {
         var pad = ArcadeTouchRecognizer(table: v1Table)
         pad.reports = false
+        pad.fingerSource = false
         return pad
     }
 
-    /// A table's plain outputs (the plain player's checks), no reports.
+    /// A table's plain outputs (the plain player's checks): no reports, no finger source.
     static func plainPad(_ table: ArcadeTouchTable) -> ArcadeTouchRecognizer {
         var pad = ArcadeTouchRecognizer(table: table)
         pad.reports = false
+        pad.fingerSource = false
         return pad
     }
 
     static func near(_ a: Double, _ b: Double, _ give: Double = 0.001) -> Bool { abs(a - b) <= give }
 
-    /// What a run did, in words: a pulse by its buttons ("CL") or its step
-    /// ("right"), a held hold on and off ("block on", "block off"), an info key ("info here").
-    static func acts(_ outputs: [ArcadeTouchOutput]) -> [String] {
-        var words: [String] = []
-        var held: [String: String] = [:]
-        for output in outputs {
-            switch output {
-            case .pad(let source, let state):
-                if source.hasPrefix("touch-p"), Int(source.dropFirst(7)) != nil {
-                    guard let state else { continue }
-                    words.append(state.buttons.isEmpty ? ArcadeGestureWords.stateWords(state) : state.buttons.joined(separator: "+"))
-                } else if source.hasPrefix("touch-hold") {
-                    if let state {
-                        let name = state.buttons.joined(separator: "+")
-                        held[source] = name
-                        words.append(name + " on")
-                    } else {
-                        words.append((held[source] ?? "hold") + " off")
-                    }
+    /// One gesture in the kit's vector shape (core/test/touchvec.js): fingers
+    /// land at `at` (each `landGap` later, 40 pt apart from x), move along the
+    /// path's [ms, dx, dy] waypoints and lift at `at + up`.
+    static func step(at: Double = 0, fingers: Int = 1, x: Double = 200, landGap: Double = 0, path: [[Double]] = [],
+                     up: Double) -> [String: Any] {
+        ["at": at, "fingers": fingers, "x": x, "landGapMs": landGap, "path": path, "upAt": up]
+    }
+
+    /// A run: the outputs as the kit's runner writes them, with their times, and every raw output.
+    struct TouchRun {
+        var timed: [(out: String, t: Double)] = []
+        var raw: [ArcadeTouchOutput] = []
+
+        var words: [String] { timed.map { $0.out } }
+
+        var shown: String { timed.map { $0.out + "@" + String(Int($0.t.rounded())) }.joined(separator: ", ") }
+
+        var reports: [ArcadeGestureReport] {
+            raw.compactMap { (output: ArcadeTouchOutput) -> ArcadeGestureReport? in
+                if case .gesture(let report) = output { return report }
+                return nil
+            }
+        }
+
+        var lifts: [ArcadeLiftReport] {
+            raw.compactMap { (output: ArcadeTouchOutput) -> ArcadeLiftReport? in
+                if case .lifted(let lift) = output { return lift }
+                return nil
+            }
+        }
+    }
+
+    /// The kit's touchvec.js expand(): each step's fingers land, move (a
+    /// sample every stepMs, sent only when the position changed) and lift;
+    /// every event in time order, ties in the order they were made.
+    static func expand(_ steps: [[String: Any]]) -> [(t: Double, type: String, id: Int, x: Double, y: Double)] {
+        var events: [(t: Double, type: String, id: Int, x: Double, y: Double, k: Int)] = []
+        for (index, step) in steps.enumerated() {
+            let n = Int(arcadeJSONNumber(step["fingers"]) ?? 1)
+            let x = arcadeJSONNumber(step["x"]) ?? 200
+            let y = arcadeJSONNumber(step["y"]) ?? 400
+            let spread = arcadeJSONNumber(step["spread"]) ?? 40
+            let at = arcadeJSONNumber(step["at"]) ?? 0
+            let land = arcadeJSONNumber(step["landGapMs"]) ?? 0
+            let liftGap = arcadeJSONNumber(step["liftGapMs"]) ?? 0
+            let every = arcadeJSONNumber(step["stepMs"]) ?? 16
+            let up = arcadeJSONNumber(step["upAt"]) ?? 0
+            for i in 0..<n {
+                events.append((t: at + Double(i) * land, type: "down", id: index * 10 + i, x: x + Double(i) * spread, y: y, k: events.count))
+            }
+            var points: [[Double]] = [[0, 0, 0]]
+            for case let point as [Any] in (step["path"] as? [Any]) ?? [] {
+                let numbers = point.compactMap { arcadeJSONNumber($0) }
+                if numbers.count >= 3 { points.append(numbers) }
+            }
+            var lastX = 0.0
+            var lastY = 0.0
+            func sample(_ t: Double, _ dx: Double, _ dy: Double) {
+                if dx == lastX && dy == lastY { return }
+                lastX = dx
+                lastY = dy
+                for i in 0..<n {
+                    events.append((t: at + t, type: "move", id: index * 10 + i, x: x + Double(i) * spread + dx, y: y + dy, k: events.count))
                 }
-            case .info(let what):
-                words.append("info " + what)
-            default:
-                break
+            }
+            for k in 1..<points.count {
+                let a = points[k - 1]
+                let b = points[k]
+                var t = a[0] + every
+                while t < b[0] {
+                    let f = (t - a[0]) / (b[0] - a[0])
+                    sample(t, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f)
+                    t += every
+                }
+                sample(b[0], b[1], b[2])
+            }
+            for i in 0..<n {
+                events.append((t: at + up + Double(i) * liftGap, type: "up", id: index * 10 + i, x: 0, y: 0, k: events.count))
             }
         }
-        return words
+        let sorted = events.sorted { ($0.t, $0.k) < ($1.t, $1.k) }
+        return sorted.map { (t: $0.t, type: $0.type, id: $0.id, x: $0.x, y: $0.y) }
     }
 
-    static func gestureReports(_ outputs: [ArcadeTouchOutput]) -> [ArcadeGestureReport] {
-        outputs.compactMap { (output: ArcadeTouchOutput) -> ArcadeGestureReport? in
-            if case .gesture(let report) = output { return report }
-            return nil
-        }
+    /// A pulse in a word, as the kit's actionOf writes it: its buttons, else its step.
+    static func pulseWord(_ state: ArcadePadState) -> String {
+        if !state.buttons.isEmpty { return state.buttons.joined(separator: "+") }
+        if state.sx > 0 { return "right" }
+        if state.sx < 0 { return "left" }
+        if state.sy > 0 { return "down" }
+        if state.sy < 0 { return "up" }
+        return ""
     }
 
-    static func dudReasons(_ outputs: [ArcadeTouchOutput]) -> [ArcadeDudReason] {
-        outputs.compactMap { (output: ArcadeTouchOutput) -> ArcadeDudReason? in
-            if case .dud(let dud) = output { return dud.reason }
-            return nil
-        }
-    }
-
-    // MARK: Shared touch vectors
-
-    /// One finger: down at (x, y) at t0, a straight slide of (dx, dy) from
-    /// `from` over `over` ms, sampled every 16 ms, up at `up`.
-    static func finger(_ id: Int = 1, x: Double = 200, y: Double = 400, t0: Double = 0, dx: Double = 0, dy: Double = 0,
-                       from: Double? = nil, over: Double = 0, up: Double) -> [[Any]] {
-        let start = from ?? t0
-        func at(_ time: Double) -> (Double, Double) {
-            guard dx != 0 || dy != 0 else { return (x, y) }
-            let p = over <= 0 ? (time >= start ? 1.0 : 0.0) : min(1, max(0, (time - start) / over))
-            return (x + dx * p, y + dy * p)
-        }
-        var events: [[Any]] = [[t0, "down", id, x, y]]
-        var t = t0 + 16
-        while t < up {
-            let point = at(t)
-            events.append([t, "move", id, point.0, point.1])
-            t += 16
-        }
-        let last = at(up)
-        events.append([up, "up", id, last.0, last.1])
-        return events
-    }
-
-    /// One finger along a path of (t, dx, dy) points, sampled every 16 ms, up at the last point.
-    static func path(_ id: Int, x: Double, y: Double, _ points: [(Double, Double, Double)]) -> [[Any]] {
-        guard let first = points.first, let last = points.last else { return [] }
-        func at(_ time: Double) -> (Double, Double) {
-            for index in 1..<points.count where time <= points[index].0 {
-                let a = points[index - 1]
-                let b = points[index]
-                let p = b.0 > a.0 ? (time - a.0) / (b.0 - a.0) : 1
-                return (x + a.1 + (b.1 - a.1) * p, y + a.2 + (b.2 - a.2) * p)
-            }
-            return (x + last.1, y + last.2)
-        }
-        var events: [[Any]] = [[first.0, "down", id, x + first.1, y + first.2]]
-        var t = first.0 + 16
-        while t < last.0 {
-            let point = at(t)
-            events.append([t, "move", id, point.0, point.1])
-            t += 16
-        }
-        events.append([last.0, "up", id, x + last.1, y + last.2])
-        return events
-    }
-
-    /// A shared vector in the shape assumed for the kit's core/test/touch_vectors.json:
-    /// {mode, tier, width, height, events: [[t, "down"|"move"|"up", id, x, y]], until, expect}.
-    static func vector(_ mode: String, _ events: [[Any]], until: Double, tier: String = "easy", expect: [String] = []) -> [String: Any] {
-        let sorted = events.sorted { (arcadeJSONNumber($0[0]) ?? 0) < (arcadeJSONNumber($1[0]) ?? 0) }
-        return ["mode": mode, "tier": tier, "width": 400, "height": 800, "events": sorted, "until": until, "expect": expect]
-    }
-
-    /// Runs a vector: before each event the clock advances to just short of
-    /// it (a touch at the same moment as a timer goes first), and to `until` at the end.
-    static func runVector(_ vector: [String: Any], table: ArcadeTouchTable = .standard, fit: ArcadeTouchFit? = nil) -> [ArcadeTouchOutput] {
-        var pad = ArcadeTouchRecognizer(table: table.onTier((vector["tier"] as? String) ?? "easy"))
-        pad.mode = (vector["mode"] as? String) ?? "menu"
+    /// The kit's touchvec.js run(): before each event every job due at or
+    /// before it runs, at its own time; then 1500 ms more. Outputs are written
+    /// as the kit writes them: a pulse's word, '<hold> on' and '<hold> off',
+    /// 'info:<key>', 'dud:<reason>'.
+    static func run(_ mode: String, _ steps: [[String: Any]], tier: String = "easy", table: ArcadeTouchTable = .standard,
+                    fit: ArcadeTouchFit? = nil) -> TouchRun {
+        var pad = ArcadeTouchRecognizer(table: table.onTier(tier))
+        pad.mode = mode
         pad.fit = fit
-        let width = arcadeJSONNumber(vector["width"]) ?? 400
-        let height = arcadeJSONNumber(vector["height"]) ?? 800
-        var out: [ArcadeTouchOutput] = []
-        for case let event as [Any] in (vector["events"] as? [Any]) ?? [] {
-            guard event.count >= 5, let t = arcadeJSONNumber(event[0]), let kind = event[1] as? String,
-                  let number = arcadeJSONNumber(event[2]), let x = arcadeJSONNumber(event[3]), let y = arcadeJSONNumber(event[4]) else { continue }
-            let id = Int(number)
-            out += pad.advance(to: t - 0.001)
-            switch kind {
-            case "down":
-                out += pad.start(id: id, x: x, y: y, width: width, height: height, now: t)
-            case "move":
-                out += pad.move(id: id, x: x, y: y, now: t)
-            case "up":
-                out += pad.move(id: id, x: x, y: y, now: t)
-                out += pad.end(id: id, now: t)
-            default:
-                break
+        var result = TouchRun()
+        var holds: [String: String] = [:]
+        var now = 0.0
+        func record(_ outputs: [ArcadeTouchOutput], at t: Double) {
+            for output in outputs {
+                result.raw.append(output)
+                switch output {
+                case .pad(let source, let state):
+                    if source == ArcadeTouchRecognizer.fingerSourceName { continue }
+                    if source.hasPrefix("touch-p") {
+                        if let state { result.timed.append((out: pulseWord(state), t: t)) }
+                        continue
+                    }
+                    if let state {
+                        let word = state.buttons.isEmpty ? "hold" : state.buttons.joined(separator: "+")
+                        holds[source] = word
+                        result.timed.append((out: word + " on", t: t))
+                    } else if let word = holds.removeValue(forKey: source) {
+                        result.timed.append((out: word + " off", t: t))
+                    }
+                case .info(let what):
+                    result.timed.append((out: "info:" + what, t: t))
+                case .dud(let dud):
+                    result.timed.append((out: "dud:" + dud.reason.rawValue, t: t))
+                default:
+                    break
+                }
             }
         }
-        out += pad.advance(to: arcadeJSONNumber(vector["until"]) ?? 5000)
-        return out
+        func until(_ end: Double) {
+            while let due = pad.nextDue, due <= end {
+                record(pad.advance(to: due), at: due)
+            }
+            now = end
+        }
+        for event in expand(steps) {
+            until(event.t)
+            switch event.type {
+            case "down":
+                record(pad.start(id: event.id, x: event.x, y: event.y, width: 400, height: 800, now: event.t), at: event.t)
+            case "move":
+                record(pad.move(id: event.id, x: event.x, y: event.y, now: event.t), at: event.t)
+            default:
+                record(pad.end(id: event.id, now: event.t), at: event.t)
+            }
+        }
+        until(now + 1500)
+        return result
     }
 
-    /// The first-timer set (the plan's FT1-FT14), Easy fight controls on the standard table.
-    static func firstTimerVectors() -> [(name: String, vector: [String: Any])] {
-        var set: [(name: String, vector: [String: Any])] = []
-        func add(_ name: String, _ events: [[Any]], until: Double, _ expect: [String]) {
-            set.append((name, vector("fight", events, until: until, expect: expect)))
+    /// The kit's matches(): the same outputs in the same order; '@ms' entries also match the time.
+    static func matches(_ run: TouchRun, _ expect: [String]) -> Bool {
+        guard run.timed.count == expect.count else { return false }
+        for (index, entry) in expect.enumerated() {
+            let parts = entry.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            if run.timed[index].out != parts[0] { return false }
+            if parts.count > 1, let at = Double(parts[1]), run.timed[index].t.rounded() != at { return false }
         }
-        add("FT1 still 150 ms", finger(up: 150), until: 2000, ["CL"])
-        add("FT2 still 420 ms, drift 10", finger(dx: 10, over: 420, up: 420), until: 2000, ["CL"])
-        add("FT3 still 480 ms, drift 26", finger(dx: 18.4, dy: 18.4, over: 480, up: 480), until: 2000, ["CL"])
-        add("FT4 a VoiceOver-style double-tap", finger(1, up: 120) + finger(2, t0: 370, up: 490), until: 2000, ["CL", "CL"])
-        add("FT5 rest 300 ms, then 45 up", finger(dy: -45, from: 300, over: 200, up: 520), until: 2000, ["CU"])
-        add("FT6 rest 700 ms", finger(up: 700), until: 2000, ["block on", "block off"])
-        add("FT7 rest 700 ms, then 50 right", finger(dx: 50, from: 700, over: 100, up: 820), until: 2000, ["block on", "block off", "CR"])
-        add("FT8 a slow flick, 35 right over 600 ms", finger(dx: 35, over: 600, up: 600), until: 2000, ["CR"])
-        add("FT9 a 15 pt slide lifted at 200 ms", finger(dx: 15, over: 200, up: 200), until: 2000, ["CL"])
-        add("FT10 two fingers 90 ms apart", finger(1, up: 200) + finger(2, x: 260, t0: 90, up: 200), until: 2000, ["info quiet"])
-        add("FT11 two-finger double-tap", finger(1, up: 100) + finger(2, x: 260, up: 100)
-                + finger(3, t0: 300, up: 450) + finger(4, x: 260, t0: 300, up: 450), until: 2000, ["START"])
-        add("FT12 two fingers 40 down", finger(1, dy: 40, over: 150, up: 200) + finger(2, x: 260, dy: 40, over: 150, up: 200),
-            until: 2000, ["info status"])
-        add("FT13 two fingers still 1.1 s", finger(1, up: 1100) + finger(2, x: 260, up: 1100), until: 3000, ["info help"])
-        add("FT14 three-finger tap", finger(1, up: 100) + finger(2, x: 260, t0: 5, up: 100) + finger(3, x: 320, t0: 10, up: 100),
-            until: 2000, ["START"])
-        return set
+        return true
     }
+
+    /// One vector from the kit's file shape: {id, mode, tier, steps, expect}.
+    static func runVector(_ vector: [String: Any], table: ArcadeTouchTable = .standard) -> TouchRun {
+        let steps = ((vector["steps"] as? [Any]) ?? []).compactMap { $0 as? [String: Any] }
+        return run((vector["mode"] as? String) ?? "menu", steps, tier: (vector["tier"] as? String) ?? "easy", table: table)
+    }
+
+    /// The kit's shared vectors (core/test/touch_vectors.json, Oct 20 2026):
+    /// the first-timer set (FT) and the menus (M), exactly as the kit has them.
+    static let sharedVectorsJSON = """
+    [
+    {"id":"FT1","what":"still 150 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"upAt":150}],"expect":["CL@150"]},
+    {"id":"FT2","what":"still 420 ms, drift 10 pt","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[420,0,10]],"upAt":420}],"expect":["CL@420"]},
+    {"id":"FT3","what":"still 480 ms, drift 26 pt","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[480,26,0]],"upAt":480}],"expect":["CL@480"]},
+    {"id":"FT4","what":"VoiceOver-style double-tap: two 120 ms taps, 250 ms apart","set":"first-timer","mode":"fight","tier":"easy","steps":[{"upAt":120},{"at":370,"upAt":120}],"expect":["CL@120","CL@490"]},
+    {"id":"FT5","what":"rest 300 ms, then 45 pt up over 200 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[300,0,0],[500,0,-45]],"upAt":520}],"expect":["CU"]},
+    {"id":"FT6","what":"rest 700 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"upAt":700}],"expect":["block on@500","block off@700"]},
+    {"id":"FT7","what":"rest 700 ms, then 50 pt right","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[700,0,0],[850,50,0]],"upAt":870}],"expect":["block on@500","block off","CR"]},
+    {"id":"FT8","what":"slow flick, 35 pt right over 600 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[600,35,0]],"upAt":620}],"expect":["CR"]},
+    {"id":"FT9","what":"15 pt slide, lifted at 200 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[200,15,0]],"upAt":200}],"expect":["CL@200"]},
+    {"id":"FT10","what":"two fingers landing 90 ms apart, lifted at 200 ms","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":2,"landGapMs":90,"upAt":200}],"expect":["info:quiet@600"]},
+    {"id":"FT11","what":"two-finger double-tap, 350 ms gap","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":2,"upAt":100},{"at":450,"fingers":2,"upAt":100}],"expect":["START"]},
+    {"id":"FT12","what":"two fingers, 40 pt down","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":2,"path":[[150,0,40]],"upAt":170}],"expect":["info:status"]},
+    {"id":"FT13","what":"two fingers still 1.1 s","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":2,"upAt":1100}],"expect":["info:help@1000"]},
+    {"id":"FT14","what":"three-finger tap","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":3,"upAt":120}],"expect":["START"]},
+    {"id":"FT15","what":"two-finger flick up","set":"first-timer","mode":"fight","tier":"easy","steps":[{"fingers":2,"path":[[150,0,-40]],"upAt":170}],"expect":["info:where"]},
+    {"id":"FT16","what":"a very slow flick: 30 pt left over 1200 ms (never a block)","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[1200,-30,0]],"upAt":1220}],"expect":["CL"]},
+    {"id":"FT17","what":"rest, then slide 30 pt out (under 40): the block stays","set":"first-timer","mode":"fight","tier":"easy","steps":[{"path":[[700,0,0],[800,0,-30]],"upAt":900}],"expect":["block on@500","block off@900"]},
+    {"id":"M1","what":"flick right 30 pt: one step (DDOWN on a list screen is the input bridge, not the recognizer)","set":"menus","mode":"menu","steps":[{"path":[[60,30,0]],"upAt":80}],"expect":["right"]},
+    {"id":"M2","what":"two taps with a 380 ms gap: choose","set":"menus","mode":"menu","steps":[{"upAt":100},{"at":480,"upAt":100}],"expect":["A"]},
+    {"id":"M3","what":"a single 420 ms still tap: hear it, 400 ms after the lift","set":"menus","mode":"menu","steps":[{"upAt":420}],"expect":["info:here@820"]},
+    {"id":"M4","what":"two-finger scrub, 3 reversals of 30 pt in 900 ms: back, and no line step","set":"menus","mode":"menu","steps":[{"fingers":2,"path":[[225,30,0],[450,0,0],[675,30,0],[900,0,0]],"upAt":920}],"expect":["B"]},
+    {"id":"M5","what":"two-finger tap: quiet","set":"menus","mode":"menu","steps":[{"fingers":2,"upAt":100}],"expect":["info:quiet@500"]},
+    {"id":"M6","what":"two-finger double-tap: start","set":"menus","mode":"menu","steps":[{"fingers":2,"upAt":100},{"at":300,"fingers":2,"upAt":100}],"expect":["START"]},
+    {"id":"M7","what":"travel of 25 pt: a dud (short flick)","set":"menus","mode":"menu","steps":[{"path":[[80,25,0]],"upAt":100}],"expect":["dud:shortFlick"]},
+    {"id":"M8","what":"one finger held still 1.1 s: repeat","set":"menus","mode":"menu","steps":[{"upAt":1100}],"expect":["info:repeat@1000"]},
+    {"id":"M9","what":"two fingers held still 1.1 s: help","set":"menus","mode":"menu","steps":[{"fingers":2,"upAt":1100}],"expect":["info:help@1000"]},
+    {"id":"M10","what":"two-finger flick down: next line","set":"menus","mode":"menu","steps":[{"fingers":2,"path":[[100,0,40]],"upAt":120}],"expect":["info:nextLine"]},
+    {"id":"M11","what":"two-finger flick up: line before","set":"menus","mode":"menu","steps":[{"fingers":2,"path":[[100,0,-40]],"upAt":120}],"expect":["info:prevLine"]},
+    {"id":"M12","what":"three-finger tap: start","set":"menus","mode":"menu","steps":[{"fingers":3,"upAt":100}],"expect":["START"]},
+    {"id":"M13","what":"three-finger flick left: C left","set":"menus","mode":"menu","steps":[{"fingers":3,"path":[[80,-40,0]],"upAt":100}],"expect":["CL"]},
+    {"id":"M14","what":"a still 600 ms touch: a dud (slow tap)","set":"menus","mode":"menu","steps":[{"upAt":600}],"expect":["dud:slowTap"]},
+    {"id":"M15","what":"a second tap 500 ms late: two taps and a lateDouble dud","set":"menus","mode":"menu","steps":[{"upAt":100},{"at":600,"upAt":100}],"expect":["info:here@500","dud:lateDouble","info:here@1100"]},
+    {"id":"M16","what":"two fingers landing 300 ms apart: a dud (apart)","set":"menus","mode":"menu","steps":[{"fingers":2,"landGapMs":300,"upAt":400}],"expect":["dud:apart"]},
+    {"id":"M17","what":"a slow 26 pt drift over 800 ms: a dud (drift)","set":"menus","mode":"menu","steps":[{"path":[[800,26,0]],"upAt":800}],"expect":["dud:drift"]},
+    {"id":"M18","what":"flick down then keep the finger down: steps again after 1 s, then every 300 ms","set":"menus","mode":"menu","steps":[{"path":[[60,0,30]],"upAt":1500}],"expect":["down","down","down"]},
+    {"id":"M19","what":"pause screen: two-finger double-tap is start (the menu table)","set":"menus","mode":"pause","steps":[{"fingers":2,"upAt":100},{"at":300,"fingers":2,"upAt":100}],"expect":["START"]},
+    {"id":"M20","what":"a demo: two-finger double-tap is start (the menu table)","set":"menus","mode":"demo","steps":[{"fingers":2,"upAt":100},{"at":300,"fingers":2,"upAt":100}],"expect":["START"]},
+    {"id":"M21","what":"a demo: one tap is hear it, never an attack","set":"menus","mode":"demo","steps":[{"upAt":120}],"expect":["info:here@520"]}
+    ]
+    """
 
     /// A seeded generator for the randomised sets.
     struct Seeded {
@@ -211,13 +277,14 @@ extension ArcadeModelsTests {
         mutating func range(_ low: Double, _ high: Double) -> Double { low + (high - low) * next() }
     }
 
+    static func hundredth(_ value: Double) -> Double { (value * 100).rounded() / 100 }
+
     // MARK: The checks
 
     static func touchPlay() throws {
         touchTablesV2()
         touchVectors()
-        touchMenusV2()
-        touchDuds()
+        touchReports()
         touchTiming()
         touchFeel()
         touchSpeechQueue()
@@ -230,7 +297,9 @@ extension ArcadeModelsTests {
     static func touchTablesV2() {
         let table = ArcadeTouchTable.standard
         check(table.flickPx == 28 && table.tapMs == 450 && table.tapSlopPx == 24 && table.doubleMs == 400 && table.holdMs == 500
-              && table.repeatEveryMs == 300 && table.base.flickBreaksPx == 40, "the relaxed numbers")
+              && table.repeatEveryMs == 300 && table.base.flickBreaksPx == 40 && table.base.stillPx == 3 && table.base.stillMs == 150,
+              "the relaxed numbers, and a rest waits until the fingers stop")
+        check(ArcadeTouchNumbers() == table.base, "a table that leaves numbers out takes the kit's v2 defaults")
         check(table.base.scrubReversals == 2 && table.base.scrubLegPx == 20 && table.base.scrubWithinMs == 1200, "the scrub's numbers")
         check(table.hasTiers && table.tier == "easy" && Set(table.fights.keys) == ["easy", "full"], "Easy and Full fight controls, Easy first")
         let fight = table.numbers(mode: "fight")
@@ -253,8 +322,9 @@ extension ArcadeModelsTests {
         check(full.zones.isEmpty && full.zone(x: 50, y: 400, width: 400, height: 800) == .left
               && full.gestures(mode: "fight", zone: .left).flicks[2]?.actions[.down] == .info("status")
               && full.gestures(mode: "fight", zone: .right).flickBreaks.contains(1)
-              && full.gestures(mode: "fight", zone: .left).holds[2] == .info("help"),
-              "Full: the two halves, status and where on the left, a flick out of the right-hand block, help on the two-finger hold")
+              && full.gestures(mode: "fight", zone: .left).holds[2] == .info("help")
+              && full.anywhere.holds[3] == .info("help") && full.anywhere.holdTimes[3] == 800,
+              "Full: the two halves, status and where on the left, a flick out of the right-hand block, help on two or three fingers")
         check(table.fight == table.fights["full"], "`fight` is an exact copy of Full, for build 341")
         var older = v1Table
         older.tier = "easy"
@@ -274,139 +344,102 @@ extension ArcadeModelsTests {
     }
 
     static func touchVectors() {
-        // The first-timer set: every attack gesture attacks or blocks, none does nothing.
-        for (name, vector) in firstTimerVectors() {
-            let got = acts(runVector(vector))
-            check(got == (vector["expect"] as? [String] ?? []), name + ": " + got.joined(separator: ", "))
+        // The kit's own first-timer and menu vectors, exactly as its recognizer gives them.
+        let shared = ((try? JSONSerialization.jsonObject(with: Data(sharedVectorsJSON.utf8))) as? [Any]) ?? []
+        check(shared.count == 38, "the shared first-timer and menu vectors are read (\(shared.count))")
+        for case let vector as [String: Any] in shared {
+            let got = runVector(vector)
+            let expect = (vector["expect"] as? [String]) ?? []
+            check(matches(got, expect), "shared vector " + ((vector["id"] as? String) ?? "?") + ": " + got.shown
+                  + " (wanted " + expect.joined(separator: ", ") + ")")
         }
-        // The same vectors survive JSON (the kit's file is read the same way).
-        if let data = try? JSONSerialization.data(withJSONObject: ["vectors": firstTimerVectors().map { $0.vector }]),
-           let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let list = parsed["vectors"] as? [Any] {
-            var same = 0
-            for case let vector as [String: Any] in list where acts(runVector(vector)) == (vector["expect"] as? [String] ?? []) { same += 1 }
-            check(same == 14, "all 14 first-timer vectors pass after JSON")
-        } else {
-            check(false, "the vectors are JSON")
-        }
-        // The kit's own vectors, when its file is given (KIT_TOUCH_VECTORS=path/to/core/test/touch_vectors.json).
+        // The kit's whole file, when it is given: every vector, on its own table, which is the app's standard one.
         if let path = ProcessInfo.processInfo.environment["KIT_TOUCH_VECTORS"], !path.isEmpty {
             let parsed = (try? Data(contentsOf: URL(fileURLWithPath: path))).flatMap { try? JSONSerialization.jsonObject(with: $0) }
-            let list = ((parsed as? [String: Any])?["vectors"] as? [Any]) ?? []
+            let file = (parsed as? [String: Any]) ?? [:]
+            let table = ArcadeTouchTable(json: file["table"] as? [String: Any])
+            check(table == ArcadeTouchTable.standard, "the kit's table is the app's standard table")
+            let list = (file["vectors"] as? [Any]) ?? []
             check(!list.isEmpty, "the kit's touch vectors are read")
+            var failed: [String] = []
             for case let vector as [String: Any] in list {
-                let got = acts(runVector(vector))
-                check(got == (vector["expect"] as? [String] ?? []), "kit vector " + ((vector["name"] as? String) ?? "?") + ": " + got.joined(separator: ", "))
+                let got = runVector(vector, table: table)
+                if !matches(got, (vector["expect"] as? [String]) ?? []) { failed.append(((vector["id"] as? String) ?? "?") + ": " + got.shown) }
             }
+            check(failed.isEmpty, "every kit vector: \(list.count - failed.count) of \(list.count); first failures: "
+                  + failed.prefix(5).joined(separator: "; "))
         }
-        // FT6 in detail: the block comes on at the rest (500 ms), with its report, and goes at the lift.
-        let rest = runVector(vector("fight", finger(up: 700), until: 2000))
-        let held = gestureReports(rest)
-        check(held.map { $0.key } == ["hold1", "release1"] && held[0].ms >= 500 && held[0].ms < 520 && held[0].say == "block",
-              "the rest blocks at 500 ms and the lift lets it go")
-        // FT10 in detail: the two-finger tap waits for a second one (400 ms), then is quiet.
-        check(acts(runVector(vector("fight", finger(1, up: 200) + finger(2, x: 260, t0: 90, up: 200), until: 599))).isEmpty
-              && acts(runVector(vector("fight", finger(1, up: 200) + finger(2, x: 260, t0: 90, up: 200), until: 600))) == ["info quiet"],
-              "quiet 400 ms after the lift, not before")
-        // FT7 in detail: the flick out of the block is reported as one.
-        let out = gestureReports(runVector(vector("fight", finger(dx: 50, from: 700, over: 100, up: 820), until: 2000)))
-        check(out.map { $0.key } == ["hold1", "release1", "flick1"] && out[2].fromHold && out[2].direction == .right
-              && out[2].say == "strong kick", "a flick out of a block: the block lets go, then the strong kick")
 
-        // Randomised Easy sets (seeded).
+        // Randomised Easy sets in the kit's shapes (seeded).
         var random = Seeded(state: 20_261_020)
         var taps = 0
-        for index in 0..<1000 {
-            let duration = random.range(80, 480)
-            let drift = random.range(0, 27)
+        for _ in 0..<1000 {
+            let ms = random.range(80, 480).rounded()
+            let distance = random.range(0, 27)
             let angle = random.range(0, 2 * Double.pi)
-            let got = acts(runVector(vector("fight", finger(index, dx: drift * cos(angle), dy: drift * sin(angle), over: duration, up: duration),
-                                            until: duration + 1000)))
-            if got == ["CL"] { taps += 1 }
+            let got = run("fight", [step(path: [[ms, hundredth(distance * cos(angle)), hundredth(distance * sin(angle))]], up: ms)])
+            if got.words == ["CL"] { taps += 1 }
         }
         check(taps == 1000, "1,000 still touches of 80-480 ms with up to 27 pt of drift: all weak punches (\(taps))")
+        let ways: [(base: Double, attack: String)] = [(Double.pi, "CL"), (-Double.pi / 2, "CU"), (Double.pi / 2, "CD"), (0, "CR")]
         var flicks = 0
-        let attacks: [ArcadeDirection: String] = [.left: "CL", .up: "CU", .down: "CD", .right: "CR"]
-        for index in 0..<1000 {
-            let travel = random.range(28, 120)
-            // The flick reaches 28 pt before the 500 ms rest (the plan's "before the rest fires").
-            let duration = random.range(80, min(1200, 470 * travel / 28))
-            let direction = ArcadeDirection.allCases[Int(random.next() * 4) % 4]
-            let side = random.range(-0.3, 0.3) * travel
-            var dx = side
-            var dy = side
-            switch direction {
-            case .left: dx = -travel
-            case .right: dx = travel
-            case .up: dy = -travel
-            case .down: dy = travel
-            }
-            if acts(runVector(vector("fight", finger(index, dx: dx, dy: dy, over: duration, up: duration), until: duration + 1000)))
-                == [attacks[direction] ?? ""] { flicks += 1 }
+        for _ in 0..<1000 {
+            let way = ways[Int(random.next() * 4) % 4]
+            let ms = random.range(80, 1200).rounded()
+            let distance = random.range(28.5, 120)
+            let angle = way.base + random.range(-Double.pi / 6, Double.pi / 6)
+            let got = run("fight", [step(path: [[ms, hundredth(distance * cos(angle)), hundredth(distance * sin(angle))]], up: ms + 20)])
+            if got.words == [way.attack] { flicks += 1 }
         }
-        check(flicks == 1000, "1,000 flicks of 28-120 pt that travel 28 pt before the rest: the right attack every time (\(flicks))")
+        check(flicks == 1000, "1,000 flicks of 28.5-120 pt over 80-1200 ms, up to 30 degrees off: the right attack, never a block (\(flicks))")
         var rests = 0
-        for index in 0..<200 {
-            let duration = random.range(520, 1500)
-            if acts(runVector(vector("fight", finger(index, up: duration), until: duration + 1000))) == ["block on", "block off"] { rests += 1 }
+        for _ in 0..<200 {
+            let ms = random.range(520, 1500).rounded()
+            if matches(run("fight", [step(up: ms)]), ["block on@500", "block off@" + String(Int(ms))]) { rests += 1 }
         }
-        check(rests == 200, "200 rests of 520-1500 ms: a block, let go at the lift (\(rests))")
-        // A slide that is still within 28 pt when the rest fires blocks (by design: a flick fires "before the rest").
-        check(acts(runVector(vector("fight", finger(dx: 30, over: 1200, up: 1200), until: 3000))) == ["block on", "block off"],
-              "28 pt reached only after the rest: a block, not a kick")
+        check(rests == 200, "200 rests of 520-1500 ms: a block at 500 ms, let go at the lift (\(rests))")
     }
 
-    static func touchMenusV2() {
-        check(acts(runVector(vector("menu", finger(dx: 30, over: 100, up: 150), until: 2000))) == ["right"], "flick right 30 pt: one step")
-        check(acts(runVector(vector("menu", finger(1, up: 100) + finger(2, t0: 300, up: 480), until: 2000))) == ["A"],
-              "two taps 380 ms apart: choose")
-        let here = vector("menu", finger(up: 420), until: 819)
-        check(acts(runVector(here)).isEmpty && acts(runVector(vector("menu", finger(up: 420), until: 820))) == ["info here"],
-              "a 420 ms still tap: hear it, 400 ms after the lift")
-        let scrubPoints: [(Double, Double, Double)] = [(0, 0, 0), (150, 30, 0), (300, 0, 0), (450, 30, 0), (600, 0, 0), (750, 30, 0), (900, 0, 0)]
-        let scrub = runVector(vector("menu", path(1, x: 150, y: 400, scrubPoints) + path(2, x: 210, y: 400, scrubPoints), until: 2500))
-        check(acts(scrub) == ["B"] && gestureReports(scrub).map { $0.key } == ["scrub2"], "a two-finger scrub is Back, and never a two-finger flick")
-        check(acts(runVector(vector("menu", finger(1, up: 100) + finger(2, x: 260, up: 100), until: 2000))) == ["info quiet"],
-              "a two-finger tap is quiet")
-        check(acts(runVector(vector("menu", finger(1, up: 100) + finger(2, x: 260, up: 100)
-                                       + finger(3, t0: 250, up: 350) + finger(4, x: 260, t0: 250, up: 350), until: 2000))) == ["START"],
-              "a two-finger double-tap is Start")
-        check(acts(runVector(vector("menu", finger(1, dy: 40, over: 120, up: 150) + finger(2, x: 260, dy: 40, over: 120, up: 150),
-                                    until: 2000))) == ["info nextLine"], "two fingers flicked down: the screen's next line")
-        check(acts(runVector(vector("menu", finger(up: 1100), until: 2500))) == ["info repeat"], "one finger still a second: repeat")
-        // A finger kept down after a flick steps again after a second, then every 300 ms.
-        let repeated = runVector(vector("menu", finger(dx: 30, over: 60, up: 1700), until: 2500))
-        check(acts(repeated) == ["right", "right", "right", "right"]
-              && gestureReports(repeated).map { $0.repeatStep } == [false, true, true, true], "a held flick repeats, each step reported")
-        check(acts(runVector(vector("menu", finger(1, up: 100) + finger(2, x: 260, up: 100) + finger(3, x: 320, up: 100), until: 2000)))
-              == ["START"], "three fingers: Start (untaught)")
-    }
-
-    static func touchDuds() {
-        let short = runVector(vector("menu", finger(dx: 25, over: 100, up: 200), until: 2000))
-        check(acts(short).isEmpty && dudReasons(short) == [.shortFlick], "25 pt is between the slop and a flick: a short flick")
-        check(ArcadeFeel.dud == [ArcadeBuzz(style: .warning)], "every dud gets the warning buzz")
-        check(dudReasons(runVector(vector("menu", finger(up: 700), until: 2000))) == [.slowTap], "still 700 ms in a menu: too slow for a tap")
-        let apart = runVector(vector("menu", finger(1, up: 900) + finger(2, x: 260, t0: 300, up: 900), until: 2000))
-        check(acts(apart).isEmpty && dudReasons(apart) == [.apart], "two fingers landing 300 ms apart that did nothing: apart")
-        let drift = runVector(vector("fight", finger(1, dx: 40, over: 100, up: 150) + finger(2, x: 260, dx: 40, over: 100, up: 150)
-                                         + finger(3, x: 320, dx: 40, over: 100, up: 150), until: 2000))
-        check(dudReasons(drift) == [.drift], "three fingers moving in Easy (no three-finger flick): drift")
-        let late = runVector(vector("menu", finger(1, up: 100) + finger(2, t0: 550, up: 700), until: 2000))
-        check(acts(late) == ["info here", "info here"] && dudReasons(late) == [.lateDouble], "a second tap 600 ms after the first: late")
-        let sideways = runVector(vector("menu", finger(1, dx: -40, over: 100, up: 150) + finger(2, x: 260, dx: -40, over: 100, up: 150),
-                                        until: 2000))
-        check(acts(sideways).isEmpty && dudReasons(sideways) == [.noAction], "two fingers flicked left in a menu: nothing there")
+    static func touchReports() {
+        // The finger source: on as the first finger lands, off after the last one's own outputs.
+        let tap = run("fight", [step(up: 150)])
+        let fingerOn = ArcadeTouchOutput.pad(source: ArcadeTouchRecognizer.fingerSourceName, state: ArcadePadState())
+        let fingerOff = ArcadeTouchOutput.pad(source: ArcadeTouchRecognizer.fingerSourceName, state: nil)
+        if let on = tap.raw.firstIndex(of: fingerOn), let off = tap.raw.firstIndex(of: fingerOff),
+           let attack = tap.raw.firstIndex(of: .pad(source: "touch-p1", state: ArcadePadState(buttons: ["CL"]))) {
+            check(on == 0 && attack < off, "'touch-finger' is held from the first finger down to after the last one's outputs")
+        } else {
+            check(false, "the finger source and the attack are sent")
+        }
+        // The rest: its report at 500 ms with its words; the lift reported as a release.
+        let rest = run("fight", [step(up: 700)])
+        check(rest.reports.map { $0.key } == ["hold1", "release"] && rest.reports[0].ms == 500 && rest.reports[0].say == "block",
+              "the rest blocks at 500 ms and the lift lets it go")
+        let broke = run("fight", [step(path: [[700, 0, 0], [850, 50, 0]], up: 870)])
+        check(broke.reports.map { $0.key } == ["hold1", "release", "flick1"] && broke.reports[2].fromHold
+              && broke.reports[2].direction == .right && broke.reports[2].say == "strong kick",
+              "a flick out of a block: the block lets go, then the strong kick")
+        let scrub = run("menu", [step(fingers: 2, path: [[225, 30, 0], [450, 0, 0], [675, 30, 0], [900, 0, 0]], up: 920)])
+        check(scrub.words == ["B"] && scrub.reports.map { $0.key } == ["scrub2"], "a two-finger scrub is Back, and never a two-finger flick")
+        let held = run("menu", [step(path: [[60, 0, 30]], up: 1500)])
+        check(held.words == ["down", "down", "down"] && held.reports.map { $0.repeatStep } == [false, true, true],
+              "a held flick repeats after a second, then every 300 ms, each step reported")
+        check(run("menu", [step(fingers: 2, path: [[100, -40, 0]], up: 150)]).words == ["dud:noAction"],
+              "two fingers flicked left in a menu: nothing there")
+        check(run("fight", [step(fingers: 3, path: [[100, 40, 0]], up: 150)]).words == ["dud:noAction"],
+              "three fingers moving in Easy: nothing there")
         var older = ArcadeTouchRecognizer(table: v1Table)
         _ = older.start(id: 1, x: 50, y: 50, width: 400, now: 0)
         _ = older.end(id: 1, now: 50)
-        check(dudReasons(older.advance(to: 1000)) == [.noAction], "a lone tap where only a double-tap works: nothing there")
-        // Every lift is measured.
-        let lifts = runVector(vector("menu", finger(dx: 10, over: 100, up: 300), until: 2000)).compactMap { (output: ArcadeTouchOutput) -> ArcadeLiftReport? in
-            if case .lifted(let lift) = output { return lift }
+        let lone = older.advance(to: 1000).compactMap { (output: ArcadeTouchOutput) -> ArcadeDudReason? in
+            if case .dud(let dud) = output { return dud.reason }
             return nil
         }
-        check(lifts.count == 1 && lifts[0].ms == 300 && lifts[0].far == 10 && !lifts[0].fired && lifts[0].fingers == 1,
+        check(lone == [.noAction], "a lone tap where only a double-tap works: nothing there")
+        let lift = run("menu", [step(path: [[100, 10, 0]], up: 300)]).lifts
+        check(lift.count == 1 && lift[0].ms == 300 && lift[0].far == 10 && !lift[0].fired && lift[0].fingers == 1,
               "the lift's measurements: 300 ms, 10 pt, nothing fired")
+        check(ArcadeFeel.dud == [ArcadeBuzz(style: .warning)], "every dud gets the warning buzz")
     }
 
     static func touchTiming() {
@@ -419,13 +452,11 @@ extension ArcadeModelsTests {
         check(quickEasy.tapMs == 250 && quickEasy.holdMs == 250 && quickEasy.tapSlopPx == 20 && quickEasy.flickPx == 20,
               "Quick keeps Easy's shape: no dead gap")
         check(menu.fitted(nil) == menu, "Relaxed is the table's own")
-        check(acts(runVector(vector("fight", finger(up: 300), until: 2000), fit: .quick)) == ["block on", "block off"],
-              "with Quick, a 300 ms rest blocks")
-        check(acts(runVector(vector("menu", finger(up: 1100), until: 2500), fit: .quick)) == ["info repeat"],
-              "an info hold keeps its own second")
+        check(run("fight", [step(up: 300)], fit: .quick).words == ["block on", "block off"], "with Quick, a 300 ms rest blocks")
+        check(run("menu", [step(up: 1100)], fit: .quick).words == ["info:repeat"], "an info hold keeps its own second")
         let slow = ArcadeTouchFit(tapMs: 600, doubleMs: 500, slopPx: 26, flickPx: 32, restMs: 700)
-        check(acts(runVector(vector("fight", finger(up: 600), until: 2000), fit: slow)) == ["CL"]
-              && acts(runVector(vector("fight", finger(up: 800), until: 2000), fit: slow)) == ["block on", "block off"],
+        check(run("fight", [step(up: 600)], fit: slow).words == ["CL"]
+              && run("fight", [step(up: 800)], fit: slow).words == ["block on", "block off"],
               "fitted to a slow tapper: 600 ms is a tap, the rest is 700 ms")
 
         let fit = ArcadeTouchFit.fitted(taps: [300, 320, 340, 360, 380, 400, 420, 440, 460, 480],
@@ -457,8 +488,8 @@ extension ArcadeModelsTests {
     }
 
     static func touchFeel() {
-        func feels(_ mode: String, _ events: [[Any]], until: Double = 2500, tier: String = "easy") -> [[ArcadeBuzz]] {
-            gestureReports(runVector(vector(mode, events, until: until, tier: tier))).map { ArcadeFeel.of($0) }
+        func feels(_ mode: String, _ steps: [[String: Any]], tier: String = "easy") -> [[ArcadeBuzz]] {
+            run(mode, steps, tier: tier).reports.map { ArcadeFeel.of($0) }
         }
         let tick = [ArcadeBuzz(style: .selection)]
         let light = [ArcadeBuzz(style: .light)]
@@ -467,25 +498,22 @@ extension ArcadeModelsTests {
         let rigid = [ArcadeBuzz(style: .rigid)]
         let soft = [ArcadeBuzz(style: .soft)]
         let twoLight = [ArcadeBuzz(style: .light), ArcadeBuzz(style: .light, afterMs: 60)]
-        check(feels("menu", finger(dx: 30, over: 100, up: 150)) == [tick], "a menu step: a selection tick")
-        check(feels("menu", finger(up: 100)) == [tick], "hear it: a tick")
-        check(feels("menu", finger(1, up: 100) + finger(2, t0: 300, up: 480)) == [medium], "choose: medium")
-        let scrubPoints: [(Double, Double, Double)] = [(0, 0, 0), (150, 30, 0), (300, 0, 0), (450, 30, 0), (600, 0, 0)]
-        check(feels("menu", path(1, x: 150, y: 400, scrubPoints) + path(2, x: 210, y: 400, scrubPoints)) == [twoLight],
-              "back: two light 60 ms apart")
-        check(feels("menu", finger(1, up: 100) + finger(2, x: 260, up: 100)) == [soft], "quiet: soft")
-        check(feels("menu", finger(1, up: 100) + finger(2, x: 260, up: 100) + finger(3, t0: 250, up: 350)
-                        + finger(4, x: 260, t0: 250, up: 350)) == [rigid], "Start: rigid")
-        check(feels("menu", finger(1, up: 1100) + finger(2, x: 260, up: 1100)) == [soft], "help: soft")
-        check(feels("fight", finger(up: 150)) == [light], "the Easy tap attack: light")
-        check(feels("fight", finger(dx: -40, over: 100, up: 150)) == [medium], "a weak punch flick: medium")
-        check(feels("fight", finger(dy: -40, over: 100, up: 150)) == [heavy], "a strong punch flick: heavy")
-        check(feels("fight", finger(up: 700)) == [rigid, soft], "block on: rigid; off: soft")
-        check(feels("fight", finger(dx: 50, from: 700, over: 100, up: 820)) == [rigid, soft, heavy], "a strong kick out of a block: heavy")
-        check(feels("fight", finger(1, dy: 40, over: 150, up: 200) + finger(2, x: 260, dy: 40, over: 150, up: 200)) == [tick],
-              "status: a tick")
-        check(feels("fight", finger(1, up: 100) + finger(2, x: 260, up: 100) + finger(3, x: 320, up: 100)) == [rigid], "pause: rigid")
-        check(feels("fight", finger(x: 300, up: 100), tier: "full") == [medium] && feels("fight", finger(x: 50, up: 100), tier: "full") == [medium],
+        let scrub = step(fingers: 2, path: [[225, 30, 0], [450, 0, 0], [675, 30, 0], [900, 0, 0]], up: 920)
+        check(feels("menu", [step(path: [[60, 30, 0]], up: 80)]) == [tick], "a menu step: a selection tick")
+        check(feels("menu", [step(up: 100)]) == [tick], "hear it: a tick")
+        check(feels("menu", [step(up: 100), step(at: 480, up: 100)]) == [medium], "choose: medium")
+        check(feels("menu", [scrub]) == [twoLight], "back: two light 60 ms apart")
+        check(feels("menu", [step(fingers: 2, up: 100)]) == [soft], "quiet: soft")
+        check(feels("menu", [step(fingers: 2, up: 100), step(at: 300, fingers: 2, up: 100)]) == [rigid], "Start: rigid")
+        check(feels("menu", [step(fingers: 2, up: 1100)]) == [soft], "help: soft")
+        check(feels("fight", [step(up: 150)]) == [light], "the Easy tap attack: light")
+        check(feels("fight", [step(path: [[100, -40, 0]], up: 150)]) == [medium], "a weak punch flick: medium")
+        check(feels("fight", [step(path: [[100, 0, -40]], up: 150)]) == [heavy], "a strong punch flick: heavy")
+        check(feels("fight", [step(up: 700)]) == [rigid, soft], "block on: rigid; off: soft")
+        check(feels("fight", [step(path: [[700, 0, 0], [850, 50, 0]], up: 870)]) == [rigid, soft, heavy], "a strong kick out of a block: heavy")
+        check(feels("fight", [step(fingers: 2, path: [[150, 0, 40]], up: 170)]) == [tick], "status: a tick")
+        check(feels("fight", [step(fingers: 3, up: 120)]) == [rigid], "pause: rigid")
+        check(feels("fight", [step(x: 300, up: 100)], tier: "full") == [medium] && feels("fight", [step(x: 50, up: 100)], tier: "full") == [medium],
               "Full: jump and change target, medium")
         check(ArcadeFeel.cue("telegraph") == [ArcadeBuzz(style: .rigid), ArcadeBuzz(style: .rigid, afterMs: 70)]
               && ArcadeFeel.cue("hurt") == heavy && ArcadeFeel.cue("landed") == twoLight
@@ -580,19 +608,19 @@ extension ArcadeModelsTests {
 
     static func touchWords() {
         let split = ArcadeGestureWords.split("doubleTap2")
-        check(split.kind == "doubleTap" && split.fingers == 2 && ArcadeGestureWords.split("hold1").kind == "hold", "keys and fingers")
-        func sayBacks(_ mode: String, _ events: [[Any]], tier: String = "easy") -> [String] {
-            gestureReports(runVector(vector(mode, events, until: 2500, tier: tier))).map { ArcadeGestureWords.sayBack($0) }
+        check(split.kind == "doubleTap" && split.fingers == 2 && ArcadeGestureWords.split("hold1").kind == "hold"
+              && ArcadeGestureWords.split("release").kind == "release", "keys and fingers")
+        func sayBacks(_ mode: String, _ steps: [[String: Any]], tier: String = "easy") -> [String] {
+            run(mode, steps, tier: tier).reports.map { ArcadeGestureWords.sayBack($0) }
         }
-        check(sayBacks("fight", finger(up: 150)) == ["Tap: weak punch."], "Tap: weak punch.")
-        check(sayBacks("fight", finger(dy: -40, over: 100, up: 150)) == ["Flick up: strong punch."], "Flick up: strong punch.")
-        check(sayBacks("fight", finger(dx: 50, from: 700, over: 100, up: 820))
+        check(sayBacks("fight", [step(up: 150)]) == ["Tap: weak punch."], "Tap: weak punch.")
+        check(sayBacks("fight", [step(path: [[100, 0, -40]], up: 150)]) == ["Flick up: strong punch."], "Flick up: strong punch.")
+        check(sayBacks("fight", [step(path: [[700, 0, 0], [850, 50, 0]], up: 870)])
               == ["Rest: block.", "Lift: block off.", "From a block, flick right: strong kick."], "Rest, Lift, and a flick out of it")
-        check(sayBacks("menu", finger(1, up: 100) + finger(2, t0: 300, up: 480)) == ["Double-tap: choose."], "Double-tap: choose.")
-        let scrubPoints: [(Double, Double, Double)] = [(0, 0, 0), (150, 30, 0), (300, 0, 0), (450, 30, 0), (600, 0, 0)]
-        check(sayBacks("menu", path(1, x: 150, y: 400, scrubPoints) + path(2, x: 210, y: 400, scrubPoints)) == ["Two-finger scrub: back."],
-              "Two-finger scrub: back.")
-        check(sayBacks("menu", finger(up: 1100)) == ["Hold: repeat."], "a menu hold is a hold, not a rest")
+        check(sayBacks("menu", [step(up: 100), step(at: 480, up: 100)]) == ["Double-tap: choose."], "Double-tap: choose.")
+        check(sayBacks("menu", [step(fingers: 2, path: [[225, 30, 0], [450, 0, 0], [675, 30, 0], [900, 0, 0]], up: 920)])
+              == ["Two-finger scrub: back."], "Two-finger scrub: back.")
+        check(sayBacks("menu", [step(up: 1100)]) == ["Hold: repeat."], "a menu hold is a hold, not a rest")
         check(ArcadeGestureWords.action(.pulse(ArcadePadState(buttons: ["CR"])), say: nil) == "C right"
               && ArcadeGestureWords.action(.info("status"), say: nil) == "how you're doing"
               && ArcadeGestureWords.action(.pulse(ArcadePadState(sx: -1)), say: nil) == "left", "words for a table with no 'say'")
@@ -607,7 +635,8 @@ extension ArcadeModelsTests {
               "the Easy rows")
         let full = ArcadeHowToPlay.sections(table: ArcadeTouchTable.standard.onTier("full"), plainHelp: nil)
         check(full.map { $0.title } == ["Menus", "Fights, Full controls, left half", "Fights, Full controls, right half", "Fights, Full controls, anywhere"]
-              && full[1].rows.contains("Slide a finger: move.") && full[2].rows.contains("Tap: jump."), "Full: the halves")
+              && full[1].rows.contains("Slide a finger: walk.") && full[2].rows.contains("Tap: jump.")
+              && full[3].rows.contains("Three-finger hold: help."), "Full: the halves and anywhere")
         let plain = ArcadeHowToPlay.sections(table: ArcadeTouchTable(), plainHelp: "The left half is the control pad.")
         check(plain.first?.title == "The game's own help" && plain.first?.rows == ["The left half is the control pad."], "the plain player's own help leads")
         check(ArcadeHowToPlay.zoneWords("a") == "the A area" && ArcadeHowToPlay.zoneWords("pad") == "the whole pad", "zone names")
@@ -636,25 +665,25 @@ extension ArcadeModelsTests {
         check(practice.padReleased() == ["Good.", lessons[0].steps[2].line], "VoiceOver back")
         check(practice.padHeld() == ["Good.", "Lesson done.", "Lesson 2, menus.", "Flick right for the next item."] && practice.mode == "menu",
               "Lesson 1 done")
-        func feed(_ events: [[Any]], _ mode: String) -> [String] {
+        func feed(_ mode: String, _ steps: [[String: Any]]) -> [String] {
             var lines: [String] = []
-            for output in runVector(vector(mode, events, until: 2500)) { lines += practice.handle(output) }
+            for output in run(mode, steps).raw { lines += practice.handle(output) }
             return lines
         }
-        let right = finger(dx: 30, over: 100, up: 150)
-        check(feed(right, "menu") == ["Flick right: next."], "every attempt is said back")
-        check(feed(right, "menu") == ["Flick right: next.", "Good.", "Flick left for the one before."], "two clean in a row pass")
-        check(feed(right, "menu") == ["Flick right: next.", "That flick went right. Flick left for previous."], "the wrong way, corrected")
-        check(feed(finger(dx: 25, over: 100, up: 200), "menu") == ["Your finger moved, but not far enough for a flick. Flick farther."],
+        let right = [step(path: [[60, 30, 0]], up: 80)]
+        check(feed("menu", right) == ["Flick right: next."], "every attempt is said back")
+        check(feed("menu", right) == ["Flick right: next.", "Good.", "Flick left for the one before."], "two clean in a row pass")
+        check(feed("menu", right) == ["Flick right: next.", "That flick went right. Flick left for previous."], "the wrong way, corrected")
+        check(feed("menu", [step(path: [[80, 25, 0]], up: 100)]) == ["Your finger moved, but not far enough for a flick. Flick farther."],
               "a dud gets its reason")
         check(practice.taps.isEmpty, "no taps measured while flicks were wanted")
         check(practice.nextLesson() == ["Next: fighting.", lessons[2].intro, "Tap anywhere: an attack."] && practice.mode == "fight",
               "Next lesson skips")
-        check(feed(finger(up: 700), "fight") == ["Rest: block.", "That was a rest, so it blocked. Lift sooner for an attack.", "Lift: block off."],
+        check(feed("fight", [step(up: 700)]) == ["Rest: block.", "That was a rest, so it blocked. Lift sooner for an attack.", "Lift: block off."],
               "a rest when a tap was wanted")
-        check(feed(finger(1, up: 100) + finger(2, x: 260, up: 100), "fight") == ["Two-finger tap: quiet.", "That was two fingers. Use one."],
+        check(feed("fight", [step(fingers: 2, up: 100)]) == ["Two-finger tap: quiet.", "That was two fingers. Use one."],
               "two fingers when one was wanted")
-        _ = feed(finger(up: 150), "fight")
+        _ = feed("fight", [step(up: 150)])
         check(practice.taps.count == 1 && practice.drifts.count == 1, "her one-finger taps are measured while a tap is wanted")
         check(practice.nextLesson() == [ArcadePadPractice.finishedLine, "In the game, Practice on the main menu is a safe first fight."]
               && practice.finished && practice.current == nil, "the end points her to the game's own practice")
@@ -711,7 +740,7 @@ extension ArcadeModelsTests {
         telemetry.touch.note(pad: true, seconds: 3.5, how: "first touch")
         telemetry.touch.watchdogFires = 1
         telemetry.touch.activates = 2
-        for output in runVector(vector("fight", finger(up: 150), until: 2500)) + runVector(vector("menu", finger(dx: 25, over: 100, up: 200), until: 2500)) {
+        for output in run("fight", [step(up: 150)]).raw + run("menu", [step(path: [[80, 25, 0]], up: 100)]).raw {
             switch output {
             case .gesture(let report): telemetry.touch.note(gesture: report, seconds: 4, held: true, tier: "easy")
             case .dud(let dud): telemetry.touch.note(dud: dud, seconds: 5, held: true, tier: "easy")

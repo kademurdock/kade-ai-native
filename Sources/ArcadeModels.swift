@@ -1652,25 +1652,26 @@ struct ArcadeTouchZoneRect: Equatable {
 }
 
 /// The touch numbers (profile.input.touch's top level, and a fight tier's
-/// own `timing` over them). Touch v2 adds flickBreaksPx (a block let go into
-/// a flick) and the scrub: `scrub: {reversals, legPx, withinMs}`.
+/// own `timing` over them), with the kit's v2 defaults for any a table
+/// leaves out. Touch v2 adds flickBreaksPx (a block let go into a flick),
+/// stillPx and stillMs (a rest waits while the fingers moved stillPx or more
+/// in the last stillMs) and the scrub: `scrub: {reversals, legPx, withinMs}`.
 struct ArcadeTouchNumbers: Equatable {
-    var flickPx = 20.0
-    var tapMs = 250.0
-    var tapSlopPx = 12.0
-    var doubleMs = 300.0
+    var flickPx = 28.0
+    var tapMs = 450.0
+    var tapSlopPx = 24.0
+    var doubleMs = 400.0
     var pulseMs = 100.0
-    var holdMs = 250.0
+    var holdMs = 500.0
     var repeatAfterMs = 1000.0
-    var repeatEveryMs = 250.0
+    var repeatEveryMs = 300.0
     var stickRadiusPx = 60.0
     var flickBreaksPx = 40.0
+    var stillPx = 3.0
+    var stillMs = 150.0
     var scrubReversals = 2
     var scrubLegPx = 20.0
     var scrubWithinMs = 1200.0
-    /// The app's own: fingers of one gesture landing further apart than this
-    /// that did nothing are a dud 'apart' ("put them down together").
-    var apartMs = 200.0
 
     /// Takes every number the row has, keeps the rest.
     mutating func read(_ json: [String: Any]?) {
@@ -1689,7 +1690,8 @@ struct ArcadeTouchNumbers: Equatable {
         repeatEveryMs = max(50, number("repeatEveryMs", repeatEveryMs))
         stickRadiusPx = max(1, number("stickRadiusPx", stickRadiusPx))
         flickBreaksPx = number("flickBreaksPx", flickBreaksPx)
-        apartMs = number("apartMs", apartMs)
+        stillPx = number("stillPx", stillPx)
+        stillMs = number("stillMs", stillMs)
         if let scrub = json["scrub"] as? [String: Any] {
             if let reversals = arcadeJSONNumber(scrub["reversals"]), reversals >= 1 { scrubReversals = Int(reversals) }
             if let leg = arcadeJSONNumber(scrub["legPx"]), leg >= 1 { scrubLegPx = leg }
@@ -1848,12 +1850,13 @@ struct ArcadeTouchTable: Equatable {
     /// The Full fight tier (Oct 20 2026): the Oct 18 two-halves table with
     /// the new timing, a flick out of the right-hand block, and on the left
     /// two-finger flicks down for status and up for where everyone is, and
-    /// a two-finger hold for help. `fight` is a copy of it.
+    /// a two-finger hold for help; three fingers held anywhere, help too.
+    /// `fight` is a copy of it.
     static let fullFightJSON = """
-    {"anywhere":{"tap3":{"pulse":{"buttons":["START"]},"say":"pause"}},
-     "left":{"stick1":{"radiusPx":60,"say":"move"},"tap1":{"pulse":{"buttons":["A"]},"say":"change target"},
+    {"anywhere":{"tap3":{"pulse":{"buttons":["START"]},"say":"pause"},"hold3":{"info":"help","ms":800,"say":"help"}},
+     "left":{"stick1":{"radiusPx":60,"say":"walk"},"tap1":{"pulse":{"buttons":["A"]},"say":"change target"},
              "flick2":{"down":{"info":"status","say":"how you're doing"},"up":{"info":"where","say":"where everyone is"},
-                       "left":{"info":"facing","say":"facing"},"right":{"info":"time","say":"time"}},
+                       "left":{"info":"facing","say":"which way you face"},"right":{"info":"time","say":"time and score"}},
              "hold2":{"info":"help","ms":1000,"say":"help"}},
      "right":{"flick1":{"left":{"pulse":{"buttons":["CL"]},"say":"weak punch"},"up":{"pulse":{"buttons":["CU"]},"say":"strong punch"},
                         "down":{"pulse":{"buttons":["CD"]},"say":"weak kick"},"right":{"pulse":{"buttons":["CR"]},"say":"strong kick"}},
@@ -1863,7 +1866,8 @@ struct ArcadeTouchTable: Equatable {
     """
 
     /// The default tables when a game's pack has no input.touch of its own
-    /// (touch v2, Oct 20 2026): the VoiceOver-style menu table (flick to
+    /// (touch v2, Oct 20 2026; the kit's own tables, as its shared touch
+    /// vectors carry them): the VoiceOver-style menu table (flick to
     /// move, tap to hear it, double-tap to choose, two-finger scrub back,
     /// two-finger tap quiet, two-finger double-tap Start) with the relaxed
     /// numbers, and the fight tiers: Easy (the whole pad one zone: tap and
@@ -1871,7 +1875,7 @@ struct ArcadeTouchTable: Equatable {
     /// back) and Full.
     static let standardJSON = """
     {"flickPx":28,"tapMs":450,"tapSlopPx":24,"doubleMs":400,"pulseMs":100,"holdMs":500,
-     "repeatAfterMs":1000,"repeatEveryMs":300,"stickRadiusPx":60,"flickBreaksPx":40,
+     "repeatAfterMs":1000,"repeatEveryMs":300,"stickRadiusPx":60,"flickBreaksPx":40,"stillPx":3,"stillMs":150,
      "scrub":{"reversals":2,"legPx":20,"withinMs":1200},
      "menu":{"flick1":{"up":{"pulse":{"sy":-1},"say":"up"},"down":{"pulse":{"sy":1},"say":"down"},
                        "left":{"pulse":{"sx":-1},"say":"previous"},"right":{"pulse":{"sx":1},"say":"next"},"repeat":true},
@@ -1948,15 +1952,16 @@ struct ArcadeGestureReport: Equatable {
 enum ArcadeDudReason: String, CaseIterable {
     /// Still, but lifted after the tap time and before any hold.
     case slowTap
-    /// Moved past the tap slop, not as far as a flick.
+    /// Moved past the tap slop, not as far as a flick, quickly.
     case shortFlick
-    /// Moved, where this many fingers have no flick.
+    /// The same, slowly (lifted after the tap time).
     case drift
-    /// The fingers of one gesture landed too far apart in time.
+    /// The fingers of one gesture landed over 250 ms apart.
     case apart
-    /// A second tap after the double-tap time (the single tap had gone).
+    /// A tap that landed just after the double-tap window (it still counts as a tap).
     case lateDouble
-    /// A gesture the table has nothing for here.
+    /// Nothing in the table for it: a flick's distance where that way has
+    /// nothing, or a tap with no action.
     case noAction
 }
 
@@ -1998,40 +2003,44 @@ enum ArcadeTouchOutput: Equatable {
     case lifted(ArcadeLiftReport)
 }
 
-/// The kit's core/touch.js recognizer, step for step, with the clock passed
-/// in (milliseconds) so it can be tested without a screen: call
-/// start/move/end for each finger and advance(to:) from a display link while
-/// `nextDue` is set. The mode is read when the first finger lands and holds
-/// until the last one lifts.
+/// The kit's core/touch.js recognizer v2 (Oct 20 2026), step for step, with
+/// the clock passed in (milliseconds) so it can be tested without a screen:
+/// call start/move/end for each finger and advance(to:) from a display link
+/// while `nextDue` is set; a job runs at its own due time. Both recognizers
+/// run the kit's shared vectors (core/test/touch_vectors.json). The mode is
+/// read when the first finger lands and holds until the last one lifts;
+/// 'menu', 'pause' and 'demo' use the menu table.
 ///
-/// Fights split the pad into zones that work side by side (the Full tier's
-/// "stick under your left thumb, attack flicks under your right"; the Easy
-/// tier is one zone, the whole pad): each zone has its own gesture, with its
-/// own fingers, flicks, taps, holds, stick and timers. A finger belongs to
-/// the zone it landed in. The 'anywhere' gestures still work across the
-/// zones for taps: when fingers on several zones together make a tap the
-/// 'anywhere' table has (three fingers, pause), all of them landed and lifted
-/// within tapMs and none moved, that tap is what happens, and a zone's own
-/// tap waits (at most tapMs from the first finger) until that is settled.
+/// The rules (the kit's own words, shortened):
+///   tap     travel tapSlopPx or less, lifted within tapMs. With a
+///           doubleTapN it waits doubleMs for a second one, which must land
+///           within doubleMs of the first lift; a waiting tap fires before
+///           any other action, in order. Without one it fires on the lift.
+///   flick   the fingers' average travel reaches flickPx, at any speed; one
+///           per gesture. A direction with no action fires nothing and does
+///           not end the gesture (a scrub can still follow).
+///   hold    the fingers stay within tapSlopPx for the hold's ms (else
+///           holdMs) and have stopped: a rest waits while they moved stillPx
+///           or more in the last stillMs, so a slow flick never blocks.
+///   flickBreaks  a slide of flickBreaksPx out of such a hold lets it go and
+///           fires that direction's flick.
+///   scrub2  two fingers rubbed sideways: the first finger turns `reversals`
+///           times after legs of legPx, within withinMs of landing.
+///   duds    a lift that did nothing: slowTap, shortFlick (quickly), drift
+///           (slowly), apart (landed over 250 ms apart), noAction; lateDouble
+///           alongside a tap that landed just after the double-tap window.
+///   zones   in fights each zone has its own gesture (Full: the two halves,
+///           side by side; Easy: one zone, the whole pad). Three or more
+///           fingers over more than one zone make one whole-screen gesture:
+///           anywhere.tapN or holdN, and the zones' own gestures are dropped.
+///   'touch-finger' is held while any finger is on the pad, so the kit's
+///           Walk in for me stops at once.
 ///
-/// Touch v2 (Oct 20 2026), the kit's recognizer v2:
-///   - the numbers are the mode's: a fight tier's own timing over the
-///     top-level ones, then her touch timing (`fit`), so an Easy still
-///     touch lifted before the 500 ms rest is a tap, with no dead gap;
-///   - a hold with flickBreaks that the finger slides flickBreaksPx out of
-///     lets go and fires that direction's flick;
-///   - a flick in a direction with no action fires nothing and leaves the
-///     gesture open (so a scrub can still be made);
-///   - scrubN: N fingers rubbed left and right, `reversals` turns with legs
-///     of legPx or more within withinMs, fires on the last turn;
-///   - reports: .gesture for everything acted on, .dud with its reason for
-///     a lift that did nothing, .lifted with the measurements of every lift.
-///
-/// Native additions: haptic cues for the stick's eight directions (with a
-/// little give at each edge, so a resting thumb does not buzz) and full
-/// push; a hold may carry its own time; and a hold never fires once the
-/// fingers have wandered past the slop, even if they came back (a scrub
-/// passing through its start is not a rest).
+/// Native additions: the numbers take her touch timing over the table's
+/// (`fit`; a held hold then takes her fitted rest); haptic cues for the
+/// stick's eight directions (with a little give at each edge) and full push;
+/// the stick moves in steps of 0.02; and the reports (.gesture, .dud,
+/// .lifted) for the haptics, Pad practice and the trace.
 struct ArcadeTouchRecognizer {
     var table: ArcadeTouchTable
     /// 'fight' uses the fight tables; anything else ('menu', 'pause', 'demo') the menu table.
@@ -2042,6 +2051,13 @@ struct ArcadeTouchRecognizer {
     var fit: ArcadeTouchFit?
     /// The v2 reports (.gesture, .dud, .lifted); off only for checks of the plain outputs.
     var reports = true
+    /// The kit's 'touch-finger' source while any finger is down; off only for checks of the plain outputs.
+    var fingerSource = true
+
+    static let fingerSourceName = "touch-finger"
+    static let apartMs = 250.0
+    static let recheckMs = 50.0
+    static let lateDoubleMs = 300.0
 
     private struct Finger {
         var x0: Double
@@ -2053,6 +2069,19 @@ struct ArcadeTouchRecognizer {
         var distance: Double { ((x - x0) * (x - x0) + (y - y0) * (y - y0)).squareRoot() }
     }
 
+    /// Where the fingers' average was, and when (a rest waits until they stop).
+    private struct Moment {
+        let t: Double
+        let dx: Double
+        let dy: Double
+    }
+
+    private struct Scrub {
+        var dir = 0
+        var legStart: Double
+        var reversals = 0
+    }
+
     /// One gesture: in menus every finger on the pad; in fights the fingers of one zone.
     private struct Gesture {
         let serial: Int
@@ -2060,32 +2089,34 @@ struct ArcadeTouchRecognizer {
         let mode: String
         let zone: ArcadeZone?
         var touches: [Int: Finger] = [:]
+        /// The first finger (the scrub follows it).
+        var firstId: Int?
         var fingers = 0
         var fired = false
         var stick = false
         var holding = false
         /// A press (pressN) is held while this gesture's fingers stay down.
         var pressing = false
-        /// The pad source a held action presses (nil for an info hold).
+        /// Part of a whole-screen gesture: its own gestures do nothing.
+        var dropped = false
+        /// It has flicked (one flick per gesture), whether or not that way had an action.
+        var flicked = false
+        /// A flick broke out of the hold.
+        var broke = false
+        var lands: [Double] = []
+        var hist: [Moment] = []
+        /// The fingers' average travel when the hold took effect.
+        var holdDx = 0.0
+        var holdDy = 0.0
+        /// The pad source a held hold presses (nil for an info hold), its action and finger count.
         var heldSource: String?
-        /// The held action and its finger count, for the release report.
         var heldAction: ArcadePadAction?
         var heldFingers = 0
-        /// A flick broke out of the hold: the gesture is spent.
-        var broke = false
+        var scrub: Scrub?
         var sector: Int?
         var fullPush = false
-        /// The average travel at its farthest.
+        /// The average travel at its farthest (the lift report).
         var peak = 0.0
-        /// When the last finger joined.
-        var lastLanding = 0.0
-        /// The scrub: the way the fingers are going (+1 right, -1 left,
-        /// 0 not yet), the travel where they turned last, the turns, and when
-        /// the rub started (the fingers' last still moment).
-        var scrubDir = 0
-        var scrubExtreme = 0.0
-        var scrubReversals = 0
-        var scrubFrom = 0.0
         /// The flick that repeats under a finger kept down.
         var repeating: ArcadeGestureReport?
 
@@ -2094,8 +2125,6 @@ struct ArcadeTouchRecognizer {
             self.t0 = t0
             self.mode = mode
             self.zone = zone
-            lastLanding = t0
-            scrubFrom = t0
         }
 
         /// Each zone has its own stick and hold sources, so letting go of one never lets go of the other.
@@ -2104,39 +2133,35 @@ struct ArcadeTouchRecognizer {
         var pressSource: String { zone.map { "touch-press-" + $0.rawValue } ?? "touch-press-all" }
     }
 
-    /// Every finger from the first one down to the last one up, across the zones.
-    private struct Family {
+    /// Every finger on the screen, first down to last up (the kit's `all`).
+    private struct Screen {
         let serial: Int
         let t0: Double
-        let fight: Bool
-        /// Every finger that touched, as a gesture counts them.
-        var fingers = 0
-        var zones: Set<ArcadeZone> = []
-        /// Something fired, a finger moved or time ran out: no 'anywhere' tap across the zones.
-        var spoiled = false
-        /// A zone's taps held back while the fingers might still be one 'anywhere' tap.
-        var deferred: [Gesture] = []
+        let mode: String
+        var touches: [Int: Finger] = [:]
+        var zones: Set<String> = []
+        var most = 0
+        var fired = false
     }
 
+    /// A tap waiting to see if a second one makes it a double tap.
     private struct Pending {
         let serial: Int
         let fingers: Int
         let mode: String
         let zone: ArcadeZone?
-        /// The tap's lift (the double-tap time counts from it).
+        /// Its lift: the second tap must land within `wait` of it.
         let at: Double
-        let t0: Double
-        let travel: Double
+        let wait: Double
+        let gesture: Gesture
         let single: ArcadePadAction?
         let say: String?
     }
 
-    /// The last single tap that went out after its double-tap wait (a second
-    /// tap soon after it is a dud 'lateDouble').
-    private struct Single {
+    /// The last single tap that went out after its wait (for lateDouble).
+    private struct LastTap {
         let fingers: Int
         let mode: String
-        let zone: ArcadeZone?
         let at: Double
     }
 
@@ -2145,7 +2170,7 @@ struct ArcadeTouchRecognizer {
         case repeatFlick(Int, ArcadePadAction)
         case release(String)
         case single(Int)
-        case flush(Int)
+        case screenHold(Int)
     }
 
     private struct Scheduled {
@@ -2157,9 +2182,9 @@ struct ArcadeTouchRecognizer {
     private var gestures: [String: Gesture] = [:]
     /// Which gesture each finger down belongs to.
     private var owners: [Int: String] = [:]
-    private var family: Family?
+    private var screen: Screen?
     private var pending: Pending?
-    private var lastSingle: Single?
+    private var lastTap: LastTap?
     private var jobs: [Scheduled] = []
     private var serial = 0
     private var pulses = 0
@@ -2168,11 +2193,12 @@ struct ArcadeTouchRecognizer {
 
     /// When advance(to:) next has work, or nil when the pad is at rest.
     var nextDue: Double? { jobs.map { $0.due }.min() }
-    var isIdle: Bool { gestures.isEmpty && family == nil && jobs.isEmpty }
+    var isIdle: Bool { gestures.isEmpty && screen == nil && jobs.isEmpty }
     var fingersDown: Int { owners.count }
 
     /// The numbers a gesture in `mode` is judged by: the table's for the
-    /// mode, with her touch timing over them.
+    /// mode (a fight tier's timing over the top-level ones), with her touch
+    /// timing over them.
     func numbers(mode: String) -> ArcadeTouchNumbers {
         table.numbers(mode: mode).fitted(fit)
     }
@@ -2181,27 +2207,46 @@ struct ArcadeTouchRecognizer {
 
     /// `height` places the finger in the table's named fight zones (0: the two halves only).
     mutating func start(id: Int, x: Double, y: Double, width: Double, height: Double = 0, now: Double) -> [ArcadeTouchOutput] {
-        var group: Family
-        if let existing = family {
-            group = existing
-        } else {
-            serial += 1
-            group = Family(serial: serial, t0: now, fight: mode == "fight")
-        }
-        let zone: ArcadeZone? = group.fight ? table.zone(x: x, y: y, width: width, height: height) : nil
+        var out: [ArcadeTouchOutput] = []
+        let gestureMode = gestures.values.first?.mode ?? (mode == "fight" ? "fight" : "menu")
+        let zone: ArcadeZone? = gestureMode == "fight" ? table.zone(x: x, y: y, width: width, height: height) : nil
         let name = zone?.rawValue ?? "all"
         var current: Gesture
         if let existing = gestures[name] {
             current = existing
         } else {
             serial += 1
-            current = Gesture(serial: serial, t0: now, mode: group.fight ? "fight" : "menu", zone: zone)
+            current = Gesture(serial: serial, t0: now, mode: gestureMode, zone: zone)
         }
         current.touches[id] = Finger(x0: x, y0: y, x: x, y: y)
+        if current.firstId == nil { current.firstId = id }
+        current.lands.append(now)
         current.fingers = max(current.fingers, current.touches.count)
-        current.lastLanding = now
-        var out: [ArcadeTouchOutput] = []
-        // A press is held from the moment the first finger lands (core/touch.js: press1 only).
+        // 'touch-finger' is on while any finger is on the pad: the kit's Walk in for me stops at once.
+        if owners.isEmpty && fingerSource { out.append(.pad(source: Self.fingerSourceName, state: ArcadePadState())) }
+        owners[id] = name
+        // Every finger on the screen: three or more over more than one zone are one whole-screen gesture.
+        var all: Screen
+        if let existing = screen {
+            all = existing
+        } else {
+            serial += 1
+            all = Screen(serial: serial, t0: now, mode: gestureMode)
+        }
+        all.touches[id] = Finger(x0: x, y0: y, x: x, y: y)
+        all.zones.insert(name)
+        all.most = max(all.most, all.touches.values.filter { !$0.ended }.count)
+        if all.most >= 3 && all.zones.count > 1 {
+            for key in Array(gestures.keys) { gestures[key]?.dropped = true }
+            current.dropped = true
+            let owner = all.serial
+            jobs.removeAll { $0.job == .screenHold(owner) }
+            if all.mode == "fight", table.active.anywhere.holds[all.most] != nil {
+                schedule(now + (table.active.anywhere.holdTimes[all.most] ?? table.base.holdMs), .screenHold(owner))
+            }
+        }
+        screen = all
+        // A press is held from the moment the first finger lands.
         let set = table.gestures(mode: current.mode, zone: current.zone)
         if current.touches.count == 1, let press = set.presses[1] {
             current.pressing = true
@@ -2210,16 +2255,17 @@ struct ArcadeTouchRecognizer {
             report(current, key: "press1", action: .hold(press), say: set.says["press1"], now: now, into: &out)
         }
         gestures[name] = current
-        owners[id] = name
-        group.fingers += 1
-        if let zone { group.zones.insert(zone) }
-        family = group
         scheduleHold(for: current, now: now)
         return out
     }
 
     mutating func move(id: Int, x: Double, y: Double, now: Double) -> [ArcadeTouchOutput] {
-        guard let name = owners[id], var current = gestures[name], current.touches[id] != nil else { return [] }
+        if screen?.touches[id] != nil {
+            screen?.touches[id]?.x = x
+            screen?.touches[id]?.y = y
+        }
+        guard let name = owners[id], var current = gestures[name], let finger = current.touches[id] else { return [] }
+        let lastX = finger.x
         current.touches[id]?.x = x
         current.touches[id]?.y = y
         var out: [ArcadeTouchOutput] = []
@@ -2228,27 +2274,54 @@ struct ArcadeTouchRecognizer {
         let n = current.fingers
         let travel = Self.travel(current)
         current.peak = max(current.peak, travel.distance)
-        let wandered = (current.touches[id]?.distance ?? 0) > numbers.tapSlopPx
-        // A flick out of a held block: the block lets go, then that direction's flick fires.
-        if current.holding, current.heldSource != nil, set.flickBreaks.contains(current.heldFingers),
-           let flick = set.flicks[n], travel.distance >= numbers.flickBreaksPx {
-            let direction = ArcadeDirection.of(dx: travel.dx, dy: travel.dy)
-            releaseHeld(&current, set: set, now: now, into: &out)
-            current.holding = false
-            current.broke = true
-            if let action = flick.actions[direction] {
-                act(action, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
-                report(current, key: "flick\(n)", action: action, say: flick.says[direction], direction: direction,
-                       fromHold: true, now: now, into: &out)
-            }
+        current.hist.append(Moment(t: now, dx: travel.dx, dy: travel.dy))
+        if current.hist.count > 64 { current.hist.removeFirst() }
+        if current.dropped || current.pressing {
             gestures[name] = current
-            spoil(now: now, into: &out)
             return out
         }
-        if current.holding || current.pressing || current.broke {
+        // Out of a hold that allows it (a block): a slide of flickBreaksPx lets it go and fires that flick.
+        if current.holding {
+            if set.holds[n] != nil, set.flickBreaks.contains(n), !current.broke {
+                let hx = travel.dx - current.holdDx
+                let hy = travel.dy - current.holdDy
+                if (hx * hx + hy * hy).squareRoot() >= numbers.flickBreaksPx {
+                    current.broke = true
+                    letGo(&current, set: set, now: now, into: &out)
+                    let direction = ArcadeDirection.of(dx: hx, dy: hy)
+                    if let flick = set.flicks[n], let action = flick.actions[direction] {
+                        act(action, now: now, holdSource: current.holdSource, into: &out)
+                        report(current, key: "flick\(n)", action: action, say: flick.says[direction], direction: direction,
+                               fromHold: true, now: now, into: &out)
+                    }
+                }
+            }
             gestures[name] = current
-            if wandered { spoil(now: now, into: &out) }
             return out
+        }
+        // The two-finger scrub: the first finger's sideways turns (VoiceOver's escape: back).
+        if n == 2, let scrubAction = set.scrubs[2], id == current.firstId {
+            var scrub = current.scrub ?? Scrub(dir: 0, legStart: lastX, reversals: 0)
+            let step = x - lastX
+            if step != 0 {
+                let dir = step > 0 ? 1 : -1
+                if scrub.dir == 0 {
+                    scrub.dir = dir
+                    scrub.legStart = lastX
+                } else if dir != scrub.dir {
+                    if abs(lastX - scrub.legStart) >= numbers.scrubLegPx { scrub.reversals += 1 }
+                    scrub.legStart = lastX
+                    scrub.dir = dir
+                }
+            }
+            current.scrub = scrub
+            if step != 0, !current.fired, scrub.reversals >= numbers.scrubReversals, now - current.t0 <= numbers.scrubWithinMs {
+                current.fired = true
+                gestures[name] = current
+                act(scrubAction, now: now, holdSource: current.holdSource, into: &out)
+                report(current, key: "scrub2", action: scrubAction, say: set.says["scrub2"], now: now, into: &out)
+                return out
+            }
         }
         if n == 1, let radius = set.stickRadius, current.stick || travel.distance > numbers.tapSlopPx {
             if !current.stick {
@@ -2287,162 +2360,74 @@ struct ArcadeTouchRecognizer {
                 current.fullPush = false
             }
             gestures[name] = current
-            spoil(now: now, into: &out)
             return out
         }
-        // The scrub: fingers rubbed left and right, fired on the last turn.
-        if !current.fired, let scrub = set.scrubs[n] {
-            Self.trackScrub(&current, dx: travel.dx, distance: travel.distance, numbers: numbers, now: now)
-            if current.scrubReversals >= numbers.scrubReversals, now - current.scrubFrom <= numbers.scrubWithinMs {
+        if !current.fired, !current.flicked, let flick = set.flicks[n], travel.distance >= numbers.flickPx {
+            let direction = ArcadeDirection.of(dx: travel.dx, dy: travel.dy)
+            current.flicked = true   // one flick per gesture
+            // A direction with no action fires nothing, and a scrub may still be coming.
+            if let action = flick.actions[direction] {
                 current.fired = true
-                act(scrub, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
-                report(current, key: "scrub\(n)", action: scrub, say: set.says["scrub\(n)"], now: now, into: &out)
+                let made = Self.gestureReport(current, key: "flick\(n)", action: action, say: flick.says[direction],
+                                              direction: direction, now: now)
+                if flick.repeats {
+                    current.repeating = made
+                    schedule(now + table.base.repeatAfterMs, .repeatFlick(current.serial, action))
+                }
                 gestures[name] = current
-                spoil(now: now, into: &out)
+                act(action, now: now, holdSource: current.holdSource, into: &out)
+                if reports { out.append(.gesture(made)) }
                 return out
             }
         }
-        if !current.fired, let flick = set.flicks[n], travel.distance >= numbers.flickPx {
-            let direction = ArcadeDirection.of(dx: travel.dx, dy: travel.dy)
-            // A direction with no action fires nothing and leaves the gesture open.
-            if let action = flick.actions[direction] {
-                current.fired = true
-                act(action, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
-                let made = Self.gestureReport(current, key: "flick\(n)", action: action, say: flick.says[direction],
-                                              direction: direction, now: now)
-                if reports { out.append(.gesture(made)) }
-                if flick.repeats {
-                    current.repeating = made
-                    schedule(now + numbers.repeatAfterMs, .repeatFlick(current.serial, action))
-                }
-            }
-        }
         gestures[name] = current
-        if current.fired || wandered { spoil(now: now, into: &out) }
         return out
     }
 
     mutating func end(id: Int, now: Double) -> [ArcadeTouchOutput] {
-        guard let name = owners[id], var current = gestures[name], current.touches[id] != nil else { return [] }
-        owners[id] = nil
-        current.touches[id]?.ended = true
-        var out: [ArcadeTouchOutput] = []
-        if current.touches.values.contains(where: { !$0.ended }) {   // wait for every finger of this gesture
-            gestures[name] = current
-            return out
-        }
-        gestures[name] = nil
-        let owner = current.serial
-        jobs.removeAll {
-            switch $0.job {
-            case .hold(let serial), .repeatFlick(let serial, _): return serial == owner
-            case .release, .single, .flush: return false
-            }
-        }
-        let numbers = self.numbers(mode: current.mode)
-        let set = table.gestures(mode: current.mode, zone: current.zone)
-        if current.stick { out.append(.pad(source: current.stickSource, state: nil)) }
-        if current.heldSource != nil { releaseHeld(&current, set: set, now: now, into: &out) }
-        if current.pressing { out.append(.pad(source: current.pressSource, state: nil)) }
-        let far = current.touches.values.map { $0.distance }.max() ?? 0
-        let elapsed = now - current.t0
-        let still = elapsed <= numbers.tapMs && far <= numbers.tapSlopPx
-        let isTap = !current.fired && still
-        // A quick still press still counts toward a tap across the zones (three
-        // fingers, Start): it only held its own button while it was down.
-        let partOfTap = (!current.fired || current.pressing) && still
-        if reports {
-            out.append(.lifted(ArcadeLiftReport(fingers: current.fingers, zone: current.zone?.rawValue, mode: current.mode,
-                                                t0: current.t0, t1: now, travel: Self.tenth(current.peak),
-                                                far: Self.tenth(far), fired: current.fired)))
-        }
-        if !current.fired && !still { dud(current, far: far, elapsed: elapsed, numbers: numbers, set: set, into: &out) }
-        guard var group = family else {
-            if isTap { tap(current, now: now, into: &out) }
-            return out
-        }
-        let fightTapMs = self.numbers(mode: "fight").tapMs
-        if !owners.isEmpty {
-            // Fingers are still down in another zone.
-            if isTap {
-                let fingersSoFar = group.fingers
-                let couldBeAnywhere = group.fight && !group.spoiled && now - group.t0 <= fightTapMs
-                    && table.anywhere.taps.keys.contains { $0 >= 2 && $0 >= fingersSoFar }
-                if couldBeAnywhere {
-                    group.deferred.append(current)
-                    family = group
-                    if !jobs.contains(where: { $0.job == .flush(group.serial) }) {
-                        schedule(group.t0 + fightTapMs, .flush(group.serial))
-                    }
-                } else {
-                    tap(current, now: now, into: &out)
-                }
-            }
-            return out
-        }
-        // The last finger is up.
-        family = nil
-        jobs.removeAll { $0.job == .flush(group.serial) }
-        if group.fight, group.zones.count >= 2, !group.spoiled, partOfTap, now - group.t0 <= fightTapMs,
-           let anywhere = table.anywhere.taps[group.fingers] {
-            act(anywhere, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
-            if reports {
-                out.append(.gesture(ArcadeGestureReport(key: "tap\(group.fingers)", direction: nil, fingers: group.fingers,
-                                                        zone: nil, mode: "fight", ms: now - group.t0, travel: 0, action: anywhere,
-                                                        say: table.anywhere.says["tap\(group.fingers)"])))
-            }
-            return out
-        }
-        for waiting in group.deferred { tap(waiting, now: now, into: &out) }
-        if isTap { tap(current, now: now, into: &out) }
+        guard owners[id] != nil else { return [] }
+        var out = lift(id: id, now: now)
+        // The finger source goes after the gesture's own outputs.
+        if owners.isEmpty && fingerSource { out.append(.pad(source: Self.fingerSourceName, state: nil)) }
         return out
     }
 
-    /// Runs whatever came due: holds, flick repeats, pulse releases, single taps, held-back taps.
+    /// Runs whatever came due, each at its own time: holds, flick repeats,
+    /// pulse releases, waiting taps, whole-screen holds.
     mutating func advance(to now: Double) -> [ArcadeTouchOutput] {
         var out: [ArcadeTouchOutput] = []
         while let index = jobs.indices.filter({ jobs[$0].due <= now }).min(by: { jobs[$0].due < jobs[$1].due }) {
             let item = jobs.remove(at: index)
+            let at = item.due
             switch item.job {
             case .hold(let owner):
-                checkHold(owner, now: now, into: &out)
+                checkHold(owner, now: at, into: &out)
             case .repeatFlick(let owner, let action):
                 if let current = gestures.values.first(where: { $0.serial == owner }) {
-                    let numbers = self.numbers(mode: current.mode)
-                    act(action, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
+                    act(action, now: at, holdSource: current.holdSource, into: &out)
                     if reports, let made = current.repeating {
                         var step = ArcadeGestureReport(key: made.key, direction: made.direction, fingers: made.fingers,
-                                                       zone: made.zone, mode: made.mode, ms: now - current.t0,
+                                                       zone: made.zone, mode: made.mode, ms: at - current.t0,
                                                        travel: Self.tenth(Self.travel(current).distance), action: made.action,
                                                        say: made.say)
                         step.repeatStep = true
                         out.append(.gesture(step))
                     }
-                    schedule(now + numbers.repeatEveryMs, .repeatFlick(owner, action))
+                    schedule(at + table.base.repeatEveryMs, .repeatFlick(owner, action))
                 }
             case .release(let source):
                 out.append(.pad(source: source, state: nil))
             case .single(let owner):
                 if let waiting = pending, waiting.serial == owner {
-                    pending = nil
-                    lastSingle = Single(fingers: waiting.fingers, mode: waiting.mode, zone: waiting.zone, at: waiting.at)
-                    if let single = waiting.single {
-                        act(single, now: now, numbers: self.numbers(mode: waiting.mode), holdSource: "touch-hold", into: &out)
-                        if reports {
-                            out.append(.gesture(ArcadeGestureReport(key: "tap\(waiting.fingers)", direction: nil, fingers: waiting.fingers,
-                                                                    zone: waiting.zone?.rawValue, mode: waiting.mode,
-                                                                    ms: waiting.at - waiting.t0, travel: waiting.travel,
-                                                                    action: single, say: waiting.say)))
-                        }
-                    } else if reports {
-                        // A lone tap where only a double-tap does something.
-                        out.append(.dud(ArcadeDudReport(reason: .noAction, fingers: waiting.fingers, zone: waiting.zone?.rawValue,
-                                                        mode: waiting.mode, ms: waiting.at - waiting.t0, travel: waiting.travel)))
+                    // A second touch already landed in the window: wait for it to finish (it may be the double tap).
+                    if gestures.values.contains(where: { $0.t0 >= waiting.at && $0.t0 - waiting.at <= waiting.wait }) {
+                        schedule(at + Self.recheckMs, .single(owner))
+                    } else {
+                        firePending(now: at, into: &out)
                     }
                 }
-            case .flush(let owner):
-                // Too late now for a tap across the zones: the held-back taps go out.
-                if let group = family, group.serial == owner { spoil(now: now, into: &out) }
+            case .screenHold(let owner):
+                screenHold(owner, now: at, into: &out)
             }
         }
         return out
@@ -2460,12 +2445,13 @@ struct ArcadeTouchRecognizer {
         for item in jobs {
             if case .release(let source) = item.job { out.append(.pad(source: source, state: nil)) }
         }
+        if !owners.isEmpty && fingerSource { out.append(.pad(source: Self.fingerSourceName, state: nil)) }
         jobs.removeAll()
         pending = nil
-        lastSingle = nil
+        lastTap = nil
         gestures.removeAll()
         owners.removeAll()
-        family = nil
+        screen = nil
         return out
     }
 
@@ -2489,18 +2475,34 @@ struct ArcadeTouchRecognizer {
         schedule(now + wait, .hold(owner))
     }
 
-    private mutating func act(_ action: ArcadePadAction, now: Double, numbers: ArcadeTouchNumbers, holdSource: String,
+    /// An action goes out; a tap still waiting goes first (in order).
+    private mutating func act(_ action: ArcadePadAction, now: Double, holdSource: String, fromPending: Bool = false,
                               into out: inout [ArcadeTouchOutput]) {
+        if !fromPending && pending != nil { firePending(now: now, into: &out) }
         switch action {
         case .pulse(let state):
             pulses += 1
             let source = "touch-p\(pulses)"
             out.append(.pad(source: source, state: state))
-            schedule(now + numbers.pulseMs, .release(source))
+            schedule(now + table.base.pulseMs, .release(source))
         case .hold(let state):
             out.append(.pad(source: holdSource, state: state))
         case .info(let what):
             out.append(.info(what))
+        }
+    }
+
+    /// The waiting tap goes out now: its single action, or a dud when it has none.
+    private mutating func firePending(now: Double, into out: inout [ArcadeTouchOutput]) {
+        guard let waiting = pending else { return }
+        jobs.removeAll { $0.job == .single(waiting.serial) }
+        pending = nil
+        lastTap = LastTap(fingers: waiting.fingers, mode: waiting.mode, at: waiting.at)
+        if let single = waiting.single {
+            act(single, now: now, holdSource: waiting.gesture.holdSource, fromPending: true, into: &out)
+            report(waiting.gesture, key: "tap\(waiting.fingers)", action: single, say: waiting.say, now: now, into: &out)
+        } else {
+            dud(waiting.gesture, .noAction, now: now, into: &out)
         }
     }
 
@@ -2520,141 +2522,189 @@ struct ArcadeTouchRecognizer {
                             action: action, say: say)
     }
 
-    /// A held hold lets go (a lift, or a flick out of it): its source goes, with a release report.
-    private func releaseHeld(_ current: inout Gesture, set: ArcadeGestureSet, now: Double, into out: inout [ArcadeTouchOutput]) {
+    private func dud(_ current: Gesture, _ reason: ArcadeDudReason, now: Double, into out: inout [ArcadeTouchOutput]) {
+        guard reports else { return }
+        out.append(.dud(ArcadeDudReport(reason: reason, fingers: current.fingers, zone: current.zone?.rawValue, mode: current.mode,
+                                        ms: now - current.t0, travel: Self.tenth(Self.travel(current).distance))))
+    }
+
+    /// A hold lets go (a lift, or a flick out of it): a held one's source goes, with a release report.
+    private func letGo(_ current: inout Gesture, set: ArcadeGestureSet, now: Double, into out: inout [ArcadeTouchOutput]) {
+        current.holding = false
         guard let held = current.heldSource else { return }
         out.append(.pad(source: held, state: nil))
         if let action = current.heldAction {
-            report(current, key: "release\(current.heldFingers)", action: action,
-                   say: set.says["hold\(current.heldFingers)"], now: now, into: &out)
+            report(current, key: "release", action: action, say: set.says["hold\(current.heldFingers)"], now: now, into: &out)
         }
         current.heldSource = nil
         current.heldAction = nil
     }
 
-    /// No 'anywhere' tap across the zones any more: any held-back taps go out now.
-    private mutating func spoil(now: Double, into out: inout [ArcadeTouchOutput]) {
-        guard var group = family, !(group.spoiled && group.deferred.isEmpty) else { return }
-        let waiting = group.deferred
-        group.spoiled = true
-        group.deferred = []
-        family = group
-        jobs.removeAll { $0.job == .flush(group.serial) }
-        for held in waiting { tap(held, now: now, into: &out) }
+    /// The fingers' last finger lifted, or one of them: the kit's lift().
+    private mutating func lift(id: Int, now: Double) -> [ArcadeTouchOutput] {
+        let name = owners.removeValue(forKey: id)
+        var out: [ArcadeTouchOutput] = []
+        // Every finger on the screen: a whole-screen tap fires as the last one lifts.
+        if var all = screen, all.touches[id] != nil {
+            all.touches[id]?.ended = true
+            if all.touches.values.allSatisfy({ $0.ended }) {
+                screen = nil
+                let owner = all.serial
+                jobs.removeAll { $0.job == .screenHold(owner) }
+                let top = numbers(mode: "menu")
+                if !all.fired && all.most >= 3 && all.zones.count > 1 && now - all.t0 <= top.tapMs {
+                    let far = all.touches.values.map { $0.distance }.max() ?? 0
+                    let anywhere = all.mode == "fight" ? table.active.anywhere : table.menu
+                    if far <= top.tapSlopPx, let tap = anywhere.taps[all.most] {
+                        act(tap, now: now, holdSource: "touch-hold", into: &out)
+                        if reports {
+                            out.append(.gesture(ArcadeGestureReport(key: "tap\(all.most)", direction: nil, fingers: all.most, zone: nil,
+                                                                    mode: all.mode, ms: now - all.t0, travel: 0, action: tap,
+                                                                    say: anywhere.says["tap\(all.most)"])))
+                        }
+                    }
+                }
+            } else {
+                screen = all
+            }
+        }
+        guard let name, var current = gestures[name], current.touches[id] != nil else { return out }
+        current.touches[id]?.ended = true
+        if current.touches.values.contains(where: { !$0.ended }) {   // wait for every finger of this gesture
+            gestures[name] = current
+            return out
+        }
+        gestures[name] = nil
+        let owner = current.serial
+        jobs.removeAll {
+            switch $0.job {
+            case .hold(let serial), .repeatFlick(let serial, _): return serial == owner
+            case .release, .single, .screenHold: return false
+            }
+        }
+        let numbers = self.numbers(mode: current.mode)
+        let set = table.gestures(mode: current.mode, zone: current.zone)
+        if current.stick { out.append(.pad(source: current.stickSource, state: nil)) }
+        if current.holding { letGo(&current, set: set, now: now, into: &out) }
+        if current.pressing { out.append(.pad(source: current.pressSource, state: nil)) }
+        let far = current.touches.values.map { $0.distance }.max() ?? 0
+        if reports {
+            out.append(.lifted(ArcadeLiftReport(fingers: current.fingers, zone: current.zone?.rawValue, mode: current.mode,
+                                                t0: current.t0, t1: now, travel: Self.tenth(current.peak),
+                                                far: Self.tenth(far), fired: current.fired)))
+        }
+        if current.fired || current.dropped { return out }
+        let slow = now - current.t0 > numbers.tapMs
+        if far > numbers.tapSlopPx {
+            dud(current, far >= numbers.flickPx ? .noAction : (slow ? .drift : .shortFlick), now: now, into: &out)
+            return out
+        }
+        if slow {
+            dud(current, .slowTap, now: now, into: &out)
+            return out
+        }
+        if current.fingers > 1, let first = current.lands.first, let last = current.lands.last, last - first > Self.apartMs {
+            dud(current, .apart, now: now, into: &out)
+            return out
+        }
+        tap(current, now: now, into: &out)
+        return out
     }
 
     private mutating func checkHold(_ owner: Int, now: Double, into out: inout [ArcadeTouchOutput]) {
         guard let name = gestures.first(where: { $0.value.serial == owner })?.key, var current = gestures[name],
-              !current.fired, !current.stick, current.scrubDir == 0 else { return }
+              !current.fired, !current.stick, !current.dropped else { return }
         let set = table.gestures(mode: current.mode, zone: current.zone)
         let numbers = self.numbers(mode: current.mode)
-        guard let hold = set.holds[current.fingers], current.peak <= numbers.tapSlopPx,
-              Self.travel(current).distance <= numbers.tapSlopPx else { return }
+        let travel = Self.travel(current)
+        guard let hold = set.holds[current.fingers], travel.distance <= numbers.tapSlopPx else { return }
+        // A rest waits until the fingers have stopped.
+        if Self.recentMove(current, now: now, stillMs: numbers.stillMs) >= numbers.stillPx {
+            schedule(now + Self.recheckMs, .hold(owner))
+            return
+        }
         current.holding = true
         current.fired = true
+        current.holdDx = travel.dx
+        current.holdDy = travel.dy
+        current.heldFingers = current.fingers
         if case .hold = hold {
             current.heldSource = current.holdSource
             current.heldAction = hold
-            current.heldFingers = current.fingers
         }
         gestures[name] = current
-        act(hold, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
+        act(hold, now: now, holdSource: current.holdSource, into: &out)
         out.append(.haptic(.hold))
         report(current, key: "hold\(current.fingers)", action: hold, say: set.says["hold\(current.fingers)"], now: now, into: &out)
-        spoil(now: now, into: &out)
+    }
+
+    /// Three or more fingers over the zones, still for anywhere.holdN's time: that hold.
+    private mutating func screenHold(_ owner: Int, now: Double, into out: inout [ArcadeTouchOutput]) {
+        guard var all = screen, all.serial == owner, !all.fired, all.mode == "fight",
+              let hold = table.active.anywhere.holds[all.most],
+              !all.touches.values.contains(where: { $0.ended }) else { return }
+        let far = all.touches.values.map { $0.distance }.max() ?? 0
+        guard far <= numbers(mode: "menu").tapSlopPx else { return }
+        all.fired = true
+        screen = all
+        act(hold, now: now, holdSource: "touch-hold", into: &out)
+        if reports {
+            out.append(.gesture(ArcadeGestureReport(key: "hold\(all.most)", direction: nil, fingers: all.most, zone: nil, mode: all.mode,
+                                                    ms: now - all.t0, travel: 0, action: hold,
+                                                    say: table.active.anywhere.says["hold\(all.most)"])))
+        }
     }
 
     private mutating func tap(_ current: Gesture, now: Double, into out: inout [ArcadeTouchOutput]) {
         let set = table.gestures(mode: current.mode, zone: current.zone)
-        let numbers = self.numbers(mode: current.mode)
+        let wait = self.numbers(mode: current.mode).doubleMs
         let n = current.fingers
         let single = set.taps[n]
-        let travel = Self.tenth(Self.travel(current).distance)
         guard let twice = set.doubleTaps[n] else {
             if let single {
-                act(single, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
+                act(single, now: now, holdSource: current.holdSource, into: &out)
                 report(current, key: "tap\(n)", action: single, say: set.says["tap\(n)"], now: now, into: &out)
-            } else if reports {
-                out.append(.dud(ArcadeDudReport(reason: .noAction, fingers: n, zone: current.zone?.rawValue, mode: current.mode,
-                                                ms: now - current.t0, travel: travel)))
+            } else {
+                dud(current, .noAction, now: now, into: &out)
             }
             return
         }
         if let waiting = pending, waiting.fingers == n, waiting.mode == current.mode, waiting.zone == current.zone,
-           now - waiting.at <= numbers.doubleMs {
-            dropPending()
-            lastSingle = nil
-            act(twice, now: now, numbers: numbers, holdSource: current.holdSource, into: &out)
+           current.t0 - waiting.at <= wait {
+            jobs.removeAll { $0.job == .single(waiting.serial) }
+            pending = nil
+            act(twice, now: now, holdSource: current.holdSource, into: &out)
             report(current, key: "doubleTap\(n)", action: twice, say: set.says["doubleTap\(n)"], now: now, into: &out)
             return
         }
-        // A second tap that came after the double-tap time, while it still
-        // looks like one: the single tap has gone already.
-        if reports, let last = lastSingle, last.fingers == n, last.mode == current.mode, last.zone == current.zone,
-           now - last.at > numbers.doubleMs, now - last.at <= numbers.doubleMs * 2 {
-            out.append(.dud(ArcadeDudReport(reason: .lateDouble, fingers: n, zone: current.zone?.rawValue, mode: current.mode,
-                                            ms: now - last.at, travel: travel)))
+        if pending != nil { firePending(now: now, into: &out) }
+        if let last = lastTap, last.fingers == n, last.mode == current.mode,
+           current.t0 - last.at > wait, current.t0 - last.at <= wait + Self.lateDoubleMs {
+            dud(current, .lateDouble, now: now, into: &out)
         }
-        lastSingle = nil
-        // A different tap was waiting: core/touch.js drops it without acting.
-        if pending != nil { dropPending() }
         serial += 1
-        pending = Pending(serial: serial, fingers: n, mode: current.mode, zone: current.zone, at: now, t0: current.t0,
-                          travel: travel, single: single, say: set.says["tap\(n)"])
-        schedule(now + numbers.doubleMs, .single(serial))
+        pending = Pending(serial: serial, fingers: n, mode: current.mode, zone: current.zone, at: now, wait: wait,
+                          gesture: current, single: single, say: set.says["tap\(n)"])
+        schedule(now + wait, .single(serial))
     }
 
-    private mutating func dropPending() {
-        if let waiting = pending {
-            jobs.removeAll { $0.job == .single(waiting.serial) }
-        }
-        pending = nil
-    }
-
-    /// A lift that did nothing: why (the kit's onDud reasons).
-    private func dud(_ current: Gesture, far: Double, elapsed: Double, numbers: ArcadeTouchNumbers, set: ArcadeGestureSet,
-                     into out: inout [ArcadeTouchOutput]) {
-        guard reports else { return }
-        let n = current.fingers
-        let reason: ArcadeDudReason
-        if n >= 2 && current.lastLanding - current.t0 > numbers.apartMs {
-            reason = .apart
-        } else if far > numbers.tapSlopPx {
-            if set.flicks[n] != nil {
-                reason = current.peak < numbers.flickPx ? .shortFlick : .noAction
+    /// How far the fingers moved in the last stillMs.
+    private static func recentMove(_ g: Gesture, now: Double, stillMs: Double) -> Double {
+        let back = now - stillMs
+        let moved = Self.travel(g)
+        var refX = 0.0
+        var refY = 0.0
+        for moment in g.hist {
+            if moment.t <= back {
+                refX = moment.dx
+                refY = moment.dy
             } else {
-                reason = .drift
+                break
             }
-        } else if set.holds[n] == nil && set.taps[n] == nil && set.doubleTaps[n] == nil {
-            reason = .noAction
-        } else {
-            reason = .slowTap
         }
-        out.append(.dud(ArcadeDudReport(reason: reason, fingers: n, zone: current.zone?.rawValue, mode: current.mode,
-                                        ms: elapsed, travel: Self.tenth(current.peak))))
-    }
-
-    /// Follows a scrub: the first leg of legPx from where the fingers rested
-    /// sets the way, and every turn back of legPx from the farthest point
-    /// counts. The window starts at the fingers' last still moment.
-    private static func trackScrub(_ g: inout Gesture, dx: Double, distance: Double, numbers: ArcadeTouchNumbers, now: Double) {
-        let leg = numbers.scrubLegPx
-        if g.scrubDir == 0 {
-            if distance <= numbers.tapSlopPx && abs(dx) < leg { g.scrubFrom = now }
-            if abs(dx) >= leg {
-                g.scrubDir = dx > 0 ? 1 : -1
-                g.scrubExtreme = dx
-            }
-            return
-        }
-        let way = Double(g.scrubDir)
-        if (dx - g.scrubExtreme) * way > 0 {
-            g.scrubExtreme = dx
-        } else if abs(dx - g.scrubExtreme) >= leg {
-            g.scrubReversals += 1
-            g.scrubDir = -g.scrubDir
-            g.scrubExtreme = dx
-        }
+        let dx = moved.dx - refX
+        let dy = moved.dy - refY
+        return (dx * dx + dy * dy).squareRoot()
     }
 
     private static func travel(_ g: Gesture) -> (dx: Double, dy: Double, distance: Double) {
