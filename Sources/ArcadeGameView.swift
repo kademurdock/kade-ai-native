@@ -276,6 +276,8 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         telemetry.title = launch.entry.title
         telemetry.gameId = launch.record.gameId
         telemetry.version = launch.record.version
+        telemetry.player = launch.record.kitVersion ?? ""
+        telemetry.newerPlayerReady = launch.newerPlayer != nil
         readProfile()
     }
 
@@ -639,7 +641,9 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     private func couldNotStart(_ what: String) {
         status = "The game hit a problem (\(what))"
         guard claimStart() else { return }
-        sayStartLine(ArcadeStartWatch.couldNotStartLine)
+        // Oct 19 2026: on an older game player than the shelf's, the line
+        // names the newer one (build 340 went on starting the old one).
+        sayStartLine(ArcadeStartWatch.failureLine(couldNotStart: true, newerPlayer: launch.newerPlayer))
     }
 
     /// Takes this load's one start line (ArcadeStartWatch.claim) and stops the
@@ -730,7 +734,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         guard claimStart() else { return }
         telemetry.note(error: "start: no ready after \(Int(ArcadeStartWatch.limit)) s (status: \(status))")
         status = ArcadeStartWatch.status
-        sayStartLine(ArcadeStartWatch.line)
+        sayStartLine(ArcadeStartWatch.failureLine(couldNotStart: false, newerPlayer: launch.newerPlayer))
     }
 
     private func setMode(_ next: String) {

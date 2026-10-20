@@ -538,6 +538,9 @@ struct ArcadeManifest: Decodable, Equatable {
 
     var totalBytes: Int64 { packs.reduce(0) { $0 + $1.size } }
 
+    /// The kit pack's (the game player's) version, when the manifest names one.
+    var kitVersion: String? { packs.first(where: { $0.kind == "kit" })?.version }
+
     /// Bytes still to fetch, given the pack keys already on the phone.
     func bytesMissing(installed: Set<String>) -> Int64 {
         packs.filter { !installed.contains($0.key) }.reduce(0) { $0 + $1.size }
@@ -734,6 +737,110 @@ struct ArcadeInstallRecord: Codable, Equatable {
         base = manifest.base
         emulatorData = manifest.emulatorData
         packs = manifest.packs.map { Pack(kind: $0.kind, id: $0.id, version: $0.version, sha256: $0.sha256) }
+    }
+
+    /// The version of the kit pack (the game player) this install runs on;
+    /// nil for an install with none.
+    var kitVersion: String? { packs.first(where: { $0.kind == "kit" })?.version }
+
+    /// Every pack folder ("<id>/<version>") this install reads.
+    var packKeys: Set<String> { Set(packs.map { $0.id + "/" + $0.version }) }
+
+    /// Oct 19 2026: the pack folders this record reads that `next`, the
+    /// record written over it for the same game version (a newer game
+    /// player), does not: the old kit. They may go once nothing else on the
+    /// phone uses them (ArcadeUpdate.letGo).
+    func retired(by next: ArcadeInstallRecord) -> Set<String> {
+        packKeys.subtracting(next.packKeys)
+    }
+}
+
+// MARK: - Updates (Oct 19 2026)
+//
+// Build 340 on Kade's iPhone: the server moved every game to a fixed kit pack
+// (a new kit version, the game player) while each game's own version stayed
+// the same. The app counted only the game's version, so it went on launching
+// the old kit, which never started, and the only way out was Delete download
+// and download it again. A different kit on the shelf is an update too.
+
+/// What an installed shelf game is waiting for.
+enum ArcadeUpdate: Equatable {
+    /// Nothing newer on the shelf (or not downloaded).
+    case current
+    /// A newer version of the game itself (it brings the shelf's kit with it).
+    case game
+    /// Only the game player (the kit) is newer; the game's own version is the same.
+    case player
+
+    /// `installedVersion` nil: not downloaded, so nothing to update.
+    static func of(catalogVersion: String, installedVersion: String?, installedKit: String?, shelfKit: String?) -> ArcadeUpdate {
+        guard let installedVersion else { return .current }
+        if installedVersion != catalogVersion { return .game }
+        return isNewerKit(shelf: shelfKit, installed: installedKit) ? .player : .current
+    }
+
+    /// The shelf names a kit and it is not the one this install runs on.
+    /// Kit versions are never ranked as older or newer: the shelf's is the
+    /// one to have, so a kit the server rolls back to is an update as well.
+    /// A shelf that names no kit, or an install with none, is no update:
+    /// there is nothing to compare.
+    static func isNewerKit(shelf: String?, installed: String?) -> Bool {
+        guard let shelf, !shelf.isEmpty, let installed, !installed.isEmpty else { return false }
+        return shelf != installed
+    }
+
+    var isUpdate: Bool { self != .current }
+
+    /// After the row's caption (console and size).
+    var captionTail: String {
+        switch self {
+        case .current: return ", downloaded"
+        case .game: return ", update ready"
+        case .player: return ", update ready: a newer game player"
+        }
+    }
+
+    /// The Play button's value.
+    var playValue: String {
+        switch self {
+        case .current: return "Downloaded"
+        case .game: return "Downloaded. An update is ready."
+        case .player: return "Downloaded. Update ready: a newer game player."
+        }
+    }
+
+    /// The button that downloads it, and what its start failure line names.
+    static let buttonTitle = "Download the update"
+
+    /// The one question Play asks first while only the game player is newer
+    /// (Download, Play anyway, Not now).
+    static func playerQuestion(bytes: Int64) -> String {
+        "A newer game player is ready, \(ArcadeText.size(bytes)). Download it first?"
+    }
+
+    /// What an install let go of (`retired`, from ArcadeInstallRecord.retired(by:))
+    /// comes to: what goes now, and what waits for the open game to close.
+    /// Anything an install on the phone still uses (`used`: every record's
+    /// packs and own folder, and every added game's) stays.
+    static func letGo(_ retired: Set<String>, used: Set<String>, protecting: Set<String>) -> (remove: Set<String>, wait: Set<String>) {
+        let unused = retired.subtracting(used)
+        return (unused.subtracting(protecting), unused.intersection(protecting))
+    }
+}
+
+/// Oct 19 2026: a launch whose game player is older than the shelf's, and
+/// where the newer one is offered, for its start failure line.
+enum ArcadeNewerPlayer: Equatable {
+    /// A shelf game: its row's Download the update.
+    case shelf
+    /// A game added from Files: Play offers the newer player first.
+    case added
+
+    var advice: String {
+        switch self {
+        case .shelf: return "A newer game player is ready: leave the game and choose " + ArcadeUpdate.buttonTitle + "."
+        case .added: return "A newer game player is ready: leave the game, press Play, and choose Download."
+        }
     }
 }
 
@@ -1988,6 +2095,17 @@ struct ArcadeStartWatch {
     /// (ArcadeJS.cannotStart), and for the same failure seen by the app.
     static let couldNotStartLine = "The game could not start. Open Settings and choose Report a problem with this game."
 
+    /// Oct 19 2026: a start failure while a newer game player is ready says
+    /// how to get it, in place of the usual advice: build 340 went on
+    /// starting an old player that never started, and nothing said a newer
+    /// one was there. `couldNotStart`: the kit's 'error' about a game that
+    /// never started (or the same failure seen by the app); otherwise the
+    /// countdown ran out.
+    static func failureLine(couldNotStart: Bool, newerPlayer: ArcadeNewerPlayer?) -> String {
+        guard let newerPlayer else { return couldNotStart ? couldNotStartLine : line }
+        return (couldNotStart ? "The game could not start. " : "The game did not start. ") + newerPlayer.advice
+    }
+
     /// When the countdown runs out; nil while it is not running.
     private(set) var deadline: Date?
     /// 'ready' came for this page load.
@@ -2118,6 +2236,10 @@ struct ArcadeTelemetry {
     var title = ""
     var gameId = ""
     var version = ""
+    /// Oct 19 2026: the kit pack (the game player) this game ran on, and
+    /// whether the shelf had a newer one, so a report says which player failed.
+    var player = ""
+    var newerPlayerReady = false
     var openedAt = Date()
     var pageLoads = 0
     var terminations = 0
@@ -2181,6 +2303,9 @@ struct ArcadeTelemetry {
         var lines: [String] = []
         lines.append("Kade AI Arcade: how the game ran")
         lines.append("Game: \(title) (\(gameId) \(version))")
+        if !player.isEmpty {
+            lines.append("Game player: " + player + (newerPlayerReady ? ", and a newer one is ready" : "") + ".")
+        }
         lines.append("Open for \(seconds / 60) min \(seconds % 60) s")
         lines.append("Page loads: \(pageLoads). Web content stopped: \(terminations). Restarted: \(recoveries).")
         lines.append("Mode: \(mode.isEmpty ? "none yet" : mode). Screen: \(screen.isEmpty ? "none yet" : screen). Game audio: \(audio.isEmpty ? "not started" : audio).")

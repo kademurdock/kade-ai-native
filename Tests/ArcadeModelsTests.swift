@@ -23,8 +23,9 @@ import CryptoKit
         javascriptAndWords()
         startWatched()
         savesKept()
+        updates()
         try addAGame()
-        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
+        print("Arcade models: \(checks) checks passed. Covers catalog and shelf gating, manifests, signed links, pack indexes, the kadearcade:// routing, MIME types and byte ranges, the touch recognizer's menu and fight tables (both halves at once, taps across them, hold times, the stick's edges), the controller map, keyboard names, the page bridge script, the start watch (its countdown from the load and from 'started', away and back, one line per load, the RAM finder's own line ending a start, and the page errors and missing EmulatorJS files that mean a start failed), updates (a newer game player with the game's own version the same, its size with the game pack on the phone, the old player let go once nothing uses it, and the start failure line naming it), kept saves, game reports and the how-it-ran text, and Add a game (systems, No-Intro sha1 and crc32, N64 byte orders, the zip reader with stored and deflated entries, the import store, /match and each row's status, the server's exact unlocked and locked answers, the access manifest's plan, pack updates, answers heard under another account, the ROM served at its pack path, and the plain player's per-system controls from the kit's systems.json: named touch zones held as presses, Select, the d-pad); not WebKit, VoiceOver, haptics, GameController or a real download.")
     }
 
     // MARK: A start that never finishes
@@ -120,6 +121,114 @@ import CryptoKit
         check(!ArcadeStartWatch.isMissingEmulatorFile("loader.js", emulatorData: "")
               && ArcadeStartWatch.isMissingEmulatorFile("emulatorjs/loader.js", emulatorData: ""),
               "an empty folder never makes every missing file count")
+    }
+
+    // MARK: Updates (Oct 19 2026, build 340)
+    //
+    // The server moved every game to a new kit (the game player) while each
+    // game's own version stayed the same; the app counted only the game's
+    // version and launched the old kit forever.
+
+    static func updates() {
+        let kitOld = "20261018-27899e08"
+        let kitNew = "20261019-dd55f62f"
+
+        check(ArcadeUpdate.of(catalogVersion: "20261018-63fdca17", installedVersion: "20261018-63fdca17",
+                              installedKit: kitOld, shelfKit: kitNew) == .player,
+              "the same game version on an older game player is an update (build 340 launched the old one forever)")
+        check(ArcadeUpdate.of(catalogVersion: "g1", installedVersion: "g1", installedKit: kitNew, shelfKit: kitNew) == .current,
+              "the same game on the shelf's player: nothing to update")
+        check(ArcadeUpdate.of(catalogVersion: "g2", installedVersion: "g1", installedKit: kitNew, shelfKit: kitNew) == .game,
+              "a newer game is an update, as before")
+        check(ArcadeUpdate.of(catalogVersion: "g2", installedVersion: "g1", installedKit: kitOld, shelfKit: kitNew) == .game,
+              "a newer game brings the shelf's player with it: one update, said as the game's")
+        check(ArcadeUpdate.of(catalogVersion: "g1", installedVersion: nil, installedKit: nil, shelfKit: kitNew) == .current,
+              "not downloaded: nothing to update")
+        check(ArcadeUpdate.of(catalogVersion: "g1", installedVersion: "g1", installedKit: kitOld, shelfKit: nil) == .current,
+              "a shelf that names no player: nothing to compare")
+        check(ArcadeUpdate.of(catalogVersion: "g1", installedVersion: "g1", installedKit: nil, shelfKit: kitNew) == .current,
+              "an install with no player pack: nothing to compare")
+        check(ArcadeUpdate.isNewerKit(shelf: kitOld, installed: kitNew), "a player the server rolled back to is the one to have")
+        check(!ArcadeUpdate.isNewerKit(shelf: "", installed: kitOld) && !ArcadeUpdate.isNewerKit(shelf: kitNew, installed: ""),
+              "an empty version is no version")
+        check(!ArcadeUpdate.current.isUpdate && ArcadeUpdate.game.isUpdate && ArcadeUpdate.player.isUpdate,
+              "a newer player shows Download the update like a newer game")
+        check(ArcadeUpdate.current.captionTail == ", downloaded" && ArcadeUpdate.game.captionTail == ", update ready"
+              && ArcadeUpdate.player.captionTail == ", update ready: a newer game player", "the row's caption says which update")
+        check(ArcadeUpdate.current.playValue == "Downloaded" && ArcadeUpdate.game.playValue == "Downloaded. An update is ready."
+              && ArcadeUpdate.player.playValue == "Downloaded. Update ready: a newer game player.", "and so does Play's value")
+        check(ArcadeUpdate.buttonTitle == "Download the update", "the button the failure line names")
+
+        // One game, the same version, first on the old player, then on the new one.
+        let gameSha = String(repeating: "ab", count: 32)
+        func manifest(kit version: String, size: Int64, sha: String) -> ArcadeManifest {
+            ArcadeManifest(id: "demo", version: "g1", entry: "games/demo/play.html", base: "games/demo/", emulatorData: "emulatorjs/",
+                           packs: [ArcadePackRef(kind: "kit", id: "kit", version: version, size: size, sha256: sha),
+                                   ArcadePackRef(kind: "game", id: "demo", version: "g1", size: 45_200_000, sha256: gameSha)])
+        }
+        let oldManifest = manifest(kit: kitOld, size: 6_900_000, sha: String(repeating: "cd", count: 32))
+        let newManifest = manifest(kit: kitNew, size: 7_000_000, sha: String(repeating: "ef", count: 32))
+        let oldRecord = ArcadeInstallRecord(manifest: oldManifest, title: "Demo")
+        let newRecord = ArcadeInstallRecord(manifest: newManifest, title: "Demo")
+        let oldKitKey = "kit/" + kitOld
+        let newKitKey = "kit/" + kitNew
+        check(oldRecord.kitVersion == kitOld && newRecord.kitVersion == kitNew && newManifest.kitVersion == kitNew,
+              "a record and a manifest name the player they run on")
+        check(ArcadeUpdate.of(catalogVersion: "g1", installedVersion: oldRecord.version, installedKit: oldRecord.kitVersion,
+                              shelfKit: kitNew) == .player, "the installed record on the old player waits for the new one")
+
+        // The offer: the game pack is on the phone and only the player is new.
+        let onPhone = oldRecord.packKeys
+        check(onPhone == [oldKitKey, "demo/g1"], "the packs the old install reads")
+        check(newManifest.bytesMissing(installed: onPhone) == 7_000_000,
+              "with the game pack on the phone, the update is the player's size alone")
+        check(ArcadeUpdate.playerQuestion(bytes: newManifest.bytesMissing(installed: onPhone))
+              == "A newer game player is ready, 7.0 MB. Download it first?", "Play's one question, with the size")
+        check(newManifest.bytesMissing(installed: onPhone.union([newKitKey])) == 0,
+              "a player another game already brought: nothing to download, put to use at once")
+
+        // One record per game version: the new one is written over the old,
+        // and the old player is let go once nothing uses it.
+        check(oldRecord.version == newRecord.version && oldRecord != newRecord,
+              "the new record has the same game version, so it takes the old one's place")
+        let retired = oldRecord.retired(by: newRecord)
+        check(retired == [oldKitKey], "the new record lets go of the old player only, never the game pack")
+        check(newRecord.retired(by: newRecord).isEmpty, "writing the same record again lets nothing go")
+        let used = newRecord.packKeys.union(["demo/g1"])
+        let free = ArcadeUpdate.letGo(retired, used: used, protecting: [])
+        check(free.remove == [oldKitKey] && free.wait.isEmpty, "nothing else on the phone uses the old player: it goes")
+        let playing = ArcadeUpdate.letGo(retired, used: used, protecting: oldRecord.packKeys.union(["demo/g1"]))
+        check(playing.remove.isEmpty && playing.wait == [oldKitKey],
+              "a game open on the old player (Play anyway while the update downloaded) keeps it until it closes")
+        let shared = ArcadeUpdate.letGo(retired, used: used.union([oldKitKey]), protecting: [oldKitKey])
+        check(shared.remove.isEmpty && shared.wait.isEmpty,
+              "another game, or a game added from Files, still on the old player keeps it, open or not")
+
+        // A start that fails on the old player names the newer one.
+        check(ArcadeStartWatch.failureLine(couldNotStart: false, newerPlayer: nil) == ArcadeStartWatch.line
+              && ArcadeStartWatch.failureLine(couldNotStart: true, newerPlayer: nil) == ArcadeStartWatch.couldNotStartLine,
+              "on the shelf's player, the usual lines")
+        check(ArcadeStartWatch.failureLine(couldNotStart: false, newerPlayer: .shelf)
+              == "The game did not start. A newer game player is ready: leave the game and choose Download the update.",
+              "the countdown on an old player names the update")
+        check(ArcadeStartWatch.failureLine(couldNotStart: true, newerPlayer: .shelf)
+              == "The game could not start. A newer game player is ready: leave the game and choose Download the update.",
+              "and so does the kit's own start error")
+        check(ArcadeStartWatch.failureLine(couldNotStart: true, newerPlayer: .added)
+              == "The game could not start. A newer game player is ready: leave the game, press Play, and choose Download.",
+              "an added game's Play offers the newer player first")
+
+        var telemetry = ArcadeTelemetry()
+        telemetry.title = "Demo"
+        telemetry.gameId = "demo"
+        telemetry.version = "g1"
+        telemetry.player = kitOld
+        telemetry.newerPlayerReady = true
+        check(telemetry.report(now: telemetry.openedAt).contains("Game player: " + kitOld + ", and a newer one is ready."),
+              "how the game ran names the player, and a newer one")
+        telemetry.newerPlayerReady = false
+        check(telemetry.report(now: telemetry.openedAt).contains("Game player: " + kitOld + ".\n"), "the shelf's own player")
+        check(!ArcadeTelemetry().report(now: Date()).contains("Game player"), "no player known, no line")
     }
 
     // MARK: Saves
@@ -293,6 +402,7 @@ import CryptoKit
               "explicit paths are tidied into relative folders")
         check(custom.packs.count == 1 && custom.packs[0].key == "tilt/3" && custom.packs[0].kind == "game",
               "a one-pack manifest carries its size and sha256 at the top")
+        check(manifest.kitVersion == "4.2.3-1" && custom.kitVersion == nil, "a manifest names its game player, when it has one")
         let kitOnly = try decoder.decode(ArcadeManifest.self, from: Data("""
         {"id":"x","version":"1","packs":[{"kind":"kit","id":"kit","version":"1","size":5,"sha256":"\(kitSha)"}]}
         """.utf8))

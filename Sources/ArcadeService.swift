@@ -19,6 +19,10 @@ import UIKit
 //     iCloud backup. Nothing from a pack is ever in the app bundle or the repo;
 //   - an update removes the game's older version and the packs only it used,
 //     never while that version is open;
+//   - (Oct 19 2026, build 340) a newer kit on the shelf (config kit.version)
+//     than the one an installed game's record runs on is an update too, with
+//     the game's own version the same: its record is written over the old
+//     one and the old kit goes once nothing on the phone uses it;
 //   - ONE service lives for the whole app session (ArcadeService.shared), so a
 //     download keeps its progress, its Stop button and its spoken news when
 //     she leaves the Arcade and comes back, and two downloads can never write
@@ -54,6 +58,9 @@ struct ArcadeLaunch: Identifiable {
     /// page expects the ROM (its romPath, the overlay's path), sent to the
     /// page as revivalKitHost.romPath. Nil for the plain player (rom= in its URL).
     var romPath: String? = nil
+    /// Oct 19 2026: the shelf has a newer game player (kit) than the one this
+    /// launch runs on, and where it is offered: a start failure says so.
+    var newerPlayer: ArcadeNewerPlayer? = nil
 
     var saveId: String { saveKey ?? record.gameId }
     /// The kit's plain player: a game added from Files with no accessibility pack.
@@ -143,6 +150,11 @@ struct ArcadeStore {
         return ArcadeMount(id: id, version: version, index: index, blob: blob)
     }
 
+    /// One record per game version: install.json in that version's folder
+    /// (the game pack's own folder). A newer game player for the same game
+    /// version writes its record over the old one, so the newest is the one
+    /// launched, and the old kit is let go by `retire`, not by `prune` (which
+    /// looks only at the game's other versions).
     func writeRecord(_ record: ArcadeInstallRecord) throws {
         guard let folder = folder(id: record.gameId, version: record.version) else {
             throw ArcadeServiceError(message: "The game's file names are not usable.")
@@ -150,6 +162,30 @@ struct ArcadeStore {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try JSONEncoder().encode(record).write(to: folder.appendingPathComponent("install.json"), options: .atomic)
         Self.excludeFromBackup(folder)
+    }
+
+    /// The record in one version's folder, as written (its packs whole or not).
+    func record(gameId: String, version: String) -> ArcadeInstallRecord? {
+        guard let folder = folder(id: gameId, version: version),
+              let data = try? Data(contentsOf: folder.appendingPathComponent("install.json")),
+              let record = try? JSONDecoder().decode(ArcadeInstallRecord.self, from: data),
+              record.gameId == gameId, record.version == version else { return nil }
+        return record
+    }
+
+    /// Oct 19 2026: pack folders ("<id>/<version>") an install let go of (the
+    /// old kit after a newer game player, an older accessibility pack) go
+    /// once no install on the phone uses them. The answer is the ones the
+    /// open game (`protecting`) still reads: they wait for it to close.
+    func retire(_ keys: Set<String>, protecting: Set<String>) -> Set<String> {
+        guard !keys.isEmpty else { return [] }
+        let plan = ArcadeUpdate.letGo(keys, used: recordKeys(), protecting: protecting)
+        for key in plan.remove {
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] != "imports", let folder = folder(id: parts[0], version: parts[1]) else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+        return plan.wait
     }
 
     /// The installed versions of a game whose every pack is still whole,
@@ -294,6 +330,9 @@ final class ArcadeService: ObservableObject {
     @Published private(set) var downloadErrors: [String: String] = [:]
     /// Installed version per game id (refreshed after load, download and delete).
     @Published private(set) var installed: [String: String] = [:]
+    /// Oct 19 2026: the kit (game player) version each installed game runs
+    /// on, so a newer kit on the shelf counts as an update (update(for:)).
+    @Published private(set) var installedKits: [String: String] = [:]
     /// Oct 19 2026: games added from Files (My games), by title, and what each row says.
     @Published private(set) var imports: [ArcadeImportRecord] = []
     @Published private(set) var importStatus: [String: ArcadeImportStatus] = [:]
@@ -310,6 +349,9 @@ final class ArcadeService: ObservableObject {
     private var inUse: Set<String> = []
     /// Updates whose old versions wait for the open game to close: game id -> version kept.
     private var prunePending: [String: String] = [:]
+    /// Pack folders let go of (an old kit) that the open game still reads:
+    /// they go once it closes.
+    private var retirePending: Set<String> = []
     /// Packs being written right now, across every service: two downloads
     /// never append to the same blob.part.
     private static var packsInFlight: Set<String> = []
@@ -348,6 +390,7 @@ final class ArcadeService: ObservableObject {
         verifying = false
         downloadErrors = [:]
         installed = [:]
+        installedKits = [:]
         importStatus = [:]
         staleAsked = []
     }
@@ -405,12 +448,23 @@ final class ArcadeService: ObservableObject {
     func refreshInstalled() {
         guard let store = try? ArcadeStore(), let rows = shelf?.rows else { return }
         var found: [String: String] = [:]
+        var kits: [String: String] = [:]
         for row in rows {
             if case .playable(let entry) = row, let record = preferredRecord(for: entry, store: store) {
                 found[entry.id] = record.version
+                kits[entry.id] = record.kitVersion
             }
         }
         installed = found
+        installedKits = kits
+    }
+
+    /// Oct 19 2026 (build 340): what an installed shelf game waits for: a
+    /// newer version of it, only a newer game player (the shelf's kit is not
+    /// the one its record runs on), or nothing.
+    func update(for entry: ArcadeCatalogEntry) -> ArcadeUpdate {
+        ArcadeUpdate.of(catalogVersion: entry.version, installedVersion: installed[entry.id],
+                        installedKit: installedKits[entry.id], shelfKit: shelf?.kitVersion)
     }
 
     private func preferredRecord(for entry: ArcadeCatalogEntry, store: ArcadeStore) -> ArcadeInstallRecord? {
@@ -507,9 +561,46 @@ final class ArcadeService: ObservableObject {
             done += pack.size
             progress = Double(done) / Double(total)
         }
-        try store.writeRecord(ArcadeInstallRecord(manifest: manifest, title: offer.entry.title))
+        try finishInstall(offer, store: store)
         progress = 1
+    }
+
+    /// Every pack is on the phone: the record, then what the update leaves.
+    /// Oct 19 2026: a newer game player for the same game version writes its
+    /// record over the old one (ArcadeStore.writeRecord), so the old kit is
+    /// let go here; the game's other versions go by prune as before.
+    private func finishInstall(_ offer: ArcadeDownloadOffer, store: ArcadeStore) throws {
+        let manifest = offer.manifest
+        let record = ArcadeInstallRecord(manifest: manifest, title: offer.entry.title)
+        let previous = store.record(gameId: manifest.id, version: manifest.version)
+        try store.writeRecord(record)
+        if let previous { retire(previous.retired(by: record)) }
         pruneOldVersions(gameId: manifest.id, keepVersion: manifest.version)
+    }
+
+    /// Oct 19 2026: an update whose every pack is already on this iPhone
+    /// (another game brought the newer game player): put to use at once, no
+    /// download, so Play can go straight on with it. False when it could not
+    /// be (a download holds the slot, a pack is missing, a file problem).
+    func installFromPhone(_ offer: ArcadeDownloadOffer) -> Bool {
+        guard downloading == nil, isPlayable(offer.entry), let store = try? ArcadeStore(),
+              offer.manifest.packs.allSatisfy({ store.hasPack($0) }) else { return false }
+        do {
+            try finishInstall(offer, store: store)
+        } catch {
+            return false
+        }
+        downloadErrors[offer.entry.id] = nil
+        refreshInstalled()
+        return true
+    }
+
+    /// Pack folders an install no longer reads go once nothing on the phone
+    /// uses them; one the open game reads (or a download is writing) waits
+    /// for stoppedPlaying.
+    private func retire(_ keys: Set<String>) {
+        guard !keys.isEmpty, let store = try? ArcadeStore() else { return }
+        retirePending.formUnion(store.retire(keys, protecting: inUse.union(Self.packsInFlight)))
     }
 
     /// An update leaves one version on the phone: the old one and the packs
@@ -535,6 +626,9 @@ final class ArcadeService: ObservableObject {
     func stoppedPlaying() {
         inUse = []
         for (gameId, version) in prunePending { pruneOldVersions(gameId: gameId, keepVersion: version) }
+        let waiting = retirePending
+        retirePending = []
+        retire(waiting)
         refreshInstalled()
     }
 
@@ -670,7 +764,11 @@ final class ArcadeService: ObservableObject {
             if pack.kind == "kit" { kit.append(mount) } else { game.append(mount) }
         }
         guard !game.isEmpty else { return nil }
-        return ArcadeLaunch(entry: entry, record: record, game: game, kit: kit)
+        var launch = ArcadeLaunch(entry: entry, record: record, game: game, kit: kit)
+        // Played on the old player (Play anyway, or no network to ask): a
+        // start failure says a newer one is ready.
+        if ArcadeUpdate.isNewerKit(shelf: shelf?.kitVersion, installed: record.kitVersion) { launch.newerPlayer = .shelf }
+        return launch
     }
 
     func delete(_ entry: ArcadeCatalogEntry) {
@@ -711,6 +809,9 @@ struct ArcadeImportOffer: Identifiable {
     var kitMissing = false
     /// Asked from Play: the question also offers to play without the pack.
     var fromPlay = false
+    /// Oct 19 2026: the player only, and the game already has an older one:
+    /// a newer game player (asked as a shelf game's is, with Play anyway).
+    var playerUpdate = false
 }
 
 /// An added file, and why the check for its accessibility pack failed (nil
@@ -753,7 +854,7 @@ extension ArcadeService {
             var status = ArcadeImportStatus.of(record, packOnPhone: onPhone, familyOpen: familyOpen)
             // The player on this iPhone has no core for the game's system, and
             // the shelf names no newer player that might.
-            if let kit = record.kit, let store, shelf?.kitVersion == nil || shelf?.kitVersion == kit.version {
+            if let kit = record.kit, let store, !ArcadeUpdate.isNewerKit(shelf: shelf?.kitVersion, installed: kit.version) {
                 if kitFiles[kit.key] == nil {
                     kitFiles[kit.key] = store.mount(id: kit.id, version: kit.version).map { Set($0.index.files.keys) } ?? []
                 }
@@ -939,9 +1040,18 @@ extension ArcadeService {
         var packs = [kit]
         if let pack = plan?.accessPack { packs.append(pack) }
         let bytes = packs.filter { !store.hasPack($0) }.reduce(Int64(0)) { $0 + $1.size }
-        return ArcadeImportOffer(record: record, kit: kit, emulatorData: emulatorData, accessPack: plan?.accessPack,
-                                 match: match, bytes: bytes, entry: plan?.entry, romPath: plan?.romPath,
-                                 kitMissing: !store.hasPack(kit))
+        var offer = ArcadeImportOffer(record: record, kit: kit, emulatorData: emulatorData, accessPack: plan?.accessPack,
+                                      match: match, bytes: bytes, entry: plan?.entry, romPath: plan?.romPath,
+                                      kitMissing: !store.hasPack(kit))
+        offer.playerUpdate = plan == nil && ArcadeUpdate.isNewerKit(shelf: kit.version, installed: record.kit?.version)
+        return offer
+    }
+
+    /// Oct 19 2026: the shelf names a newer game player than the one this
+    /// added game runs on (false while it has none: Play asks for one then).
+    func importHasNewerPlayer(_ localId: String) -> Bool {
+        guard let importStore = try? ArcadeImportStore.standard(), let record = importStore.record(localId) else { return false }
+        return ArcadeUpdate.isNewerKit(shelf: shelf?.kitVersion, installed: record.kit?.version)
     }
 
     /// This game's match, when it has a pack this account may download, or why not.
@@ -1065,6 +1175,7 @@ extension ArcadeService {
             throw ArcadeServiceError(message: "That game was deleted while its download ran.")
         }
         let previousPack = record.accessPack
+        let previousKit = record.kit
         record.kit = ArcadeImportPack(kind: "kit", id: offer.kit.id, version: offer.kit.version,
                                       sha256: offer.kit.sha256, access: ArcadeAccess.open.rawValue)
         record.emulatorData = offer.emulatorData
@@ -1077,8 +1188,13 @@ extension ArcadeService {
             record.entry = offer.entry ?? "games/\(pack.id)/play.html"
         }
         try importStore.save(record)
-        // A newer accessibility pack replaces the older one.
-        if let previousPack, previousPack.key != record.accessPack?.key { store.removeIfUnused(previousPack.key) }
+        // A newer accessibility pack replaces the older one, and (Oct 19
+        // 2026) a newer game player the older player, once nothing else on
+        // the phone uses it and the open game does not read it.
+        var letGo = Set<String>()
+        if let previousPack, previousPack.key != record.accessPack?.key { letGo.insert(previousPack.key) }
+        if let previousKit, previousKit.key != record.kit?.key { letGo.insert(previousKit.key) }
+        retire(letGo)
         progress = 1
     }
 
@@ -1103,7 +1219,8 @@ extension ArcadeService {
             return .needsPlayer
         }
         // The shelf names a newer player than the one on this iPhone.
-        let newerKit = shelf?.kitVersion.map { $0 != kitRef.version } ?? false
+        let newerKit = ArcadeUpdate.isNewerKit(shelf: shelf?.kitVersion, installed: kitRef.version)
+        let newerPlayer: ArcadeNewerPlayer? = newerKit ? .added : nil
         guard ArcadeImportPlay.hasCore(kitMount.index.files.keys, system: record.system) else {
             if newerKit { return .needsPlayer }
             return .problem(ArcadeImportText.cannotRun(record.system) + ". Try again after the next Arcade update.")
@@ -1127,7 +1244,7 @@ extension ArcadeService {
             return .ready(ArcadeLaunch(entry: entryRow, record: installed, game: [gameMount], kit: [kitMount],
                                        overlays: [ArcadeOverlay(path: romPath, file: rom, length: romSize)],
                                        saveKey: saveKey, pageHost: .game, pageQuery: nil, reportTarget: target,
-                                       system: record.system, romPath: romPath))
+                                       system: record.system, romPath: romPath, newerPlayer: newerPlayer))
         }
 
         guard kitMount.index.file(at: ArcadeImportPlay.plainEntry) != nil else {
@@ -1145,7 +1262,7 @@ extension ArcadeService {
         return .ready(ArcadeLaunch(entry: entryRow, record: installed, game: [], kit: [kitMount],
                                    overlays: [ArcadeOverlay(path: ArcadeImportPlay.plainROMPath(record), file: rom, length: romSize)],
                                    saveKey: saveKey, pageHost: .kit, pageQuery: ArcadeImportPlay.plainQuery(record),
-                                   reportTarget: target, system: record.system))
+                                   reportTarget: target, system: record.system, newerPlayer: newerPlayer))
     }
 
     /// A new title from Rename; false when nothing usable was typed.
