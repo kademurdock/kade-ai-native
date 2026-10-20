@@ -604,7 +604,7 @@ extension ArcadeView {
         }
         checkingImport = record.localId
         Task {
-            defer { checkingImport = nil }
+            var playInstead = false
             do {
                 var next = try await service.importOffer(for: record.localId, withPack: withPack)
                 next.fromPlay = fromPlay
@@ -614,16 +614,19 @@ extension ArcadeView {
                     importOffer = next
                 }
             } catch {
-                // Play's newer-player question that could not be asked
-                // (offline, the server busy): played on the player it has,
-                // whose start failure line then names the newer one.
                 if fromPlay && !withPack {
-                    playImport(record, offerPack: false, offerPlayer: false)
-                    return
+                    // Play's newer-player question that could not be asked
+                    // (offline, the server busy): played on the player it
+                    // has, whose start failure line then names the newer one.
+                    playInstead = true
+                } else {
+                    importProblem = (error as? ArcadeServiceError)?.message
+                        ?? "The size could not be checked. Check the connection and try again."
                 }
-                importProblem = (error as? ArcadeServiceError)?.message
-                    ?? "The size could not be checked. Check the connection and try again."
             }
+            checkingImport = nil
+            // After the slot is free: a player missing after all asks again, and says why.
+            if playInstead { playImport(record, offerPack: false, offerPlayer: false) }
         }
     }
 
