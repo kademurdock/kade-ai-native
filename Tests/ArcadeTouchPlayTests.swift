@@ -714,6 +714,33 @@ extension ArcadeModelsTests {
         queued.setMode("pause")
         check(queued.touch(now: 20, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false)] && !queued.autoPaused,
               "taken again on the pause screen: the kit's own read says it, so no second paused line")
+        // Oct 21 2026: an answer she asks for while away (Status from the strip) clears the kit's queue, the held
+        // pause read too: the paused line is said on her return, even with Pad on. said long ago.
+        queued.setMode("fight")
+        _ = queued.lostFocus(now: 30, mode: "fight", pauseOnLeave: true)
+        queued.kitQueueCleared()
+        check(!queued.heldReadDropped, "an answer before the game reached its pause screen leaves the read to come")
+        queued.setMode("pause")
+        queued.kitQueueCleared()
+        check(queued.heldReadDropped && queued.touch(now: 40, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false),
+                                                                                   .say(ArcadeTouchLines.pausedReturn, cls: "screen")]
+              && !queued.heldReadDropped,
+              "the kit's held read cleared while she was away: the paused line on her return, once")
+        queued.kitQueueCleared()
+        check(!queued.heldReadDropped, "an answer while she holds the pad drops nothing of hers")
+        queued.setMode("fight")
+        _ = queued.lostFocus(now: 50, mode: "fight", pauseOnLeave: true)
+        queued.setMode("pause")
+        queued.kitQueueCleared()
+        queued.setMode("fight")   // resumed some other way: nothing to say on return
+        check(!queued.heldReadDropped && !queued.touch(now: 60, voiceOver: true).contains(.say(ArcadeTouchLines.pausedReturn, cls: "screen")),
+              "the fight resumed some other way after the read was cleared: no paused line in a live fight")
+        queued.setMode("fight")
+        _ = queued.lostFocus(now: 70, mode: "fight", pauseOnLeave: true)
+        queued.setMode("pause")
+        queued.kitQueueCleared()
+        queued.forgetPause()
+        check(!queued.heldReadDropped, "a pause forgotten forgets the cleared read too")
         check(hold.lostFocus(now: 60, mode: "menu", pauseOnLeave: true) == [.fallingChime, .holdSpeech(true)], "in a menu nothing pauses")
         check(hold.lostFocus(now: 70, mode: "fight", pauseOnLeave: true) == [.holdSpeech(true)], "focus leaving a pad not held only holds the voice")
         var off = ArcadePadHold()
@@ -955,6 +982,27 @@ extension ArcadeModelsTests {
         check(shown.lessDamage == nil && shown.skipDemo == nil && shown.lessDamageShown(touch: true) && shown.skipDemoShown(touch: true)
               && !shown.lessDamageShown(touch: false) && !shown.skipDemoShown(touch: false),
               "Settings shows the kit's default for the input at hand, not the old kept false")
+        // Oct 21 2026: the kit sets Less damage only at boot and on a switch to touch, never on a change of Fight
+        // controls, so once this page's kit has sent its settings the switches read what it is doing.
+        let beforeEcho = ArcadeTouchChoices(settings: echoed, chosen: [], echo: nil)
+        check(beforeEcho.lessDamage == nil && beforeEcho.kitLessDamage == nil && beforeEcho.kitSkipDemo == nil
+              && beforeEcho.lessDamageShown(touch: true) && beforeEcho.skipDemoShown(touch: true),
+              "before this page's kit has sent its settings: the defaults worked out here")
+        let fullNow: [String: Any] = ["fightControls": "full", "walkIn": true, "lessDamage": true]
+        let fullStillLess = ArcadeTouchChoices(settings: fullNow, chosen: ["fightControls"], echo: fullNow)
+        check(fullStillLess.fightControls == "full" && fullStillLess.lessDamage == nil && fullStillLess.lessDamageShown(touch: true)
+              && fullStillLess.kitSkipDemo == nil && fullStillLess.skipDemoShown(touch: true) && !fullStillLess.skipDemoShown(touch: false),
+              "Easy at boot, then Full: the kit still takes one fifth damage, so the switch stays on (only her choice goes back)")
+        let easyNow: [String: Any] = ["fightControls": "easy", "walkIn": true, "lessDamage": false, "skipDemo": true]
+        let easyNoLess = ArcadeTouchChoices(settings: easyNow, chosen: ["fightControls"], echo: easyNow)
+        check(easyNoLess.lessDamage == nil && !easyNoLess.lessDamageShown(touch: true) && easyNoLess.skipDemoShown(touch: false),
+              "Full at boot, then Easy: the kit's Less damage stays off, and the switch says so; its demo choice too")
+        check(!ArcadeTouchChoices(settings: [:], chosen: [], echo: ["fightControls": "easy"]).lessDamageShown(touch: true),
+              "a kit with no Less damage of its own has it off")
+        let hers = ArcadeTouchChoices(settings: ["lessDamage": false, "skipDemo": false], chosen: ["lessDamage", "skipDemo"],
+                                      echo: ["lessDamage": true, "skipDemo": true])
+        check(hers.lessDamage == false && !hers.lessDamageShown(touch: true) && !hers.skipDemoShown(touch: true),
+              "her own choice is shown over the kit's")
         var touchStart = ArcadeKitSettings.hostSettings(saved: unchosen, readsAll: false, showPicture: false, hasSoundWorld: true)
         ArcadeTouchChoices.fillDefaults(&touchStart, pauseOnLeave: true, touch: true)
         var keysStart = ArcadeKitSettings.hostSettings(saved: unchosen, readsAll: false, showPicture: false, hasSoundWorld: true)

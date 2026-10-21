@@ -294,9 +294,14 @@ struct ArcadePadHold {
     /// Oct 21 2026: the page's kit has the one queue (the host asks it at
     /// 'ready'). Its pause screen read, held while she was off the pad, is
     /// said as the hold lifts and ends with the same words as the paused
-    /// line, so that line is said only where "Pad on." cuts the read. An
-    /// older kit (false, until known) has no held read: the line is always said.
+    /// line, so that line is said only where "Pad on." cuts the read or the
+    /// read is already gone (heldReadDropped). An older kit (false, until
+    /// known) has no held read: the line is always said.
     var kitQueue = false
+    /// The kit's held pause read is gone: its queue was cleared while she was
+    /// off the pad with the fight paused for her (an answer she asked for
+    /// from the strip or Settings, or quiet), so the paused line is said on her return.
+    private(set) var heldReadDropped = false
     private var lastActivate: Double?
     private var touchedSinceActivate = true
 
@@ -331,7 +336,19 @@ struct ArcadePadHold {
     /// is nothing to say on return.
     mutating func setMode(_ next: String) {
         mode = next
-        if next != "pause" { autoPaused = false }
+        if next != "pause" {
+            autoPaused = false
+            heldReadDropped = false
+        }
+    }
+
+    /// Oct 21 2026: the kit's one queue was cleared. Every answer it queues
+    /// clears what waits there (the host hears each as 'cut': her Status,
+    /// Repeat or Teach me again from the strip or Settings), and so does its
+    /// quiet. While she is off the pad on the pause screen of a fight that
+    /// paused itself, that takes the kit's held pause read with it.
+    mutating func kitQueueCleared() {
+        if autoPaused && !held && mode == "pause" { heldReadDropped = true }
     }
 
     mutating func activate(now: Double) -> [ArcadePadEffect] {
@@ -369,6 +386,7 @@ struct ArcadePadHold {
     /// The game left the fight some other way (her own Start, a menu): nothing to say on return.
     mutating func forgetPause() {
         autoPaused = false
+        heldReadDropped = false
     }
 
     private mutating func take() -> [ArcadePadEffect] {
@@ -379,12 +397,17 @@ struct ArcadePadHold {
             saidPadOn = true
             out.append(.say(ArcadeTouchLines.padOn, cls: "answer"))
         }
+        let readGone = heldReadDropped
+        heldReadDropped = false
         if autoPaused {
             autoPaused = false
             // Only while the game is still paused: the line asks for the
             // two-finger double-tap that resumes it. With the kit's one queue,
-            // only when "Pad on." (an answer) has cut the kit's own held read.
-            if mode == "pause" && (!kitQueue || saysPadOn) { out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen")) }
+            // only when the kit's own held read is gone: "Pad on." (an answer)
+            // cuts it now, or an answer while she was away already cleared it.
+            if mode == "pause" && (!kitQueue || saysPadOn || readGone) {
+                out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen"))
+            }
         }
         return out
     }
@@ -1204,6 +1227,14 @@ struct ArcadeTouchChoices: Equatable {
     /// Nil: the kit's own default (on for touch input only, so keyboard and
     /// controller players keep the demo fight).
     var skipDemo: Bool?
+    /// Oct 21 2026: Less damage and Skip the demo fight as this page's kit
+    /// has them, from the 'settings' it sent (nil until it has sent any), for
+    /// the switches only. The kit sets its own defaults at boot and on a
+    /// switch to touch, never on a change of Fight controls, so mid-session
+    /// they can differ from the defaults worked out here.
+    var kitLessDamage: Bool?
+    /// Nil also when the kit has no skipDemo of its own: it follows the input then.
+    var kitSkipDemo: Bool?
 
     init() {}
 
@@ -1215,13 +1246,27 @@ struct ArcadeTouchChoices: Equatable {
         if let value = settings["skipDemo"] as? Bool { skipDemo = value }
     }
 
-    /// Less damage as the Settings switch shows it: her choice, else on in
-    /// Easy for touch input (Oct 21 2026: as the kit has it, now that only her
-    /// own choice goes back to it, a keyboard or controller player's is off).
-    func lessDamageShown(touch: Bool) -> Bool { lessDamage ?? (touch && fightControls == "easy") }
+    /// Oct 21 2026: her choices from the kit's kept settings (Less damage and
+    /// Skip the demo fight only where she set them; onlyChosen), with what
+    /// this page's kit is doing from `echo`, the 'settings' it sent (nil until
+    /// it has sent any). Only her choices go back to the kit.
+    init(settings: [String: Any]?, chosen: Set<String>, echo: [String: Any]?) {
+        self.init(settings: ArcadeTouchChoices.onlyChosen(settings, chosen: chosen))
+        guard let echo else { return }
+        // The kit's Less damage is on only when it is true there.
+        kitLessDamage = (echo["lessDamage"] as? Bool) ?? false
+        kitSkipDemo = echo["skipDemo"] as? Bool
+    }
 
-    /// Skip the demo fight as the Settings switch shows it: her choice, else on for touch input.
-    func skipDemoShown(touch: Bool) -> Bool { skipDemo ?? touch }
+    /// Less damage as the Settings switch shows it: her choice, else what
+    /// this page's kit is doing, else (before it has said) on in Easy for
+    /// touch input (Oct 21 2026: as the kit has it, now that only her own
+    /// choice goes back to it, a keyboard or controller player's is off).
+    func lessDamageShown(touch: Bool) -> Bool { lessDamage ?? kitLessDamage ?? (touch && fightControls == "easy") }
+
+    /// Skip the demo fight as the Settings switch shows it: her choice, else
+    /// what this page's kit is doing, else on for touch input.
+    func skipDemoShown(touch: Bool) -> Bool { skipDemo ?? kitSkipDemo ?? touch }
 
     /// Oct 21 2026: the kit's touch keys whose default depends on the input
     /// at hand (Less damage: on in Easy for touch; Skip the demo fight: on for

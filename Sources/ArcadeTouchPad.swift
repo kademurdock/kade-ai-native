@@ -149,6 +149,12 @@ final class ArcadeTouchPadView: UIView {
         hold.kitQueue = on
     }
 
+    /// Oct 21 2026: the kit's one queue was cleared (an answer queued, or its
+    /// quiet): a pause read it held while she was away went with it.
+    func kitQueueCleared() {
+        hold.kitQueueCleared()
+    }
+
     /// The kit's game cue ('telegraph', 'hurt', 'landed', 'blocked', 'reach', 'ko').
     func feel(cue kind: String) {
         play(ArcadeFeel.cue(kind))

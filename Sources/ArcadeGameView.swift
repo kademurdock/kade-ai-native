@@ -345,6 +345,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
     /// Oct 19 2026: the kit's own settings for this game as it last sent
     /// them ('settings'), kept beside the save and given back at every start.
     private var kitSettings: [String: Any]?
+    /// Oct 21 2026: the 'settings' this page's kit has sent (nil until it
+    /// has): Settings shows its Less damage and Skip the demo fight where she
+    /// has not chosen them, so the switches read what the kit is doing.
+    private var pageKitSettings: [String: Any]?
     /// Oct 21 2026: the kit's touch keys she set in this game's Settings
     /// herself; Less damage and Skip the demo fight go back to the kit only
     /// once chosen, so its default for the input at hand applies otherwise.
@@ -416,7 +420,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if let key = settingsKey {
             kitChosen = Set(defaults.stringArray(forKey: ArcadeKeysStore.kitChosen + key) ?? [])
         }
-        touchChoices = ArcadeTouchChoices(settings: ArcadeTouchChoices.onlyChosen(kitSettings, chosen: kitChosen))
+        touchChoices = ArcadeTouchChoices(settings: kitSettings, chosen: kitChosen, echo: nil)
         readProfile()
     }
 
@@ -724,7 +728,7 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         markChosen(key)
         var settings = kitSettings ?? [:]
         settings[key] = value
-        touchChoices = ArcadeTouchChoices(settings: ArcadeTouchChoices.onlyChosen(settings, chosen: kitChosen))
+        touchChoices = ArcadeTouchChoices(settings: settings, chosen: kitChosen, echo: pageKitSettings)
         if touchTable.tier != touchChoices.fightControls {
             touchTable.tier = touchChoices.fightControls
             pad?.setTable(touchTable)
@@ -827,6 +831,10 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         routeSent = nil
         kitSound = nil
         screenText = nil
+        // Oct 21 2026: the new page's kit sets its own defaults again: until it
+        // sends its settings, Settings shows the defaults worked out here.
+        pageKitSettings = nil
+        touchChoices = ArcadeTouchChoices(settings: kitSettings, chosen: kitChosen, echo: nil)
         // The new page numbers its native items from the start again: the old
         // page's ids and items mean nothing to it (the app's own lines stay).
         speechIds.removeAll()
@@ -1158,9 +1166,14 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
             watchdog()
         case "quiet":
             runSpeech(speech.quiet())
+            // Oct 21 2026: the kit's queue is empty now, a pause read held while she was away too.
+            pad?.kitQueueCleared()
         case "cut":
             // The kit cut its own line for her answer (the host script sends this with every answer it queues).
             runSpeech(speech.cutKit(now: speechClock))
+            // Oct 21 2026: an answer clears everything waiting in the kit's queue, a held pause read too
+            // (her Status or Teach me again while she is off the pad): the paused line is said on her return.
+            pad?.kitQueueCleared()
         case "lines":
             screenText = ArcadeScreenText(detail: detail)
         case "audio":
@@ -1330,9 +1343,11 @@ final class ArcadeGameHost: NSObject, ObservableObject, WKNavigationDelegate {
         if let sound = ArcadeKitSound(settings) { kitSound = sound }
         guard let key = settingsKey else { return }
         kitSettings = settings
+        pageKitSettings = settings
         // Oct 20 2026: the kit's own touch choices, and the fight tier the pad
-        // uses (Oct 21: Less damage and Skip the demo fight as she chose them, else the kit's default).
-        touchChoices = ArcadeTouchChoices(settings: ArcadeTouchChoices.onlyChosen(settings, chosen: kitChosen))
+        // uses (Oct 21: Less damage and Skip the demo fight as she chose them,
+        // else as this page's kit has them now).
+        touchChoices = ArcadeTouchChoices(settings: settings, chosen: kitChosen, echo: settings)
         if touchTable.tier != touchChoices.fightControls {
             touchTable.tier = touchChoices.fightControls
             pad?.setTable(touchTable)
