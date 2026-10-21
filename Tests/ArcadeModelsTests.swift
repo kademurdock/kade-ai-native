@@ -348,10 +348,10 @@ import CryptoKit
               && ArcadeKitSettings.soundWorld("off") == "off", "sound worlds in the kit's own spelling")
         check(ArcadeKitSettings.soundWorld("loud") == nil && ArcadeKitSettings.soundWorld(3) == nil && ArcadeKitSettings.soundWorld(nil) == nil,
               "anything else is no sound world")
-        check(ArcadeKitSettings.calls("Urgent") == "urgent" && ArcadeKitSettings.calls("all") == "all" && ArcadeKitSettings.calls("some") == nil,
-              "calls in the kit's own spelling")
-        check(ArcadeKitSettings.soundWorlds == ["stereo", "3d", "off"] && ArcadeKitSettings.callChoices == ["all", "urgent", "alerts", "off"],
-              "the Settings sheet's order, Stereo first")
+        check(ArcadeKitSettings.calls("Urgent") == "alerts" && ArcadeKitSettings.calls("all") == "all" && ArcadeKitSettings.calls("some") == nil,
+              "calls in the kit's own spelling ('urgent' is its older name for 'alerts', Oct 21 2026)")
+        check(ArcadeKitSettings.soundWorlds == ["stereo", "3d", "off"] && ArcadeKitSettings.callChoices == ["all", "alerts", "off"],
+              "the Settings sheet's order, Stereo first; calls All, Attacks only, Off")
 
         // The settings given back at the next start.
         let first = ArcadeKitSettings.hostSettings(saved: nil, readsAll: false, showPicture: false, hasSoundWorld: true)
@@ -449,7 +449,8 @@ import CryptoKit
 
         // What the Settings sheet shows.
         let sound = ArcadeKitSound(["soundWorld": "3D", "calls": "Urgent", "output": "speaker"])
-        check(sound?.soundWorld == "3d" && sound?.calls == "urgent" && sound?.output == .speaker, "the kit's sound, read")
+        check(sound?.soundWorld == "3d" && sound?.calls == "alerts" && sound?.output == .speaker,
+              "the kit's sound, read (a kept 'urgent' shows as Attacks only)")
         check(ArcadeKitSound(["calls": "all"]) == nil && ArcadeKitSound(nil) == nil, "no sound world named (an older player): no choices")
         let quiet = ArcadeKitSound(["soundWorld": "off", "calls": "", "output": ""])
         check(quiet?.calls == "all" && quiet?.output == nil, "calls default to all; no route yet")
@@ -611,6 +612,16 @@ import CryptoKit
     // MARK: Manifest and links
 
     static func manifestAndLinks() throws {
+        // Oct 21 2026: every request to the Arcade routes carries the Arcade level this build plays at.
+        var asked = URLRequest(url: URL(fileURLWithPath: "/api/kade/arcade/config"))
+        asked.setValue("application/json", forHTTPHeaderField: "Accept")
+        let leveled = ArcadeAPI.leveled(asked)
+        check(ArcadeAPI.levelHeader == "X-Kade-Arcade-Level" && ArcadeAPI.level == "2"
+              && leveled.value(forHTTPHeaderField: "X-Kade-Arcade-Level") == "2"
+              && leveled.value(forHTTPHeaderField: "Accept") == "application/json" && leveled.url == asked.url
+              && asked.value(forHTTPHeaderField: "X-Kade-Arcade-Level") == nil,
+              "the Arcade level header, X-Kade-Arcade-Level: 2, added to the request as it was")
+
         let decoder = JSONDecoder()
         let sha = String(repeating: "ab", count: 32)
         let kitSha = String(repeating: "cd", count: 32)

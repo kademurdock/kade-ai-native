@@ -274,10 +274,11 @@ enum ArcadePadEffect: Equatable {
 /// else the first touch that reaches the pad takes it: a rising chime, a
 /// success buzz, the kit's voice let go, "Pad on." the first time each
 /// session, and "Paused. Two-finger double-tap to fight." when a fight paused
-/// itself as she left. Focus leaving the pad: a falling chime, the kit's
-/// voice held (answers still pass), and a live fight pauses (Pause when I
-/// leave the pad). Two activates within 10 s with no touch between mean
-/// direct touch is off for the app: said once.
+/// itself as she left (with the kit's one queue, its own pause read says
+/// that instead, unless "Pad on." cuts it). Focus leaving the pad: a falling
+/// chime, the kit's voice held (answers still pass), and a live fight pauses
+/// (Pause when I leave the pad). Two activates within 10 s with no touch
+/// between mean direct touch is off for the app: said once.
 struct ArcadePadHold {
     private(set) var focused = false
     /// VoiceOver focus has been on the pad at least once (until then, nothing says where it is).
@@ -290,6 +291,12 @@ struct ArcadePadHold {
     private(set) var activates = 0
     /// The kit's mode, as the pad has it ('menu', 'fight', 'pause', 'demo').
     private(set) var mode = "menu"
+    /// Oct 21 2026: the page's kit has the one queue (the host asks it at
+    /// 'ready'). Its pause screen read, held while she was off the pad, is
+    /// said as the hold lifts and ends with the same words as the paused
+    /// line, so that line is said only where "Pad on." cuts the read. An
+    /// older kit (false, until known) has no held read: the line is always said.
+    var kitQueue = false
     private var lastActivate: Double?
     private var touchedSinceActivate = true
 
@@ -367,14 +374,17 @@ struct ArcadePadHold {
     private mutating func take() -> [ArcadePadEffect] {
         held = true
         var out: [ArcadePadEffect] = [.risingChime, .takenBuzz, .holdSpeech(false)]
-        if !saidPadOn {
+        let saysPadOn = !saidPadOn
+        if saysPadOn {
             saidPadOn = true
             out.append(.say(ArcadeTouchLines.padOn, cls: "answer"))
         }
         if autoPaused {
             autoPaused = false
-            // Only while the game is still paused: the line asks for the two-finger double-tap that resumes it.
-            if mode == "pause" { out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen")) }
+            // Only while the game is still paused: the line asks for the
+            // two-finger double-tap that resumes it. With the kit's one queue,
+            // only when "Pad on." (an answer) has cut the kit's own held read.
+            if mode == "pause" && (!kitQueue || saysPadOn) { out.append(.say(ArcadeTouchLines.pausedReturn, cls: "screen")) }
         }
         return out
     }
@@ -480,10 +490,13 @@ struct ArcadeSpeechQueue {
         }
         guard var item = current else { return [] }
         if let said, said != item.text { return [] }
-        if !ok && item.tries < 1 {
+        // Oct 21 2026: the one retry stays inside the line's first window:
+        // the kit's own wait for this id runs from when it was routed, so the
+        // deadline is kept, and with less than half of it left there is no
+        // retry (not spoken, at once).
+        if !ok && item.tries < 1, let deadline, deadline - now >= Self.timeoutMs(item.text) / 2 {
             item.tries += 1
             current = item
-            deadline = now + Self.timeoutMs(item.text)
             return [.post(item)]
         }
         current = nil
@@ -493,13 +506,19 @@ struct ArcadeSpeechQueue {
         return steps + startNext(now: now)
     }
 
-    /// The current line ran past its time: given up (not spoken), the next one starts.
+    /// The current line ran past its time: given up (not spoken), the next
+    /// one starts. A line said a second time (the retry) may still be going:
+    /// it stops, so it never talks over the kit's next line.
     mutating func expire(now: Double) -> [ArcadeSpeechStep] {
         guard let deadline, now >= deadline, let item = current else { return [] }
         current = nil
         self.deadline = nil
         var steps: [ArcadeSpeechStep] = []
         if let id = item.id { steps.append(.ack(id: id, ok: false)) }
+        if item.tries > 0 {
+            noteCut(item.text)
+            steps.append(.silence)
+        }
         return steps + startNext(now: now)
     }
 
@@ -1180,7 +1199,7 @@ enum ArcadeChime {
 struct ArcadeTouchChoices: Equatable {
     var fightControls = "easy"
     var walkIn = true
-    /// Nil: the kit's own default (on in Easy until she turns it off).
+    /// Nil: the kit's own default (on in Easy for touch input until she turns it off).
     var lessDamage: Bool?
     /// Nil: the kit's own default (on for touch input only, so keyboard and
     /// controller players keep the demo fight).
@@ -1196,11 +1215,30 @@ struct ArcadeTouchChoices: Equatable {
         if let value = settings["skipDemo"] as? Bool { skipDemo = value }
     }
 
-    /// Less damage as the Settings switch shows it: her choice, else on in Easy.
-    var lessDamageShown: Bool { lessDamage ?? (fightControls == "easy") }
+    /// Less damage as the Settings switch shows it: her choice, else on in
+    /// Easy for touch input (Oct 21 2026: as the kit has it, now that only her
+    /// own choice goes back to it, a keyboard or controller player's is off).
+    func lessDamageShown(touch: Bool) -> Bool { lessDamage ?? (touch && fightControls == "easy") }
 
     /// Skip the demo fight as the Settings switch shows it: her choice, else on for touch input.
     func skipDemoShown(touch: Bool) -> Bool { skipDemo ?? touch }
+
+    /// Oct 21 2026: the kit's touch keys whose default depends on the input
+    /// at hand (Less damage: on in Easy for touch; Skip the demo fight: on for
+    /// touch). The kit takes any key given back to it as her choice, and its
+    /// 'settings' carry every key it has, so these go back to it only once
+    /// she has set them in the game's Settings herself.
+    static let inputDefaultKeys = ["lessDamage", "skipDemo"]
+
+    /// The kit's kept settings without the input-dependent keys she has not
+    /// chosen (`chosen`: the keys she set in Settings; settings kept by an
+    /// earlier build count as not chosen), so the kit's own default for the
+    /// input at hand applies at every start.
+    static func onlyChosen(_ settings: [String: Any]?, chosen: Set<String>) -> [String: Any]? {
+        guard var kept = settings else { return nil }
+        for key in inputDefaultKeys where !chosen.contains(key) { kept.removeValue(forKey: key) }
+        return kept
+    }
 
     /// The defaults, filled only where the kit's kept settings have none:
     /// Easy and Walk in for me for every input (as the kit does); Skip the

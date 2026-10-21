@@ -144,10 +144,40 @@ extension ArcadeModelsTests {
         return ""
     }
 
+    /// Outputs as the kit's runner writes them: a pulse's word, '<hold> on'
+    /// and '<hold> off', 'info:<key>', 'dud:<reason>' ('touch-finger' and the
+    /// reports are not written). `holds` keeps each held source's word for its 'off'.
+    static func kitWords(_ outputs: [ArcadeTouchOutput], holds: inout [String: String]) -> [String] {
+        var words: [String] = []
+        for output in outputs {
+            switch output {
+            case .pad(let source, let state):
+                if source == ArcadeTouchRecognizer.fingerSourceName { continue }
+                if source.hasPrefix("touch-p") {
+                    if let state { words.append(pulseWord(state)) }
+                    continue
+                }
+                if let state {
+                    let word = state.buttons.isEmpty ? "hold" : state.buttons.joined(separator: "+")
+                    holds[source] = word
+                    words.append(word + " on")
+                } else if let word = holds.removeValue(forKey: source) {
+                    words.append(word + " off")
+                }
+            case .info(let what):
+                words.append("info:" + what)
+            case .dud(let dud):
+                words.append("dud:" + dud.reason.rawValue)
+            default:
+                break
+            }
+        }
+        return words
+    }
+
     /// The kit's touchvec.js run(): before each event every job due at or
     /// before it runs, at its own time; then 1500 ms more. Outputs are written
-    /// as the kit writes them: a pulse's word, '<hold> on' and '<hold> off',
-    /// 'info:<key>', 'dud:<reason>'.
+    /// as the kit writes them (kitWords), with their times.
     static func run(_ mode: String, _ steps: [[String: Any]], tier: String = "easy", table: ArcadeTouchTable = .standard,
                     fit: ArcadeTouchFit? = nil) -> TouchRun {
         var pad = ArcadeTouchRecognizer(table: table.onTier(tier))
@@ -157,30 +187,8 @@ extension ArcadeModelsTests {
         var holds: [String: String] = [:]
         var now = 0.0
         func record(_ outputs: [ArcadeTouchOutput], at t: Double) {
-            for output in outputs {
-                result.raw.append(output)
-                switch output {
-                case .pad(let source, let state):
-                    if source == ArcadeTouchRecognizer.fingerSourceName { continue }
-                    if source.hasPrefix("touch-p") {
-                        if let state { result.timed.append((out: pulseWord(state), t: t)) }
-                        continue
-                    }
-                    if let state {
-                        let word = state.buttons.isEmpty ? "hold" : state.buttons.joined(separator: "+")
-                        holds[source] = word
-                        result.timed.append((out: word + " on", t: t))
-                    } else if let word = holds.removeValue(forKey: source) {
-                        result.timed.append((out: word + " off", t: t))
-                    }
-                case .info(let what):
-                    result.timed.append((out: "info:" + what, t: t))
-                case .dud(let dud):
-                    result.timed.append((out: "dud:" + dud.reason.rawValue, t: t))
-                default:
-                    break
-                }
-            }
+            result.raw += outputs
+            for word in kitWords(outputs, holds: &holds) { result.timed.append((out: word, t: t)) }
         }
         func until(_ end: Double) {
             while let due = pad.nextDue, due <= end {
@@ -218,6 +226,41 @@ extension ArcadeModelsTests {
     static func runVector(_ vector: [String: Any], table: ArcadeTouchTable = .standard) -> TouchRun {
         let steps = ((vector["steps"] as? [Any]) ?? []).compactMap { $0 as? [String: Any] }
         return run((vector["mode"] as? String) ?? "menu", steps, tier: (vector["tier"] as? String) ?? "easy", table: table)
+    }
+
+    /// Oct 21 2026: the live pad's order (ArcadeTouchPadView): every event
+    /// goes through touchBegan, touchMoved and touchEnded with no display-link
+    /// tick between events, then the clock runs on 1500 ms. `beforeFix` sends
+    /// them straight to start, move and end instead, as the pad did before:
+    /// no job ran before a touch until the next tick. The kit's words, no times.
+    static func live(_ mode: String, _ steps: [[String: Any]], tier: String = "easy", beforeFix: Bool = false) -> [String] {
+        var pad = ArcadeTouchRecognizer(table: ArcadeTouchTable.standard.onTier(tier))
+        pad.mode = mode
+        var outputs: [ArcadeTouchOutput] = []
+        var last = 0.0
+        for event in expand(steps) {
+            if event.type == "down" {
+                if beforeFix {
+                    outputs += pad.start(id: event.id, x: event.x, y: event.y, width: 400, height: 800, now: event.t)
+                } else {
+                    outputs += pad.touchBegan(id: event.id, x: event.x, y: event.y, width: 400, height: 800, now: event.t)
+                }
+            } else if event.type == "move" {
+                if beforeFix {
+                    outputs += pad.move(id: event.id, x: event.x, y: event.y, now: event.t)
+                } else {
+                    outputs += pad.touchMoved(id: event.id, x: event.x, y: event.y, now: event.t)
+                }
+            } else if beforeFix {
+                outputs += pad.end(id: event.id, now: event.t)
+            } else {
+                outputs += pad.touchEnded(id: event.id, now: event.t)
+            }
+            last = event.t
+        }
+        outputs += pad.advance(to: last + 1500)
+        var holds: [String: String] = [:]
+        return kitWords(outputs, holds: &holds)
     }
 
     /// The kit's shared vectors (core/test/touch_vectors.json, Oct 20 2026):
@@ -284,6 +327,7 @@ extension ArcadeModelsTests {
     static func touchPlay() throws {
         touchTablesV2()
         touchVectors()
+        touchLiveOrder()
         touchReports()
         touchTiming()
         touchFeel()
@@ -398,6 +442,30 @@ extension ArcadeModelsTests {
             if matches(run("fight", [step(up: ms)]), ["block on@500", "block off@" + String(Int(ms))]) { rests += 1 }
         }
         check(rests == 200, "200 rests of 520-1500 ms: a block at 500 ms, let go at the lift (\(rests))")
+    }
+
+    static func touchLiveOrder() {
+        // Oct 21 2026: the live pad runs every job due by a touch before the
+        // touch, as the kit's runner does, with no display-link tick between.
+        let rest = [step(up: 505)]
+        check(live("fight", rest, beforeFix: true) == ["dud:slowTap"],
+              "before the fix: a still Easy touch lifted at 505 ms, with no tick since it landed, was a slow tap")
+        check(live("fight", rest) == ["block on", "block off"],
+              "the live pad: a still Easy touch lifted at 505 ms with no tick between is a block on, then off")
+        check(live("menu", [step(up: 1005)], beforeFix: true) == ["dud:slowTap"]
+              && live("menu", [step(up: 1005)]) == ["info:repeat"],
+              "a menu one-finger hold lifted at 1005 ms with no tick between: repeat, not a slow tap")
+        // The live order gives every shared vector the same words as the kit's runner.
+        let shared = ((try? JSONSerialization.jsonObject(with: Data(sharedVectorsJSON.utf8))) as? [Any]) ?? []
+        var same = 0
+        for case let vector as [String: Any] in shared {
+            let steps = ((vector["steps"] as? [Any]) ?? []).compactMap { $0 as? [String: Any] }
+            let mode = (vector["mode"] as? String) ?? "menu"
+            let tier = (vector["tier"] as? String) ?? "easy"
+            if live(mode, steps, tier: tier) == run(mode, steps, tier: tier).words { same += 1 }
+        }
+        check(shared.count == 38 && same == shared.count,
+              "the shared vectors in the live pad's order: the same words as the kit's runner (\(same) of \(shared.count))")
     }
 
     static func touchReports() {
@@ -539,7 +607,8 @@ extension ArcadeModelsTests {
               "another announcement's end changes nothing")
         var retried = first
         retried.tries = 1
-        check(queue.finished(text: "Pad on.", ok: false, now: 200) == [.post(retried)], "VoiceOver did not say it: once more")
+        check(queue.finished(text: "Pad on.", ok: false, now: 200) == [.post(retried)] && queue.deadline == 1600,
+              "VoiceOver did not say it: once more, inside the window the kit gave it (its deadline kept)")
         check(queue.finished(text: "Pad on.", ok: false, now: 300) == [.ack(id: "1", ok: false), .post(second)],
               "not said twice: acknowledged as not spoken, and the next one starts")
         check(queue.expire(now: 1899).isEmpty, "not given up before its time")
@@ -593,6 +662,26 @@ extension ArcadeModelsTests {
         _ = reload.add(ArcadeSpeechItem(id: "k10", text: "Fight.", cls: "flow"), now: 2)
         check(reload.dropKit(now: 10) == [.post(restart)] && reload.current == restart && reload.waiting.isEmpty,
               "a new page: the old page's items go with no answer, the app's own line is said")
+
+        // Oct 21 2026: the retry stays inside the kit's window for the line (it runs from when the line was routed).
+        var late = ArcadeSpeechQueue()
+        let padOn = ArcadeSpeechItem(id: "k1", text: "Pad on.", cls: "answer")
+        let next = ArcadeSpeechItem(id: "k2", text: "Legal notice.", cls: "screen")
+        _ = late.add(padOn, now: 0)
+        _ = late.add(next, now: 5)
+        check(late.finished(text: "Pad on.", ok: false, now: 801) == [.ack(id: "k1", ok: false), .post(next)],
+              "not said with less than half its window left: no retry, not spoken at once, and the next line starts")
+        var edge = ArcadeSpeechQueue()
+        _ = edge.add(padOn, now: 0)
+        var again = padOn
+        again.tries = 1
+        check(edge.finished(text: "Pad on.", ok: false, now: 800) == [.post(again)] && edge.deadline == 1600,
+              "with half its window left, said once more, by the same deadline")
+        check(edge.expire(now: 1599).isEmpty, "the retry has no fresh window")
+        check(edge.expire(now: 1600) == [.ack(id: "k1", ok: false), .silence] && edge.isIdle && edge.cutTexts == ["Pad on."],
+              "a retry still going at the deadline is given up and stopped, so it never talks over the kit's next line")
+        check(edge.finished(text: "Pad on.", ok: false, now: 1650).isEmpty && edge.cutTexts.isEmpty,
+              "and VoiceOver's end for the stopped retry is its own")
     }
 
     static func touchPadHeld() {
@@ -614,6 +703,17 @@ extension ArcadeModelsTests {
         check(hold.autoPaused && hold.touch(now: 50, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false),
                                                                           .say("Paused. Two-finger double-tap to fight.", cls: "screen")],
               "taken again on the pause screen: Pad on. only once a session, and the paused line")
+        // Oct 21 2026: with the kit's one queue, its own pause read (held while she was away) ends with the same
+        // words, and is said as the hold lifts: the paused line only where Pad on. cuts that read.
+        var queued = ArcadePadHold()
+        queued.kitQueue = true
+        _ = queued.touch(now: 0, voiceOver: true)
+        queued.setMode("fight")
+        check(queued.lostFocus(now: 10, mode: "fight", pauseOnLeave: true) == [.fallingChime, .holdSpeech(true), .pauseGame],
+              "the kit's one queue: the fight pauses itself as she leaves, as before")
+        queued.setMode("pause")
+        check(queued.touch(now: 20, voiceOver: true) == [.risingChime, .takenBuzz, .holdSpeech(false)] && !queued.autoPaused,
+              "taken again on the pause screen: the kit's own read says it, so no second paused line")
         check(hold.lostFocus(now: 60, mode: "menu", pauseOnLeave: true) == [.fallingChime, .holdSpeech(true)], "in a menu nothing pauses")
         check(hold.lostFocus(now: 70, mode: "fight", pauseOnLeave: true) == [.holdSpeech(true)], "focus leaving a pad not held only holds the voice")
         var off = ArcadePadHold()
@@ -806,6 +906,9 @@ extension ArcadeModelsTests {
               "an item's id goes back as it came")
         check(ArcadeJS.holdSpeech(true).contains("holdSpeech(true)") && ArcadeJS.speechGo.contains("speechGo()")
               && ArcadeJS.hasSpeechQueue.contains("window.revivalKit.spoken"), "hold, go and the queue check")
+        check(ArcadeJS.speechQueueState.hasPrefix("(window.revivalKit ? (") && ArcadeJS.speechQueueState.contains(ArcadeJS.hasSpeechQueue)
+              && ArcadeJS.speechQueueState.contains("'queue' : 'older') : 'starting')"),
+              "the kit as the first-open offer needs it: still starting, the one queue, or an older kit")
         check(ArcadeJS.holdSpeech(true).contains("else { window.__arcadeHold = true; }")
               && ArcadeJS.holdSpeech(false).contains("k.holdSpeech(false)"),
               "a hold sent before the kit is there is kept for it")
@@ -818,20 +921,47 @@ extension ArcadeModelsTests {
               "the kit's voice held from its first event while the offer or Pad practice is up")
         check(script.contains("if (name === 'say' && detail && detail.cls === 'answer') { post({ t: 'event', name: 'cut', detail: null }); }"),
               "every answer the kit queues is a cut of the line being said, sent as 'cut'")
-        check(ArcadeKitSettings.calls("alerts") == "alerts", "the kit's 'alerts' calls")
+        check(ArcadeKitSettings.calls("alerts") == "alerts" && ArcadeKitSettings.calls("urgent") == "alerts"
+              && !ArcadeKitSettings.callChoices.contains("urgent"),
+              "the kit's 'alerts' calls; its older name 'urgent' is the same choice, and not offered twice")
         check(ArcadeSpeakerWarnings.buzzAndWords.calls == "alerts" && ArcadeSpeakerWarnings.buzzOnly.calls == "off"
               && ArcadeSpeakerWarnings.everyCall.calls == "all" && ArcadeSpeakerWarnings.off.calls == "off"
               && ArcadeSpeakerWarnings.buzzOnly.buzz && !ArcadeSpeakerWarnings.off.buzz, "Warnings on the phone speaker")
 
         let none = ArcadeTouchChoices(settings: nil)
         check(none == ArcadeTouchChoices() && none.fightControls == "easy" && none.walkIn && none.skipDemo == nil && none.lessDamage == nil
-              && none.lessDamageShown && none.skipDemoShown(touch: true) && !none.skipDemoShown(touch: false),
-              "the touch defaults: Easy, walk in, less damage in Easy, and the demo skipped for touch input only")
+              && none.lessDamageShown(touch: true) && !none.lessDamageShown(touch: false)
+              && none.skipDemoShown(touch: true) && !none.skipDemoShown(touch: false),
+              "the touch defaults: Easy, walk in, and for touch input less damage in Easy and the demo skipped")
         let chosen = ArcadeTouchChoices(settings: ["fightControls": "full", "walkIn": false, "lessDamage": false, "skipDemo": false])
         check(chosen.fightControls == "full" && !chosen.walkIn && chosen.skipDemo == false && !chosen.skipDemoShown(touch: true)
-              && !chosen.lessDamageShown, "her own choices")
+              && !chosen.lessDamageShown(touch: true), "her own choices")
         check(ArcadeTouchChoices(settings: ["fightControls": "hard"]).fightControls == "easy", "an unknown tier is Easy")
-        check(ArcadeTouchChoices(settings: ["fightControls": "full"]).lessDamageShown == false, "less damage is on by default only in Easy")
+        check(ArcadeTouchChoices(settings: ["fightControls": "full"]).lessDamageShown(touch: true) == false, "less damage is on by default only in Easy")
+
+        // Oct 21 2026: the kit's 'settings' carry every key it has, and it takes any key given back as her choice,
+        // so Less damage and Skip the demo fight go back only once she has set them in Settings herself.
+        let echoed: [String: Any] = ["fightControls": "easy", "walkIn": true, "lessDamage": false, "skipDemo": true,
+                                     "calls": "all", "coached": ["easy": true]]
+        let unchosen = ArcadeTouchChoices.onlyChosen(echoed, chosen: []) ?? [:]
+        check(unchosen["lessDamage"] == nil && unchosen["skipDemo"] == nil && (unchosen["fightControls"] as? String) == "easy"
+              && (unchosen["walkIn"] as? Bool) == true && (unchosen["calls"] as? String) == "all" && unchosen["coached"] != nil,
+              "settings kept by an earlier build: Less damage and Skip the demo fight are not hers, everything else goes back")
+        let lessChosen = ArcadeTouchChoices.onlyChosen(echoed, chosen: ["lessDamage"]) ?? [:]
+        check((lessChosen["lessDamage"] as? Bool) == false && lessChosen["skipDemo"] == nil, "a key she set herself goes back as she set it")
+        check(ArcadeTouchChoices.onlyChosen(nil, chosen: ["lessDamage"]) == nil && ArcadeTouchChoices.inputDefaultKeys == ["lessDamage", "skipDemo"],
+              "nothing kept is nothing; the two input-dependent keys")
+        let shown = ArcadeTouchChoices(settings: unchosen)
+        check(shown.lessDamage == nil && shown.skipDemo == nil && shown.lessDamageShown(touch: true) && shown.skipDemoShown(touch: true)
+              && !shown.lessDamageShown(touch: false) && !shown.skipDemoShown(touch: false),
+              "Settings shows the kit's default for the input at hand, not the old kept false")
+        var touchStart = ArcadeKitSettings.hostSettings(saved: unchosen, readsAll: false, showPicture: false, hasSoundWorld: true)
+        ArcadeTouchChoices.fillDefaults(&touchStart, pauseOnLeave: true, touch: true)
+        var keysStart = ArcadeKitSettings.hostSettings(saved: unchosen, readsAll: false, showPicture: false, hasSoundWorld: true)
+        ArcadeTouchChoices.fillDefaults(&keysStart, pauseOnLeave: true, touch: false)
+        check(touchStart["lessDamage"] == nil && (touchStart["skipDemo"] as? Bool) == true
+              && keysStart["lessDamage"] == nil && keysStart["skipDemo"] == nil,
+              "the next start: the kit's own Less damage default for every input, and the demo skipped for touch only")
         var kept: [String: Any] = ["fightControls": "full", "walkIn": false]
         ArcadeTouchChoices.fillDefaults(&kept, pauseOnLeave: false, touch: true)
         check((kept["fightControls"] as? String) == "full" && (kept["walkIn"] as? Bool) == false && (kept["skipDemo"] as? Bool) == true

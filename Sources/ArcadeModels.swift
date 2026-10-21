@@ -130,6 +130,26 @@ enum ArcadePaths {
     }
 }
 
+// MARK: - The server's Arcade routes
+
+/// Oct 21 2026: the Arcade level this build plays at. Every request to the
+/// server's /api/kade/arcade routes (config, match, a game's or the kit's
+/// manifest, pack signing) carries it as X-Kade-Arcade-Level, so the server
+/// can keep an older build (no header, or a lower level) on the packs it was
+/// built for. Level 2: touch play v2 (the kit's one speech queue, Easy and
+/// Full fight controls).
+enum ArcadeAPI {
+    static let levelHeader = "X-Kade-Arcade-Level"
+    static let level = "2"
+
+    /// The request with the Arcade level set (ArcadeService's every Arcade request).
+    static func leveled(_ request: URLRequest) -> URLRequest {
+        var request = request
+        request.setValue(level, forHTTPHeaderField: levelHeader)
+        return request
+    }
+}
+
 // MARK: - The catalog
 
 enum ArcadeAccess: String, Equatable {
@@ -1273,8 +1293,9 @@ enum ArcadeKitSettings {
     /// The sound worlds in the order the Settings sheet offers them.
     static let soundWorlds = ["stereo", "3d", "off"]
     /// Oct 20 2026: 'alerts' (attacks and jump-overs only, words only when
-    /// the voice is free; the touch default on the phone speaker).
-    static let callChoices = ["all", "urgent", "alerts", "off"]
+    /// the voice is free; the touch default on the phone speaker). Oct 21
+    /// 2026: 'urgent' is not offered; it is the kit's older name for 'alerts'.
+    static let callChoices = ["all", "alerts", "off"]
 
     /// A sound world in the kit's own spelling ("3D" -> "3d"); nil when it is none of the three.
     static func soundWorld(_ value: Any?) -> String? {
@@ -1282,10 +1303,13 @@ enum ArcadeKitSettings {
         return text
     }
 
-    /// A position-calls choice in the kit's own spelling; nil when it is none of the three.
+    /// A position-calls choice in the kit's own spelling; nil when it is none
+    /// of the three. A kept 'urgent' (Oct 19) is 'alerts', which the kit treats
+    /// it as, so Settings shows it as Attacks only.
     static func calls(_ value: Any?) -> String? {
-        guard let text = (value as? String)?.lowercased(), callChoices.contains(text) else { return nil }
-        return text
+        guard let text = (value as? String)?.lowercased() else { return nil }
+        if text == "urgent" { return "alerts" }
+        return callChoices.contains(text) ? text : nil
     }
 
     /// The name a player's kit settings are kept under (ArcadeSaveStore
@@ -2006,7 +2030,10 @@ enum ArcadeTouchOutput: Equatable {
 /// The kit's core/touch.js recognizer v2 (Oct 20 2026), step for step, with
 /// the clock passed in (milliseconds) so it can be tested without a screen:
 /// call start/move/end for each finger and advance(to:) from a display link
-/// while `nextDue` is set; a job runs at its own due time. Both recognizers
+/// while `nextDue` is set; a job runs at its own due time. The live pad calls
+/// touchBegan/touchMoved/touchEnded, which first run every job due at or
+/// before the touch (as the kit's runner does), so a job that came due
+/// between two display-link ticks never runs after the touch. Both recognizers
 /// run the kit's shared vectors (core/test/touch_vectors.json). The mode is
 /// read when the first finger lands and holds until the last one lifts;
 /// 'menu', 'pause' and 'demo' use the menu table.
@@ -2452,6 +2479,36 @@ struct ArcadeTouchRecognizer {
         gestures.removeAll()
         owners.removeAll()
         screen = nil
+        return out
+    }
+
+    // MARK: The live pad's touches
+
+    /// Oct 21 2026: a finger landing on the live pad. Every job due at or
+    /// before `now` runs first, each at its own time, then the finger lands:
+    /// the order of the kit's runner and the shared vectors. The display
+    /// link only ticks once a frame, so on its own a job due just before a
+    /// touch would run after it.
+    mutating func touchBegan(id: Int, x: Double, y: Double, width: Double, height: Double = 0, now: Double) -> [ArcadeTouchOutput] {
+        var out = advance(to: now)
+        out += start(id: id, x: x, y: y, width: width, height: height, now: now)
+        return out
+    }
+
+    /// A finger moving on the live pad, after every job due by then.
+    mutating func touchMoved(id: Int, x: Double, y: Double, now: Double) -> [ArcadeTouchOutput] {
+        var out = advance(to: now)
+        out += move(id: id, x: x, y: y, now: now)
+        return out
+    }
+
+    /// A finger lifted (or cancelled) on the live pad, after every job due by
+    /// then: a still Easy touch lifted a frame after its 500 ms rest is a
+    /// block let go, never a slow tap, and a menu hold lifted just past its
+    /// second still repeats.
+    mutating func touchEnded(id: Int, now: Double) -> [ArcadeTouchOutput] {
+        var out = advance(to: now)
+        out += end(id: id, now: now)
         return out
     }
 
@@ -3039,6 +3096,12 @@ enum ArcadeJS {
 
     /// Whether the page's kit has the one queue (say and spoken).
     static let hasSpeechQueue = "!!(window.revivalKit && window.revivalKit.say && window.revivalKit.spoken)"
+
+    /// Oct 21 2026: the page's kit as the first-open offer needs to know it:
+    /// 'starting' (no window.revivalKit yet, when hasSpeechQueue reads false
+    /// too), 'queue' (the one queue, and with it holdSpeech) or 'older' (a
+    /// kit from before both, which would talk over the offer).
+    static let speechQueueState = "(window.revivalKit ? (\(hasSpeechQueue) ? 'queue' : 'older') : 'starting')"
 
     /// The document-start script: window.revivalKitHost exactly as the kit's
     /// core/host.js reads it. Every line with no cloned clip comes back

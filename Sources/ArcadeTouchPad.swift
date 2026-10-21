@@ -143,6 +143,12 @@ final class ArcadeTouchPadView: UIView {
         touchedOnce = false
     }
 
+    /// Oct 21 2026: whether the page's kit has the one speech queue (the
+    /// host asks it at 'ready'): the paused line on her return depends on it.
+    func setKitQueue(_ on: Bool) {
+        hold.kitQueue = on
+    }
+
     /// The kit's game cue ('telegraph', 'hurt', 'landed', 'blocked', 'reach', 'ko').
     func feel(cue kind: String) {
         play(ArcadeFeel.cue(kind))
@@ -288,7 +294,8 @@ final class ArcadeTouchPadView: UIView {
             nextId += 1
             ids[ObjectIdentifier(touch)] = id
             let point = touch.location(in: self)
-            emit(recognizer.start(id: id, x: Double(point.x), y: Double(point.y), width: width, height: height, now: t))
+            // Oct 21 2026: every job due by now runs first (touchBegan), as in the kit.
+            emit(recognizer.touchBegan(id: id, x: Double(point.x), y: Double(point.y), width: width, height: height, now: t))
         }
         startLink()
     }
@@ -299,7 +306,7 @@ final class ArcadeTouchPadView: UIView {
             guard let id = ids[ObjectIdentifier(touch)] else { continue }
             lastTouch = t
             let point = touch.location(in: self)
-            emit(recognizer.move(id: id, x: Double(point.x), y: Double(point.y), now: t))
+            emit(recognizer.touchMoved(id: id, x: Double(point.x), y: Double(point.y), now: t))
         }
     }
 
@@ -316,7 +323,8 @@ final class ArcadeTouchPadView: UIView {
         for touch in touches {
             guard let id = ids.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
             lastTouch = t
-            emit(recognizer.end(id: id, now: t))
+            // A hold due a moment before the lift is a block (or a repeat), never a slow tap.
+            emit(recognizer.touchEnded(id: id, now: t))
         }
         startLink()
     }

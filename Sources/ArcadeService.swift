@@ -415,6 +415,13 @@ final class ArcadeService: ObservableObject {
 
     init(apiClient: KadeAPIClient) { client = apiClient }
 
+    /// Oct 21 2026: every request to the server's Arcade routes, signed in
+    /// and carrying the Arcade level (ArcadeAPI), so the server can keep an
+    /// older build on the packs it was built for.
+    private func arcadeRequest(_ path: String, queryItems: [URLQueryItem]? = nil) -> URLRequest {
+        ArcadeAPI.leveled(client.request(path: path, authorized: true, queryItems: queryItems))
+    }
+
     private func reset() {
         generation += 1
         downloadTask?.cancel()
@@ -455,7 +462,7 @@ final class ArcadeService: ObservableObject {
         loading = true
         defer { if asked == generation { loading = false } }
         do {
-            let request = client.request(path: "api/kade/arcade/config", authorized: true)
+            let request = arcadeRequest("api/kade/arcade/config")
             let (data, http) = try await client.send(request)
             // Signed out (perhaps in as someone else) while it was asked.
             guard asked == generation else { return }
@@ -534,7 +541,7 @@ final class ArcadeService: ObservableObject {
     }
 
     private func fetchManifest(_ entry: ArcadeCatalogEntry) async throws -> ArcadeManifest {
-        let request = client.request(path: "api/kade/arcade/games/\(entry.id)/manifest", authorized: true)
+        let request = arcadeRequest("api/kade/arcade/games/\(entry.id)/manifest")
         let (data, http) = try await client.send(request)
         if http.statusCode == 403 {
             throw ArcadeServiceError(message: readable(data) ?? KadeFamilyFeatures.note)
@@ -697,7 +704,7 @@ final class ArcadeService: ObservableObject {
 
     private func signedLink(for pack: ArcadePackRef, gameId: String) async throws -> ArcadeSignedLink {
         let (path, query) = signPath(for: pack, gameId: gameId)
-        let request = client.request(path: path, authorized: true, queryItems: query)
+        let request = arcadeRequest(path, queryItems: query)
         let (data, http) = try await client.send(request)
         if http.statusCode == 403 { throw ArcadeServiceError(message: readable(data) ?? KadeFamilyFeatures.note) }
         guard http.statusCode == 200, let link = try? JSONDecoder().decode(ArcadeSignedLink.self, from: data) else {
@@ -1016,8 +1023,7 @@ extension ArcadeService {
         }
         let asked = generation
         do {
-            let request = client.request(path: "api/kade/arcade/match", authorized: true,
-                                         queryItems: [URLQueryItem(name: "sha1", value: record.sha1)])
+            let request = arcadeRequest("api/kade/arcade/match", queryItems: [URLQueryItem(name: "sha1", value: record.sha1)])
             let (data, http) = try await client.send(request)
             guard asked == generation else { return .failed(ArcadeImportText.unreachable) }
             guard http.statusCode == 200 else {
@@ -1048,7 +1054,7 @@ extension ArcadeService {
     private func fetchKit() async throws -> (pack: ArcadePackRef, emulatorData: String) {
         if shelf?.kitVersion == nil { await load() }
         guard let version = shelf?.kitVersion else { throw ArcadeServiceError(message: ArcadeImportText.playerMissing) }
-        let request = client.request(path: "api/kade/arcade/kit/\(version)/manifest", authorized: true)
+        let request = arcadeRequest("api/kade/arcade/kit/\(version)/manifest")
         let (data, http) = try await client.send(request)
         guard http.statusCode == 200 else {
             throw ArcadeServiceError(message: readable(data) ?? ArcadeImportText.playerMissing)
@@ -1152,8 +1158,7 @@ extension ArcadeService {
             guard let asked = ArcadeAccessPlan.manifestRequest(raw, gameId: match.id) else {
                 throw ArcadeServiceError(message: "The accessibility pack's details could not be read. Try again later.")
             }
-            let request = client.request(path: asked.path, authorized: true,
-                                         queryItems: [URLQueryItem(name: "version", value: asked.version)])
+            let request = arcadeRequest(asked.path, queryItems: [URLQueryItem(name: "version", value: asked.version)])
             let (data, http) = try await client.send(request)
             if http.statusCode == 404 && attempt == 0 {
                 match = try await openMatch(localId)
