@@ -845,6 +845,159 @@ class ProtocolChecks(unittest.TestCase):
         self.assertTrue(all(record['revalidationDiagnostic']['matchesOriginal'].values()))
         self.assertIs(host.validate_owned_termination(record,owned),record);CHECKS+=10
 
+    def dead_copy_path(self,identifier,temp='temp.YwOcj5',bundle='ABCDEFAB-1234-1234-1234-123456789ABC',cache='com.apple.containermanagerd'):
+        return ('/Users/runner/Library/Developer/CoreSimulator/Devices/'+identifier+'/data/Library/Caches/'+cache
+                +'/Dead/'+temp+'/'+bundle+'/KadeAI.app/KadeAI')
+
+    def dead_copy_world(self,owned,kernel,dead,dead_binary=None,dead_plist=None,alias=False):
+        host=audit.host
+        binary=b'synthetic unchanged compiled app, never native proof'
+        plist_bytes=host.plistlib.dumps({'CFBundleIdentifier':host.BUNDLE_ID,'CFBundleExecutable':'KadeAI'})
+        files={kernel['path']:binary,kernel['path'].rsplit('/',1)[0]+'/Info.plist':plist_bytes,
+               dead:binary if dead_binary is None else dead_binary,
+               dead.rsplit('/',1)[0]+'/Info.plist':plist_bytes if dead_plist is None else dead_plist}
+        owned=dict(owned,executableSha256=hashlib.sha256(binary).hexdigest(),infoPlistSha256=hashlib.sha256(plist_bytes).hexdigest())
+        compiled={'artifacts':{'app':{key:owned[key] for key in ('infoPlistSha256','executableSha256')}}}
+        reads=[]
+        class MemoryPath:
+            def __init__(self,value):self.value=str(value)
+            def __str__(self):return self.value
+            def __eq__(self,other):return isinstance(other,MemoryPath) and self.value==other.value
+            def __truediv__(self,value):return MemoryPath(self.value+'/'+value)
+            @classmethod
+            def home(cls):return cls('/Users/runner')
+            @property
+            def parent(self):return MemoryPath(self.value.rsplit('/',1)[0])
+            def resolve(self,strict=False):return MemoryPath('/alias') if alias else self
+            def is_symlink(self):return alias
+            def is_file(self):return self.value in files
+            def stat(self):return type('MemoryStat',(),{'st_size':len(files[self.value])})()
+            def open(self,mode):reads.append(self.value);return BytesIO(files[self.value])
+        return owned,compiled,reads,MemoryPath
+
+    def test_dead_copy_rename_is_accepted_only_at_the_recheck_with_equal_bytes(self):
+        # Run 39531005702 attempts 1-2: the verified launch (same pid, uid and birth) was later named
+        # by this phone's containermanagerd Dead copy. Only that re-check may accept it, by bytes.
+        global CHECKS
+        host=audit.host;fixture,_,kernel=self.owned_fixture();identifier=fixture['identifier']
+        other_plist=host.plistlib.dumps({'CFBundleIdentifier':host.BUNDLE_ID,'CFBundleExecutable':'KadeAI','Extra':True})
+        cases=(('deadCopy',self.dead_copy_path(identifier),{},0,True),
+               ('deadCopyOtherBundleFolder',self.dead_copy_path(identifier,bundle='00000000-1234-1234-1234-123456789ABC'),{},0,True),
+               ('deadCopyOtherExecutable',self.dead_copy_path(identifier),{'dead_binary':b'other code'},0,False),
+               ('deadCopyOtherPlist',self.dead_copy_path(identifier),{'dead_plist':other_plist},0,False),
+               ('deadCopyAlias',self.dead_copy_path(identifier),{'alias':True},0,False),
+               ('deadCopyBirthChanged',self.dead_copy_path(identifier),{},1,False),
+               ('deadCopyOtherPhone',self.dead_copy_path('00000000-1234-1234-1234-123456789ABC'),{},0,False),
+               ('deadCopyShortTemp',self.dead_copy_path(identifier,temp='temp.abc'),{},0,False),
+               ('deadCopyNested',self.dead_copy_path(identifier,temp='temp.YwOcj5/extra'),{},0,False),
+               ('deadCopyOtherCache',self.dead_copy_path(identifier,cache='com.apple.other'),{},0,False))
+        for scenario,dead,options,birth_delta,accepted in cases:
+            owned,compiled,reads,MemoryPath=self.dead_copy_world(fixture,kernel,dead,**options)
+            library,calls=self.diagnostic_native_library(owned,dead,birth_delta=birth_delta)
+            signals=[];record={}
+            def kill(pid,signum):
+                if signum==host.signal.SIGTERM:signals.append((pid,signum))
+                else:raise ProcessLookupError(errno.ESRCH,'synthetic observed absence')
+            with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library),\
+                 patch.object(host,'Path',MemoryPath),patch.object(host.os,'getuid',return_value=501,create=True),\
+                 patch.object(host,'native_process_snapshot',side_effect=NATIVE_SNAPSHOT),\
+                 patch.object(host,'owned_process_identity',side_effect=OWNED_IDENTITY),\
+                 patch.object(host,'same_native_file',return_value=None),\
+                 patch.object(host.os,'kill',side_effect=kill),patch.object(host.time,'monotonic',return_value=0),\
+                 patch.object(host,'now',return_value=owned['capturedAtUtc']):
+                # A fresh launch at the Dead copy still fails, even with equal bytes.
+                if scenario=='deadCopy':
+                    with self.assertRaisesRegex(RuntimeError,'outside the exact simulator installed app'):
+                        OWNED_IDENTITY(owned['pid'],identifier,compiled,100,owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'])
+                    self.assertEqual(reads,[]);calls.clear();CHECKS+=2
+                if accepted:host.terminate_owned_process(owned,identifier,compiled,100,record)
+                else:
+                    with self.assertRaises(RuntimeError):host.terminate_owned_process(owned,identifier,compiled,100,record)
+            diagnostic=record['revalidationDiagnostic']
+            self.assertFalse(diagnostic['exactSimulatorAppScope'])
+            self.assertEqual(diagnostic['matchesOriginal'],{'pid':True,'uid':True,'birth':birth_delta==0,'path':False})
+            same_phone=scenario not in ('deadCopyOtherPhone','deadCopyShortTemp','deadCopyNested','deadCopyOtherCache')
+            self.assertEqual(diagnostic['pathCategory'],'sameSimulatorDeadCopy' if same_phone else
+                             'sameAppSuffixElsewhere' if scenario=='deadCopyOtherPhone' else 'sameSimulatorOtherPath')
+            self.assertEqual(record['passed'],accepted);self.assertEqual(record['identityVerified'],accepted)
+            self.assertEqual(signals,[(2468,host.signal.SIGTERM)] if accepted else [])
+            self.assertEqual('renamedExecutable' in record,accepted)
+            if not same_phone:self.assertEqual(reads,[])
+            self.assertIs(host.validate_owned_termination(record,owned),record)
+            encoded=json.dumps(record)
+            self.assertNotIn(dead,encoded);self.assertNotIn('/Users/runner',encoded)
+            CHECKS+=11
+            if accepted:
+                renamed=record['renamedExecutable']
+                self.assertEqual(renamed,{'schema':'kade.della-host-renamed-executable.v1','pathCategory':'sameSimulatorDeadCopy',
+                    'executablePathSha256':hashlib.sha256(dead.encode()).hexdigest(),'bundleInstance':dead.split('/')[-3],
+                    'infoPlistSha256':owned['infoPlistSha256'],'executableSha256':owned['executableSha256']})
+                self.assertEqual(calls,[('bsd',2468,3,0),('path',2468)]*3);self.assertEqual(len(reads),2)
+                self.assertEqual(record['pollCount'],1);CHECKS+=4
+
+    def test_renamed_executable_receipt_cannot_be_forged(self):
+        global CHECKS
+        host=audit.host;fixture,_,kernel=self.owned_fixture();identifier=fixture['identifier']
+        dead=self.dead_copy_path(identifier)
+        owned,compiled,_,MemoryPath=self.dead_copy_world(fixture,kernel,dead)
+        library,_=self.diagnostic_native_library(owned,dead)
+        def kill(pid,signum):
+            if signum==0:raise ProcessLookupError(errno.ESRCH,'synthetic observed absence')
+        record={}
+        with patch.object(host.sys,'platform','darwin'),patch.object(host.ctypes,'CDLL',return_value=library),\
+             patch.object(host,'Path',MemoryPath),patch.object(host.os,'getuid',return_value=501,create=True),\
+             patch.object(host,'native_process_snapshot',side_effect=NATIVE_SNAPSHOT),\
+             patch.object(host,'owned_process_identity',side_effect=OWNED_IDENTITY),\
+             patch.object(host,'same_native_file',return_value=None),\
+             patch.object(host.os,'kill',side_effect=kill),patch.object(host.time,'monotonic',return_value=0),\
+             patch.object(host,'now',return_value=owned['capturedAtUtc']):
+            host.terminate_owned_process(owned,identifier,compiled,100,record)
+        self.assertIs(host.validate_owned_termination(record,owned),record);CHECKS+=1
+        base=kernel['path'].rsplit('/',3)[0]
+        diagnostic=host.owned_revalidation_diagnostic(dict(kernel,path=dead),2,base,identifier,None,owned)
+        self.assertEqual(diagnostic,record['revalidationDiagnostic'])
+        self.assertIs(host.validate_owned_revalidation_diagnostic(diagnostic,owned),diagnostic);CHECKS+=2
+        forged=[]
+        for key,value in (('schema','wrong'),('pathCategory','sameSimulatorOtherPath'),('executablePathSha256','c'*64),
+                          ('executablePathSha256',owned['executablePathSha256']),('bundleInstance','private path'),
+                          ('infoPlistSha256','c'*64),('executableSha256','c'*64),('extra',True)):
+            changed=copy.deepcopy(record);changed['renamedExecutable'][key]=value;forged.append(changed)
+        changed=copy.deepcopy(record);del changed['renamedExecutable'];forged.append(changed)
+        changed=copy.deepcopy(record);del changed['revalidationDiagnostic'];forged.append(changed)
+        changed=copy.deepcopy(record);changed['renamedExecutable']=None;forged.append(changed)
+        changed=copy.deepcopy(record);changed['revalidationDiagnostic']['birthMicroseconds']+=1
+        changed['revalidationDiagnostic']['matchesOriginal']['birth']=False;forged.append(changed)
+        changed=copy.deepcopy(record);changed['revalidationDiagnostic']['pathCategory']='sameSimulatorOtherPath';forged.append(changed)
+        changed=copy.deepcopy(record);changed['revalidationDiagnostic']['exactSimulatorAppScope']=True;forged.append(changed)
+        for changed in forged:
+            with self.assertRaises(RuntimeError):host.validate_owned_termination(changed,owned)
+            CHECKS+=1
+        # A Dead-copy rename with other bytes cannot be relabelled into a passing exit.
+        other=dict(owned,executableSha256='c'*64)
+        with self.assertRaises(RuntimeError):host.validate_owned_termination(record,other)
+        CHECKS+=1
+
+    def test_capture_gives_only_each_phones_first_launch_the_cold_bound(self):
+        global CHECKS
+        host=audit.host
+        self.assertEqual((host.CAPTURE_LAUNCH_SECONDS,host.PREFLIGHT_LAUNCH_SECONDS),(45,240));CHECKS+=1
+        tree=ast.parse((ROOT/'dev/della-host-layout-audit.py').read_text(encoding='utf-8'))
+        capture=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='capture']
+        self.assertEqual(len(capture),1);CHECKS+=1
+        loops=[node for node in ast.walk(capture[0]) if isinstance(node,ast.For)
+               and isinstance(node.target,ast.Tuple) and [getattr(item,'id',None) for item in node.target.elts]==['index','phase']
+               and ast.unparse(node.iter)=='enumerate(device_phases)']
+        self.assertEqual(len(loops),1);CHECKS+=1
+        launches=[node for node in ast.walk(loops[0]) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
+                  and node.func.id=='sim' and node.args and isinstance(node.args[0],ast.Constant) and node.args[0].value=='launch']
+        self.assertEqual(len(launches),1)
+        self.assertEqual([ast.unparse(keyword.value) for keyword in launches[0].keywords if keyword.arg=='timeout'],
+                         ['remaining(launch_bound)']);CHECKS+=2
+        bounds=[node for node in ast.walk(capture[0]) if isinstance(node,ast.Assign)
+                and any(isinstance(target,ast.Name) and target.id=='launch_bound' for target in node.targets)]
+        self.assertEqual(len(bounds),1)
+        self.assertEqual(ast.unparse(bounds[0].value),'PREFLIGHT_LAUNCH_SECONDS if index == 0 else CAPTURE_LAUNCH_SECONDS');CHECKS+=2
+
     def test_owned_installed_bundle_hashes_aliases_uid_and_birth(self):
         global CHECKS
         host=audit.host;owned,_,kernel=self.owned_fixture()

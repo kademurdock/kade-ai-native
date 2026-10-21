@@ -167,6 +167,16 @@ BOOT_SECONDS=600
 INSTALL_SECONDS=180
 PREFLIGHT_CONTAINER_SECONDS=90
 PREFLIGHT_LAUNCH_SECONDS=240
+# Warm host-capture launches took 0.6-7 s. The first launch after the capture's own boot of a
+# phone is a cold launch and keeps the preflight's cold bound (run 39531005702 attempt 3: the SE
+# phone's first launch, 65 s after its boot, exceeded 45 s).
+CAPTURE_LAUNCH_SECONDS=45
+# Oct 21 2026: containermanagerd keeps a replaced install here until it deletes it. Minutes after
+# an earlier step's install, the kernel can name an already verified running app by this copy's
+# path (same pid, uid and birth). Only the cleanup re-check of that launch may accept it, and
+# only when its executable and Info.plist bytes still equal the compiled app.
+DEAD_COPY=(r'/data/Library/Caches/com\.apple\.containermanagerd/Dead/temp\.[A-Za-z0-9]{6}/'
+           r'([A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12})/KadeAI\.app/KadeAI')
 # First `simctl ui appearance` after a cold boot took 9.7 s to >45 s on 3-vCPU runners.
 APPEARANCE_SECONDS=120
 # The first `simctl list` on a fresh runner starts CoreSimulatorService (>45 s seen 5 times).
@@ -1012,7 +1022,12 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
     if revalidation_record is not None:
         revalidation_record['revalidationDiagnostic']=owned_revalidation_diagnostic(
             first,status_sink['status'],base,identifier,match,original_owned)
-    if match is None:
+    # A fresh launch must always be the exact installed app. Only the re-check of a launch that
+    # already passed here may find the same process renamed to this phone's containermanagerd
+    # Dead copy; its bytes are hashed below exactly like the installed app's.
+    dead=(dead_copy_match(first['path'],base) if match is None and revalidation_record is not None
+          and original_owned is not None else None)
+    if match is None and dead is None:
         # Oct 16 2026: name WHERE the launched executable was (a category, never the path).
         path=first['path'];root=str(base).removesuffix('/data/Containers/Bundle/Application')
         where=('sameSimulatorOtherPath' if path.startswith(root+'/') else
@@ -1025,7 +1040,7 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
                      str(path)[len(root)+1:] if str(path).startswith(root+'/') else '')[:200]
         print(json.dumps({'launchedOutsideInstalledApp':where,'executableName':str(path).rsplit('/',1)[-1][:40],
                           'deviceRelativeShape':shape}),file=sys.stderr,flush=True)
-    require(match is not None,'Launched executable is outside the exact simulator installed app')
+    require(match is not None or dead is not None,'Launched executable is outside the exact simulator installed app')
     executable=Path(first['path']);plist=executable.parent/'Info.plist'
     for item in (executable,plist):
         require(item.resolve(strict=True)==item and not item.is_symlink(),'Owned app leaf or parent uses an unexpected alias')
@@ -1046,11 +1061,42 @@ def owned_process_identity(pid,identifier,compiled,deadline,launch_started,launc
     require(time.monotonic()<deadline and native_process_snapshot(pid)==first,
             'Native PID identity changed while checking installed artifact bytes')
     record={'schema':'kade.della-host-owned-process.v1',**{key:first[key] for key in
-            ('pid','uid','birthSeconds','birthMicroseconds')},'identifier':identifier,'bundleInstance':match[1],
+            ('pid','uid','birthSeconds','birthMicroseconds')},'identifier':identifier,'bundleInstance':(match or dead)[1],
             'bundleId':BUNDLE_ID,'executable':'KadeAI','executablePathSha256':hashlib.sha256(first['path'].encode()).hexdigest(),
             'infoPlistSha256':plist_hash,'executableSha256':executable_hash,
             'launchStartedAtUtc':launch_started,'launchFinishedAtUtc':launch_finished,'capturedAtUtc':now()}
-    return validate_owned_process(record,identifier,compiled)
+    # The Dead copy must also hash to the exact compiled app (validated here, before acceptance).
+    record=validate_owned_process(record,identifier,compiled)
+    if dead is not None:
+        require(all(record[key]==original_owned[key] for key in ('pid','uid','birthSeconds','birthMicroseconds'))
+                and all(record[key]==original_owned[key] for key in ('infoPlistSha256','executableSha256')),
+                'Renamed executable is not the same verified launch')
+        revalidation_record['renamedExecutable']={'schema':'kade.della-host-renamed-executable.v1',
+            'pathCategory':'sameSimulatorDeadCopy',**{key:record[key] for key in
+            ('executablePathSha256','bundleInstance','infoPlistSha256','executableSha256')}}
+        installed=base/original_owned['bundleInstance']/'KadeAI.app/KadeAI'
+        root=str(base).removesuffix('/data/Containers/Bundle/Application')
+        print(json.dumps({'ownedExecutableRenamed':'sameSimulatorDeadCopy','bytesEqualCompiled':True,
+                          'deviceRelativeShape':re.sub(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}','<uuid>',
+                                                       first['path'][len(root)+1:])[:200],
+                          'sameBundleInstance':dead[1].casefold()==original_owned['bundleInstance'].casefold(),
+                          'sameFileAsInstalled':same_native_file(str(installed),first['path'])}),
+              file=sys.stderr,flush=True)
+    return record
+
+
+def dead_copy_match(path,base):
+    device_root=str(base).removesuffix('/data/Containers/Bundle/Application')
+    return re.fullmatch(re.escape(device_root)+DEAD_COPY,path)
+
+
+def same_native_file(first,second):
+    # Diagnostic only (never a gate): does the Dead copy share the installed executable's inode?
+    try:
+        one=os.stat(first);two=os.stat(second)
+        return (one.st_dev,one.st_ino)==(two.st_dev,two.st_ino)
+    except (OSError,ValueError):
+        return None
 
 
 def owned_revalidation_diagnostic(first,status,base,identifier,match,owned):
@@ -1063,7 +1109,8 @@ def owned_revalidation_diagnostic(first,status,base,identifier,match,owned):
     same_device=(path.startswith(device_root+'/') or family_device is not None
                  and family_device[1].casefold()==identifier.casefold())
     other=re.fullmatch(re.escape(family)+r'/('+uuid+r')/data/Containers/Bundle/Application/'+uuid+r'/KadeAI\.app/KadeAI',path)
-    category=('expectedSimulatorApp' if match is not None else 'sameSimulatorOtherPath'
+    category=('expectedSimulatorApp' if match is not None else 'sameSimulatorDeadCopy'
+              if dead_copy_match(path,base) is not None else 'sameSimulatorOtherPath'
               if same_device else 'anotherSimulatorApp'
               if other is not None and other[1].casefold()!=identifier.casefold() else 'sameAppSuffixElsewhere'
               if path.endswith('/KadeAI.app/KadeAI') else 'otherAbsolutePath')
@@ -1090,8 +1137,8 @@ def validate_owned_revalidation_diagnostic(data,owned):
             and isinstance(data['executablePathSha256'],str) and re.fullmatch(r'[a-f0-9]{64}',data['executablePathSha256'])
             and type(data['exactSimulatorAppScope']) is bool
             and isinstance(data['pathCategory'],str)
-            and data['pathCategory'] in ('expectedSimulatorApp','sameSimulatorOtherPath','anotherSimulatorApp',
-                                         'sameAppSuffixElsewhere','otherAbsolutePath')
+            and data['pathCategory'] in ('expectedSimulatorApp','sameSimulatorDeadCopy','sameSimulatorOtherPath',
+                                         'anotherSimulatorApp','sameAppSuffixElsewhere','otherAbsolutePath')
             and data['exactSimulatorAppScope']==(data['pathCategory']=='expectedSimulatorApp'),
             'Owned revalidation diagnostic schema, kernel fields or path category is invalid')
     matches=data['matchesOriginal']
@@ -1111,7 +1158,7 @@ def owned_identity_digest(owned):
 def validate_owned_termination(data,owned):
     fields={'schema','pid','identitySha256','timeoutSeconds','signal','signalSubmitted','identityVerified',
             'observedExit','passed','timedOut','exitCode','pollCount','startedAtUtc','finishedAtUtc','elapsedSeconds'}
-    require(isinstance(data,dict) and fields<=set(data)<=fields|{'errorType','error','revalidationDiagnostic'}
+    require(isinstance(data,dict) and fields<=set(data)<=fields|{'errorType','error','revalidationDiagnostic','renamedExecutable'}
             and data['schema']=='kade.della-host-owned-exit.v1' and data['signal']=='SIGTERM' and data['exitCode'] is None
             and number(data['timeoutSeconds']) and 0<=data['timeoutSeconds']<=30
             and number(data['elapsedSeconds']) and 0<=data['elapsedSeconds']<=data['timeoutSeconds']+1
@@ -1127,10 +1174,14 @@ def validate_owned_termination(data,owned):
             and (not data['signalSubmitted'] or data['identityVerified'])
             and (not data['observedExit'] or data['signalSubmitted']),
             'Owned process exit diagnostics contradict the verified signal or contain unsafe text')
+    require('renamedExecutable' not in data or 'revalidationDiagnostic' in data,
+            'A renamed executable record requires its kernel revalidation diagnostic')
     if 'revalidationDiagnostic' in data:
         diagnostic=validate_owned_revalidation_diagnostic(data['revalidationDiagnostic'],owned)
+        renamed=data.get('renamedExecutable')
+        if renamed is not None:validate_renamed_executable(renamed,diagnostic,owned)
         require(not data['identityVerified'] or diagnostic['exactSimulatorAppScope']
-                and all(diagnostic['matchesOriginal'].values()),
+                and all(diagnostic['matchesOriginal'].values()) or renamed is not None,
                 'Owned revalidation diagnostic contradicts verified native ownership')
     start=datetime.fromisoformat(data['startedAtUtc']);finish=datetime.fromisoformat(data['finishedAtUtc'])
     require(start.tzinfo is not None and finish.tzinfo is not None and start<=finish
@@ -1140,6 +1191,24 @@ def validate_owned_termination(data,owned):
     if data['passed']:require(owned is not None and all(data[key] for key in ('identityVerified','signalSubmitted','observedExit'))
             and data['timeoutSeconds']>0 and data['pollCount']>0 and not data['timedOut'] and 'errorType' not in data,
             'Unobserved or failed owned process exit retained native success')
+    return data
+
+
+def validate_renamed_executable(data,diagnostic,owned):
+    # The same pid, uid and birth as the verified launch, named by this phone's Dead copy whose
+    # executable and Info.plist bytes equal the launch's (which equal the compiled app's).
+    require(isinstance(data,dict) and set(data)=={'schema','pathCategory','executablePathSha256','bundleInstance',
+                                                 'infoPlistSha256','executableSha256'}
+            and data['schema']=='kade.della-host-renamed-executable.v1'
+            and data['pathCategory']==diagnostic['pathCategory']=='sameSimulatorDeadCopy'
+            and not diagnostic['exactSimulatorAppScope']
+            and all(diagnostic['matchesOriginal'][key] for key in ('pid','uid','birth'))
+            and not diagnostic['matchesOriginal']['path']
+            and data['executablePathSha256']==diagnostic['executablePathSha256']
+            and isinstance(data['bundleInstance'],str)
+            and re.fullmatch(r'[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}',data['bundleInstance'])
+            and all(data[key]==owned[key] for key in ('infoPlistSha256','executableSha256')),
+            'Renamed executable record is not the same verified launch at its Dead copy')
     return data
 
 
@@ -1155,14 +1224,18 @@ def terminate_owned_process(owned,identifier,compiled,deadline,record,bound=30):
         fresh=owned_process_identity(owned['pid'],identifier,compiled,limit,
                                      owned['launchStartedAtUtc'],owned['launchFinishedAtUtc'],
                                      revalidation_record=record,original_owned=owned)
-        require({key:value for key,value in fresh.items() if key!='capturedAtUtc'}==
-                {key:value for key,value in owned.items() if key!='capturedAtUtc'},
+        # Only a verified Dead-copy rename may change the path and its bundle folder; every other
+        # field, including both artifact hashes, must equal the launch identity.
+        moved=('capturedAtUtc','bundleInstance','executablePathSha256') if 'renamedExecutable' in record else ('capturedAtUtc',)
+        require({key:value for key,value in fresh.items() if key not in moved}==
+                {key:value for key,value in owned.items() if key not in moved},
                 'Owned launch PID was reused or its installed identity changed; no signal was sent')
         require(time.monotonic()<limit,'Owned process signal has no remaining cleanup deadline')
         immediate=native_process_snapshot(owned['pid'])
         require(immediate is not None and all(immediate[key]==owned[key] for key in
                 ('pid','uid','birthSeconds','birthMicroseconds'))
-                and hashlib.sha256(immediate['path'].encode()).hexdigest()==owned['executablePathSha256'],
+                and hashlib.sha256(immediate['path'].encode()).hexdigest() in
+                    {owned['executablePathSha256'],fresh['executablePathSha256']},
                 'Native ownership changed immediately before the one signal; no signal was sent')
         record['identityVerified']=True
         require(time.monotonic()<limit,'Native ownership verification exhausted the existing signal deadline')
@@ -1927,7 +2000,9 @@ def capture(expected):
             # kernel could name the running app by that copy's path (run 38870116120 attempt 2:
             # data/Library/Caches/com.apple.containermanagerd/Dead/temp.*/<uuid>/KadeAI.app/KadeAI),
             # failing the identity check on the right app. The keypose capture never reinstalls
-            # and has never hit this.
+            # and has never hit this. Oct 21 2026: the earlier steps' installs still leave such a
+            # copy (run 39531005702 attempts 1-2), so the cleanup re-check accepts it under
+            # DEAD_COPY's byte-equality rule.
             try:
                 installed=sim('get_app_container',identifier,BUNDLE_ID,'app',timeout=global_remaining(45)).strip()
                 require(installed.endswith('/KadeAI.app') and Path(installed).is_dir(),
@@ -1968,10 +2043,14 @@ def capture(expected):
                              SIMCTL_CHILD_KADE_PUPPET_LAB='0',SIMCTL_CHILD_KADE_DELLA_ARTICULATED_AUDIT='0',
                              SIMCTL_CHILD_KADE_CHAT_LAYOUT_AUDIT='0',SIMCTL_CHILD_KADE_CALL_LAYOUT_AUDIT='0',
                              SIMCTL_CHILD_KADE_TOUR='0')
+                    # A phone's first launch here can follow the capture's own boot of it (the SE
+                    # phone starts shut down): a cold launch.
+                    timing['launchTimeoutSeconds']=launch_bound=(PREFLIGHT_LAUNCH_SECONDS if index==0
+                                                                 else CAPTURE_LAUNCH_SECONDS)
                     launch_started=time.monotonic()
                     launch_at=now()
                     launched=sim('launch','--stdout='+str(OUT/(phase+'.stdout')),'--stderr='+str(OUT/(phase+'.stderr')),
-                        identifier,BUNDLE_ID,env=env,timeout=remaining(45))
+                        identifier,BUNDLE_ID,env=env,timeout=remaining(launch_bound))
                     launch_finished=now()
                     timing['launchSeconds']=round(time.monotonic()-launch_started,3)
                     owned=owned_process_identity(launch_pid(launched),identifier,compiled,deadline-30,launch_at,launch_finished)
