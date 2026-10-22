@@ -126,6 +126,38 @@ private enum WorkspaceStartJournal {
     static func clear(_ account: String) { SecItemDelete(query(account) as CFDictionary) }
 }
 
+/// A continuation uses the mode saved before this phone submitted the run.
+/// Server run pages are not an authoritative record of a runtime's first mode.
+private enum WorkspacePolicyJournal {
+    private static func query(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "com.kademurdock.kadeai.workspace-policies",
+         kSecAttrAccount as String: account]
+    }
+    static func load(_ account: String) -> [String: WorkspaceContinuationPolicy] {
+        var request = query(account)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let policies = try? JSONDecoder().decode([String: WorkspaceContinuationPolicy].self, from: data) else { return [:] }
+        return policies.filter { $0.value.account == account }
+    }
+    static func save(_ policies: [String: WorkspaceContinuationPolicy], account: String) -> Bool {
+        guard policies.values.allSatisfy({ $0.account == account }),
+              let data = try? JSONEncoder().encode(policies) else { return false }
+        let request = query(account)
+        let updated = SecItemUpdate(request as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else { return false }
+        var item = request
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+    }
+}
+
 private struct WorkspaceServiceError: LocalizedError {
     let message: String
     let status: Int?
@@ -206,6 +238,7 @@ struct WorkspaceView: View {
     @State private var busy = false
     @State private var status = "Loading workspaces…"
     @State private var pending: WorkspacePendingStart?
+    @State private var sessionPolicies: [String: WorkspaceContinuationPolicy] = [:]
     @State private var selectedRunId: String?
     @State private var events: [KadeWorkspaceEvent] = []
     @State private var eventRequestRevision = 0
@@ -217,7 +250,12 @@ struct WorkspaceView: View {
     private var session: KadeWorkspaceSession? { sessions.first { $0.id == sessionId } }
     private var availableSessions: [KadeWorkspaceSession] { sessions.filter { $0.projectId == projectId } }
     private var selectedRun: KadeWorkspaceRun? { runs.first { $0.id == selectedRunId } }
-    private var sessionMode: String? { runs.first { $0.sessionId == sessionId }?.mode }
+    private var continuationPolicy: WorkspaceContinuationPolicy? {
+        guard let account, let session, let policy = sessionPolicies[session.id],
+              policy.matches(account: account, projectId: projectId, runtime: session.runtime, model: session.model) else { return nil }
+        return policy
+    }
+    private var continuationUnavailable: Bool { !sessionId.isEmpty && continuationPolicy == nil }
     private var engines: [String] {
         let capabilities = devices.first { $0.id == project?.deviceId }?.capabilities ?? []
         let supported = ["inspect", "codex", "claude", "custom"].filter { capabilities.contains($0) }
@@ -253,7 +291,12 @@ struct WorkspaceView: View {
                     }.disabled(busy || pending != nil)
                     if let session {
                         Text("Engine: \(session.runtime). Model: \(session.model ?? "engine default").")
-                        Text("Continuing keeps this conversation's edit policy. Choose New conversation to change it.")
+                        if let policy = continuationPolicy {
+                            Text(policy.allowEdits ? "Continuing allows edits under the saved policy." : "Continuing uses the saved inspection policy.")
+                            Text("Choose New conversation to change this policy.")
+                        } else {
+                            Text("This conversation's edit policy is not saved on this phone. Choose New conversation to start safely; its saved actions remain available below.")
+                        }
                     } else {
                         Picker("Agent engine", selection: $runtime) {
                             ForEach(engines, id: \.self) { engine in
@@ -267,7 +310,7 @@ struct WorkspaceView: View {
                         .accessibilityLabel("What should the agent do?")
                         .disabled(busy || pending != nil)
                     if project?.allowEdits == true {
-                        Toggle("Allow edits for this run", isOn: $allowEdits).disabled(busy || pending != nil || !sessionId.isEmpty)
+                        Toggle("Allow edits for this run", isOn: $allowEdits).disabled(busy || pending != nil || !sessionId.isEmpty || (session?.runtime ?? runtime) == "inspect")
                     } else { Text("Read-only workspace. Edit access can be granted on Windows.") }
                     Text("Folder inspection only inventories files. Coding engines use their own account or API billing.")
                         .font(.footnote)
@@ -275,7 +318,7 @@ struct WorkspaceView: View {
                         Text("A start may already have been accepted. Check saved start uses the same request identifiers.")
                     }
                     Button(pending == nil ? "Start run" : "Check saved start") { start() }
-                        .disabled(busy || (pending == nil && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                        .disabled(busy || (pending == nil && (continuationUnavailable || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
                 }
             }
             Section("Saved work") {
@@ -310,6 +353,7 @@ struct WorkspaceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             visible = true
+            if let account { sessionPolicies = WorkspacePolicyJournal.load(account) }
             if let account, let restored = WorkspaceStartJournal.load(account) {
                 pending = restored
                 projectId = restored.projectId
@@ -338,7 +382,10 @@ struct WorkspaceView: View {
         }
         .onChange(of: sessionId) { _, _ in
             guard pending == nil else { return }
-            allowEdits = sessionMode == "edit" && project?.allowEdits == true
+            allowEdits = continuationPolicy?.allowEdits == true && project?.allowEdits == true
+        }
+        .onChange(of: runtime) { _, engine in
+            if pending == nil && sessionId.isEmpty && engine == "inspect" { allowEdits = false }
         }
         .onDisappear {
             visible = false
@@ -397,9 +444,29 @@ struct WorkspaceView: View {
         if let pending { request = pending }
         else {
             guard let project else { return }
+            if continuationUnavailable {
+                status = "Choose New conversation because this phone has no saved edit policy for the selected conversation."
+                return
+            }
+            let requestedEdits = continuationPolicy?.allowEdits ?? allowEdits
+            guard (session?.runtime ?? runtime) != "inspect" || !requestedEdits else {
+                status = "Folder inspection does not edit files. Choose a coding engine or turn off edits."
+                return
+            }
+            guard !requestedEdits || project.allowEdits == true else {
+                status = "This conversation's saved policy allows edits, but the workspace no longer does. Choose New conversation."
+                return
+            }
+            let chosenModel: String?
+            if let session { chosenModel = session.model }
+            else {
+                let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+                chosenModel = trimmedModel.isEmpty ? nil : trimmedModel
+            }
             request = WorkspacePendingStart(projectId: project.id, prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
-                runtime: session?.runtime ?? runtime, model: session?.model ?? (model.isEmpty ? nil : model),
-                allowEdits: allowEdits && project.allowEdits == true,
+                runtime: session?.runtime ?? runtime,
+                model: chosenModel,
+                allowEdits: requestedEdits,
                 sessionRequestId: UUID().uuidString, runRequestId: UUID().uuidString, sessionId: session?.id)
         }
         guard !request.prompt.isEmpty, WorkspaceStartJournal.save(request, account: account) else {
@@ -422,12 +489,23 @@ struct WorkspaceView: View {
                         throw WorkspaceServiceError(message: "The conversation was saved, but its receipt could not be saved on this phone. Check saved work before trying again.")
                     }
                 }
+                let policy = WorkspaceContinuationPolicy(account: account, projectId: request.projectId,
+                    runtime: request.runtime, model: request.model, allowEdits: request.allowEdits)
+                if let existing = sessionPolicies[request.sessionId!], existing != policy {
+                    throw WorkspaceServiceError(message: "The saved start conflicts with this phone's original conversation policy. Review saved work before continuing.")
+                }
+                var updatedPolicies = sessionPolicies
+                updatedPolicies[request.sessionId!] = policy
+                guard WorkspacePolicyJournal.save(updatedPolicies, account: account) else {
+                    throw WorkspaceServiceError(message: "Could not save this conversation's edit policy. Check saved start to retry with the same request identifiers.")
+                }
+                sessionPolicies = updatedPolicies
                 let reply = try await api.request("runs", method: "POST", body: ["requestId": request.runRequestId,
                     "sessionId": request.sessionId!, "prompt": request.prompt, "mode": request.allowEdits ? "edit" : "inspect"], as: WorkspaceRunReply.self)
                 WorkspaceStartJournal.clear(account)
                 pending = nil
                 prompt = ""
-                allowEdits = false
+                allowEdits = request.allowEdits
                 sessionId = reply.run.sessionId
                 selectedRunId = reply.run.id
                 busy = false
@@ -438,7 +516,7 @@ struct WorkspaceView: View {
             } catch {
                 busy = false
                 if let rejection = error as? WorkspaceServiceError, let code = rejection.status,
-                   (400...499).contains(code), code != 408 {
+                   WorkspaceRetryPolicy.isDefinitiveRefusal(code) {
                     WorkspaceStartJournal.clear(account)
                     pending = nil
                     status = error.localizedDescription + " The start was refused; your prompt is still here."
