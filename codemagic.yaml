@@ -58,6 +58,7 @@ workflows:
           bash ./run-family-tests.sh
           bash ./run-clubhouse-tests.sh
           bash ./run-caption-tests.sh
+          bash ./run-workspace-tests.sh
           python3 dev/art-check.py
           python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py
@@ -72,12 +73,14 @@ workflows:
       - name: Set up code signing (reusable certificate)
         script: |
           set -e
+          # Workspace release: require existing signing resources. Missing
+          # certificates/profiles fail this run rather than creating new ones.
+          # Historical creation notes below describe earlier setup only.
           keychain initialize
           printf '%s' "$CERT_KEY" | openssl base64 -d -A > /tmp/cert_key.pem
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --certificate-key=@file:/tmp/cert_key.pem \
-            --create
+            --type IOS_APP_STORE --strict-match-identifier \
+            --certificate-key=@file:/tmp/cert_key.pem
           # July 28 2026 (keyboard extension attempt): the extension is its
           # own bundle id and needs its own App Store profile. --create
           # registers the id in the developer portal on first run via the
@@ -85,9 +88,8 @@ workflows:
           # at, the ASC key's role can't create bundle ids -- register
           # com.kademurdock.kadeai.keyboard by hand in the portal and rerun.
           app-store-connect fetch-signing-files "$BUNDLE_ID.keyboard" \
-            --type IOS_APP_STORE \
-            --certificate-key=@file:/tmp/cert_key.pem \
-            --create
+            --type IOS_APP_STORE --strict-match-identifier \
+            --certificate-key=@file:/tmp/cert_key.pem
           # Part 120 (Sep 3 2026) — the share extension, third bundle id.
           # Same --create story as the keyboard: if THIS line is what a red
           # build points at, the ASC key's role cannot create bundle ids, so
@@ -102,15 +104,13 @@ workflows:
           # day the portal step is done this line and the target come back
           # together.
           app-store-connect fetch-signing-files "$BUNDLE_ID.share" \
-            --type IOS_APP_STORE \
-            --certificate-key=@file:/tmp/cert_key.pem \
-            --create
+            --type IOS_APP_STORE --strict-match-identifier \
+            --certificate-key=@file:/tmp/cert_key.pem
           # Sep 23 2026 redesign: the widget extension (KadeWidgets), fourth bundle id.
           # Same --create story; it has no App Group, so there is no portal step.
           app-store-connect fetch-signing-files "$BUNDLE_ID.widgets" \
-            --type IOS_APP_STORE \
-            --certificate-key=@file:/tmp/cert_key.pem \
-            --create
+            --type IOS_APP_STORE --strict-match-identifier \
+            --certificate-key=@file:/tmp/cert_key.pem
           keychain add-certificates
           xcode-project use-profiles
       - name: Auto-increment the TestFlight build number (floor 100 for native)
