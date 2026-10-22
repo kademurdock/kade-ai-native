@@ -1,0 +1,114 @@
+name: Workspace update - unsigned iOS checks
+
+# Standard macos-26 runners are free for this public repository. This branch
+# has no signing secrets, publishing steps or Codemagic trigger.
+'on':
+  push:
+    branches: [codex/agent-workspaces-20261022]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.repository == 'kademurdock/kade-ai-native' && github.event.repository.private == false
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the exact pushed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Verify source and installed Apple toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          printf 'Source: %s\n' "$(git rev-parse HEAD)"
+
+      - name: Existing Foundation, model and source gates
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_gate() {
+            local log
+            log=$(mktemp)
+            printf '\nChecking %s\n' "$*"
+            if "$@" > "$log" 2>&1; then
+              tail -n 4 "$log"
+            else
+              tail -n 100 "$log"
+              exit 1
+            fi
+            rm "$log"
+          }
+          run_gate bash run-speech-tests.sh
+          run_gate bash run-push-tests.sh
+          run_gate bash run-character-tests.sh
+          run_gate bash run-starter-tests.sh
+          run_gate bash run-memory-receipt-tests.sh
+          run_gate bash run-reply-focus-tests.sh
+          run_gate bash run-library-browse-tests.sh
+          run_gate python3 VoiceSelectionTests/run.py
+          run_gate bash run-world-tests.sh
+          run_gate bash run-arcade-tests.sh
+          run_gate bash run-family-tests.sh
+          run_gate bash run-clubhouse-tests.sh
+          run_gate bash run-caption-tests.sh
+          run_gate bash run-soul-tests.sh
+          run_gate bash run-workspace-tests.sh
+          run_gate python3 dev/art-check.py
+          run_gate python3 dev/prepare-puppet-review.py --check
+          run_gate python3 scripts/test_release_receipt.py
+
+      - name: Generate the native Xcode project
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+
+      - name: Compile the app and extensions without signing
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/kade-workspace-compile.log"
+          status=0
+          xcodebuild -jobs 3 -project KadeAI.xcodeproj -scheme KadeAI \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/kade-workspace-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= build > "$log" 2>&1 || status=$?
+          grep -E 'error:|BUILD (SUCCEEDED|FAILED)' "$log" | sort -u | head -n 40 || true
+          if [ "$status" -ne 0 ]; then
+            tail -n 60 "$log"
+          fi
+          exit "$status"
+
+      - name: Existing attachment cancellation and retry regressions
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/kade-workspace-attachments.log"
+          if python3 dev/run-attachment-tests.py > "$log" 2>&1; then
+            tail -n 30 "$log"
+          else
+            tail -n 100 "$log"
+            exit 1
+          fi
