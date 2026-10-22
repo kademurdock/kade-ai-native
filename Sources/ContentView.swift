@@ -478,9 +478,9 @@ struct ContentView: View {
     /// breaks.
     private func go(_ destination: HomeRoute) {
         switch destination {
-        case .alerts: unread.markSeen(.alerts)
-        case .announcements: unread.markSeen(.announcements)
-        case .agentWork: unread.markSeen(.agentWork)
+        case .alerts: unread.markSeen(.alerts, client: apiClient)
+        case .announcements: unread.markSeen(.announcements, client: apiClient)
+        case .agentWork: unread.markSeen(.agentWork, client: apiClient)
         default: break
         }
         switch destination {
@@ -511,7 +511,7 @@ struct ContentView: View {
             // notification tapped while already in Admin.
             tab = .more
             morePath = [.admin, .feedbackReports]
-        case .alerts, .announcements, .agentWork, .bookmarks, .settings, .settingsSearch,
+        case .alerts, .announcements, .agentWork, .workspaces, .bookmarks, .settings, .settingsSearch,
              .search, .help, .admin, .brief, .accessRequests, .approvals:
             tab = .more
             morePath = [destination]
@@ -559,6 +559,8 @@ struct ContentView: View {
             AgentWorkView(apiClient: apiClient, selectedRunId: selectedHarnessRunId) { conversation in
                 go(.savedChat(conversation))
             }
+        case .workspaces:
+            WorkspaceView(apiClient: apiClient)
         case .savedChat(let conversation):
             ConversationDetailView(conversation: conversation)
         case .describe:
@@ -1430,6 +1432,7 @@ enum HomeRoute: Identifiable, Hashable {
     case help
     case conversations
     case agentWork
+    case workspaces
     case savedChat(KadeConversation)
     case describe
     case quickDictate
@@ -1489,6 +1492,7 @@ enum HomeRoute: Identifiable, Hashable {
         case .help: return "help"
         case .conversations: return "conversations"
         case .agentWork: return "agentWork"
+        case .workspaces: return "workspaces"
         case .savedChat(let conversation): return "savedChat-\(conversation.conversationId)"
         case .describe: return "describe"
         case .quickDictate: return "quickDictate"

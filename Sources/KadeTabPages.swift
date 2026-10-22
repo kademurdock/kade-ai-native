@@ -283,6 +283,8 @@ struct MoreHomeView: View {
                     spoken: unread.spoken("Agent work", .agentWork), hint: "Check recent requests and find saved replies after a connection drops.") { nav.open(.agentWork) }
 
                 heading("Your things")
+                row("Workspaces", icon: "desktopcomputer", tint: .indigo, caption: "Agents working with folders on your computer",
+                    spoken: "Workspaces", hint: "Choose a shared Windows folder, start work, or read saved actions.") { nav.open(.workspaces) }
                 row("Bookmarks", icon: "bookmark.fill", tint: .red, caption: "Conversations you tagged",
                     spoken: "Bookmarks", hint: "Your tagged conversations, gathered by bookmark — tag any conversation from the conversation list.") { nav.open(.bookmarks) }
 
