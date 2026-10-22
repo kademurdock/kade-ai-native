@@ -11,6 +11,7 @@ import SwiftUI
 /// Voice-row lesson recorded in `AgentEditorView`).
 struct AlertsView: View {
     let apiClient: KadeAPIClient
+    @ObservedObject private var unread = KadeUnread.shared
 
     @StateObject private var service: AlertsService
 
@@ -81,6 +82,7 @@ struct AlertsView: View {
                 Text("Recent")
             } footer: {
                 Text("The last 15 things Kade-AI sent your way, newest first.")
+                Text(unread.synchronizationNote)
             }
 
             Section {
