@@ -378,6 +378,7 @@ struct LiveFaceWebView: UIViewRepresentable {
 
 /// The account's sight flag, kept on the server so it follows the person
 /// across devices (the arcade and the web will read the same answer).
+@MainActor
 enum SightService {
     static func pull(client: KadeAPIClient) async {
         let req = client.request(path: "api/kade/sight", authorized: true, timeout: 15)
@@ -391,7 +392,8 @@ enum SightService {
         defaults.set(liveFaces, forKey: LiveFaceSetting.key)
     }
 
-    static func push(sight: String, liveFaces: Bool, client: KadeAPIClient = KadeAPIClient()) async {
+    static func push(sight: String, liveFaces: Bool) async {
+        let client = KadeAPIClient()
         var req = client.request(path: "api/kade/sight", method: "PUT", authorized: true, timeout: 15)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let value: Any = sight.isEmpty ? NSNull() : sight
