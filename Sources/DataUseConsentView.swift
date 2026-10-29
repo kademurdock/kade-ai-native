@@ -200,8 +200,11 @@ struct DataUseConsentView: View {
 /// whole reason this is not a bare Bool.
 enum DataUseConsent {
     /// Bump when `whatIsSent` or `whoReceivesIt` changes materially.
-    /// 2 (Oct 29 2026): Simli joined the list (live video faces).
-    static let currentVersion = 2
+    /// Oct 29 2026: Simli joined the list (live video faces) WITHOUT a bump, at
+    /// Kade's word ("Don't make people accept another policy"). Simli receives
+    /// only the character's own spoken reply, never anything the person typed,
+    /// said or shared, so consent to the list it joined still covers it.
+    static let currentVersion = 1
     static let policyURL = URL(string: "https://kademurdock.com/privacy")!
 
     private static func key(_ userId: String) -> String { "kadeDataUseConsent.v.\(userId)" }
