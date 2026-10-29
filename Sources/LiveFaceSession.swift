@@ -561,7 +561,8 @@ struct LiveFaceWebView: UIViewRepresentable {
 enum SightService {
     private static var lastPushAt: Date?
 
-    static func pull(client: KadeAPIClient = KadeAPIClient()) async {
+    static func pull(client given: KadeAPIClient? = nil) async {
+        let client = given ?? KadeAPIClient()
         let req = client.request(path: "api/kade/sight", authorized: true, timeout: 15)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
