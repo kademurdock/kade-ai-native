@@ -34,7 +34,8 @@ struct CharacterLoopView: View {
             guard let url = CharacterLoopPolicy.url(agentID: agentID, state: state) else { file = nil; return }
             // Hold a loop at least a moment: a face that flickers between two
             // expressions must not restart the film on every flicker.
-            if shownState != nil, shownState != state {
+            // Speech starting or stopping switches at once.
+            if shownState != nil, shownState != state, state != .talking, shownState != .talking {
                 try? await Task.sleep(for: .milliseconds(1500))
                 if Task.isCancelled { return }
             }

@@ -219,7 +219,7 @@ struct CharacterPortraitView: View {
                             .offset(y: pose.lift * reach)
                     }
                     // Oct 28 2026: painted loops between replies and the live video
-                    // face, for a sighted account; the rig underneath keeps the mouth.
+                    // face, for a sighted account; the talking loop covers speech when the video is not up.
                     if stage, sightSetting == SightSetting.sighted {
                         LiveFaceStageLayer(agentID: agentID, side: side, sight: sightSetting,
                             speaking: speaking, thinking: performance.activity == .thinking,

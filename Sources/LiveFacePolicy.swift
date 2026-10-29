@@ -80,19 +80,23 @@ enum LiveFacePolicy {
 }
 
 /// The painted loops (option four): short film loops made once from each
-/// character's painting, shown on a sighted person's stage between replies
-/// when the live face is not running. While the character speaks the mesh
-/// rig takes over, since only it knows the mouth. Blind accounts never load
-/// them: they are decoration, and data.
+/// character's portrait, shown on a sighted person's stage whenever the live
+/// face is not running. Oct 29 2026: the four main characters got new looks
+/// (Kade: "I don't care how much you have to change about how the people
+/// look"), so the old painted rig would show a different person; while one of
+/// them speaks without live video the talking loop plays instead. Blind
+/// accounts never load them: they are decoration, and data.
 enum CharacterLoopState: String, CaseIterable {
-    case idle, listening, thinking, laugh, surprised, concerned
+    case idle, listening, thinking, laugh, surprised, concerned, talking
 }
 
 enum CharacterLoopPolicy {
-    /// Which loop a stage shows for a performance, or nil to show the rig.
+    /// Which loop a stage shows for a performance, or nil to show the rig
+    /// (blind or unanswered accounts, motion off, or the live face is up).
     static func state(sight: String, speaking: Bool, thinking: Bool, listening: Bool,
                       face: String, motionAllowed: Bool, liveFaceUp: Bool) -> CharacterLoopState? {
-        guard sight == SightSetting.sighted, motionAllowed, !liveFaceUp, !speaking else { return nil }
+        guard sight == SightSetting.sighted, motionAllowed, !liveFaceUp else { return nil }
+        if speaking { return .talking }
         if thinking { return .thinking }
         switch face {
         case "laugh", "delighted": return .laugh

@@ -51,7 +51,8 @@ func loop(sight: String = SightSetting.sighted, speaking: Bool = false, thinking
 }
 check("blind account loads no loops", loop(sight: SightSetting.nonvisual) == nil)
 check("unset account loads no loops", loop(sight: SightSetting.unset) == nil)
-check("the rig keeps the mouth while speaking", loop(speaking: true) == nil)
+check("speaking without live video plays the talking loop", loop(speaking: true) == .talking)
+check("the live face wins while speaking too", loop(speaking: true, liveFaceUp: true) == nil)
 check("the live face wins over loops", loop(liveFaceUp: true) == nil)
 check("motion off, no loops", loop(motionAllowed: false) == nil)
 check("idle by default", loop() == .idle)
