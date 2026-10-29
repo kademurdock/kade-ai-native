@@ -60,6 +60,8 @@ workflows:
           bash ./run-clubhouse-tests.sh
           bash ./run-caption-tests.sh
           bash ./run-workspace-tests.sh
+          # Oct 28 2026: the live video face gate and the painted-loop pick.
+          bash ./run-live-face-tests.sh
           python3 dev/art-check.py
           python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py

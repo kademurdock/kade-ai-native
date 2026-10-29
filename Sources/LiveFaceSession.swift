@@ -504,6 +504,8 @@ final class LiveFaceSession: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func pullSightIfNeeded() async {
+        // Signed out (or an offline audit run): nothing to read, never a request.
+        guard Keychain.string(for: .accessToken) != nil else { return }
         if let at = sightPulledAt, Date().timeIntervalSince(at) < 600 { return }
         sightPulledAt = Date()
         await SightService.pull(client: client)
@@ -562,6 +564,7 @@ enum SightService {
     private static var lastPushAt: Date?
 
     static func pull(client given: KadeAPIClient? = nil) async {
+        guard Keychain.string(for: .accessToken) != nil else { return }
         let client = given ?? KadeAPIClient()
         let req = client.request(path: "api/kade/sight", authorized: true, timeout: 15)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200,
