@@ -50,6 +50,10 @@ struct CharacterPortraitView: View {
     @AppStorage("kadeVoicePortraits") private var enabled = true
     @State private var visible = false
     @State private var onScreen = true
+    /// Oct 28 2026: the live video face and painted loops (LiveFaceStageLayer).
+    /// On the big stage only, for an account that said it uses the screen.
+    @AppStorage(SightSetting.key) private var sightSetting = SightSetting.unset
+    @AppStorage(LiveFaceSetting.key) private var liveFacesSetting = LiveFaceSetting.defaultOn
     @State private var bodyClock = CharacterBodyPerformanceClock()
     @State private var angelFaceClock = AngelVectorFaceClock()
     /// Blinks and expression cross-fades; its queued blinks also raise the
@@ -214,6 +218,13 @@ struct CharacterPortraitView: View {
                             .rotationEffect(.degrees(pose.tilt * reach))
                             .offset(y: pose.lift * reach)
                     }
+                    // Oct 28 2026: painted loops between replies and the live video
+                    // face, for a sighted account; the talking loop covers speech when the video is not up.
+                    if stage, sightSetting == SightSetting.sighted {
+                        LiveFaceStageLayer(agentID: agentID, side: side, sight: sightSetting,
+                            speaking: speaking, thinking: performance.activity == .thinking,
+                            listening: listening, face: String(describing: face), motionAllowed: active)
+                    }
                     #if DEBUG && targetEnvironment(simulator)
                     if stage, side >= 160, prepared,
                        agentID == CharacterMotion.harleyID,
@@ -237,7 +248,15 @@ struct CharacterPortraitView: View {
                 return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
             }) { onScreen = $0 }
             .onAppear { visible = true }
-            .onDisappear { visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset() }
+            .onDisappear {
+                visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
+                if stage { LiveFaceSession.shared.detach(agentID: agentID) }
+            }
+            .task(id: "\(agentID ?? "")|\(stage)|\(listening)|\(enabled && motionAllowed)|\(sightSetting)|\(liveFacesSetting)") {
+                guard stage else { return }
+                await LiveFaceSession.shared.attach(agentID: agentID, lane: listening ? .call : .chat,
+                    motionAllowed: enabled && motionAllowed)
+            }
             .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
                 bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
             }

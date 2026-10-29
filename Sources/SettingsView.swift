@@ -352,6 +352,7 @@ struct SettingsView: View {
             spacingRow(searchStyle: false)
             picturesRow(searchStyle: false)
             pictureWordsRow(searchStyle: false)
+            sightRow(searchStyle: false)
         } header: {
             sectionHeader("Accessibility")
         } footer: {
@@ -371,6 +372,7 @@ struct SettingsView: View {
             reduceMotionRow(searchStyle: false)
             animatedCharactersRow(searchStyle: false)
             livingPaintingsRow(searchStyle: false)
+            liveFacesRow(searchStyle: false)
 
             // Session 23 (Kade: "Eventually I'll make new sounds"):
             // the two lonely test buttons grew into the full vocabulary
@@ -572,8 +574,8 @@ struct SettingsView: View {
         case voiceDefault, thinkingProgress, streamingVoice, whisper, speed, fillers, pronunciation
         case notificationPermission, longTaskPing, brief
         case memories, logbook, memorySharing
-        case highContrast, font, spacing, pictures, pictureWords
-        case soundEffects, haptics, sensorySync, reduceMotion, animatedCharacters, livingPaintings
+        case highContrast, font, spacing, pictures, pictureWords, sight
+        case soundEffects, haptics, sensorySync, reduceMotion, animatedCharacters, livingPaintings, liveFaces
         case keyboardPhrases, keyboardClean
         case location
         case usage, accountSecurity, export
@@ -605,6 +607,8 @@ struct SettingsView: View {
             case .spacing: return "Line spacing"
             case .pictures: return "Painted pictures"
             case .pictureWords: return "Describe pictures"
+            case .sight: return "I use the screen"
+            case .liveFaces: return "Live video faces"
             case .soundEffects: return "Sound effects"
             case .haptics: return "Haptics"
             case .sensorySync: return "Pulse with the visuals"
@@ -631,8 +635,8 @@ struct SettingsView: View {
             case .voiceDefault, .thinkingProgress, .streamingVoice, .whisper, .speed, .fillers, .pronunciation: return "Voice & Audio"
             case .notificationPermission, .longTaskPing, .brief: return "Notifications"
             case .memories, .logbook, .memorySharing: return "Memory"
-            case .highContrast, .font, .spacing, .pictures, .pictureWords: return "Accessibility"
-            case .soundEffects, .haptics, .sensorySync, .reduceMotion, .animatedCharacters, .livingPaintings: return "Feedback & Sounds"
+            case .highContrast, .font, .spacing, .pictures, .pictureWords, .sight: return "Accessibility"
+            case .soundEffects, .haptics, .sensorySync, .reduceMotion, .animatedCharacters, .livingPaintings, .liveFaces: return "Feedback & Sounds"
             case .keyboardPhrases, .keyboardClean: return "Kade Keys"
             case .location: return "Location"
             case .usage, .accountSecurity, .export: return "Account"
@@ -675,6 +679,8 @@ struct SettingsView: View {
             case .reduceMotion: return "motion animation reduce animations still"
             case .animatedCharacters: return "animated characters puppets moving face portrait avatar kiana harley lilly della librarian calls conversation voice messages"
             case .livingPaintings: return "living painted faces painting paintings realistic della eyelids eyes blink brows mouth moving face portrait animation"
+            case .sight: return "sight see screen sighted blind vision visual voiceover braille low vision account video faces arcade"
+            case .liveFaces: return "live video faces face video call calls voice message messages kiana harley lifelike talking head penny minute cost"
             case .keyboardPhrases: return "keyboard phrases quick kade keys buttons typing"
             case .keyboardClean: return "keyboard dictation clean cleanup transcribe filler grammar typing"
             case .location: return "location gps where directions maps share place"
@@ -756,6 +762,8 @@ struct SettingsView: View {
         case .reduceMotion: reduceMotionRow(searchStyle: true)
         case .animatedCharacters: animatedCharactersRow(searchStyle: true)
         case .livingPaintings: livingPaintingsRow(searchStyle: true)
+        case .sight: sightRow(searchStyle: true)
+        case .liveFaces: liveFacesRow(searchStyle: true)
         case .keyboardPhrases: keyboardPhrasesRow(searchStyle: true)
         case .keyboardClean: keyboardCleanRow(searchStyle: true)
         case .location: locationRow(searchStyle: true)
@@ -1076,6 +1084,39 @@ struct SettingsView: View {
         }
         .disabled(!voicePortraits)
         .accessibilityHint("The hand-painted characters, Della so far, move like living paintings: eyelids close, eyes glance, brows lift and the mouth moves, instead of whole pictures fading in and out. Turn off for the picture-swapping faces. Animated characters must be on. Reduce motion, Low Power Mode and a hot phone still keep faces still.")
+    }
+    /* Oct 28 2026 (Kade: "we kinda need a vision and non vision flag...
+     * like, an account thing"). One answer on the account, kept on the
+     * server so the arcade and the web read the same one. Nothing is
+     * taken away from anyone: it only unlocks the paid video faces for
+     * people who can watch them. */
+    @AppStorage(SightSetting.key) private var sight = SightSetting.unset
+    @AppStorage(LiveFaceSetting.key) private var liveFaces = LiveFaceSetting.defaultOn
+    private func sightRow(searchStyle: Bool) -> some View {
+        Picker(selection: $sight) {
+            Text("Not said yet").tag(SightSetting.unset)
+            Text("Yes, I can see it").tag(SightSetting.sighted)
+            Text("No, I listen").tag(SightSetting.nonvisual)
+        } label: {
+            tileLabel(searchStyle ? searchLabel(.sight, "I use the screen") : "I use the screen",
+                systemImage: "eye", tint: SectionTint.accessibility)
+        }
+        .onChange(of: sight) { _, value in
+            Task { await SightService.push(sight: value, liveFaces: liveFaces) }
+        }
+        .task { await SightService.pull() }
+        .accessibilityHint("Whether you watch the screen. Saying yes lets the main characters appear as live video, which costs a couple of cents a minute from your balance while it is on screen; saying no, or nothing, keeps the free painted faces and never spends on video. You can change it any time.")
+    }
+    private func liveFacesRow(searchStyle: Bool) -> some View {
+        Toggle(isOn: $liveFaces) {
+            tileLabel(searchStyle ? searchLabel(.liveFaces, "Live video faces") : "Live video faces",
+                systemImage: "video.bubble", tint: SectionTint.feedback)
+        }
+        .disabled(sight != SightSetting.sighted)
+        .onChange(of: liveFaces) { _, value in
+            Task { await SightService.push(sight: sight, liveFaces: value) }
+        }
+        .accessibilityHint("When you play a voice message from Kiana, Harley, Della or Lilly, or take a call with them, their painting comes alive as video of them saying it, like a video message. A couple of cents a minute from your balance while it is on screen. Needs I use the screen set to yes; VoiceOver, Low Power Mode and Reduce Motion keep it off.")
     }
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {

@@ -1532,6 +1532,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         characterTimeline.append(identity: character,
             duration: Double(buffer.frameLength) / buffer.format.sampleRate, now: characterPlayerTime ?? 0)
         playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
+        // Oct 28 2026: a live video face on the call stage follows the same
+        // audio (the page is muted on a call; this engine keeps the sound).
+        LiveFaceSession.shared.feedCall(buffer, agentID: character?.speakerID)
         clipsScheduled += 1
         nextPlayheadSample = nil
     }

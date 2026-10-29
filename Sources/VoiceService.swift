@@ -97,6 +97,7 @@ final class VoiceService: NSObject, ObservableObject {
     }
     func characterLevel() -> Double {
         guard isClipPlaying, !isPaused else { return 0 }
+        if LiveFaceSession.shared.isPlayingClip { return LiveFaceSession.shared.level() }
         if streamedClipActive { return streamingPlayer.characterLevel() }
         guard let player = currentPlayer, player.isPlaying else { return 0 }
         player.isMeteringEnabled = true
@@ -748,6 +749,7 @@ final class VoiceService: NSObject, ObservableObject {
         cancelGeneration &+= 1
         currentPlayer?.stop()
         currentPlayer = nil
+        LiveFaceSession.shared.interrupt()
         // Part 98: the streamed player obeys the same stop, and its parked
         // play() await resumes so the pump can run its cancel check.
         streamingPlayer.stop()
@@ -775,6 +777,13 @@ final class VoiceService: NSObject, ObservableObject {
     /// pausing a clip that's still FETCHING has nothing to pause yet, and
     /// the composer button routes that case to a full stop instead.
     func pauseSpeaking() {
+        // Oct 28 2026: a live video face playing the clip takes the pause.
+        if LiveFaceSession.shared.isPlayingClip {
+            guard !LiveFaceSession.shared.isPausedClip else { return }
+            LiveFaceSession.shared.pause()
+            isPaused = true
+            return
+        }
         // Part 98: while the streamed player owns the clip, it takes the
         // pause — same contract (a pause is not a stop; the queue waits).
         if streamedClipActive {
@@ -794,6 +803,12 @@ final class VoiceService: NSObject, ObservableObject {
     /// output session first -- the same defensive move `playAudio` makes --
     /// because a call or recording may have re-routed audio while paused.
     func resumeSpeaking() {
+        if LiveFaceSession.shared.isPausedClip, isPaused {
+            LiveFaceSession.shared.resume()
+            isPaused = false
+            LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
+            return
+        }
         if streamedClipActive, isPaused {
             prepareOutputSession()
             streamingPlayer.resume()
@@ -1285,6 +1300,41 @@ final class VoiceService: NSObject, ObservableObject {
         #if DEBUG && targetEnvironment(simulator)
         CharacterAuditCheckpoint.mark("Voice audio session prepared")
         #endif
+        /* Oct 28 2026: a live video face on the stage takes the clip instead of
+         * the local player; the page plays the sound, so the mouth and the
+         * voice stay together. Only once its first frame is up. Any other
+         * answer leaves this method exactly as it was. */
+        if LiveFaceSession.shared.takesClip(agentID: agentID) {
+            let generation = cancelGeneration
+            let outcome = await LiveFaceSession.shared.playClip(data, agentID: agentID, onStarted: { [weak self] in
+                guard let self, generation == self.cancelGeneration else { return }
+                self.isClipPlaying = true
+                LibraryNowPlaying.shared.pauseForOtherAudio(self.libraryPauseReason)
+                self.isPaused = false
+                self.nowPlayingKey = key
+                self.nowPlayingAgentID = agentID
+                self.playingCharacterCue = cue
+                self.pausedCharacterElapsed = 0
+            }, cancelled: { [weak self] in
+                guard let self else { return true }
+                return generation != self.cancelGeneration
+            })
+            switch outcome {
+            case .notTaken:
+                break
+            case .played:
+                isClipPlaying = false
+                return true
+            case .failed:
+                // The page could not play it: the session is closed, the clip
+                // plays here as it always did, and the face comes back after.
+                isClipPlaying = false
+                if generation != cancelGeneration { return false }
+            }
+        }
+        if LiveFaceSession.shared.state == .idle {
+            Task { await LiveFaceSession.shared.reopenIfWanted() }
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             do {
                 /* Belt and braces for the same class of fault: if a
