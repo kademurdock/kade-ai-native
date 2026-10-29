@@ -94,8 +94,10 @@ struct DataUseConsentView: View {
         loud. Google reads photos, video and documents you share, and indexes \
         your saved memories so they can be found again. Tavily searches the web \
         when you ask for research. fal.ai and Black Forest Labs make images and \
-        video when you ask for them. Twilio carries phone calls and text \
-        messages. Backblaze stores backups and avatars.
+        video when you ask for them. Simli turns a character's spoken replies \
+        into live video of their face, only if you say you use the screen. \
+        Twilio carries phone calls and text messages. Backblaze stores backups \
+        and avatars.
         """
 
     static let promise = """
@@ -198,7 +200,8 @@ struct DataUseConsentView: View {
 /// whole reason this is not a bare Bool.
 enum DataUseConsent {
     /// Bump when `whatIsSent` or `whoReceivesIt` changes materially.
-    static let currentVersion = 1
+    /// 2 (Oct 29 2026): Simli joined the list (live video faces).
+    static let currentVersion = 2
     static let policyURL = URL(string: "https://kademurdock.com/privacy")!
 
     private static func key(_ userId: String) -> String { "kadeDataUseConsent.v.\(userId)" }
