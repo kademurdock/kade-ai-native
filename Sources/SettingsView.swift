@@ -1105,7 +1105,7 @@ struct SettingsView: View {
             Task { await SightService.push(sight: value, liveFaces: liveFaces) }
         }
         .task { await SightService.pull() }
-        .accessibilityHint("Whether you watch the screen. Saying yes lets Kiana and Harley appear as live video, which costs a couple of cents a minute from your balance while it is on screen; saying no, or nothing, keeps the free painted faces and never spends on video. You can change it any time.")
+        .accessibilityHint("Whether you watch the screen. Saying yes lets the main characters appear as live video, which costs a couple of cents a minute from your balance while it is on screen; saying no, or nothing, keeps the free painted faces and never spends on video. You can change it any time.")
     }
     private func liveFacesRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $liveFaces) {
@@ -1116,7 +1116,7 @@ struct SettingsView: View {
         .onChange(of: liveFaces) { _, value in
             Task { await SightService.push(sight: sight, liveFaces: value) }
         }
-        .accessibilityHint("When you play a voice message from Kiana or Harley, or take a call with them, their painting comes alive as video of them saying it, like a video message. A couple of cents a minute from your balance while it is on screen. Needs I use the screen set to yes; VoiceOver, Low Power Mode and Reduce Motion keep it off.")
+        .accessibilityHint("When you play a voice message from Kiana, Harley, Della or Lilly, or take a call with them, their painting comes alive as video of them saying it, like a video message. A couple of cents a minute from your balance while it is on screen. Needs I use the screen set to yes; VoiceOver, Low Power Mode and Reduce Motion keep it off.")
     }
     private func reduceMotionRow(searchStyle: Bool) -> some View {
         Toggle(isOn: $feedback.forceReduceMotion) {

@@ -102,11 +102,15 @@ enum CharacterLoopPolicy {
         }
     }
 
-    /// Where a character's loops live. Only the painted cast with loops.
+    /// Where a character's loops live: the main painted cast (Kiana, Harley,
+    /// Della, Lilly). Anyone else keeps the rig alone.
     static func folder(agentID: String?) -> String? {
         switch agentID {
         case "agent_6llV0eMu4fmIaj8f2x1Sb": return "kiana"
         case "agent_d26Mtu8mgOzkVGQECqO1a": return "harley"
+        case "agent_BSOLa3eNEZyjs-7abCjMt": return "della"
+        // The public Lilly and Skylee's own share one painting.
+        case "agent_TOdYS8v-bRxeNw0dia_Md", "agent_JhouuajXMYsfhCTVMQCv_": return "lilly"
         default: return nil
         }
     }

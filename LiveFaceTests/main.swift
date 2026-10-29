@@ -10,7 +10,8 @@ func check(_ name: String, _ ok: Bool) {
 
 let kiana = "agent_6llV0eMu4fmIaj8f2x1Sb"
 let harley = "agent_d26Mtu8mgOzkVGQECqO1a"
-let della = "agent_della"
+let della = "agent_BSOLa3eNEZyjs-7abCjMt"
+let stranger = "agent_someone_else"
 let faces: Set<String> = [kiana, harley]
 
 func verdict(sight: String = SightSetting.sighted, liveFaces: Bool = true, voiceOver: Bool = false,
@@ -29,7 +30,7 @@ check("the switch closes it", verdict(liveFaces: false) == .switchedOff)
 check("VoiceOver closes it even for a sighted account", verdict(voiceOver: true) == .voiceOver)
 check("Reduce Motion / Low Power closes it", verdict(motionAllowed: false) == .motionOff)
 check("no server setup is its own answer", verdict(serverEnabled: false) == .notOffered)
-check("Della has no live face yet", verdict(agentID: della) == .noFace)
+check("a character without a face yet stays closed", verdict(agentID: stranger) == .noFace)
 check("Harley has one", verdict(agentID: harley) == nil)
 check("a compact row never opens one", verdict(stage: false) == .notStage)
 check("no agent, nothing", verdict(agentID: nil) == .noAgent)
@@ -62,7 +63,10 @@ check("surprise", loop(face: "surprised") == .surprised)
 check("Kiana's loops have a home", CharacterLoopPolicy.url(agentID: kiana, state: .idle)?.absoluteString
     == "https://kademurdock.com/assets/characters/kiana/loops/idle.mp4")
 check("Harley's loops have a home", CharacterLoopPolicy.folder(agentID: harley) == "harley")
-check("others have none", CharacterLoopPolicy.url(agentID: della, state: .idle) == nil)
+check("Della's loops have a home", CharacterLoopPolicy.folder(agentID: della) == "della")
+check("both Lillys share hers", CharacterLoopPolicy.folder(agentID: "agent_TOdYS8v-bRxeNw0dia_Md") == "lilly"
+    && CharacterLoopPolicy.folder(agentID: "agent_JhouuajXMYsfhCTVMQCv_") == "lilly")
+check("others have none", CharacterLoopPolicy.url(agentID: stranger, state: .idle) == nil)
 
 if failures > 0 {
     print("\(failures) live face check(s) failed")
