@@ -50,11 +50,10 @@ struct CharacterPortraitView: View {
     @AppStorage("kadeVoicePortraits") private var enabled = true
     @State private var visible = false
     @State private var onScreen = true
-    /// Oct 28 2026: the live video face (LiveFaceSession). On the big stage
-    /// only, for an account that said it uses the screen; it lies over the
-    /// rig and shows once its first frame is in, so nothing flashes.
-    @ObservedObject private var liveFace = LiveFaceSession.shared
+    /// Oct 28 2026: the live video face and painted loops (LiveFaceStageLayer).
+    /// On the big stage only, for an account that said it uses the screen.
     @AppStorage(SightSetting.key) private var sightSetting = SightSetting.unset
+    @AppStorage(LiveFaceSetting.key) private var liveFacesSetting = LiveFaceSetting.defaultOn
     @State private var bodyClock = CharacterBodyPerformanceClock()
     @State private var angelFaceClock = AngelVectorFaceClock()
     /// Blinks and expression cross-fades; its queued blinks also raise the
@@ -219,24 +218,12 @@ struct CharacterPortraitView: View {
                             .rotationEffect(.degrees(pose.tilt * reach))
                             .offset(y: pose.lift * reach)
                     }
-                    // Oct 28 2026: the painted loops, for a sighted account between
-                    // replies (CharacterLoopPolicy); the rig underneath keeps the mouth.
-                    if stage, let loopState = CharacterLoopPolicy.state(sight: sightSetting, speaking: speaking,
-                            thinking: performance.activity == .thinking, listening: listening,
-                            face: String(describing: face), motionAllowed: active,
-                            liveFaceUp: liveFace.shows(agentID: agentID)),
-                       CharacterLoopPolicy.folder(agentID: agentID) != nil {
-                        CharacterLoopView(agentID: agentID, state: loopState)
-                            .frame(width: side, height: side)
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
-                            .allowsHitTesting(false)
-                    }
-                    if stage, liveFace.shows(agentID: agentID) {
-                        LiveFaceWebView(session: liveFace)
-                            .frame(width: side, height: side)
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
-                            .opacity(liveFace.firstFrame ? 1 : 0)
-                            .allowsHitTesting(false)
+                    // Oct 28 2026: painted loops between replies and the live video
+                    // face, for a sighted account; the rig underneath keeps the mouth.
+                    if stage, sightSetting == SightSetting.sighted {
+                        LiveFaceStageLayer(agentID: agentID, side: side, sight: sightSetting,
+                            speaking: speaking, thinking: performance.activity == .thinking,
+                            listening: listening, face: String(describing: face), motionAllowed: active)
                     }
                     #if DEBUG && targetEnvironment(simulator)
                     if stage, side >= 160, prepared,
@@ -263,11 +250,12 @@ struct CharacterPortraitView: View {
             .onAppear { visible = true }
             .onDisappear {
                 visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
-                if stage { liveFace.detach(agentID: agentID) }
+                if stage { LiveFaceSession.shared.detach(agentID: agentID) }
             }
-            .task(id: "\(agentID ?? "")|\(stage)|\(listening)|\(motionAllowed)") {
+            .task(id: "\(agentID ?? "")|\(stage)|\(listening)|\(enabled && motionAllowed)|\(sightSetting)|\(liveFacesSetting)") {
                 guard stage else { return }
-                await liveFace.attach(agentID: agentID, lane: listening ? .call : .chat, motionAllowed: motionAllowed)
+                await LiveFaceSession.shared.attach(agentID: agentID, lane: listening ? .call : .chat,
+                    motionAllowed: enabled && motionAllowed)
             }
             .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
                 bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()

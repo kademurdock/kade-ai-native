@@ -777,6 +777,13 @@ final class VoiceService: NSObject, ObservableObject {
     /// pausing a clip that's still FETCHING has nothing to pause yet, and
     /// the composer button routes that case to a full stop instead.
     func pauseSpeaking() {
+        // Oct 28 2026: a live video face playing the clip takes the pause.
+        if LiveFaceSession.shared.isPlayingClip {
+            guard !LiveFaceSession.shared.isPausedClip else { return }
+            LiveFaceSession.shared.pause()
+            isPaused = true
+            return
+        }
         // Part 98: while the streamed player owns the clip, it takes the
         // pause — same contract (a pause is not a stop; the queue waits).
         if streamedClipActive {
@@ -796,6 +803,12 @@ final class VoiceService: NSObject, ObservableObject {
     /// output session first -- the same defensive move `playAudio` makes --
     /// because a call or recording may have re-routed audio while paused.
     func resumeSpeaking() {
+        if LiveFaceSession.shared.isPausedClip, isPaused {
+            LiveFaceSession.shared.resume()
+            isPaused = false
+            LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
+            return
+        }
         if streamedClipActive, isPaused {
             prepareOutputSession()
             streamingPlayer.resume()
@@ -1313,9 +1326,14 @@ final class VoiceService: NSObject, ObservableObject {
                 isClipPlaying = false
                 return true
             case .failed:
+                // The page could not play it: the session is closed, the clip
+                // plays here as it always did, and the face comes back after.
                 isClipPlaying = false
-                return false
+                if generation != cancelGeneration { return false }
             }
+        }
+        if LiveFaceSession.shared.state == .idle {
+            Task { await LiveFaceSession.shared.reopenIfWanted() }
         }
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             do {

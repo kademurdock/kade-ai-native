@@ -32,11 +32,53 @@ struct CharacterLoopView: View {
         .accessibilityHidden(true)
         .task(id: "\(agentID ?? "")|\(state.rawValue)") {
             guard let url = CharacterLoopPolicy.url(agentID: agentID, state: state) else { file = nil; return }
+            // Hold a loop at least a moment: a face that flickers between two
+            // expressions must not restart the film on every flicker.
+            if shownState != nil, shownState != state {
+                try? await Task.sleep(for: .milliseconds(1500))
+                if Task.isCancelled { return }
+            }
             if let local = await CharacterLoopCache.shared.file(for: url), !Task.isCancelled {
                 file = local
                 shownState = state
             }
         }
+    }
+}
+
+/// The stage's top layers for a sighted account: the painted loop between
+/// replies, and the live video face over it once its first frame is in. Only
+/// this small view watches the live session, so a transcript of portrait
+/// rows never redraws when the page reports speaking or silence.
+struct LiveFaceStageLayer: View {
+    let agentID: String?
+    let side: Double
+    let sight: String
+    let speaking: Bool
+    let thinking: Bool
+    let listening: Bool
+    let face: String
+    let motionAllowed: Bool
+    @ObservedObject private var liveFace = LiveFaceSession.shared
+
+    var body: some View {
+        let liveUp = liveFace.shows(agentID: agentID)
+        ZStack {
+            if let loopState = CharacterLoopPolicy.state(sight: sight, speaking: speaking, thinking: thinking,
+                    listening: listening, face: face, motionAllowed: motionAllowed,
+                    liveFaceUp: liveUp && liveFace.firstFrame),
+               CharacterLoopPolicy.folder(agentID: agentID) != nil {
+                CharacterLoopView(agentID: agentID, state: loopState)
+            }
+            if liveUp {
+                LiveFaceWebView(session: liveFace)
+                    .opacity(liveFace.firstFrame ? 1 : 0)
+            }
+        }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
