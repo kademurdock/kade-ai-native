@@ -999,8 +999,12 @@ checkEqual("A list with nothing saved is unchanged", VoicePacePolicy.choices([1,
 // Oct 30 2026: a character's default speed belongs to the character's own builder voice.
 checkEqual("With no pick the character's speed applies",
     VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: nil), 1.3)
-checkEqual("A character with no builder voice keeps its speed with no pick",
-    VoicePacePolicy.characterRate(1.3, builderVoice: nil, listenerVoice: nil), 1.3)
+checkEqual("A character with no builder voice has no speed for the fallback voice",
+    VoicePacePolicy.characterRate(1.3, builderVoice: nil, listenerVoice: nil), nil)
+checkEqual("A blank builder voice is no builder voice",
+    VoicePacePolicy.characterRate(1.3, builderVoice: "  ", listenerVoice: nil), nil)
+checkEqual("A character with no builder voice has no speed for a listener's voice either",
+    VoicePacePolicy.characterRate(1.3, builderVoice: nil, listenerVoice: "Mine"), nil)
 checkEqual("A listener's own voice never gets the character's speed",
     VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: "Mine"), nil)
 checkEqual("Picking the builder's own voice keeps the character's speed",

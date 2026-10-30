@@ -82,11 +82,14 @@ enum VoicePacePolicy {
     /// voice we choose when we build an agent ... so people can hear it how
     /// you intended"). A voice the listener picked was never tuned to that
     /// number, so it plays at the listener's number or 1x. Picking the
-    /// builder's own voice is still the builder's voice.
+    /// builder's own voice is still the builder's voice. A character with no
+    /// builder voice has no number either: the fallback voice plays at the
+    /// listener's number or 1x, as the fork's kadeVoiceResolver.js does.
     static func characterRate(_ rate: Double?, builderVoice: String?, listenerVoice: String?) -> Double? {
+        let builder = (builderVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !builder.isEmpty else { return nil }
         let picked = (listenerVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !picked.isEmpty else { return rate }
-        let builder = (builderVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return picked.caseInsensitiveCompare(builder) == .orderedSame ? rate : nil
     }
     /// The `tts` an agent save sends (Oct 30 2026). The field is replaced

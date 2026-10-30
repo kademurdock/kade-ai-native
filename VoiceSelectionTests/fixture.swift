@@ -6,6 +6,7 @@ import FoundationNetworking
 @MainActor final class FixtureClient {
     var defaults = ["kiana": "old voice", "forge": "forge voice"]
     var rates: [String: Double] = [:]
+    var voiceless: Set<String> = []
     var prefs: [String: String] = [:]
     var delay: UInt64 = 0
     var reads = 0
@@ -25,7 +26,7 @@ import FoundationNetworking
             payload = try JSONEncoder().encode(["prefs": prefs])
         } else {
             let agent = request.url!.lastPathComponent
-            var tts: [String: Any] = ["voiceId": defaults[agent] ?? "fallback"]
+            var tts: [String: Any] = voiceless.contains(agent) ? [:] : ["voiceId": defaults[agent] ?? "fallback"]
             if let rate = rates[agent] { tts["speakingRate"] = rate }
             payload = try JSONSerialization.data(withJSONObject: ["tts": tts])
         }
@@ -110,6 +111,17 @@ actor VoiceCatalog {
         selection.refresh()
         let sameVoiceSpeed = await selection.lookupSpeed("kiana")
         check(sameVoiceSpeed == 1.3, "picking the builder's own voice keeps the character's speed")
+        client.prefs = [:]
+        client.voiceless = ["kiana"]
+        selection.refresh()
+        let hashedVoice = await selection.lookup("kiana")
+        check(hashedVoice == "fallback", "a character with no builder voice gets the fallback voice")
+        let hashedSpeed = await selection.lookupSpeed("kiana")
+        check(hashedSpeed == nil, "the fallback voice does not get the character's speed")
+        client.prefs["kiana"] = "personal voice"
+        selection.refresh()
+        let voicelessPickSpeed = await selection.lookupSpeed("kiana")
+        check(voicelessPickSpeed == nil, "a listener's voice on a voice-less character does not get its speed")
         print("Voice selection: \(count) checks passed using production methods; no audio requested.")
     }
 }

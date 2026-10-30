@@ -1619,7 +1619,9 @@ final class VoiceService: NSObject, ObservableObject {
     /// both are compared as today's label when the catalog is already here;
     /// speech never waits for it.
     private func characterRate(_ tts: AgentTTSDetail.TTS?, listenerVoice: String?) async -> Double? {
-        guard let listenerVoice, !listenerVoice.isEmpty else { return tts?.speakingRate }
+        guard let listenerVoice, !listenerVoice.isEmpty else {
+            return VoicePacePolicy.characterRate(tts?.speakingRate, builderVoice: tts?.voiceId, listenerVoice: nil)
+        }
         let builderLabel = await VoiceCatalog.shared.cachedLabel(tts?.voiceId ?? "")
         let listenerLabel = await VoiceCatalog.shared.cachedLabel(listenerVoice)
         return VoicePacePolicy.characterRate(tts?.speakingRate, builderVoice: builderLabel, listenerVoice: listenerLabel)
