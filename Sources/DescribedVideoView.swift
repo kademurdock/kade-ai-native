@@ -1556,7 +1556,7 @@ struct DescribedVideoView: View {
         if chosen.rehearsal == true { bits.append("rehearsal, test tone") }
         if let settings = chosen.settings {
             if let name = settings.voice { bits.append(Self.voiceName(name)) }
-            if let speed = settings.rate { bits.append(Self.speedNumber(speed) + "×") }
+            if let speed = settings.rate { bits.append(VoicePacePolicy.speedWords(speed)) }
             if let level = settings.detail { bits.append(level) }
         }
         if let count = chosen.count { bits.append("\(count) descriptions") }
@@ -1826,8 +1826,7 @@ struct DescribedVideoView: View {
 
     /// The choices a Describe again will use, said in its question.
     private func againChoiceWords(_ current: DVJob, preview: Bool) -> String {
-        let speed = Self.speedNumber(rate)
-        var bits: [String] = ["Narrator \(Self.voiceName(voice)) at \(speed)×"]
+        var bits: [String] = ["Narrator \(Self.voiceName(voice)) at \(VoicePacePolicy.speedWords(rate))"]
         bits.append(Self.detailWords(detail))
         bits.append(mode == "extended" ? "pausing the picture when needed" : "keeping the original length")
         bits.append(closeLook ? "closer look on" : "closer look off")
