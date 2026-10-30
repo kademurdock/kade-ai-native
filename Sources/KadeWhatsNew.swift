@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: More room for your character"
-    static let body = "Calls show a larger character portrait, with Mute and Hang Up always within reach. Scroll to read longer captions or find the other call controls. Describe character reads the current portrait when you ask. Larger accessibility text gets more room in chat and calls."
+    static let title = "What's new: Voice speed in real numbers"
+    static let body = "Voice speed now shows real numbers, from 0.75x to 1.5x, in Settings and beside Hear replies. Character's speed is the default and plays a character's own voice the way its builder set it. Agent Builder has a Speed row to set that number. A voice you picked yourself plays at 1x unless you choose a number. The Library's speed list shows numbers too."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

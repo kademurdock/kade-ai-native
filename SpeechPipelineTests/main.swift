@@ -951,37 +951,99 @@ checkEqual("Inworld keeps a supported rate exact", VoicePacePolicy.rate(base: 1.
 checkEqual("Inworld retains a character rate without a listener override", VoicePacePolicy.rate(base: 1.25, preference: nil), 1.25)
 checkEqual("Invalid rate never reaches the provider", VoicePacePolicy.rate(base: nil, preference: .nan), 1)
 // Oct 16 2026: one pace for every voice; the proxy maps it per provider.
-checkEqual("Unhurried overrides a fast character", VoicePacePolicy.paceRate("unhurried", base: 1.2), 0.75)
-checkEqual("Easygoing selects its value", VoicePacePolicy.paceRate("easygoing", base: nil), 0.9)
-checkEqual("Natural overrides a fast character", VoicePacePolicy.paceRate("natural", base: 1.5), 1)
-checkEqual("Brisk overrides a slow character", VoicePacePolicy.paceRate("brisk", base: 0.75), 1.2)
-checkEqual("Quick selects its value", VoicePacePolicy.paceRate("quick", base: nil), 1.5)
-checkEqual("Character's own speed retains the saved setting", VoicePacePolicy.paceRate("character", base: 1.2), 1.2)
+checkEqual("0.75x overrides a fast character", VoicePacePolicy.paceRate("unhurried", base: 1.2), 0.75)
+checkEqual("0.9x selects its value", VoicePacePolicy.paceRate("easygoing", base: nil), 0.9)
+checkEqual("1x overrides a fast character", VoicePacePolicy.paceRate("natural", base: 1.5), 1)
+checkEqual("1.2x overrides a slow character", VoicePacePolicy.paceRate("brisk", base: 0.75), 1.2)
+checkEqual("1.5x selects its value", VoicePacePolicy.paceRate("quick", base: nil), 1.5)
+checkEqual("Character's speed retains the saved setting", VoicePacePolicy.paceRate("character", base: 1.2), 1.2)
 checkEqual("Unknown saved pace safely uses the character setting", VoicePacePolicy.paceRate("unknown", base: nil), 1)
-checkEqual("Pace names make no numerical speed promise", VoicePacePolicy.name("brisk"), "Brisk")
-checkEqual("Unknown pace name is a safe character default", VoicePacePolicy.name("unknown"), "Character's own speed")
-checkEqual("The chip says Auto for the character's own speed", VoicePacePolicy.chipLabel("character"), "Auto")
-checkEqual("The chip names a chosen pace", VoicePacePolicy.chipLabel("quick"), "Quick")
+checkEqual("A pace is named by the number the proxy delivers", VoicePacePolicy.name("brisk"), "1.2x")
+checkEqual("Unknown pace name is a safe character default", VoicePacePolicy.name("unknown"), "Character's speed")
+checkEqual("The chip says Auto for the character's speed", VoicePacePolicy.chipLabel("character"), "Auto")
+checkEqual("The chip shows a chosen number", VoicePacePolicy.chipLabel("quick"), "1.5x")
 checkEqual("The chip never shows an unknown saved value", VoicePacePolicy.chipLabel("1.25"), "Auto")
 check("One list, each pace named once", Set(VoicePacePolicy.options.map { $0.label }).count == VoicePacePolicy.options.count)
 check("No list entry names a provider",
     VoicePacePolicy.options.allSatisfy { !$0.label.contains("Fish") && !$0.label.contains("Classic") && !$0.label.contains("Inworld") })
+// Oct 30 2026: the list shows numbers, and phones keep the keys they saved.
+checkEqual("The list is exactly the agreed numbers, Character's speed first",
+    VoicePacePolicy.options.map { $0.label },
+    ["Character's speed", "0.75x", "0.8x", "0.9x", "1x", "1.1x", "1.2x", "1.3x", "1.4x", "1.5x"])
+checkEqual("The list's rates are the numbers its labels show",
+    VoicePacePolicy.options.compactMap { $0.rate.map(VoicePacePolicy.speedShort) },
+    Array(VoicePacePolicy.options.map { $0.label }.dropFirst()))
+for (key, rate) in [("unhurried", 0.75), ("easygoing", 0.9), ("natural", 1.0), ("brisk", 1.2), ("quick", 1.5)] {
+    checkEqual("A key saved by an older build still resolves: \(key)", VoicePacePolicy.paceRate(key, base: 1.4), rate)
+    checkEqual("A key saved by an older build still has a list entry: \(key)", VoicePacePolicy.options.filter { $0.value == key }.count, 1)
+}
+for (key, rate, label) in [("relaxed", 0.8, "0.8x"), ("upbeat", 1.1, "1.1x"), ("swift", 1.3, "1.3x"), ("rapid", 1.4, "1.4x")] {
+    checkEqual("A new key sends its number: \(key)", VoicePacePolicy.paceRate(key, base: 0.5), rate)
+    checkEqual("A new key shows its number: \(key)", VoicePacePolicy.chipLabel(key), label)
+    checkEqual("A new key round trips through a saved old Fish pace: \(key)",
+        VoicePacePolicy.unifiedPace(fishPace: key, classicRate: nil), key)
+    checkEqual("A new key is what a saved old rate at that number becomes: \(key)", VoicePacePolicy.legacyPace(rate), key)
+}
+check("No key is a numeric string, because an unknown string means the character's speed",
+    VoicePacePolicy.options.allSatisfy { Double($0.value) == nil })
+checkEqual("VoiceOver says times, not x", VoicePacePolicy.spokenName("brisk"), "1.2 times")
+checkEqual("VoiceOver says the slow number too", VoicePacePolicy.spokenName("unhurried"), "0.75 times")
+checkEqual("1x is spoken the way Family stories speak it", VoicePacePolicy.spokenName("natural"), "Normal")
+checkEqual("VoiceOver says Character's speed for the default", VoicePacePolicy.spokenName("character"), "Character's speed")
+checkEqual("A saved number off the list shows as itself", VoicePacePolicy.speedShort(1.15), "1.15x")
+checkEqual("A saved number off the list is spoken as itself", VoicePacePolicy.speedWords(1.25), "1.25 times")
+checkEqual("A list keeps a saved number it lacks, in order",
+    VoicePacePolicy.choices([1, 1.2, 1.5], keeping: 1.25), [1, 1.2, 1.25, 1.5])
+checkEqual("A list does not repeat a saved number it has", VoicePacePolicy.choices([1, 1.2], keeping: 1.2), [1, 1.2])
+checkEqual("A list with nothing saved is unchanged", VoicePacePolicy.choices([1, 1.2], keeping: nil), [1, 1.2])
+// Oct 30 2026: a character's default speed belongs to the character's own builder voice.
+checkEqual("With no pick the character's speed applies",
+    VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: nil), 1.3)
+checkEqual("A character with no builder voice keeps its speed with no pick",
+    VoicePacePolicy.characterRate(1.3, builderVoice: nil, listenerVoice: nil), 1.3)
+checkEqual("A listener's own voice never gets the character's speed",
+    VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: "Mine"), nil)
+checkEqual("Picking the builder's own voice keeps the character's speed",
+    VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: "builder "), 1.3)
+checkEqual("A listener's own voice plays at 1x when they chose no number",
+    VoicePacePolicy.rate(base: VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: "Mine"), preference: nil), 1)
+checkEqual("The listener's number beats the character's on the builder's voice",
+    VoicePacePolicy.paceRate("brisk", base: VoicePacePolicy.characterRate(1.4, builderVoice: "Builder", listenerVoice: nil)), 1.2)
+// Oct 30 2026: `tts` is replaced whole on the server, so a save sends every part.
+do {
+    let all = VoicePacePolicy.agentTTSBody(voice: " Voice ", speakingRate: 1.3, deliveryMode: "STABLE")
+    checkEqual("A save sends the voice", all?["voiceId"] as? String, "Voice")
+    checkEqual("A save sends the speed", all?["speakingRate"] as? Double, 1.3)
+    checkEqual("A save sends the delivery", all?["deliveryMode"] as? String, "STABLE")
+    check("The tts body is valid JSON", JSONSerialization.isValidJSONObject(all ?? [:]))
+    let noVoice = VoicePacePolicy.agentTTSBody(voice: "  ", speakingRate: 1, deliveryMode: nil)
+    checkEqual("A speed with no voice is still sent", noVoice?["speakingRate"] as? Double, 1)
+    check("An empty voice id is never sent, the server refuses it", noVoice?["voiceId"] == nil)
+    check("The character quiz sends no tts at all",
+        VoicePacePolicy.agentTTSBody(voice: "", speakingRate: nil, deliveryMode: nil) == nil)
+    let voiceOnly = VoicePacePolicy.agentTTSBody(voice: "Voice", speakingRate: nil, deliveryMode: nil)
+    checkEqual("A voice with nothing else is the old shape", voiceOnly?.count, 1)
+    checkEqual("A speed outside the range is held inside it, the server refuses the save otherwise",
+        VoicePacePolicy.agentTTSBody(voice: "", speakingRate: 2, deliveryMode: nil)?["speakingRate"] as? Double, 1.5)
+    check("A delivery the server would refuse is left out",
+        VoicePacePolicy.agentTTSBody(voice: "Voice", speakingRate: nil, deliveryMode: "WILD")?["deliveryMode"] == nil)
+}
 
 checkEqual("No old speed keeps the character default", VoicePacePolicy.legacyPace(nil), "character")
 checkEqual("Old normal speed keeps the character default", VoicePacePolicy.legacyPace(1), "character")
-checkEqual("Saved 1.2 becomes Brisk rather than silently resetting", VoicePacePolicy.legacyPace(1.2), "brisk")
-checkEqual("Saved slow speed becomes Unhurried", VoicePacePolicy.legacyPace(0.75), "unhurried")
-checkEqual("Saved 2x becomes Quick without residual stretching", VoicePacePolicy.legacyPace(2), "quick")
+checkEqual("Saved 1.2 becomes 1.2x rather than silently resetting", VoicePacePolicy.legacyPace(1.2), "brisk")
+checkEqual("Saved slow speed becomes 0.75x", VoicePacePolicy.legacyPace(0.75), "unhurried")
+checkEqual("Saved 2x becomes 1.5x, the top of the range", VoicePacePolicy.legacyPace(2), "quick")
 checkEqual("Invalid stored speed has a safe default", VoicePacePolicy.legacyPace(.nan), "character")
 checkEqual("A chosen Fish pace becomes the one voice speed",
     VoicePacePolicy.unifiedPace(fishPace: "brisk", classicRate: 0.5), "brisk")
-checkEqual("A Classic rate is kept when Fish was left on the character setting",
+checkEqual("A Classic rate is kept when Fish was left on the character setting; exactly between two stops takes the slower",
     VoicePacePolicy.unifiedPace(fishPace: "character", classicRate: 1.25), "brisk")
 checkEqual("A Classic rate is kept when Fish pace was never saved",
     VoicePacePolicy.unifiedPace(fishPace: nil, classicRate: 0.75), "unhurried")
 checkEqual("A damaged Fish pace falls back to the Classic rate",
     VoicePacePolicy.unifiedPace(fishPace: "warp", classicRate: 1.5), "quick")
-checkEqual("Nothing saved keeps the character's own speed",
+checkEqual("Nothing saved keeps the character's speed",
     VoicePacePolicy.unifiedPace(fishPace: nil, classicRate: nil), "character")
 
 // Oct 16 2026: filler words and little sounds, and auditions that sound like voice messages.
@@ -1006,7 +1068,7 @@ checkEqual("The quick audition is the line the proxy matches",
     VoiceAudition.sample(long: false), "Hey \u{2014} quick hello from this voice, right here with you.")
 checkEqual("An audition speed is kept inside the API range like a reply's",
     VoicePacePolicy.rate(base: nil, preference: 1.8), 1.5)
-checkEqual("An audition at the character's own speed sends that rate",
+checkEqual("An audition at the character's speed sends that rate",
     VoicePacePolicy.paceRate("character", base: 1.15), 1.15)
 
 print("  Speech pipeline — \(checks) checks")

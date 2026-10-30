@@ -79,6 +79,10 @@ actor VoiceCatalog {
     /// map when it is already here, else nil (and the caller falls back).
     func cachedProviders() -> [String: String]? { cached?.providers }
 
+    /// Today's label for a stored spelling ("Voice 69"), also for speech: the
+    /// spelling as it stands when the catalog is not here yet.
+    func cachedLabel(_ stored: String) -> String { cached?.displayLabel(stored) ?? stored }
+
     /// Start loading the catalog without waiting for it (launch, and speech
     /// that found nothing cached). A recent failure waits out the retry interval.
     func prefetch() {

@@ -255,8 +255,9 @@ struct SettingsView: View {
             ForEach(VoicePacePolicy.options, id: \.value) { pace in
                 Button(pace.label) {
                     voiceService.voicePace = pace.value
-                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(pace.label). Applies to the next message.")
+                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(VoicePacePolicy.spokenName(pace.value)). Applies to the next message.")
                 }
+                .accessibilityLabel(VoicePacePolicy.spokenName(pace.value))
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -304,7 +305,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("Fish pace requests an acting delivery. Inworld uses its own speaking rate. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
+            Text("One number for every voice. Character's speed plays a character's own voice the way its builder set it; a voice you picked yourself plays at 1x unless you choose a number. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
         }
     }
 
@@ -866,7 +867,7 @@ struct SettingsView: View {
         // children:.ignore on a Button — this was the exact construction
         // that killed Amber's conversation rows. Label/value/hint stay.
         .accessibilityLabel(searchStyle ? searchLabel(.speed, "Voice speed") : "Voice speed")
-        .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
+        .accessibilityValue(VoicePacePolicy.spokenName(voiceService.voicePace))
         .accessibilityHint("Choose how fast every voice speaks, starting with the next message.")
     }
 

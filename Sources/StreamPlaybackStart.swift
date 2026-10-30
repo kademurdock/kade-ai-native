@@ -5,11 +5,20 @@ import Foundation
 /// rides the next synthesis request as `speed`; the proxy turns it into each
 /// provider's own control. Audio players always use 1.0, including after a
 /// preference changes mid-clip.
+///
+/// Oct 30 2026, Kade: "The brisk and all that, that wasn't original, that was
+/// just because we couldn't get fish api to sound right. Inworld originally
+/// just had a speed, 1x 1.2x whatever, up and down." So the list shows the
+/// number the proxy now delivers. The value keys are what phones have saved
+/// (`kade.voiceMessage.pace`): the old five stay, and the new stops get word
+/// keys too, never numeric strings, because an unknown saved string means
+/// the character's speed.
 enum VoicePacePolicy {
     static let options: [(value: String, label: String, rate: Double?)] = [
-        ("character", "Character's own speed", nil), ("unhurried", "Unhurried", 0.75),
-        ("easygoing", "Easygoing", 0.9), ("natural", "Natural", 1),
-        ("brisk", "Brisk", 1.2), ("quick", "Quick", 1.5),
+        ("character", "Character's speed", nil), ("unhurried", "0.75x", 0.75),
+        ("relaxed", "0.8x", 0.8), ("easygoing", "0.9x", 0.9), ("natural", "1x", 1),
+        ("upbeat", "1.1x", 1.1), ("brisk", "1.2x", 1.2), ("swift", "1.3x", 1.3),
+        ("rapid", "1.4x", 1.4), ("quick", "1.5x", 1.5),
     ]
     static func rate(base: Double?, preference: Double?) -> Double {
         let value = preference ?? base ?? 1
@@ -36,11 +45,67 @@ enum VoicePacePolicy {
         return legacyPace(classicRate)
     }
     static func name(_ pace: String) -> String {
-        options.first { $0.value == pace }?.label ?? "Character's own speed"
+        options.first { $0.value == pace }?.label ?? "Character's speed"
     }
-    /// Short on-screen form: "Auto" for the character's own speed.
+    /// Short on-screen form: the number, or "Auto" for the character's speed.
     static func chipLabel(_ pace: String) -> String {
         pace != "character" && options.contains(where: { $0.value == pace }) ? name(pace) : "Auto"
+    }
+    /// What VoiceOver says for a choice in the list: "1.2 times", not "1.2x".
+    static func spokenName(_ pace: String) -> String {
+        guard let rate = options.first(where: { $0.value == pace })?.rate else { return name(pace) }
+        return speedWords(rate)
+    }
+    /// The list's numbers, without "Character's speed" (the builder's Speed row).
+    static var rates: [Double] { options.compactMap { $0.rate } }
+    /// "1.2x". A saved number off the list shows as itself ("1.15x").
+    static func speedShort(_ rate: Double) -> String { numberText(rate) + "x" }
+    /// "Normal", "1.2 times": the same words Family stories speak
+    /// (FamilyStoryParts.speedWords).
+    static func speedWords(_ rate: Double) -> String {
+        abs(rate - 1) < 0.001 ? "Normal" : numberText(rate) + " times"
+    }
+    private static func numberText(_ value: Double) -> String {
+        guard value.isFinite else { return "1" }
+        let rounded = (value * 100).rounded() / 100
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(rounded)
+    }
+    /// A list that also offers a saved number it does not contain, in order,
+    /// so a saved 1.25 keeps working and shows as itself instead of leaving a
+    /// picker blank.
+    static func choices(_ list: [Double], keeping saved: Double?) -> [Double] {
+        guard let saved, saved.isFinite, !list.contains(where: { abs($0 - saved) < 0.001 }) else { return list }
+        return (list + [saved]).sorted()
+    }
+    /// A character's default speed belongs to the character's own builder
+    /// voice (Oct 30 2026, Kade: "a default voice speed for the default agent
+    /// voice we choose when we build an agent ... so people can hear it how
+    /// you intended"). A voice the listener picked was never tuned to that
+    /// number, so it plays at the listener's number or 1x. Picking the
+    /// builder's own voice is still the builder's voice.
+    static func characterRate(_ rate: Double?, builderVoice: String?, listenerVoice: String?) -> Double? {
+        let picked = (listenerVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !picked.isEmpty else { return rate }
+        let builder = (builderVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return picked.caseInsensitiveCompare(builder) == .orderedSame ? rate : nil
+    }
+    /// The `tts` an agent save sends (Oct 30 2026). The field is replaced
+    /// whole on the server, so every part the agent has must ride along:
+    /// a save that sent only the voice used to erase the speed and delivery
+    /// set on the website. nil = nothing to say, and `tts` stays out of the
+    /// body. No empty voice id and no number outside 0.5-1.5: the server's
+    /// validator refuses the whole save over either one.
+    static func agentTTSBody(voice: String, speakingRate: Double?, deliveryMode: String?) -> [String: Any]? {
+        var tts: [String: Any] = [:]
+        let voiceId = voice.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !voiceId.isEmpty { tts["voiceId"] = voiceId }
+        if let speakingRate, speakingRate.isFinite {
+            tts["speakingRate"] = rate(base: nil, preference: speakingRate)
+        }
+        if let deliveryMode, ["STABLE", "BALANCED", "CREATIVE"].contains(deliveryMode) {
+            tts["deliveryMode"] = deliveryMode
+        }
+        return tts.isEmpty ? nil : tts
     }
 }
 

@@ -19,12 +19,13 @@ def method(name):
 
 production = '\n'.join(method(name) for name in [
     'invalidateVoiceSelections', 'loadUserVoicePrefsIfNeeded',
-    'setUserVoiceOverride', 'resolveVoice'])
+    'setUserVoiceOverride', 'resolveVoice', 'characterRate'])
 fixture = (Path(__file__).parent / 'fixture.swift').read_text(encoding='utf-8')
 assert fixture.count('// PRODUCTION_METHODS') == 1
 with tempfile.TemporaryDirectory() as directory:
     code = Path(directory) / 'fixture.swift'
     code.write_text(fixture.replace('// PRODUCTION_METHODS', production), encoding='utf-8')
     binary = str(Path(directory) / 'voice-selection-tests')
-    subprocess.run([os.environ.get('SWIFTC', 'swiftc'), '-parse-as-library', str(code), '-o', binary], check=True)
+    policy = str(root / 'Sources/StreamPlaybackStart.swift')
+    subprocess.run([os.environ.get('SWIFTC', 'swiftc'), '-parse-as-library', str(code), policy, '-o', binary], check=True)
     subprocess.run([binary], check=True)

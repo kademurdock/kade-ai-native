@@ -234,8 +234,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.8: More room for your character",
+                title: "Newest build, 2.2.17: Voice speed in real numbers",
                 body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.8: More room for your character",
+                body: "Calls show a larger character portrait, with Mute and Hang Up always within reach. Scroll to read longer captions or find the other call controls. Describe character reads the current portrait when you ask. Larger accessibility text gets more room in chat and calls."
             ),
             HelpEntry(
                 title: "In 2.2.7: One Library shelf",
@@ -358,7 +362,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Voice speed",
-                body: "The speed button beside Hear replies runs from 0.75 up to 2 times. It takes effect straight away, even in the middle of a clip, and it's remembered next time."
+                body: "The speed button beside Hear replies runs from 0.75x up to 1.5x, the same list in Settings. Character's speed is the default: a character's own voice plays the way its builder set it. A voice you picked yourself plays at 1x unless you choose a number. A change starts with the next message, the clip already playing keeps its speed, and it's remembered next time."
             ),
             HelpEntry(
                 title: "Filler words and little sounds",

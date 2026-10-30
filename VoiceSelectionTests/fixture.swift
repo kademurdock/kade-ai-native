@@ -5,6 +5,7 @@ import FoundationNetworking
 
 @MainActor final class FixtureClient {
     var defaults = ["kiana": "old voice", "forge": "forge voice"]
+    var rates: [String: Double] = [:]
     var prefs: [String: String] = [:]
     var delay: UInt64 = 0
     var reads = 0
@@ -23,18 +24,27 @@ import FoundationNetworking
         } else if request.url!.path.hasSuffix("voice-prefs") {
             payload = try JSONEncoder().encode(["prefs": prefs])
         } else {
-            payload = try JSONEncoder().encode(["tts": ["voiceId": defaults[request.url!.lastPathComponent] ?? "fallback"]])
+            let agent = request.url!.lastPathComponent
+            var tts: [String: Any] = ["voiceId": defaults[agent] ?? "fallback"]
+            if let rate = rates[agent] { tts["speakingRate"] = rate }
+            payload = try JSONSerialization.data(withJSONObject: ["tts": tts])
         }
         if delay > 0 { try await Task.sleep(nanoseconds: delay) }
         return (payload, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 }
 
+/// The one VoiceCatalog call the production methods make: no renames here.
+actor VoiceCatalog {
+    static let shared = VoiceCatalog()
+    func cachedLabel(_ stored: String) -> String { stored }
+}
+
 @MainActor final class Selection {
     let client: FixtureClient
     var voiceSelectionRevision = 0
     var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
-    var agentRateCache: [String: Double?] = [:]
+    var agentTTSCache: [String: AgentTTSDetail.TTS?] = [:]
     var userVoicePrefs: [String: String]?
     struct AgentTTSDetail: Codable {
         struct TTS: Codable { let voiceId: String?; let speakingRate: Double? }
@@ -43,6 +53,7 @@ import FoundationNetworking
     init(_ client: FixtureClient) { self.client = client }
     func refresh() { invalidateVoiceSelections() }
     func lookup(_ id: String) async -> String? { await resolveVoice(agentId: id, agentName: id).voice }
+    func lookupSpeed(_ id: String) async -> Double? { await resolveVoice(agentId: id, agentName: id).speed }
     func fetchVoicesList() async -> [String] { ["fallback"] }
     static func hashVoice(for name: String, voices: [String]) -> String? { voices.first }
     // PRODUCTION_METHODS
@@ -87,6 +98,18 @@ import FoundationNetworking
         client.prefs = [:]
         let reset = await selection.lookup("kiana")
         check(reset == "new voice", "invalidated personal picks are not retained")
+        client.rates["kiana"] = 1.3
+        selection.refresh()
+        let builderSpeed = await selection.lookupSpeed("kiana")
+        check(builderSpeed == 1.3, "the builder's voice carries the character's speed")
+        client.prefs["kiana"] = "personal voice"
+        selection.refresh()
+        let personalSpeed = await selection.lookupSpeed("kiana")
+        check(personalSpeed == nil, "a voice the listener picked does not get the character's speed")
+        client.prefs["kiana"] = "new voice"
+        selection.refresh()
+        let sameVoiceSpeed = await selection.lookupSpeed("kiana")
+        check(sameVoiceSpeed == 1.3, "picking the builder's own voice keeps the character's speed")
         print("Voice selection: \(count) checks passed using production methods; no audio requested.")
     }
 }

@@ -94,7 +94,8 @@ struct VoicePickerView: View {
     /// These three let a surface that is not a chat say otherwise.
     /// `previewSpeed`: auditions at this pace (the API takes 0.5-1.5). nil =
     /// the speed this character's voice messages use: her Voice speed over
-    /// the character's own rate (VoiceService.voiceMessageSpeed).
+    /// the character's speed, which only the builder's own voice gets
+    /// (VoiceService.voiceMessageSpeed).
     /// `previewDelivery`: used when no delivery is chosen here. nil = the
     /// proxy's default, as a reply with no delivery chosen gets.
     /// `previewFillers`: nil = her "Filler words and little sounds" switch.
@@ -898,7 +899,7 @@ struct VoicePickerView: View {
         if let previewSpeed {
             speed = previewSpeed
         } else {
-            speed = await voice.voiceMessageSpeed(forAgent: deliveryAgentId)
+            speed = await voice.voiceMessageSpeed(forAgent: deliveryAgentId, auditioning: v)
             // She moved on, or pressed Stop, while the speed was looked up.
             guard previewing == v, !Task.isCancelled else {
                 if previewing == v { previewing = nil }

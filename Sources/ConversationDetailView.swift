@@ -1431,8 +1431,9 @@ struct ConversationDetailView: View {
             ForEach(VoicePacePolicy.options, id: \.value) { pace in
                 Button(pace.label) {
                     voiceService.voicePace = pace.value
-                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(pace.label). Applies to the next message.")
+                    UIAccessibility.post(notification: .announcement, argument: "Voice speed \(VoicePacePolicy.spokenName(pace.value)). Applies to the next message.")
                 }
+                .accessibilityLabel(VoicePacePolicy.spokenName(pace.value))
             }
             // Oct 16 2026: Settings' "Filler words and little sounds", here too,
             // because this list is where she already is when a voice sounds off.
@@ -2932,7 +2933,7 @@ struct ConversationDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Voice speed")
-        .accessibilityValue(VoicePacePolicy.name(voiceService.voicePace))
+        .accessibilityValue(VoicePacePolicy.spokenName(voiceService.voicePace))
         .dellaHostProbe("speedButton", identifier: "della-host.chat.speed")
         .accessibilityHint("Choose how fast every voice speaks, starting with the next message. Filler words and little sounds can be turned on or off here too.")
     }

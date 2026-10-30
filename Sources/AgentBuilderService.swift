@@ -198,6 +198,13 @@ final class AgentBuilderService: ObservableObject {
         /// touch tools at all (the lookup list failed to load, so the
         /// editor can't know what it would be overwriting).
         var tools: [String]?
+        /// The character's default speed, `tts.speakingRate` (Oct 30 2026).
+        /// nil = this save has no number to send (the character quiz, or an
+        /// editor whose agent never loaded).
+        var speakingRate: Double? = nil
+        /// `tts.deliveryMode`, set on the website. Not edited on the phone;
+        /// the editor reads it and sends it back so a save cannot drop it.
+        var deliveryMode: String? = nil
     }
 
     private func bodyJSON(_ fields: AgentFields) -> [String: Any] {
@@ -209,8 +216,9 @@ final class AgentBuilderService: ObservableObject {
             "provider": fields.provider,
             "model": fields.model,
         ]
-        let v = fields.voice.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !v.isEmpty { body["tts"] = ["voiceId": v] }
+        if let tts = VoicePacePolicy.agentTTSBody(voice: fields.voice, speakingRate: fields.speakingRate, deliveryMode: fields.deliveryMode) {
+            body["tts"] = tts
+        }
         body["conversation_starters"] = fields.starters
         if let tools = fields.tools { body["tools"] = tools }
         return body
@@ -729,7 +737,23 @@ struct AgentSummary: Decodable, Identifiable, Hashable {
 /// silently ignored, same treatment `KadeAgent`'s own doc comment
 /// describes for the marketplace list.
 struct AgentDetail: Decodable, Identifiable, Hashable {
-    struct TTSInfo: Decodable, Hashable { let voiceId: String? }
+    struct TTSInfo: Decodable, Hashable {
+        let voiceId: String?
+        /// The character's default speed.
+        let speakingRate: Double?
+        let deliveryMode: String?
+
+        private enum CodingKeys: String, CodingKey { case voiceId, speakingRate, deliveryMode }
+
+        /// `tts` is an untyped field on the server: one odd value in it must
+        /// not stop the whole editor from loading.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            voiceId = try? container.decodeIfPresent(String.self, forKey: .voiceId)
+            speakingRate = try? container.decodeIfPresent(Double.self, forKey: .speakingRate)
+            deliveryMode = try? container.decodeIfPresent(String.self, forKey: .deliveryMode)
+        }
+    }
     let id: String
     /// Raw `_id` — what the permissions routes key on (Part 116).
     let mongoId: String?

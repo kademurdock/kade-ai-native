@@ -271,27 +271,32 @@ final class VoiceService: NSObject, ObservableObject {
     }
 
     /// The `speed` this character's voice messages are sent with: her Voice
-    /// speed over the character's own rate, exactly as `synthesize` works it
+    /// speed over the character's speed, exactly as `synthesize` works it
     /// out. No character (nil, or the Library's reading id) = her Voice speed
     /// alone. Auditions use this so a voice sounds the same in the picker as
-    /// in the chat. Reads the rate without filling the voice cache, so an
-    /// audition can never change which voice a reply speaks in.
-    func voiceMessageSpeed(forAgent agentId: String?) async -> Double {
+    /// in the chat, which since Oct 30 2026 depends on the voice: `auditioning`
+    /// gets the character's speed only if it is the builder's own voice
+    /// (VoicePacePolicy.characterRate). Reads the rate without filling the
+    /// voice cache, so an audition can never change which voice a reply speaks in.
+    func voiceMessageSpeed(forAgent agentId: String?, auditioning voice: String? = nil) async -> Double {
         guard let agentId, !agentId.isEmpty, !Self.isLibraryReading(agentId) else {
             return synthesisSpeed(base: nil)
         }
-        if let cached = agentVoiceCache[agentId] { return synthesisSpeed(base: cached.speed) }
-        if let rate = agentRateCache[agentId] { return synthesisSpeed(base: rate) }
-        let revision = voiceSelectionRevision
-        let req = client.request(path: "api/agents/\(agentId)", authorized: true)
-        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
-              let detail = try? JSONDecoder().decode(AgentTTSDetail.self, from: data) else {
-            // Not remembered: the next audition asks again.
-            return synthesisSpeed(base: nil)
+        let tts: AgentTTSDetail.TTS?
+        if let cached = agentTTSCache[agentId] {
+            tts = cached
+        } else {
+            let revision = voiceSelectionRevision
+            let req = client.request(path: "api/agents/\(agentId)", authorized: true)
+            guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+                  let detail = try? JSONDecoder().decode(AgentTTSDetail.self, from: data) else {
+                // Not remembered: the next audition asks again.
+                return synthesisSpeed(base: nil)
+            }
+            tts = detail.tts
+            if revision == voiceSelectionRevision { agentTTSCache.updateValue(tts, forKey: agentId) }
         }
-        let rate = detail.tts?.speakingRate
-        if revision == voiceSelectionRevision { agentRateCache.updateValue(rate, forKey: agentId) }
-        return synthesisSpeed(base: rate)
+        return synthesisSpeed(base: await characterRate(tts, listenerVoice: voice))
     }
 
     /// Session 17 (Kade: "a native way to access settings like speech and
@@ -348,8 +353,8 @@ final class VoiceService: NSObject, ObservableObject {
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
-    /// Characters' own speaking rates, for auditions (voiceMessageSpeed).
-    private var agentRateCache: [String: Double?] = [:]
+    /// Characters' builder voices and speeds, for auditions (voiceMessageSpeed).
+    private var agentTTSCache: [String: AgentTTSDetail.TTS?] = [:]
     /// The signed-in user's OWN per-agent voice picks ({agentId: voice}),
     /// which override the agent's builder default. Loaded once from
     /// `GET /api/kade/voice-prefs`; nil until first load.
@@ -382,7 +387,7 @@ final class VoiceService: NSObject, ObservableObject {
     private func invalidateVoiceSelections() {
         voiceSelectionRevision += 1
         agentVoiceCache.removeAll()
-        agentRateCache.removeAll()
+        agentTTSCache.removeAll()
         userVoicePrefs = nil
     }
 
@@ -1167,7 +1172,8 @@ final class VoiceService: NSObject, ObservableObject {
 
         var fields: [(String, String)] = [("input", text)]
         if let voice { fields.append(("voice", voice)) }
-        // The proxy interprets Fish pace as instructions and Classic pace as an API rate.
+        // One number for every voice: the proxy stretches a Fish clip by exactly this
+        // (FISH_SPEED_EXACT) and hands it to Classic voices as their API rate.
         let tuned = synthesisSpeed(base: speed)
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
@@ -1586,8 +1592,10 @@ final class VoiceService: NSObject, ObservableObject {
             if let (data, http) = try? await client.send(req),
                http.statusCode == 200,
                let detail = try? JSONDecoder().decode(AgentTTSDetail.self, from: data) {
+                // Oct 30 2026: the character's speed comes with the builder's
+                // voice only. A voice she picked herself plays at her number or 1x.
+                resolvedSpeed = await characterRate(detail.tts, listenerVoice: resolvedVoice)
                 if resolvedVoice == nil { resolvedVoice = detail.tts?.voiceId }
-                resolvedSpeed = detail.tts?.speakingRate
             }
         }
 
@@ -1604,6 +1612,17 @@ final class VoiceService: NSObject, ObservableObject {
             agentVoiceCache[agentId] = result
         }
         return result
+    }
+
+    /// The character's speed for this listener's voice. A builder can hold an
+    /// old spelling ("Voice 69") while the picker hands back today's label, so
+    /// both are compared as today's label when the catalog is already here;
+    /// speech never waits for it.
+    private func characterRate(_ tts: AgentTTSDetail.TTS?, listenerVoice: String?) async -> Double? {
+        guard let listenerVoice, !listenerVoice.isEmpty else { return tts?.speakingRate }
+        let builderLabel = await VoiceCatalog.shared.cachedLabel(tts?.voiceId ?? "")
+        let listenerLabel = await VoiceCatalog.shared.cachedLabel(listenerVoice)
+        return VoicePacePolicy.characterRate(tts?.speakingRate, builderVoice: builderLabel, listenerVoice: listenerLabel)
     }
 
     /// `GET /api/files/speech/tts/voices` -- verified live 2026-07-19: a

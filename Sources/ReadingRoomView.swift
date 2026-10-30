@@ -529,8 +529,9 @@ struct ReadingRoomView: View {
                 if !book.isAudio { voiceAndSpeed }
                 else {
                     Picker("Speed", selection: Binding(get: { player.speed }, set: { player.changeSpeed($0) })) {
-                        ForEach(speeds, id: \.0) { Text($0.1).tag($0.0) }
+                        ForEach(speeds, id: \.0) { Text($0.1).accessibilityLabel(VoicePacePolicy.speedWords($0.0)).tag($0.0) }
                     }
+                    .accessibilityValue(VoicePacePolicy.speedWords(player.speed))
                 }
 
                 bookmarksBlock(book)
@@ -620,7 +621,11 @@ struct ReadingRoomView: View {
         showReport = true
     }
 
-    private var speeds: [(Double, String)] { [(0.8, "Slower"), (0.9, "A little slower"), (1.0, "Normal"), (1.15, "A little faster"), (1.3, "Faster"), (1.5, "Fastest")] }
+    /// Oct 30 2026: numbers, like every other speed list; the values are the
+    /// ones books already have saved. A saved number off the list shows as itself.
+    private var speeds: [(Double, String)] {
+        VoicePacePolicy.choices([0.8, 0.9, 1.0, 1.15, 1.3, 1.5], keeping: player.speed).map { ($0, VoicePacePolicy.speedShort($0)) }
+    }
 
     @State private var scrubPosition: Double = 0
     @State private var scrubbing = false
@@ -738,8 +743,9 @@ struct ReadingRoomView: View {
                 VoicePickerView(apiClient: service.client, selection: Binding(get: { player.voice }, set: { player.changeVoice($0) }), deliveryAgentId: ReadingRoomPlayer.deliveryPreference, previewSpeed: player.speed, previewDelivery: "STABLE", previewFillers: false)
             }
             Picker("Speed", selection: Binding(get: { player.speed }, set: { player.changeSpeed($0) })) {
-                ForEach(speeds, id: \.0) { Text($0.1).tag($0.0) }
+                ForEach(speeds, id: \.0) { Text($0.1).accessibilityLabel(VoicePacePolicy.speedWords($0.0)).tag($0.0) }
             }
+            .accessibilityValue(VoicePacePolicy.speedWords(player.speed))
         }
     }
 

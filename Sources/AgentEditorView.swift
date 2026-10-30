@@ -64,6 +64,17 @@ struct AgentEditorView: View {
     @State private var provider = ""
     @State private var model = ""
     @State private var voice = ""
+    /// Oct 30 2026 (Kade: "a default voice speed for the default agent voice
+    /// we choose when we build an agent ... so people can hear it how you
+    /// intended, or they can slow or speed it to how they like"). 1x when the
+    /// agent has none. `tts.speakingRate`, shared with the website builder.
+    @State private var speakingRate: Double = 1
+    /// What the agent came with, kept on offer if it is not on the list.
+    @State private var loadedSpeakingRate: Double?
+    /// `tts.deliveryMode`, read and sent back untouched.
+    @State private var deliveryMode: String?
+    /// Whether this agent's `tts` was read. A save without it must not write one.
+    @State private var ttsLoaded = false
     /// Part 119: the described catalog, so a voice stored in an old spelling
     /// ("Voice 69") reads as its described label here, as it does in the picker.
     @State private var voiceCatalog: VoiceCatalog.Snapshot = .empty
@@ -244,6 +255,15 @@ struct AgentEditorView: View {
                             : "The machinery that does their thinking, in plain words. Technical names are one tap away and nothing is hidden.")
                     }
                     Section("Voice") {
+                        Picker("Speed", selection: $speakingRate) {
+                            ForEach(VoicePacePolicy.choices(VoicePacePolicy.rates, keeping: loadedSpeakingRate), id: \.self) { rate in
+                                Text(VoicePacePolicy.speedShort(rate))
+                                    .accessibilityLabel(VoicePacePolicy.speedWords(rate))
+                                    .tag(rate)
+                            }
+                        }
+                        .accessibilityValue(VoicePacePolicy.speedWords(speakingRate))
+                        .accessibilityHint("How fast this character speaks in their own voice, unless a listener chooses a speed of their own.")
                         Button {
                             showingVoicePicker = true
                         } label: {
@@ -460,7 +480,9 @@ struct AgentEditorView: View {
                 // (same night, her word on the web version): quoted persona text
                 // is mostly RULES, not dialogue, so it read her instructions. Off
                 // until the extractor can tell a line from a rule. Pooled scripts.
-                VoicePickerView(apiClient: apiClient, selection: $voice, defaultLabel: "No specific voice (default)", deliveryAgentId: existingId)
+                // Oct 30 2026: auditions here play at the character's number,
+                // not at whatever Voice speed the builder listens at herself.
+                VoicePickerView(apiClient: apiClient, selection: $voice, defaultLabel: "No specific voice (default)", deliveryAgentId: existingId, previewSpeed: speakingRate)
             }
             .alert(
                 pendingPublic == true ? "Share on the marketplace?" : "Take it off the marketplace?",
@@ -643,7 +665,9 @@ struct AgentEditorView: View {
                 .filter { !$0.isEmpty },
             tools: toolsListLoaded
                 ? preservedUnknownTools + availableTools.map(\.pluginKey).filter { selectedTools.contains($0) }
-                : nil
+                : nil,
+            speakingRate: existingId == nil || ttsLoaded ? speakingRate : nil,
+            deliveryMode: deliveryMode
         )
         do {
             if let existingId {
@@ -681,6 +705,11 @@ struct AgentEditorView: View {
             if let p = detail.provider, !p.isEmpty { provider = p }
             if let m = detail.model, !m.isEmpty { model = m }
             voice = detail.tts?.voiceId ?? ""
+            let savedRate = detail.tts?.speakingRate.map { VoicePacePolicy.rate(base: nil, preference: $0) }
+            speakingRate = savedRate ?? 1
+            loadedSpeakingRate = savedRate
+            deliveryMode = detail.tts?.deliveryMode
+            ttsLoaded = true
             starters = detail.conversation_starters ?? []
             let agentTools = detail.tools ?? []
             let known = Set(availableTools.map { $0.pluginKey })
