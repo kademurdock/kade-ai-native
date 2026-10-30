@@ -239,14 +239,13 @@ struct AskToJoinView: View {
         }
     }
 
-    /// Moves VoiceOver to the answer and says it, a beat after the form has
-    /// redrawn so the focus lands on the new text rather than the old button.
+    /// Moves VoiceOver to the answer, a beat after the form has redrawn so
+    /// the focus lands on the new text rather than the old button. Moving
+    /// focus reads it; a separate announcement on top would say it twice.
     private func focusMessage() {
-        let text = message ?? ""
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             a11yFocus = .message
-            UIAccessibility.post(notification: .announcement, argument: text)
         }
     }
 
