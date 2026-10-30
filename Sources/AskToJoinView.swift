@@ -22,6 +22,10 @@ struct AskToJoinView: View {
     @State private var message: String?
     @State private var webPage: AskToJoinWebPage?
     @State private var webLoadFailed = false
+    /// A web page that would not load. Kept apart from `message`, which is
+    /// read as "Not sent", because nothing about the request failed.
+    @State private var pageProblem: String?
+    @State private var askDiscard = false
 
     private enum Field: Hashable { case name, contact, who, why }
     @FocusState private var typing: Field?
@@ -46,11 +50,19 @@ struct AskToJoinView: View {
                 }
 
                 Section {
+                    if let pageProblem {
+                        Text(pageProblem)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Button("Have an invite code? Create your account on the web") {
+                        pageProblem = nil
                         webPage = .register
                     }
                     .accessibilityHint("Opens the sign-up page for people Kade has already sent a code.")
                     Button("Use the request page on the web instead") {
+                        pageProblem = nil
                         webPage = .requestAccess
                     }
                     .accessibilityHint("Opens the same request form on kademurdock.com.")
@@ -60,7 +72,7 @@ struct AskToJoinView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(sent ? "Done" : "Cancel", action: onClose)
+                    Button(sent ? "Done" : "Cancel") { cancel() }
                 }
             }
             .sheet(item: $webPage) { page in
@@ -71,8 +83,37 @@ struct AskToJoinView: View {
                 guard failed else { return }
                 webPage = nil
                 webLoadFailed = false
-                say("Couldn't load the page. Check your connection and try again.")
+                pageLoadFailed()
             }
+        }
+        // Oct 29 2026 (review): the FamilyNoteSheet rule. Typed words are
+        // never thrown away by a stray swipe or the escape gesture; Cancel
+        // asks first.
+        .interactiveDismissDisabled(hasUnsentWords || sending)
+        .accessibilityAction(.escape) { cancel() }
+        .confirmationDialog("Discard your request?", isPresented: $askDiscard, titleVisibility: .visible) {
+            Button("Discard", role: .destructive) { onClose() }
+            Button("Keep writing", role: .cancel) {}
+        } message: {
+            Text("What you typed has not been sent.")
+        }
+    }
+
+    /// Words typed into the form that have not gone to Kade yet.
+    private var hasUnsentWords: Bool {
+        !sent && form.hasTypedSomething
+    }
+
+    /// Cancel, Done, or the escape gesture: asks first when words would be lost.
+    private func cancel() {
+        if sending {
+            UIAccessibility.post(notification: .announcement, argument: "Still sending your request. One moment.")
+            return
+        }
+        if hasUnsentWords {
+            askDiscard = true
+        } else {
+            onClose()
         }
     }
 
@@ -196,7 +237,7 @@ struct AskToJoinView: View {
                     .font(.body.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if form.contactLooksLikePhone {
-                    Text("You gave a phone number, so you'll sign in with that number. If you ever forget your password, choose Forgot your password on the sign-in screen, then Call my phone with a code.")
+                    Text("You gave a phone number, so you'll sign in with that number. When Kade approves you, Kade AI may call it to read you your sign-in and password, so pick up. If you ever forget your password, choose Forgot your password on the sign-in screen, then Call my phone with a code.")
                         .font(.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -249,15 +290,20 @@ struct AskToJoinView: View {
         }
     }
 
-    private func say(_ text: String) {
-        // After a request has gone, the "sent" words stay on screen; this
-        // is only spoken.
-        if sent {
+    /// A web page would not load. Said aloud and shown beside the links,
+    /// never in `message`: that one reads as "Not sent", and the request
+    /// itself (sent or still being typed) is untouched.
+    private func pageLoadFailed() {
+        let text = sent
+            ? "Couldn't load the web page. Check your connection and try again."
+            : "Couldn't load the web page. Check your connection and try again. Your request here is still as you left it."
+        pageProblem = text
+        // A beat after the web sheet closes, or VoiceOver's own focus move
+        // talks over it.
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
             UIAccessibility.post(notification: .announcement, argument: text)
-            return
         }
-        message = text
-        focusMessage()
     }
 }
 

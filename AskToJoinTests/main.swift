@@ -58,6 +58,36 @@ check("an email is not a phone", !r.contactLooksLikePhone)
 r.contact = "call me"
 check("words are not a phone", !r.contactLooksLikePhone)
 
+// The server's phone rule (kadeLoginId.js normalizePhone): 10 digits, or 11 starting with 1.
+r.contact = "770-4722"
+check("seven digits is not a phone", !r.contactLooksLikePhone)
+check("seven digits asks for the area code before sending",
+      r.missing == "Please include the area code, like 417-555-0123.")
+r.contact = "+44 20 7946 0958"
+check("a UK number is not a phone", !r.contactLooksLikePhone)
+check("a foreign number says US or email", r.missing?.contains("US phone number") == true)
+r.contact = "1-417-770-0000"
+check("eleven digits starting with 1 is a phone", r.contactLooksLikePhone && r.missing == nil)
+check("eleven digits starting with 1 drops the 1", AskToJoinRequest.usPhoneDigits("1-417-770-0000") == "4177700000")
+r.contact = "2-417-770-0000"
+check("eleven digits starting with 2 is not a phone", !r.contactLooksLikePhone && r.missing != nil)
+r.contact = "call me"
+check("words alone ask for a phone or email", r.missing?.contains("or an email address") == true)
+r.contact = "dave@example"
+check("an unfinished email is caught", r.missing?.contains("email address looks unfinished") == true)
+r.contact = "Dave@Example.com or 417-770-0000"
+check("an email anywhere wins, like the server", !r.contactLooksLikePhone && r.missing == nil
+      && AskToJoinRequest.findEmail(r.contact) == "dave@example.com")
+check("only 0-9 count as digits", AskToJoinRequest.asciiDigits("٤١٧ 417") == "417")
+
+// Something typed is something to ask about before throwing it away.
+var blank = AskToJoinRequest()
+check("an empty form has nothing to lose", !blank.hasTypedSomething)
+blank.sight = .sighted
+check("a sight tap alone is not typing", !blank.hasTypedSomething)
+blank.whoYouAre = "  hi "
+check("words in any box count", blank.hasTypedSomething)
+
 // Answers.
 let ok = AskToJoinRequest.outcome(status: 200, serverMessage: "Request sent. Kade will review it.")
 check("success keeps the server's words", ok.sent && ok.text == "Request sent. Kade will review it.")

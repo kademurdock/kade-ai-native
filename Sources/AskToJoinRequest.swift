@@ -73,16 +73,79 @@ struct AskToJoinRequest: Equatable {
     var missing: String? {
         if cleanName.isEmpty { return "Please say what people call you." }
         if cleanContact.isEmpty { return "Please give a phone number or an email, so Kade can reach you." }
+        if let problem = contactProblem { return problem }
         if cleanWho.isEmpty { return "Please tell Kade a little about yourself." }
         return nil
     }
 
-    /// True when the way to reach them reads as a phone number rather than an
-    /// email: no "@" and at least seven digits.
+    /// Oct 29 2026 (review): an approval can only make an account from an
+    /// email address or a US phone number the server can read. Anything
+    /// else is caught here, before sending, in words that say how to fix it,
+    /// instead of Kade finding out at approval time that no account could
+    /// be made. nil when the contact is fine (or still empty).
+    var contactProblem: String? {
+        let c = cleanContact
+        if c.isEmpty || Self.findEmail(c) != nil { return nil }
+        if c.contains("@") {
+            return "That email address looks unfinished. Please check it, like name@example.com, or give a phone number with its area code."
+        }
+        if Self.usPhoneDigits(c) != nil { return nil }
+        let count = Self.asciiDigits(c).count
+        if count == 0 {
+            return "Please give a phone number with its area code, like 417-555-0123, or an email address."
+        }
+        if count < 10 {
+            return "Please include the area code, like 417-555-0123."
+        }
+        return "That doesn't read as a US phone number. Please give one with its area code, like 417-555-0123, or an email address instead."
+    }
+
+    /// True when the account would be filed under a phone number: no email
+    /// address anywhere in the contact (the server prefers an email when
+    /// there is one) and a phone number the server can read.
     var contactLooksLikePhone: Bool {
         let c = cleanContact
-        guard !c.isEmpty, !c.contains("@") else { return false }
-        return c.filter(\.isNumber).count >= 7
+        guard !c.isEmpty, Self.findEmail(c) == nil else { return false }
+        return Self.usPhoneDigits(c) != nil
+    }
+
+    /// The server's own phone rule (kadeLoginId.js normalizePhone): strip
+    /// everything but the digits 0-9, then accept ten digits, or eleven that
+    /// start with a 1. Returns the ten digits, or nil.
+    static func usPhoneDigits(_ s: String) -> String? {
+        let digits = asciiDigits(s)
+        if digits.count == 10 { return digits }
+        if digits.count == 11, digits.hasPrefix("1") { return String(digits.dropFirst()) }
+        return nil
+    }
+
+    /// Only 0-9, the way JavaScript's \D sees digits (not other scripts' numerals).
+    static func asciiDigits(_ s: String) -> String {
+        var out = ""
+        for scalar in s.unicodeScalars where scalar.value >= 48 && scalar.value <= 57 {
+            out.unicodeScalars.append(scalar)
+        }
+        return out
+    }
+
+    /// The server's "an email somewhere in the contact line" rule
+    /// (kadeLoginId.js EMAIL_ANYWHERE_RE), or nil.
+    static func findEmail(_ s: String) -> String? {
+        guard let re = try? NSRegularExpression(
+            pattern: "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        guard let m = re.firstMatch(in: s, options: [], range: range),
+              let r = Range(m.range, in: s) else { return nil }
+        return String(s[r]).lowercased()
+    }
+
+    /// Something typed that would be lost if the form were thrown away.
+    var hasTypedSomething: Bool {
+        [name, contact, whoYouAre, whyHere].contains {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     /// The JSON body for POST /api/access-request. `sight` is always present,

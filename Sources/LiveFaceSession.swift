@@ -562,6 +562,22 @@ struct LiveFaceWebView: UIViewRepresentable {
 @MainActor
 enum SightService {
     private static var lastPushAt: Date?
+    /// Oct 29 2026 (review): what the server last said, or was last sent.
+    /// `pull` writes the server's answer into the same UserDefaults keys
+    /// Settings shows, which fires Settings' onChange; that onChange asks
+    /// here first, so a value the app just READ is never pushed straight
+    /// back as the user's own choice (which would overwrite the server's
+    /// record of who set it, 'signup' or 'admin', with 'user'). One question
+    /// per field, because a pull can change both and each onChange may see
+    /// the other field's old value.
+    private static var serverSight: String?
+    private static var serverLiveFaces: Bool?
+
+    /// True when the server already holds this sight answer: nothing to save.
+    static func isServerSight(_ sight: String) -> Bool { serverSight == sight }
+
+    /// True when the server already holds this live-faces switch.
+    static func isServerLiveFaces(_ on: Bool) -> Bool { serverLiveFaces == on }
     /// Oct 29 2026: the app-wide read at launch and on coming back. Keyed by
     /// account, so a different sign-in on the same phone reads at once.
     private static var lastAppPullUserID: String?
@@ -607,6 +623,10 @@ enum SightService {
         let liveFaces = (json["liveFaces"] as? Bool) ?? LiveFaceSetting.defaultOn
         let defaults = UserDefaults.standard
         let value = [SightSetting.sighted, SightSetting.nonvisual].contains(sight) ? sight : SightSetting.unset
+        // Remembered before the writes below, so the onChange they fire
+        // already sees them as the server's own values.
+        serverSight = value
+        serverLiveFaces = liveFaces
         if defaults.string(forKey: SightSetting.key) != value { defaults.set(value, forKey: SightSetting.key) }
         if (defaults.object(forKey: LiveFaceSetting.key) as? Bool) != liveFaces { defaults.set(liveFaces, forKey: LiveFaceSetting.key) }
         return true
@@ -614,6 +634,11 @@ enum SightService {
 
     static func push(sight: String, liveFaces: Bool) async {
         lastPushAt = Date()
+        // Taken as the server's from the start, so switching back to the
+        // old value while this save is in flight still sends; a failed save
+        // re-reads below and puts the truth back.
+        serverSight = sight
+        serverLiveFaces = liveFaces
         let client = KadeAPIClient()
         var req = client.request(path: "api/kade/sight", method: "PUT", authorized: true, timeout: 15)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

@@ -1102,6 +1102,9 @@ struct SettingsView: View {
                 systemImage: "eye", tint: SectionTint.accessibility)
         }
         .onChange(of: sight) { _, value in
+            // Oct 29 2026: a value SightService.pull just applied from the
+            // server is not the user's choice; never push it back.
+            guard !SightService.isServerSight(value) else { return }
             Task { await SightService.push(sight: value, liveFaces: liveFaces) }
         }
         .task { await SightService.pull() }
@@ -1114,6 +1117,7 @@ struct SettingsView: View {
         }
         .disabled(sight != SightSetting.sighted)
         .onChange(of: liveFaces) { _, value in
+            guard !SightService.isServerLiveFaces(value) else { return }
             Task { await SightService.push(sight: sight, liveFaces: value) }
         }
         .accessibilityHint("When you play a voice message from Kiana, Harley, Della or Lilly, or take a call with them, their painting comes alive as video of them saying it, like a video message. A couple of cents a minute from your balance while it is on screen. Needs I use the screen set to yes; VoiceOver, Low Power Mode and Reduce Motion keep it off.")
