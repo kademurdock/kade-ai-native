@@ -184,9 +184,9 @@ final class AgentBuilderService: ObservableObject {
         var category: String
         var provider: String
         var model: String
-        /// TTS voice id ("Voice 42"), or empty to leave the agent on its
-        /// name-hash default. Sent as `tts.voiceId`, the same shape
-        /// `VoiceService` reads back.
+        /// TTS voice id ("Voice 42"), or empty for the agent's name-hash
+        /// default. Sent as `tts.voiceId`, the same shape `VoiceService`
+        /// reads back. Empty on an agent with a `savedVoice` clears that voice.
         var voice: String
         /// Tappable opening lines shown when someone starts a chat with
         /// this agent. Always sent (an empty array deliberately clears
@@ -205,6 +205,9 @@ final class AgentBuilderService: ObservableObject {
         /// `tts.deliveryMode`, set on the website. Not edited on the phone;
         /// the editor reads it and sends it back so a save cannot drop it.
         var deliveryMode: String? = nil
+        /// The voice this agent came with, when the editor read it. nil = a new
+        /// agent, the quiz, or an editor whose agent never loaded.
+        var savedVoice: String? = nil
     }
 
     private func bodyJSON(_ fields: AgentFields) -> [String: Any] {
@@ -216,7 +219,7 @@ final class AgentBuilderService: ObservableObject {
             "provider": fields.provider,
             "model": fields.model,
         ]
-        if let tts = VoicePacePolicy.agentTTSBody(voice: fields.voice, speakingRate: fields.speakingRate, deliveryMode: fields.deliveryMode) {
+        if let tts = VoicePacePolicy.agentTTSBody(voice: fields.voice, savedVoice: fields.savedVoice, speakingRate: fields.speakingRate, deliveryMode: fields.deliveryMode) {
             body["tts"] = tts
         }
         body["conversation_starters"] = fields.starters

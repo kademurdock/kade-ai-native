@@ -28,6 +28,12 @@ enum VoicePacePolicy {
     static func paceRate(_ pace: String, base: Double?) -> Double {
         rate(base: base, preference: options.first { $0.value == pace }?.rate)
     }
+    /// The listener's own number for a call's hello, or nil when they chose
+    /// none (Character's speed, or a saved value the list no longer has), and
+    /// then `speed` stays out of the hello.
+    static func listenerRate(_ pace: String) -> Double? {
+        options.first { $0.value == pace }?.rate
+    }
     /// The nearest named pace for an old numeric speed; normal or none keeps
     /// the character's own speed.
     static func legacyPace(_ rate: Double?) -> String {
@@ -72,11 +78,22 @@ enum VoicePacePolicy {
     }
     /// A list that also offers a saved number it does not contain, in order,
     /// so a saved 1.25 keeps working and shows as itself instead of leaving a
-    /// picker blank.
+    /// picker blank. A Picker matches its tags exactly, so a saved number a
+    /// hair from a stop (1.2000000000000002) takes that stop's place.
     static func choices(_ list: [Double], keeping saved: Double?) -> [Double] {
-        guard let saved, saved.isFinite, !list.contains(where: { abs($0 - saved) < 0.001 }) else { return list }
-        return (list + [saved]).sorted()
+        guard let saved, saved.isFinite else { return list }
+        guard list.contains(where: { abs($0 - saved) < 0.001 }) else { return (list + [saved]).sorted() }
+        return list.map { abs($0 - saved) < 0.001 ? saved : $0 }
     }
+    /// Described video narration (Oct 30 2026): the nine numbers plus the
+    /// stops the describer already offered, so a saved 1.2 stays 1.2 and a
+    /// saved 1.25 stays 1.25.
+    static let narrationRates: [Double] = [0.75, 0.8, 0.9, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2, 2.25, 2.5, 3]
+    static func nearestNarrationRate(_ value: Double) -> Double {
+        narrationRates.min { abs($0 - value) < abs($1 - value) } ?? 1.5
+    }
+    /// Words a minute at a narration speed, in tens: the voice's own pace is about 150.
+    static func narrationWords(_ rate: Double) -> Int { Int(150 * rate / 10) * 10 }
     /// A character's default speed belongs to the character's own builder
     /// voice (Oct 30 2026, Kade: "a default voice speed for the default agent
     /// voice we choose when we build an agent ... so people can hear it how
@@ -92,16 +109,24 @@ enum VoicePacePolicy {
         guard !picked.isEmpty else { return rate }
         return picked.caseInsensitiveCompare(builder) == .orderedSame ? rate : nil
     }
-    /// The `tts` an agent save sends (Oct 30 2026). The field is replaced
-    /// whole on the server, so every part the agent has must ride along:
-    /// a save that sent only the voice used to erase the speed and delivery
-    /// set on the website. nil = nothing to say, and `tts` stays out of the
-    /// body. No empty voice id and no number outside 0.5-1.5: the server's
-    /// validator refuses the whole save over either one.
-    static func agentTTSBody(voice: String, speakingRate: Double?, deliveryMode: String?) -> [String: Any]? {
+    /// The `tts` an agent save sends (Oct 30 2026). The server keeps what a
+    /// save leaves out and clears what it sends as null (mergeAgentTts in the
+    /// fork's agents/v1.js). Every part the agent has still rides along, as a
+    /// save that sent only the voice used to erase the speed and delivery set
+    /// on the website. Leaving the voice out keeps the old one, so picking "No
+    /// specific voice" on a character that has one (`savedVoice`) sends null,
+    /// and only then: the quiz, and an editor whose agent never loaded, cannot
+    /// wipe a voice. nil = nothing to say, and `tts` stays out of the body. No
+    /// empty voice id and no number outside 0.5-1.5: the server's validator
+    /// refuses the whole save over either one.
+    static func agentTTSBody(voice: String, savedVoice: String? = nil, speakingRate: Double?, deliveryMode: String?) -> [String: Any]? {
         var tts: [String: Any] = [:]
         let voiceId = voice.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !voiceId.isEmpty { tts["voiceId"] = voiceId }
+        if !voiceId.isEmpty {
+            tts["voiceId"] = voiceId
+        } else if !(savedVoice ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            tts["voiceId"] = NSNull()
+        }
         if let speakingRate, speakingRate.isFinite {
             tts["speakingRate"] = rate(base: nil, preference: speakingRate)
         }

@@ -1,4 +1,4 @@
-# Conversation puppet completion, 2.2.15
+# Conversation puppet completion, 2.2.17
 
 The next candidate adds attached upper-body, elbow, wrist and hand movement to the ordinary conversation stage. The original character identity, face atlases and supporting artwork remain independently checked. Kiana's rejected supporting plate is absent from the new renderer's resource list. Public and private Lilly retain separate exact identities while sharing the same drawn rig and original stationary cats.
 
@@ -32,8 +32,8 @@ All49 exported PNGs must be inspected internally before candidate acceptance. Ea
 
 ## Release and signing
 
-All four targets use marketing version2.2.15 with sourcebuild100. The guarded upload lane obtains the latest Apple build across versions and uses latest-plus-one;333 is an expectation only if332 remains the latest actual build. Host/device/source/trusted-tool ledgers and both signed archive/IPA four-bundle inventories must be fresh and exact. Native assetutil must verify all18 required image names/dimensions and Angel's compiled data asset in the unsigned Release app and both signed catalogs.
+All four targets use marketing version2.2.17 with sourcebuild100. The guarded upload lane obtains the latest Apple build across versions and uses latest-plus-one;333 is an expectation only if332 remains the latest actual build. Host/device/source/trusted-tool ledgers and both signed archive/IPA four-bundle inventories must be fresh and exact. Native assetutil must verify all18 required image names/dimensions and Angel's compiled data asset in the unsigned Release app and both signed catalogs.
 
 The existing standard public GitHub runner performs all compilation/signing. `codemagic-cli-tools==0.70.0` is a locally installed command package; no Codemagic build service is dispatched. Existing four approved repository secrets, family certificate/SPKI and four approved profiles are reused, with no provisioning or secret overwrite. The modern native profile installation, durable owned-leaf ledger, scoped cleanup and supported publish find-wait argument remain intact.
 
-No push, dispatch, signing, upload or Apple mutation is implied by preparing this code. The next release uses its own exact-source plan and intent namespace after genuine proofs, independent internal QA and deliberate trusted-tool/receiver binding. Original receipts and credential approval records are preserved onF; new reception lives in a separate2.2.15 directory. No new temporary files are placed onC.
+No push, dispatch, signing, upload or Apple mutation is implied by preparing this code. The next release uses its own exact-source plan and intent namespace after genuine proofs, independent internal QA and deliberate trusted-tool/receiver binding. Original receipts and credential approval records are preserved onF; new reception lives in a separate2.2.17 directory. No new temporary files are placed onC.

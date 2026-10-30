@@ -194,7 +194,7 @@ final class VoiceService: NSObject, ObservableObject {
     private static let voicePaceKey = "kade.voiceMessage.pace"
     /// First run after the merge: the older Fish pace and Classic rate
     /// preferences become the one pace (VoicePacePolicy.unifiedPace).
-    private static func loadVoicePace() -> String {
+    static func loadVoicePace() -> String {
         let defaults = UserDefaults.standard
         if let kept = defaults.string(forKey: voicePaceKey),
            VoicePacePolicy.options.contains(where: { $0.value == kept }) { return kept }

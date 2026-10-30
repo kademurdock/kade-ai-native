@@ -362,7 +362,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Voice speed",
-                body: "The speed button beside Hear replies runs from 0.75x up to 1.5x, the same list in Settings. Character's speed is the default: a character's own voice plays the way its builder set it. A voice you picked yourself plays at 1x unless you choose a number. A change starts with the next message, the clip already playing keeps its speed, and it's remembered next time."
+                body: "The speed button beside Hear replies runs from 0.75x up to 1.5x, the same list in Settings. Character's speed is the default: a character's own voice plays the way its builder set it. A voice you picked yourself plays at 1x unless you choose a number. A change starts with the next message, the clip already playing keeps its speed, and it's remembered next time. Calls use the same number; Spotter's live voice keeps its own pace."
             ),
             HelpEntry(
                 title: "Filler words and little sounds",
@@ -673,7 +673,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Voice & Audio",
-                body: "Turn Hear replies on by default for every new conversation, set the voice speed for replies and Spotter calls, and open the Pronunciation Dictionary."
+                body: "Turn Hear replies on by default for every new conversation, set the voice speed for replies and calls (Spotter's live voice keeps its own pace), and open the Pronunciation Dictionary."
             ),
             HelpEntry(
                 title: "Accessibility",

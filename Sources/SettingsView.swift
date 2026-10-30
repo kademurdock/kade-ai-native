@@ -305,7 +305,7 @@ struct SettingsView: View {
         } header: {
             sectionHeader("Voice & Audio")
         } footer: {
-            Text("One number for every voice. Character's speed plays a character's own voice the way its builder set it; a voice you picked yourself plays at 1x unless you choose a number. Changes apply to future voice messages; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
+            Text("One number for every voice. Character's speed plays a character's own voice the way its builder set it; a voice you picked yourself plays at 1x unless you choose a number. Changes apply to future voice messages and your next call; playing audio keeps its original speed. Voice auditions use the same speed and filler setting as that character's messages.")
         }
     }
 

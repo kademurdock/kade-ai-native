@@ -256,7 +256,7 @@ class ProtocolChecks(unittest.TestCase):
             (bundle, "KadeAIUITests", "com.kademurdock.kadeai.uitests")):
             info = {"CFBundleIdentifier": identifier, "CFBundleExecutable": executable, "DTPlatformName": "iphonesimulator"}
             if path == app:
-                info.update(CFBundleShortVersionString="2.2.15", CFBundleVersion="100",
+                info.update(CFBundleShortVersionString="2.2.17", CFBundleVersion="100",
                             UISupportedInterfaceOrientations=["UIInterfaceOrientationPortrait"])
             files[path + "/Info.plist"] = plistlib.dumps(info)
             files[path + "/" + executable] = main if path == app else ("synthetic-" + executable).encode()
@@ -327,7 +327,7 @@ class ProtocolChecks(unittest.TestCase):
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
         # Oct 16 2026: repinned for the Release-only exclusion of the DEBUG puppet gallery and Body editor samples.
-        original_project_sha = "871ba1b894b952993905aa5075cb04bb071c6a2add9769d1b0a10b6973b2de0a"
+        original_project_sha = "e272b92aac243eea521d47332fb1a400bf79531278d1a808775466fd85780f20"
         # Bind the exact original command expression bytes. ast.dump is a
         # Python-version-dependent representation, not the build arguments.
         original_command_sha = "bf5b25c7e5fd0070363cb4d18c44c755902d21c1a1dbccfa0dda2f8999293999"
@@ -347,7 +347,7 @@ class ProtocolChecks(unittest.TestCase):
         coherent_project(project); command_expression(helper); CHECKS += 2
         for changed in (project.replace('ENABLE_DEBUG_DYLIB: "NO"', 'ENABLE_DEBUG_DYLIB: false', 1), project.replace("        Debug:\n", "        Release:\n", 1),
                         project.replace(snippet, ""), project + snippet, project.replace("  KadeAI:\n", "  AnotherApp:\n", 1),
-                        project.replace("MARKETING_VERSION: \"2.2.15\"", "MARKETING_VERSION: \"2.2.16\"", 1)):
+                        project.replace("MARKETING_VERSION: \"2.2.17\"", "MARKETING_VERSION: \"2.2.18\"", 1)):
             with self.assertRaises(ValueError): coherent_project(changed)
             CHECKS += 1
         with self.assertRaises(ValueError): command_expression(helper.replace("'-configuration','Debug'", "'-configuration','Release'", 1))

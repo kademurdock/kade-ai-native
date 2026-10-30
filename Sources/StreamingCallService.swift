@@ -424,6 +424,14 @@ final class StreamingCallService: NSObject, ObservableObject {
         if let pendingCallPlanId {
             hello["callPlanId"] = pendingCallPlanId
         }
+        // Oct 30 2026: the listener's own number, and only when they chose one.
+        // Character's speed leaves it out, as the website's hello does
+        // (ConversationMode.tsx); the bridge then plays the character's number
+        // on its own voice, or 1x (helloListenerRate in voice-stream.js). Read
+        // from the saved choice each time, so a reconnect carries a change.
+        if let listenerRate = VoicePacePolicy.listenerRate(VoiceService.loadVoicePace()) {
+            hello["speed"] = listenerRate
+        }
         sendJSON(hello)
         startReceiveLoop()
     }

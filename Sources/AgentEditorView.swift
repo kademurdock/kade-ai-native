@@ -64,6 +64,8 @@ struct AgentEditorView: View {
     @State private var provider = ""
     @State private var model = ""
     @State private var voice = ""
+    /// The voice the agent came with, so picking "No specific voice" can clear it.
+    @State private var loadedVoice: String?
     /// Oct 30 2026 (Kade: "a default voice speed for the default agent voice
     /// we choose when we build an agent ... so people can hear it how you
     /// intended, or they can slow or speed it to how they like"). 1x when the
@@ -667,7 +669,8 @@ struct AgentEditorView: View {
                 ? preservedUnknownTools + availableTools.map(\.pluginKey).filter { selectedTools.contains($0) }
                 : nil,
             speakingRate: existingId == nil || ttsLoaded ? speakingRate : nil,
-            deliveryMode: deliveryMode
+            deliveryMode: deliveryMode,
+            savedVoice: loadedVoice
         )
         do {
             if let existingId {
@@ -705,6 +708,7 @@ struct AgentEditorView: View {
             if let p = detail.provider, !p.isEmpty { provider = p }
             if let m = detail.model, !m.isEmpty { model = m }
             voice = detail.tts?.voiceId ?? ""
+            loadedVoice = detail.tts?.voiceId
             let savedRate = detail.tts?.speakingRate.map { VoicePacePolicy.rate(base: nil, preference: $0) }
             speakingRate = savedRate ?? 1
             loadedSpeakingRate = savedRate

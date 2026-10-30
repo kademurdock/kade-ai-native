@@ -996,6 +996,33 @@ checkEqual("A list keeps a saved number it lacks, in order",
     VoicePacePolicy.choices([1, 1.2, 1.5], keeping: 1.25), [1, 1.2, 1.25, 1.5])
 checkEqual("A list does not repeat a saved number it has", VoicePacePolicy.choices([1, 1.2], keeping: 1.2), [1, 1.2])
 checkEqual("A list with nothing saved is unchanged", VoicePacePolicy.choices([1, 1.2], keeping: nil), [1, 1.2])
+checkEqual("A saved number a hair from a stop is the tag, so the picker matches it",
+    VoicePacePolicy.choices([1, 1.2, 1.5], keeping: 1.2000000000000002), [1, 1.2000000000000002, 1.5])
+checkEqual("That hair does not show", VoicePacePolicy.speedShort(1.2000000000000002), "1.2x")
+// Oct 30 2026: the Library's list is the same nine numbers; its old 1.15 shows as itself.
+checkEqual("The nine numbers", VoicePacePolicy.rates, [0.75, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5])
+checkEqual("A book saved at the old 1.15 keeps it, in order",
+    VoicePacePolicy.choices(VoicePacePolicy.rates, keeping: 1.15), [0.75, 0.8, 0.9, 1, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5])
+for saved in VoicePacePolicy.rates {
+    check("A book saved at \(saved) matches a tag and adds no row",
+        VoicePacePolicy.choices(VoicePacePolicy.rates, keeping: saved) == VoicePacePolicy.rates)
+}
+// Oct 30 2026: a call's hello carries the listener's own number and nothing else.
+checkEqual("Character's speed sends no number on a call", VoicePacePolicy.listenerRate("character"), nil)
+checkEqual("A saved value the list lacks sends no number on a call", VoicePacePolicy.listenerRate("1.25"), nil)
+for pace in VoicePacePolicy.options where pace.value != "character" {
+    checkEqual("A call sends the listener's number: \(pace.label)", VoicePacePolicy.listenerRate(pace.value), pace.rate)
+}
+// Oct 30 2026: described video narration. A saved 1.2 used to snap to 1.25.
+checkEqual("The narration list",
+    VoicePacePolicy.narrationRates, [0.75, 0.8, 0.9, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2, 2.25, 2.5, 3])
+for stop in VoicePacePolicy.narrationRates {
+    checkEqual("A narration speed saved at \(stop) stays there", VoicePacePolicy.nearestNarrationRate(stop), stop)
+    check("The words a minute shown for \(stop) are within ten of the real number",
+        abs(Double(VoicePacePolicy.narrationWords(stop)) - 150 * stop) < 10)
+}
+checkEqual("The voice's own pace is 150 words a minute", VoicePacePolicy.narrationWords(1), 150)
+checkEqual("A narration speed off the list goes to the nearest stop", VoicePacePolicy.nearestNarrationRate(1.22), 1.2)
 // Oct 30 2026: a character's default speed belongs to the character's own builder voice.
 checkEqual("With no pick the character's speed applies",
     VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: nil), 1.3)
@@ -1013,7 +1040,7 @@ checkEqual("A listener's own voice plays at 1x when they chose no number",
     VoicePacePolicy.rate(base: VoicePacePolicy.characterRate(1.3, builderVoice: "Builder", listenerVoice: "Mine"), preference: nil), 1)
 checkEqual("The listener's number beats the character's on the builder's voice",
     VoicePacePolicy.paceRate("brisk", base: VoicePacePolicy.characterRate(1.4, builderVoice: "Builder", listenerVoice: nil)), 1.2)
-// Oct 30 2026: `tts` is replaced whole on the server, so a save sends every part.
+// Oct 30 2026: a save sends every part the agent has, and null clears a voice.
 do {
     let all = VoicePacePolicy.agentTTSBody(voice: " Voice ", speakingRate: 1.3, deliveryMode: "STABLE")
     checkEqual("A save sends the voice", all?["voiceId"] as? String, "Voice")
@@ -1023,6 +1050,20 @@ do {
     let noVoice = VoicePacePolicy.agentTTSBody(voice: "  ", speakingRate: 1, deliveryMode: nil)
     checkEqual("A speed with no voice is still sent", noVoice?["speakingRate"] as? Double, 1)
     check("An empty voice id is never sent, the server refuses it", noVoice?["voiceId"] == nil)
+    let cleared = VoicePacePolicy.agentTTSBody(voice: "  ", savedVoice: "Voice", speakingRate: 1.2, deliveryMode: "STABLE")
+    check("No specific voice on a character with a voice clears it", cleared?["voiceId"] is NSNull)
+    checkEqual("Clearing the voice keeps the speed", cleared?["speakingRate"] as? Double, 1.2)
+    checkEqual("Clearing the voice keeps the delivery", cleared?["deliveryMode"] as? String, "STABLE")
+    check("The cleared voice goes out as JSON null",
+        String(decoding: (try? JSONSerialization.data(withJSONObject: cleared ?? [:], options: [.sortedKeys])) ?? Data(), as: UTF8.self).contains("\"voiceId\":null"))
+    check("A character with no voice has nothing to clear",
+        VoicePacePolicy.agentTTSBody(voice: "", savedVoice: nil, speakingRate: nil, deliveryMode: nil) == nil)
+    check("A blank saved voice has nothing to clear",
+        VoicePacePolicy.agentTTSBody(voice: "", savedVoice: "  ", speakingRate: 1, deliveryMode: nil)?["voiceId"] == nil)
+    checkEqual("A new voice replaces the saved one",
+        VoicePacePolicy.agentTTSBody(voice: "New", savedVoice: "Old", speakingRate: nil, deliveryMode: nil)?["voiceId"] as? String, "New")
+    checkEqual("Keeping the saved voice sends it",
+        VoicePacePolicy.agentTTSBody(voice: "Old", savedVoice: "Old", speakingRate: nil, deliveryMode: nil)?["voiceId"] as? String, "Old")
     check("The character quiz sends no tts at all",
         VoicePacePolicy.agentTTSBody(voice: "", speakingRate: nil, deliveryMode: nil) == nil)
     let voiceOnly = VoicePacePolicy.agentTTSBody(voice: "Voice", speakingRate: nil, deliveryMode: nil)

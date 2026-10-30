@@ -621,10 +621,10 @@ struct ReadingRoomView: View {
         showReport = true
     }
 
-    /// Oct 30 2026: numbers, like every other speed list; the values are the
-    /// ones books already have saved. A saved number off the list shows as itself.
+    /// Oct 30 2026: the same nine numbers as every other speed list. A saved
+    /// number off the list, like the old 1.15, shows as itself.
     private var speeds: [(Double, String)] {
-        VoicePacePolicy.choices([0.8, 0.9, 1.0, 1.15, 1.3, 1.5], keeping: player.speed).map { ($0, VoicePacePolicy.speedShort($0)) }
+        VoicePacePolicy.choices(VoicePacePolicy.rates, keeping: player.speed).map { ($0, VoicePacePolicy.speedShort($0)) }
     }
 
     @State private var scrubPosition: Double = 0

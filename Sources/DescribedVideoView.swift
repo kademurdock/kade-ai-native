@@ -209,7 +209,7 @@ struct DescribedVideoView: View {
         var id: String { value }
     }
 
-    static let speeds: [Double] = [1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3]
+    static let speeds: [Double] = VoicePacePolicy.narrationRates
     private static let settingsKey = "kade.describedVideo.settings"
 
     fileprivate static let detailOptions: [DVOption] = [
@@ -1130,11 +1130,14 @@ struct DescribedVideoView: View {
                 .accessibilityHidden(true)
             Picker(title, selection: selection) {
                 ForEach(Self.speeds, id: \.self) { value in
-                    Text(Self.speedLabel(value)).tag(value)
+                    Text(Self.speedLabel(value))
+                        .accessibilityLabel(Self.speedSpoken(value))
+                        .tag(value)
                 }
             }
             .pickerStyle(.menu)
             .accessibilityLabel(title)
+            .accessibilityValue(Self.speedSpoken(selection.wrappedValue))
             .accessibilityHint(hint)
             Text(hint)
                 .font(.footnote)
@@ -3306,13 +3309,20 @@ struct DescribedVideoView: View {
 
     /// "1.5×, roughly 220 words a minute": the voice's own pace is about 150.
     static func speedLabel(_ value: Double) -> String {
-        let words = Int(150 * value / 10) * 10
+        let words = VoicePacePolicy.narrationWords(value)
         let own = value == 1 ? " (the voice's own pace)" : ""
         return "\(speedNumber(value))×\(own), roughly \(words) words a minute"
     }
 
+    /// What VoiceOver says for that row: "Normal", never "1 times".
+    static func speedSpoken(_ value: Double) -> String {
+        let words = VoicePacePolicy.narrationWords(value)
+        let own = value == 1 ? " (the voice's own pace)" : ""
+        return "\(VoicePacePolicy.speedWords(value))\(own), roughly \(words) words a minute"
+    }
+
     static func nearestSpeed(_ value: Double) -> Double {
-        speeds.min(by: { abs($0 - value) < abs($1 - value) }) ?? 1.5
+        VoicePacePolicy.nearestNarrationRate(value)
     }
 
     static func money(_ value: Double?) -> String {
