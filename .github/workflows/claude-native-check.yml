@@ -40,6 +40,7 @@ jobs:
           if [ -f run-puppet-tests.sh ]; then bash run-puppet-tests.sh 2>&1 | tail -n 120; fi
           if [ -f run-living-painting-tests.sh ]; then bash run-living-painting-tests.sh 2>&1 | tail -n 60; fi
           if [ -f run-live-face-tests.sh ]; then bash run-live-face-tests.sh 2>&1 | tail -n 60; fi
+          if [ -f run-ask-to-join-tests.sh ]; then bash run-ask-to-join-tests.sh 2>&1 | tail -n 40; fi
           if [ -f run-soul-tests.sh ]; then bash run-soul-tests.sh 2>&1 | tail -n 20; fi
           if [ -f run-arcade-tests.sh ]; then bash run-arcade-tests.sh 2>&1 | tail -n 20; fi
 

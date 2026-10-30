@@ -56,12 +56,15 @@ struct ContentView: View {
     @State private var showingWeb = false
     @State private var webLoadFailed = false
     @State private var showWebLoadAlert = false
-    /// Build 193: the front door from the sign-in screen — Safari onto
-    /// /request-access.
+    /// Build 193: the front door from the sign-in screen. Oct 29 2026: a
+    /// native form now (AskToJoinView), so it can ask the sight question.
     @State private var showingAskToJoin = false
     /// Sep 23 2026 redesign (B13): the sign-in screen's missing "Forgot your
-    /// password?" — Safari onto the site's own reset page.
-    @State private var showingForgotPassword = false
+    /// password?". Oct 29 2026: it asks which way first (a phone call that
+    /// reads a code aloud, or an email link), because an account made with
+    /// only a phone number can never get the email.
+    @State private var showingForgotChoices = false
+    @State private var forgotPage: ForgotPasswordPage?
     @State private var showingHelpSignedOut = false
     /// Build 193: true when a lock-screen LISTEN action routed to the Brief
     /// screen — BriefView starts speaking on load.
@@ -144,6 +147,7 @@ struct ContentView: View {
                 Task { await DescribedVideoAccess.shared.check(client: apiClient) }
                 // Sep 29 2026: Family history's row (never twice in half a minute).
                 Task { await FamilyHistoryAccess.shared.check(client: apiClient) }
+                pullAccountSight()
             }
         }
         .onAppear {
@@ -155,6 +159,9 @@ struct ContentView: View {
         }
         .onChange(of: authStateID) { old, _ in
             handleStateChange(from: old)
+            // Oct 29 2026: a fresh sign-in or a restored session reads the
+            // account's sight answer straight away.
+            pullAccountSight()
             // A Siri phrase can easily land before a saved session has
             // finished restoring, or while she's still signed out. Rather
             // than drop it, it waits here and runs the moment there's an
@@ -682,8 +689,7 @@ struct ContentView: View {
             .onChange(of: webLoadFailed) { _, failed in
                 guard failed else { return }
                 showingWeb = false
-                showingAskToJoin = false
-                showingForgotPassword = false
+                forgotPage = nil
                 webLoadFailed = false
                 // Small delay so the alert doesn't try to present while the
                 // sheet is still mid-dismiss.
@@ -792,12 +798,22 @@ struct ContentView: View {
             .disabled(isSigningIn)
             .accessibilityHint("Signs in to your Kade-AI account on kademurdock.com.")
 
-            /* B13: the missing way back in. The site's own reset page, same
-             * link style as Ask to join below (primary + underline, 44-point
-             * target, `.plain` so the tint can't undo the contrast fix —
-             * see the Part 91 notes on Ask to join). */
+            /* B13: the missing way back in. Same link style as Ask to join
+             * below (primary + underline, 44-point target, `.plain` so the
+             * tint can't undo the contrast fix — see the Part 91 notes on Ask
+             * to join).
+             *
+             * Oct 29 2026 (Kade: her friend signed up with just his phone, and
+             * "his phone can't get a temp password from resend email so he
+             * prob hasn't ever been able to log in"): the email link alone was
+             * a wall for phone-only accounts. Now it asks first: a phone call
+             * that reads a code aloud (the site's /reset-by-phone page), or
+             * the email link. A system action sheet, which VoiceOver reads as
+             * its title, message and three buttons. The web page opens from a
+             * background view, never a second presentation on this button
+             * (the build-121 rule). */
             Button {
-                showingForgotPassword = true
+                showingForgotChoices = true
             } label: {
                 Text("Forgot your password?")
                     .font(.callout)
@@ -807,9 +823,20 @@ struct ContentView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Opens the page that sends you a link to set a new password.")
-            .sheet(isPresented: $showingForgotPassword) {
-                SafariView(url: URL(string: "https://kademurdock.com/forgot-password")!, loadFailed: $webLoadFailed)
+            .accessibilityHint("Choose a phone call that reads you a code, or an email with a link, to set a new password.")
+            .confirmationDialog("Forgot your password?", isPresented: $showingForgotChoices, titleVisibility: .visible) {
+                Button("Call my phone with a code") { forgotPage = .phoneCall }
+                Button("Email me a link") { forgotPage = .email }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("If you sign in with a phone number, Kade-AI calls that phone and reads you a code. If you sign in with an email address, it emails you a link.")
+            }
+            .background {
+                Color.clear
+                    .sheet(item: $forgotPage) { page in
+                        SafariView(url: page.url, loadFailed: $webLoadFailed)
+                            .ignoresSafeArea()
+                    }
             }
 
             /* Build 193 — THE FRONT DOOR: accounts here are personal invites,
@@ -829,9 +856,9 @@ struct ContentView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Opens the request page. Kade approves people herself — if she knows you, expect to hear back.")
+            .accessibilityHint("Opens a short form asking Kade for an account. Kade approves people herself — if she knows you, expect to hear back.")
             .sheet(isPresented: $showingAskToJoin) {
-                SafariView(url: URL(string: "https://kademurdock.com/request-access")!, loadFailed: $webLoadFailed)
+                AskToJoinView(client: apiClient, onClose: { showingAskToJoin = false })
             }
         }
     }
@@ -929,6 +956,15 @@ struct ContentView: View {
         case .signedIn(let u): return "signedIn:\(u.id)"
         case .failed(let m): return "failed:\(m)"
         }
+    }
+
+    /// Oct 29 2026: the account's sight answer (set at the door, in Settings,
+    /// or by Kade) reaches this phone at launch and whenever the app comes
+    /// back, instead of waiting for a character stage or Settings to ask.
+    /// Signed in only, and at most once every ten minutes per account.
+    private func pullAccountSight() {
+        guard let uid = signedInUserId else { return }
+        Task { await SightService.pullIfStale(userID: uid, client: apiClient) }
     }
 
     private func submit() {
@@ -1308,6 +1344,23 @@ struct ContentView: View {
             a11yFocus = .email
         default:
             break
+        }
+    }
+}
+
+/// Oct 29 2026: the two ways back into an account from the sign-in screen.
+enum ForgotPasswordPage: String, Identifiable {
+    /// The site calls the account's phone and reads a six-digit code aloud.
+    case phoneCall
+    /// The site emails a reset link.
+    case email
+
+    var id: String { rawValue }
+
+    var url: URL {
+        switch self {
+        case .phoneCall: return URL(string: "https://kademurdock.com/reset-by-phone")!
+        case .email:     return URL(string: "https://kademurdock.com/forgot-password")!
         }
     }
 }

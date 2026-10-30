@@ -562,21 +562,54 @@ struct LiveFaceWebView: UIViewRepresentable {
 @MainActor
 enum SightService {
     private static var lastPushAt: Date?
+    /// Oct 29 2026: the app-wide read at launch and on coming back. Keyed by
+    /// account, so a different sign-in on the same phone reads at once.
+    private static var lastAppPullUserID: String?
+    private static var lastAppPullAt: Date?
 
-    static func pull(client given: KadeAPIClient? = nil) async {
-        guard Keychain.string(for: .accessToken) != nil else { return }
+    /// The read the app root makes when it launches signed in, signs in, or
+    /// comes back to the front: at most once every ten minutes per account,
+    /// and never while signed out (`pull` checks the token too).
+    ///
+    /// A restored session shows as signed in BEFORE its token is refreshed,
+    /// so the first read at launch can carry an expired token. A failed read
+    /// therefore tries once more a few seconds later, and only a read that
+    /// worked starts the ten minutes.
+    static func pullIfStale(userID: String, client: KadeAPIClient) async {
+        guard !userID.isEmpty, Keychain.string(for: .accessToken) != nil else { return }
+        if lastAppPullUserID == userID, let at = lastAppPullAt, Date().timeIntervalSince(at) < 600 { return }
+        if appPullRunning { return }
+        appPullRunning = true
+        defer { appPullRunning = false }
+        var ok = await pull(client: client)
+        if !ok {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            ok = await pull(client: client)
+        }
+        if ok {
+            lastAppPullUserID = userID
+            lastAppPullAt = Date()
+        }
+    }
+    private static var appPullRunning = false
+
+    /// True when the server answered (Oct 29 2026, for `pullIfStale`).
+    @discardableResult
+    static func pull(client given: KadeAPIClient? = nil) async -> Bool {
+        guard Keychain.string(for: .accessToken) != nil else { return false }
         let client = given ?? KadeAPIClient()
         let req = client.request(path: "api/kade/sight", authorized: true, timeout: 15)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         // A save in flight wins over an older read.
-        if let lastPushAt, Date().timeIntervalSince(lastPushAt) < 20 { return }
+        if let lastPushAt, Date().timeIntervalSince(lastPushAt) < 20 { return true }
         let sight = (json["sight"] as? String) ?? SightSetting.unset
         let liveFaces = (json["liveFaces"] as? Bool) ?? LiveFaceSetting.defaultOn
         let defaults = UserDefaults.standard
         let value = [SightSetting.sighted, SightSetting.nonvisual].contains(sight) ? sight : SightSetting.unset
         if defaults.string(forKey: SightSetting.key) != value { defaults.set(value, forKey: SightSetting.key) }
         if (defaults.object(forKey: LiveFaceSetting.key) as? Bool) != liveFaces { defaults.set(liveFaces, forKey: LiveFaceSetting.key) }
+        return true
     }
 
     static func push(sight: String, liveFaces: Bool) async {

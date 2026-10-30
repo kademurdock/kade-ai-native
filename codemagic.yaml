@@ -62,6 +62,8 @@ workflows:
           bash ./run-workspace-tests.sh
           # Oct 28 2026: the live video face gate and the painted-loop pick.
           bash ./run-live-face-tests.sh
+          # Oct 29 2026: the in-app Ask to join request and its sight question.
+          bash ./run-ask-to-join-tests.sh
           python3 dev/art-check.py
           python3 dev/prepare-puppet-review.py --check
           python3 scripts/test_release_receipt.py
