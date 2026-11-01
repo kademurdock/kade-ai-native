@@ -376,6 +376,7 @@ struct KadeAppShortcuts: AppShortcutsProvider {
                 // Her old words keep working. Siri matches them; nobody reads
                 // them on a button.
                 "Open the \(.applicationName) Agent Builder",
+                "Build an agent in \(.applicationName)",
             ],
             shortTitle: "Character Builder",
             systemImageName: "person.crop.circle.badge.plus"
