@@ -49,8 +49,8 @@ struct AgentManagerView: View {
             if let error = service.loadError, agents.isEmpty {
                 errorState(error)
             } else if service.isLoading && !hasLoaded {
-                ProgressView("Loading your agents…")
-                    .accessibilityLabel("Loading your agents")
+                ProgressView("Loading your characters…")
+                    .accessibilityLabel("Loading your characters")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if agents.isEmpty {
                 emptyState
@@ -58,7 +58,7 @@ struct AgentManagerView: View {
                 list
             }
         }
-        .navigationTitle("Agent Builder")
+        .navigationTitle("Character Builder")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -67,7 +67,7 @@ struct AgentManagerView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .accessibilityLabel("New agent")
+                .accessibilityLabel("New character")
                 .accessibilityHint("Create a new character from scratch.")
             }
             // Build 202 — the quiz door. Eight questions, no wrong answers,
@@ -106,7 +106,7 @@ struct AgentManagerView: View {
             }
         }
         .alert(
-            "Delete this agent?",
+            "Delete this character?",
             isPresented: Binding(
                 get: { deletingAgent != nil },
                 set: { if !$0 { deletingAgent = nil } }
@@ -124,13 +124,13 @@ struct AgentManagerView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Text("No agents of your own yet.")
+            Text("No characters of your own yet.")
                 .font(.headline)
             Text("Build a character with their own name, persona, and voice in the conversation.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("New agent") { activeSheet = .new }
+            Button("New character") { activeSheet = .new }
                 .buttonStyle(.borderedProminent)
         }
         .padding()
@@ -160,7 +160,7 @@ struct AgentManagerView: View {
                 // children:.ignore on a Button — see AgentPickerView's row
                 // for the full story. Label + hint stay; native flatten.
                 .accessibilityLabel(accessibleLabel(for: agent))
-                .accessibilityHint("Opens this agent to edit it.")
+                .accessibilityHint("Opens this character to edit them.")
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
                         deletingAgent = agent
@@ -216,7 +216,7 @@ struct AgentManagerView: View {
                 argument: "Duplicated. \(copy.name ?? agent.name) is in your list, ready to edit."
             )
         } catch {
-            let message = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't duplicate that agent."
+            let message = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't duplicate that character."
             UIAccessibility.post(notification: .announcement, argument: message)
         }
     }

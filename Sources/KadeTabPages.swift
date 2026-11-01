@@ -5,12 +5,14 @@ import SwiftUI
 // The old Home held 23 buttons under one title, two Backs behind the chat the
 // app opens into. Its contents now live on the five tabs:
 //   Talk     Spotter first (her standing rule), Talk to your main character,
-//            Describe and Transcribe, then the conversation list itself.
+//            Meet the characters (Matchmaker inside), Describe and Transcribe,
+//            then the conversation list itself.
 //   Library  the Library (ReadingRoomView), unchanged as a destination.
-//   Create   Sound Booth, My Creations, Wall of Fame, Agent Builder, Prompts.
-//   Play     The Parlor, Kade's Clubhouse, Debate Room, Matchmaker, Marketplace.
-//   More     account, search, Alerts / Announcements / Agent work with "new"
-//            badges, Bookmarks, Settings, Help, feedback, web, Admin, Sign out.
+//   Create   Sound Booth, My Creations, Wall of Fame, Character Builder.
+//   Play     The Parlor, Kade's Clubhouse, Debate Room, Arcade.
+//   More     account, search, Alerts / Announcements with "new" badges, Settings,
+//            Help, feedback, web, Power tools (closed: Saved replies, Workspaces,
+//            Prompts, Bookmarks), Admin, Sign out.
 //
 // Every spoken label and hint below is carried over from the old Home word for
 // word unless the redesign changed it on purpose (B1 captions are visible-only;
@@ -73,6 +75,17 @@ struct TalkHeader: View {
             .accessibilityLabel("Talk to \(DefaultAgentStore.displayName)")
             .accessibilityHint("Opens a new conversation with your main character.")
 
+            // Oct 31 2026: finding characters lives on Talk. Route .marketplace,
+            // so old links and pushes keep working.
+            Button { nav.open(.marketplace) } label: {
+                Label("Meet the characters", systemImage: "person.3.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeRowLabelStyle(tint: .orange, caption: "Everyone you can talk to, and the Matchmaker"))
+            .accessibilityLabel("Meet the characters")
+            .accessibilityHint("Browse every published character by category, hear who's who, start talking to anyone, try the Matchmaker, and publish your own creations.")
+
             KadeToolRow {
                 Button { nav.open(.describe) } label: {
                     Label("Describe", systemImage: "plus.viewfinder")
@@ -128,11 +141,8 @@ struct CreateHomeView: View {
                     kadeTile("Wall of Fame", caption: "What the family shared", spoken: "Wall of Fame", icon: "trophy", tint: .brown, hint: "Creations the whole family chose to share, newest first.", route: .wallOfFame)
                 }
                 KadeToolRow {
-                    kadeTile("Agent Builder", caption: "Make your own character", spoken: "Agent Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own characters.", route: .agentBuilder)
-                    kadeTile("Prompts", caption: "Saved things to say", spoken: "The Prompt Library", icon: "text.badge.star", tint: .green, hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.", route: .prompts)
-                }
-                if describedVideo.allowed {
-                    KadeToolRow {
+                    kadeTile("Character Builder", caption: "Make your own character", spoken: "Character Builder", icon: "person.crop.circle.badge.plus", tint: .cyan, hint: "Create or edit your own characters.", route: .agentBuilder)
+                    if describedVideo.allowed {
                         kadeTile("Described video", caption: "Narration for any video", spoken: "Make a described video", icon: "film", tint: .teal, hint: "A narrator describes what happens on screen in the pauses, keeping the actors, music and sound. The price is said before anything is spent.", route: .describedVideo(DescribedVideoStart()))
                     }
                 }
@@ -167,20 +177,10 @@ struct PlayHomeView: View {
                 }
                 KadeToolRow {
                     kadeTile("Debate Room", caption: "Characters talk it out", spoken: "Debate Room", icon: "person.3.fill", tint: .indigo, hint: "Set a topic, cast 2 to 6 characters, and let them go back and forth. Also reaches the Conversation Hall.", route: .debateRoom)
-                    kadeTile("Matchmaker", caption: "Find a character you'd like", spoken: "Matchmaker", icon: "person.2.fill", tint: .pink, hint: "Five quick questions, then three characters who might be a good fit.", route: .matchmaker)
+                    // Oct 18 2026: the Arcade. Every build and every account since
+                    // Oct 19 2026; family games greyed inside it outside the pack.
+                    kadeTile("Arcade", caption: "Classic games, playable by ear", spoken: "The Arcade", icon: "gamecontroller.fill", tint: .purple, hint: "Old console games made to play by ear, by touch, keyboard or controller. Family games are part of the Family feature pack.", route: .arcade)
                 }
-                // Oct 18 2026: the Arcade. Every build and every account since
-                // Oct 19 2026; family games greyed inside it outside the pack.
-                kadeTile("Arcade", caption: "Classic games, playable by ear", spoken: "The Arcade", icon: "gamecontroller.fill", tint: .purple, hint: "Old console games made to play by ear, by touch, keyboard or controller. Family games are part of the Family feature pack.", route: .arcade)
-
-                Button { nav.open(.marketplace) } label: {
-                    Label("Marketplace", systemImage: "storefront")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(KadeCardButtonStyle())
-                .labelStyle(KadeRowLabelStyle(tint: .orange, caption: "Meet every character"))
-                .accessibilityLabel("The Marketplace")
-                .accessibilityHint("Browse every published character by category, hear who's who, start talking to anyone — and publish your own creations.")
             }
             .padding()
             .frame(maxWidth: 680)
@@ -238,6 +238,9 @@ struct MoreHomeView: View {
     /// Oct 16 2026: how many of Forge's requests wait on her yes (admin only;
     /// nil until the count lands or when it can't be read).
     @State private var approvalsWaiting: Int?
+    /// Oct 31 2026: the Power tools group, closed on every launch. It stays
+    /// open while you go into one of its rows and come Back.
+    @State private var powerToolsOpen = false
 
     var body: some View {
         ScrollView {
@@ -279,14 +282,6 @@ struct MoreHomeView: View {
                     spoken: unread.spoken("Alerts", .alerts), hint: "Your recent reminders and check-ins, and how they reach you.") { nav.open(.alerts) }
                 row("Announcements", icon: "megaphone", tint: .purple, caption: "News about the app from Kade", badge: unread.count(.announcements),
                     spoken: unread.spoken("Announcements", .announcements), hint: "What's New announcements from Kade-AI, full text, newest first.") { nav.open(.announcements) }
-                row("Agent work", icon: "checklist", tint: .indigo, caption: "Replies saved after a dropped connection", badge: unread.count(.agentWork),
-                    spoken: unread.spoken("Agent work", .agentWork), hint: "Check recent requests and find saved replies after a connection drops.") { nav.open(.agentWork) }
-
-                heading("Your things")
-                row("Workspaces", icon: "desktopcomputer", tint: .indigo, caption: "Agents working with folders on your computer",
-                    spoken: "Workspaces", hint: "Choose a shared Windows folder, start work, or read saved actions.") { nav.open(.workspaces) }
-                row("Bookmarks", icon: "bookmark.fill", tint: .red, caption: "Conversations you tagged",
-                    spoken: "Bookmarks", hint: "Your tagged conversations, gathered by bookmark — tag any conversation from the conversation list.") { nav.open(.bookmarks) }
 
                 heading("Settings and help")
                 row("Settings", icon: "gearshape", tint: .gray, caption: "Voices, ringtone, text and sound",
@@ -303,6 +298,8 @@ struct MoreHomeView: View {
                     hint: "Checks whether a newer Kade-AI is ready. You have version \(updates.installedDescription).") {
                     Task { await checkForUpdates() }
                 }
+
+                powerTools
 
                 // Session 24: server-gated; rendered only for an ADMIN account,
                 // so nobody else ever hears a section they can't use.
@@ -377,6 +374,45 @@ struct MoreHomeView: View {
         updateCheckNote = words
         if let words {
             UIAccessibility.post(notification: .announcement, argument: words)
+        }
+    }
+
+    /// Oct 31 2026: what few people use, in one closed group. The rows are all
+    /// still reachable from Search everything and Help's Where is. An unread
+    /// Saved replies count shows on the closed group, so it can't hide: the
+    /// More tab's own badge counts it either way.
+    ///
+    /// By hand instead of DisclosureGroup, so the state VoiceOver reads is ours
+    /// on every iOS this app supports: a value of Collapsed or Expanded. It is
+    /// the same button before and after, so focus stays on it when it opens,
+    /// and the rows are next in swipe order.
+    private var powerTools: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                powerToolsOpen.toggle()
+            } label: {
+                Label("Power tools", systemImage: "wrench.and.screwdriver")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .labelStyle(KadeRowLabelStyle(tint: .gray, caption: "Saved replies, Workspaces, Prompts, Bookmarks", badge: unread.count(.agentWork),
+                                          trailingSymbol: powerToolsOpen ? "chevron.up" : "chevron.down"))
+            .accessibilityLabel(unread.spoken("Power tools", .agentWork))
+            .accessibilityValue(powerToolsOpen ? "Expanded" : "Collapsed")
+            .accessibilityHint(powerToolsOpen ? "Hides Saved replies, Workspaces, Prompts and Bookmarks." : "Shows Saved replies, Workspaces, Prompts and Bookmarks.")
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("more.powerTools")
+
+            if powerToolsOpen {
+                row("Saved replies", icon: "checklist", tint: .indigo, caption: "Replies saved after a dropped connection", badge: unread.count(.agentWork),
+                    spoken: unread.spoken("Saved replies", .agentWork), hint: "Check recent requests and find saved replies after a connection drops.") { nav.open(.agentWork) }
+                row("Workspaces", icon: "desktopcomputer", tint: .indigo, caption: "Agents working with folders on your computer",
+                    spoken: "Workspaces", hint: "Choose a shared Windows folder, start work, or read saved actions.") { nav.open(.workspaces) }
+                row("Prompts", icon: "text.badge.star", tint: .green, caption: "Saved things to say",
+                    spoken: "The Prompt Library", hint: "Saved prompts you can drop into a fresh chat pre-typed, plus a form to save new ones.") { nav.open(.prompts) }
+                row("Bookmarks", icon: "bookmark.fill", tint: .red, caption: "Conversations you tagged",
+                    spoken: "Bookmarks", hint: "Your tagged conversations, gathered by bookmark — tag any conversation from the conversation list.") { nav.open(.bookmarks) }
+            }
         }
     }
 

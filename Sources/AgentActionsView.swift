@@ -82,7 +82,7 @@ struct AgentActionsView: View {
             }
 
             Section {
-                Text("Creating an action needs a pasted API description, which only the web builder can check and convert. Open Kade-AI web from the home screen, then Agent Builder, to add one — it shows up here afterward.")
+                Text("Creating an action needs a pasted API description, which only the web builder can check and convert. Open Kade-AI web from the More tab, then the builder, to add one — it shows up here afterward.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } header: {

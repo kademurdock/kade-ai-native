@@ -198,7 +198,7 @@ struct AgentConnectionsView: View {
             let expanded = try await service.loadExpandedRaw(id: agentId)
             var current = (expanded["edges"] as? [[String: Any]]) ?? []
             guard current.count < Self.maxEdges else {
-                statusText = "This agent already has \(Self.maxEdges) connections — remove one first."
+                statusText = "This character already has \(Self.maxEdges) connections — remove one first."
                 statusFocused = true
                 return
             }

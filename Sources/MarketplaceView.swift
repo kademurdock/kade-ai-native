@@ -28,6 +28,7 @@ import ImageIO
 struct MarketplaceView: View {
     @EnvironmentObject private var agentsService: AgentsService
     @EnvironmentObject private var apiClient: KadeAPIClient
+    @Environment(\.kadeNavigation) private var nav
     let currentUserId: String
 
     @State private var searchText = ""
@@ -125,8 +126,8 @@ struct MarketplaceView: View {
     var body: some View {
         Group {
             if agentsService.isLoading && agentsService.agents.isEmpty {
-                ProgressView("Loading the marketplace…")
-                    .accessibilityLabel("Loading the marketplace")
+                ProgressView("Loading the characters…")
+                    .accessibilityLabel("Loading the characters")
             } else if let error = agentsService.loadError, agentsService.agents.isEmpty {
                 VStack(spacing: 12) {
                     Text(error).multilineTextAlignment(.center)
@@ -138,7 +139,7 @@ struct MarketplaceView: View {
                 list
             }
         }
-        .navigationTitle("Marketplace")
+        .navigationTitle("Meet the characters")
         .navigationBarTitleDisplayMode(.inline)
         .task { await agentsService.loadIfNeeded() }
         /* A reveal's count is heard in full, THEN VoiceOver moves to the
@@ -211,6 +212,7 @@ struct MarketplaceView: View {
     /// House picks, then every category, each with its own window of rows.
     @ViewBuilder
     private var browseSections: some View {
+        matchmakerRow
         let picks = promoted
         if !picks.isEmpty {
             section(title: "House picks", key: "picks", agents: picks)
@@ -218,6 +220,19 @@ struct MarketplaceView: View {
         ForEach(categories, id: \.title) { bucket in
             section(title: bucket.title, key: "cat:" + bucket.title, agents: bucket.agents)
         }
+    }
+
+    /// Oct 31 2026: the Matchmaker lives inside this screen now. The same door
+    /// as a push or Siri, so Back from it always lands here.
+    private var matchmakerRow: some View {
+        Button { nav.open(.matchmaker) } label: {
+            Label("Matchmaker", systemImage: "person.2.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(KadeCardButtonStyle())
+        .labelStyle(KadeRowLabelStyle(tint: .pink, caption: "Find a character you'd like"))
+        .accessibilityLabel("Matchmaker")
+        .accessibilityHint("Five quick questions, then three characters who might be a good fit.")
     }
 
     /// One heading, its first rows, and its own "Show N more" button.
@@ -660,7 +675,7 @@ private struct MarketplaceAgentDetail: View {
                 .accessibilityAddTraits(.isHeader)
             switch publishState {
             case .unknown, .loading:
-                Text("Checking marketplace status…")
+                Text("Checking sharing status…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             case .unavailable(let why):
@@ -674,7 +689,7 @@ private struct MarketplaceAgentDetail: View {
                 Button(role: .destructive) {
                     Task { await setPublished(false) }
                 } label: {
-                    if publishBusy { ProgressView() } else { Text("Take off the marketplace") }
+                    if publishBusy { ProgressView() } else { Text("Take out of Meet the characters") }
                 }
                 .disabled(publishBusy)
                 .accessibilityHint("Makes \(agent.name) private again — only you will see them.")
@@ -685,11 +700,11 @@ private struct MarketplaceAgentDetail: View {
                 Button {
                     Task { await setPublished(true) }
                 } label: {
-                    if publishBusy { ProgressView() } else { Text("Publish to the marketplace") }
+                    if publishBusy { ProgressView() } else { Text("Publish to Meet the characters") }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(publishBusy)
-                .accessibilityHint("Puts \(agent.name) on the marketplace for everyone to find.")
+                .accessibilityHint("Puts \(agent.name) in Meet the characters for everyone to find.")
             }
         }
         .padding(12)
@@ -708,7 +723,7 @@ private struct MarketplaceAgentDetail: View {
         let req = apiClient.request(path: "api/permissions/agent/\(mongoId)", authorized: true)
         guard let (data, http) = try? await apiClient.send(req), http.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            publishState = .unavailable("Couldn't check marketplace status right now.")
+            publishState = .unavailable("Couldn't check sharing status right now.")
             return
         }
         if let flag = obj["public"] as? Bool {
@@ -737,7 +752,7 @@ private struct MarketplaceAgentDetail: View {
         publishState = publish ? .published : .unpublished
         UIAccessibility.post(notification: .announcement,
                              argument: publish
-                                 ? "\(agent.name) is on the marketplace."
+                                 ? "\(agent.name) is in Meet the characters now."
                                  : "\(agent.name) is private again.")
     }
 }

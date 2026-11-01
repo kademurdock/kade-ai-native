@@ -491,9 +491,14 @@ struct ContentView: View {
         default: break
         }
         switch destination {
-        case .mainChat, .savedChat, .chatWith, .freshAgentChat, .transcribe, .describe, .quickDictate, .kadeKeysDictate:
+        case .mainChat, .savedChat, .chatWith, .freshAgentChat, .transcribe, .describe, .quickDictate, .kadeKeysDictate, .marketplace:
             tab = .talk
             talkPath = [destination]
+        case .matchmaker:
+            // Oct 31 2026: inside Meet the characters, from anywhere (its
+            // row, Search, Siri, a push), so Back always lands there.
+            tab = .talk
+            talkPath = [.marketplace, .matchmaker]
         case .conversations:
             tab = .talk
             talkPath = []
@@ -503,10 +508,10 @@ struct ContentView: View {
         case .library:
             tab = .library
             libraryPath = [destination]
-        case .soundBooth, .myCreations, .wallOfFame, .agentBuilder, .prompts, .describedVideo:
+        case .soundBooth, .myCreations, .wallOfFame, .agentBuilder, .describedVideo:
             tab = .create
             createPath = [destination]
-        case .parlor, .lounge, .gameRoom, .debateRoom, .matchmaker, .marketplace:
+        case .parlor, .lounge, .gameRoom, .debateRoom:
             tab = .play
             playPath = [destination]
         case .arcade:
@@ -518,7 +523,7 @@ struct ContentView: View {
             // notification tapped while already in Admin.
             tab = .more
             morePath = [.admin, .feedbackReports]
-        case .alerts, .announcements, .agentWork, .workspaces, .bookmarks, .settings, .settingsSearch,
+        case .alerts, .announcements, .agentWork, .workspaces, .bookmarks, .prompts, .settings, .settingsSearch,
              .search, .help, .admin, .brief, .accessRequests, .approvals:
             tab = .more
             morePath = [destination]
@@ -1087,7 +1092,10 @@ struct ContentView: View {
                 ("settings", { go(.settings) }),
                 ("sound-booth", { go(.soundBooth) }),
                 ("help", { go(.help) }),
-                ("marketplace", { go(.marketplace) }),
+                // Oct 31 2026: Meet the characters moved to Talk, and Describe
+                // gained its top card.
+                ("describe", { go(.describe) }),
+                ("meet-the-characters", { go(.marketplace) }),
                 // Oct 19 2026: the Arcade is in every build; the test seat
                 // meets its description and the greyed Family shelf.
                 ("arcade", { go(.arcade) }),

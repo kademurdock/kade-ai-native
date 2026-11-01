@@ -133,15 +133,20 @@ struct AgentPickerView: View {
     /// matched against the live roster so an unpublished pick simply drops
     /// off the shelf instead of rendering a dead row. Search-first behavior
     /// is untouched — this only exists in the browse layout underneath.
-    private static let starterNames = [
-        "Kiana", "Vista", "Dr. Nora", "Chef Marcel",
-        "Silas", "Ariadne", "Mac", "Doug",
-    ]
-
+    ///
+    /// Oct 31 2026: most of the old eight went to the attic, so the shelf is
+    /// the kept cast now, by exact id (KadeHouseCast.swift), so the Librarian
+    /// is found under her roster name and Skylee's Lilly is never mistaken
+    /// for the public one. Whoever this account can't see just doesn't show.
     private var starterAgents: [KadeAgent] {
-        Self.starterNames.compactMap { name in
-            agentsService.agents.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
-        }
+        KadeHouseCast.shelf(from: agentsService.agents, id: { $0.id })
+    }
+
+    private var starterFooter: String {
+        let rest = "A few good first hellos, hand-picked. Everyone else is below, by category -- or just type a name in search."
+        let souls = starterAgents.filter { KadeHouseCast.isSoul($0.id) }.map(\.name)
+        guard let sentence = KadeHouseCast.soulsSentence(names: souls) else { return rest }
+        return sentence + " " + rest
     }
 
     /// Groups the full agent list by their server-provided `category`
@@ -329,7 +334,7 @@ struct AgentPickerView: View {
                         Text("Starters")
                             .accessibilityAddTraits(.isHeader)
                     } footer: {
-                        Text("A few good first hellos, hand-picked. Everyone else is below, by category -- or just type a name in search.")
+                        Text(starterFooter)
                     }
                 }
                 if !recentAgents.isEmpty {

@@ -187,6 +187,9 @@ struct KadeRowLabelStyle: LabelStyle {
     var tint: Color
     var caption: String? = nil
     var badge: Int = 0
+    /// What the row does at its end: chevron.right opens a screen; a closed
+    /// group on More says chevron.down, an open one chevron.up.
+    var trailingSymbol: String = "chevron.right"
     @ScaledMetric(relativeTo: .body) private var tileSide: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
@@ -223,7 +226,7 @@ struct KadeRowLabelStyle: LabelStyle {
 
             KadeNewBadge(count: badge)
 
-            Image(systemName: "chevron.right")
+            Image(systemName: trailingSymbol)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)

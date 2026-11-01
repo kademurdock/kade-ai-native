@@ -76,7 +76,7 @@ final class KadeA11yAuditUITests: XCTestCase {
     ///
     /// ⚠️ THESE ARE ACCESSIBILITY LABELS, NOT VISIBLE TITLES. The home tiles
     /// pass a `spoken:` string that becomes the label, and the label is what
-    /// XCUITest matches on ("The Marketplace", not "Marketplace"). If a stop
+    /// XCUITest matches on ("The Arcade", not "Arcade"). If a stop
     /// starts reporting `skipped`, the label moved — fix it here, and treat
     /// the skip line as the lane telling the truth rather than as a failure.
     private struct Stop {
@@ -99,12 +99,17 @@ final class KadeA11yAuditUITests: XCTestCase {
         Stop(name: "Search everything", tab: "More", path: ["Search everything"]),
         Stop(name: "Settings", tab: "More", path: ["Settings"]),
         Stop(name: "Settings, Accessibility", tab: "More", path: ["Settings", "Accessibility"]),
-        Stop(name: "The Marketplace", tab: "Play", path: ["The Marketplace"]),
+        Stop(name: "Meet the characters", tab: "Talk", path: ["Meet the characters"]),
         // Oct 19 2026: the Arcade's list only (no game is opened, so no game
         // loop runs). It is in every build, so App Review meets it too.
         Stop(name: "The Arcade", tab: "Play", path: ["The Arcade"]),
-        Stop(name: "The Prompt Library", tab: "Create", path: ["The Prompt Library"]),
-        Stop(name: "Bookmarks", tab: "More", path: ["Bookmarks"]),
+        // Oct 31 2026: these live in the closed Power tools group on More.
+        // more.powerTools is the group's identifier, because its label grows
+        // to "Power tools, 2 new". `follow` leaves an open group open.
+        Stop(name: "More, Power tools open", tab: "More", path: ["more.powerTools"]),
+        Stop(name: "The Prompt Library", tab: "More", path: ["more.powerTools", "The Prompt Library"]),
+        Stop(name: "Bookmarks", tab: "More", path: ["more.powerTools", "Bookmarks"]),
+        Stop(name: "Describe", tab: "Talk", path: ["Describe a photo, video, or document"]),
         Stop(name: "Transcribe", tab: "Talk", path: ["Transcribe a voice memo"]),
         Stop(name: "Help", tab: "More", path: ["Help"])
     ]
@@ -323,6 +328,9 @@ final class KadeA11yAuditUITests: XCTestCase {
                 skip(name, "could not find \"\(clean(label))\" to tap")
                 return false
             }
+            // A closed group stays open across stops; a second tap would close
+            // it and lose the row the next path entry is looking for.
+            if (button.value as? String) == "Expanded" { continue }
             if !button.isHittable { app.swipeUp() }
             button.tap()
             // Let the navigation settle before auditing what is on screen.

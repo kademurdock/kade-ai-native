@@ -68,6 +68,14 @@ struct CharacterAboutView: View {
 
     var body: some View {
         List {
+            // Oct 31 2026: who the house cast are, even while the rest loads.
+            // Only by exact id (KadeHouseCast): never someone else's character.
+            if let line = KadeHouseCast.identityLine(agentID: target.agentId, name: name) {
+                Section {
+                    Text(line)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if let snapshot {
                 content(snapshot)
             } else if let loadError {

@@ -371,10 +371,13 @@ struct KadeAppShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenAgentBuilderIntent(),
             phrases: [
+                "Open the \(.applicationName) Character Builder",
+                "Build a character in \(.applicationName)",
+                // Her old words keep working. Siri matches them; nobody reads
+                // them on a button.
                 "Open the \(.applicationName) Agent Builder",
-                "Build an agent in \(.applicationName)",
             ],
-            shortTitle: "Agent Builder",
+            shortTitle: "Character Builder",
             systemImageName: "person.crop.circle.badge.plus"
         )
         AppShortcut(
@@ -435,9 +438,9 @@ struct OpenDebateRoomIntent: AppIntent {
 }
 
 struct OpenAgentBuilderIntent: AppIntent {
-    static var title: LocalizedStringResource = "Agent Builder"
+    static var title: LocalizedStringResource = "Character Builder"
     static var description = IntentDescription(
-        "Opens the Agent Builder so you can create or edit your own characters."
+        "Opens the Character Builder so you can create or edit your own characters."
     )
     static var openAppWhenRun: Bool = true
 

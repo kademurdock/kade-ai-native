@@ -83,7 +83,7 @@ struct DataUseConsentView: View {
         The messages you type. Voice recordings you make when you talk instead \
         of typing. Photos, video and documents you choose to share or ask about. \
         Your location, but only while the app is open and only if you switch \
-        Share my location on. And the things you ask a companion to remember.
+        Share my location on. And the things you ask a character to remember.
         """
 
     static let whoReceivesIt = """

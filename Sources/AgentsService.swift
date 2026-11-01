@@ -267,7 +267,7 @@ final class AgentsService: ObservableObject {
             await loadFavorites()
             hasLoadedOnce = true
         } catch {
-            loadError = "Couldn't load the agent list. Try again."
+            loadError = "Couldn't load the character list. Try again."
         }
     }
 }

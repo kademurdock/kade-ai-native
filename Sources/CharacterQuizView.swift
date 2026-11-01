@@ -164,7 +164,7 @@ struct CharacterQuizView: View {
                     phase = .describing
                     UIAccessibility.post(
                         notification: .screenChanged,
-                        argument: "Describe the character or agent you want. A sentence is enough to start."
+                        argument: "Describe the character you want. A sentence is enough to start."
                     )
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
@@ -216,7 +216,7 @@ struct CharacterQuizView: View {
                     .accessibilityLabel("Their name")
                     .accessibilityHint("Optional. Leave it blank and names get suggested later.")
             } header: {
-                Text("Describe the character or agent you want")
+                Text("Describe the character you want")
             } footer: {
                 Text("A sentence is enough to start with — you get follow-up questions afterwards, and the answers make it deeper each time.")
             }

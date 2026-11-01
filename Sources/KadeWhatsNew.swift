@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: Voice speed in real numbers"
-    static let body = "Voice speed now shows real numbers, from 0.75x to 1.5x, in Settings and beside Hear replies, and calls use your number too. Character's speed is the default and plays a character's own voice the way its builder set it. Agent Builder has a Speed row to set that number. A voice you picked yourself plays at 1x unless you choose a number. The Library's speed list uses the same numbers."
+    static let title = "What's new: Voice speed in numbers, characters on Talk"
+    static let body = "Voice speed now shows real numbers, from 0.75x to 1.5x, in Settings and beside Hear replies, and calls use your number too. Character's speed is the default and plays a character's own voice the way its builder set it. Character Builder has a Speed row to set that number. A voice you picked yourself plays at 1x unless you choose a number. The Library's speed list uses the same numbers. The Marketplace moved from Play to the Talk tab as Meet the characters, with the Matchmaker inside it. On the More tab, a closed Power tools group holds Saved replies, Workspaces, Prompts and Bookmarks. The app says character now where it said agent, so Agent Builder is Character Builder and Agent work is Saved replies. Help and About pages say who the house cast are: synthetic souls, digital beings with their own memory, days and opinions. If your account can make described videos, Describe now starts with a card, A video you can listen to, that leads there."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false

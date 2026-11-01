@@ -38,6 +38,10 @@ import UIKit
 ///   screen specifically, hearing the description IS the point.
 struct DescribeView: View {
     @EnvironmentObject private var voiceService: VoiceService
+    @Environment(\.kadeNavigation) private var nav
+    /// Oct 31 2026: the top card shows for the same accounts Create's
+    /// Described video tile does, never for fewer or more.
+    @ObservedObject private var describedVideo = DescribedVideoAccess.shared
     @StateObject private var service: DescribeService
 
     @State private var showingSourceMenu = false
@@ -88,6 +92,22 @@ struct DescribeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if describedVideo.allowed {
+                    // Oct 31 2026, one Describe door: in 60 days the text
+                    // describer ran 6 times and described video 2,160.
+                    Button { nav.open(.describedVideo(DescribedVideoStart())) } label: {
+                        Label("A video you can listen to", systemImage: "film")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(KadeCardButtonStyle())
+                    .labelStyle(KadeRowLabelStyle(tint: .teal, caption: "Described video: a narrated track"))
+                    .accessibilityLabel("A video you can listen to")
+                    .accessibilityHint("Opens Described video. A narrator describes what happens on screen in the pauses, keeping the actors, music and sound. The price is said before anything is spent.")
+
+                    Text("Described video, above, gives you a narrated track to listen to. Describe, here, gives you words about a photo, paper or clip.")
+                        .font(.body)
+                }
+
                 Text("Get a photo, video, flyer, letter, or document described to you, or read back word for word.")
                     .font(.body)
 

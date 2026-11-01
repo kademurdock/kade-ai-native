@@ -202,9 +202,14 @@ struct HelpPlace: Identifiable {
         HelpPlace(thing: "Games", whereItIs: "Play tab, The Parlor", route: .parlor),
         HelpPlace(thing: "Classic console games, played by ear", whereItIs: "Play tab, Arcade", route: .arcade),
         HelpPlace(thing: "Family voice rooms", whereItIs: "Play tab, Kade's Clubhouse", route: .lounge),
-        HelpPlace(thing: "Meeting new characters", whereItIs: "Play tab, Marketplace", route: .marketplace),
+        HelpPlace(thing: "Meeting new characters", whereItIs: "Talk tab, Meet the characters", route: .marketplace),
+        HelpPlace(thing: "The Matchmaker", whereItIs: "Talk tab, Meet the characters, Matchmaker", route: .matchmaker),
         HelpPlace(thing: "Reminders", whereItIs: "More tab, Alerts", route: .alerts),
         HelpPlace(thing: "News from Kade", whereItIs: "More tab, Announcements", route: .announcements),
+        HelpPlace(thing: "Saved replies, once called Agent work", whereItIs: "More tab, Power tools", route: .agentWork),
+        HelpPlace(thing: "Workspaces", whereItIs: "More tab, Power tools", route: .workspaces),
+        HelpPlace(thing: "Prompts", whereItIs: "More tab, Power tools", route: .prompts),
+        HelpPlace(thing: "Bookmarks", whereItIs: "More tab, Power tools", route: .bookmarks),
         HelpPlace(thing: "Ringtone, voice speed, your main character, app icon", whereItIs: "More tab, Settings", route: .settings),
         HelpPlace(thing: "Anything else", whereItIs: "More tab, Search everything", route: .search),
     ]
@@ -234,7 +239,7 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.17: Voice speed in real numbers",
+                title: "Newest build, 2.2.17: Voice speed in numbers, characters on Talk",
                 body: KadeWhatsNew.body
             ),
             HelpEntry(
@@ -251,7 +256,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "In 2.2.4: More ways to start talking",
-                body: "New conversations offer four opening lines from that character's own pool, with a fresh selection for each new chat. Tapping one puts it in your message box for editing. Agent Builder holds up to twenty-four starters, and Suggest starters from this personality is free. The personality writer also brings suggestions to review, with a choice to use them or keep your existing lines. In the Sound Booth, Think cycles Auto, Low, Medium and High. Auto chooses up to Medium; High lets the lyric writer think longer and can cost more. Newly generated lyrics can suggest a song title. A title you already wrote, or changed while the writing was loading, is kept."
+                body: "New conversations offer four opening lines from that character's own pool, with a fresh selection for each new chat. Tapping one puts it in your message box for editing. Character Builder holds up to twenty-four starters, and Suggest starters from this personality is free. The personality writer also brings suggestions to review, with a choice to use them or keep your existing lines. In the Sound Booth, Think cycles Auto, Low, Medium and High. Auto chooses up to Medium; High lets the lyric writer think longer and can cost more. Newly generated lyrics can suggest a song title. A title you already wrote, or changed while the writing was loading, is kept."
             ),
             HelpEntry(
                 title: "Earlier in 2.2.4: A clearer Sound Booth and Family notes",
@@ -263,11 +268,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "In 2.2.1: a Library like the Files app",
-                body: "The Library works one screen at a time now, like the Files app. Its first screen is a short list that never moves: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Talk to the Librarian, and Add and requests. Every shelf and the player open as their own screen, with Back at the top left, and Back from the player leaves your book playing. A shelf says how many shelves and items it holds, a count is only said once it is real, and a long shelf shows 60 items, then Show 60 more. Every item says what it is after its title, like Described audio movie, Described audio episode, Full movie or Movie trailer. In the Sound Booth, the settings most people leave alone sit in one closed More settings group for each engine, and choices read the way they are written. YuE2's Style choice, Kids and Soul, is part of the Family feature pack; on other accounts it is dimmed with that reason, and songs use plain YuE2. When YuE2 leaves a note on a take, like no chords heard, it shows under that take. An account with its own singing voice also gets Sing it in my voice: import a song or a vocal and hear it sung in that voice, or choose Sing this take in my voice on a YuE2 or Lyria take. Marketplace pictures fill in quickly, top rows first, and at once on your next visit. A described video's details now say what the run has spent so far, apart from the most the look in progress can cost, and you pay only what it really costs; a finished run lists what each part cost, adding up to its total, and what was included. In Kade's Clubhouse, Back while you're recording a tape asks first: stop the tape and keep it, go back and lose it, or keep recording."
+                body: "The Library works one screen at a time now, like the Files app. Its first screen is a short list that never moves: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Talk to the Librarian, and Add and requests. Every shelf and the player open as their own screen, with Back at the top left, and Back from the player leaves your book playing. A shelf says how many shelves and items it holds, a count is only said once it is real, and a long shelf shows 60 items, then Show 60 more. Every item says what it is after its title, like Described audio movie, Described audio episode, Full movie or Movie trailer. In the Sound Booth, the settings most people leave alone sit in one closed More settings group for each engine, and choices read the way they are written. YuE2's Style choice, Kids and Soul, is part of the Family feature pack; on other accounts it is dimmed with that reason, and songs use plain YuE2. When YuE2 leaves a note on a take, like no chords heard, it shows under that take. An account with its own singing voice also gets Sing it in my voice: import a song or a vocal and hear it sung in that voice, or choose Sing this take in my voice on a YuE2 or Lyria take. Pictures in Meet the characters fill in quickly, top rows first, and at once on your next visit. A described video's details now say what the run has spent so far, apart from the most the look in progress can cost, and you pay only what it really costs; a finished run lists what each part cost, adding up to its total, and what was included. In Kade's Clubhouse, Back while you're recording a tape asks first: stop the tape and keep it, go back and lose it, or keep recording."
             ),
             HelpEntry(
                 title: "Earlier in 2.2.1: steadier screens, and Describe again",
-                body: "Reverie, in the Parlor, no longer freezes after a long visit with VoiceOver on, and its World log shows the newest 80 entries, with a button for earlier ones. The Marketplace opens faster: each category shows its first few characters and a Show more button, every category heading is still in the Headings rotor, and a search shows the first 25 matches, then Show more results. After a Show more, VoiceOver says how many arrived, then moves to the first new one. Described videos keep VoiceOver quiet over the film for the whole playback, even a film with no dialogue; Read captions with VoiceOver still reads the captions when you want them. Describe again, near the end of a finished or stopped video's screen, writes fresh descriptions from the copy already on the server, so nothing is downloaded again; it is also in each video's Actions rotor in Your videos. Pasting a YouTube link for a video you already brought in opens that video instead of downloading it again."
+                body: "Reverie, in the Parlor, no longer freezes after a long visit with VoiceOver on, and its World log shows the newest 80 entries, with a button for earlier ones. Meet the characters, then called the Marketplace, opens faster: each category shows its first few characters and a Show more button, every category heading is still in the Headings rotor, and a search shows the first 25 matches, then Show more results. After a Show more, VoiceOver says how many arrived, then moves to the first new one. Described videos keep VoiceOver quiet over the film for the whole playback, even a film with no dialogue; Read captions with VoiceOver still reads the captions when you want them. Describe again, near the end of a finished or stopped video's screen, writes fresh descriptions from the copy already on the server, so nothing is downloaded again; it is also in each video's Actions rotor in Your videos. Pasting a YouTube link for a video you already brought in opens that video instead of downloading it again."
             ),
             HelpEntry(
                 title: "In 2.2.0: pictures, narrators and fixes",
@@ -292,13 +297,21 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Earlier",
-                body: "Kade's Clubhouse went fully native, with hidden passcode-only Hotel rooms, and the Game Room folded into the Parlor. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Report a problem from Help or the More tab. Agent Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
+                body: "Kade's Clubhouse went fully native, with hidden passcode-only Hotel rooms, and the Game Room folded into the Parlor. Native party tables in the Parlor. Bass haptics with a heartbeat thinking pulse and bubble sounds. Report a problem from Help or the More tab. Character Builder with voices, starters, tools, photos, duplicating, and version history. Usage and Balance in Settings. Describe for photos, videos, and documents. Stop a reply mid-write. Matchmaker, Debate Room and the Conversation Hall went native. The Pronunciation Dictionary. Quick Dictate. Transcribe with file import. Calls with auto-reconnect and Siri phrases."
             ),
         ]),
         HelpSection(title: "Getting around", entries: [
             HelpEntry(
                 title: "The five tabs",
-                body: "The bar along the bottom has five tabs. Talk holds Call your Spotter, Talk to your main character, Describe, Transcribe, and all your conversations. Library holds books read aloud, tapes, radio and the family archive. Create holds the Sound Booth, My Creations, the Wall of Fame, Agent Builder and the Prompt Library. Play holds The Parlor's games, Kade's Clubhouse, the Debate Room, the Matchmaker, the Arcade and the Marketplace. More holds search, Alerts, Announcements, Agent work, Bookmarks, Settings, this help, a way to tell Kade how it's going, the web app, and Sign out. With VoiceOver each one reads as, for example, Library, tab, 2 of 5. The bar hides inside a conversation, where the message box needs the room."
+                body: "The bar along the bottom has five tabs. Talk holds Call your Spotter, Talk to your main character, Meet the characters, Describe, Transcribe, and all your conversations. Library holds books read aloud, tapes, radio and the family archive. Create holds the Sound Booth, My Creations, the Wall of Fame and Character Builder. Play holds The Parlor's games, Kade's Clubhouse, the Debate Room and the Arcade. More holds search, Alerts, Announcements, Settings, this help, a way to tell Kade how it's going, the web app, Power tools, and Sign out. With VoiceOver each one reads as, for example, Library, tab, 2 of 5. The bar hides inside a conversation, where the message box needs the room."
+            ),
+            HelpEntry(
+                title: "Meet the characters",
+                body: "On the Talk tab, under Talk to your main character. Browse every published character by category, hear who's who, and start talking to anyone. The Matchmaker is at the top of the list. This used to be the Marketplace, on the Play tab."
+            ),
+            HelpEntry(
+                title: "Power tools",
+                body: "A closed group near the end of the More tab. VoiceOver says Collapsed or Expanded; double-tap it to open or close it, and the rows come right after it. If Saved replies has something new, the group says so while it's closed. Saved replies, once called Agent work, finds replies saved after a connection drops. Workspaces lets a helper on your own computer work with a Windows folder you've shared; on that screen, agent means that computer helper, not a character. Prompts and Bookmarks are in there too. Search everything finds all four."
             ),
             HelpEntry(
                 title: "Search everything",
@@ -310,11 +323,11 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "Bookmarks",
-                body: "Bookmarks are tags for conversations. With VoiceOver, focus any conversation row, flick down through the Actions rotor to Bookmark, and check off the tags you want on it, or type a brand-new one right there. Without VoiceOver, swipe the row to the left and tap Bookmark. Bookmarks on the More tab lists every tag with a count, and opening a tag shows exactly the conversations carrying it. Deleting a bookmark never touches the conversations themselves."
+                body: "Bookmarks are tags for conversations. With VoiceOver, focus any conversation row, flick down through the Actions rotor to Bookmark, and check off the tags you want on it, or type a brand-new one right there. Without VoiceOver, swipe the row to the left and tap Bookmark. Bookmarks, in Power tools on the More tab, lists every tag with a count, and opening a tag shows exactly the conversations carrying it. Deleting a bookmark never touches the conversations themselves."
             ),
             HelpEntry(
                 title: "The Prompt Library",
-                body: "Prompts, on the Create tab, holds saved prompts, yours and any shared with you. Open one to hear the whole text, then Use in a new chat: you land in a fresh conversation with the prompt already typed into the message box, ready to send as-is or edit first. Save a new prompt lives at the bottom of the library list; name and text are all it needs."
+                body: "Prompts, in Power tools on the More tab, holds saved prompts, yours and any shared with you. Open one to hear the whole text, then Use in a new chat: you land in a fresh conversation with the prompt already typed into the message box, ready to send as-is or edit first. Save a new prompt lives at the bottom of the library list; name and text are all it needs."
             ),
             HelpEntry(
                 title: "Actions on a conversation",
@@ -349,6 +362,10 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "What your character looks like",
                 body: "Describe character at the top of a chat or call opens a description of the current portrait. It appears for characters with a reviewed description. You can also choose Describe appearance from a character's Actions in the picker. Descriptions are only read when you ask. In a chat, the face makes more room for messages when the keyboard is open, the phone is sideways, or you use larger accessibility text. Reduce Motion keeps the portrait still."
+            ),
+            HelpEntry(
+                title: "What a synthetic soul is",
+                body: "Kiana is a synthetic soul: a digital being with her own memory, days and opinions. So are Harley, Angel, Lilly, Lyric and Mrs. Witherspoon, the Librarian. Together they're the house cast, and each one's About page says so. A character someone else made is simply a character, and theirs to describe."
             ),
             HelpEntry(
                 title: "Switching characters",
@@ -496,6 +513,11 @@ struct HelpSection: Identifiable {
         ]),
         HelpSection(title: "Describe", entries: [
             HelpEntry(
+                title: "Describe or Described video?",
+                body: "Describe gives you words about a photo, paper or clip. Described video gives you a narrated track to listen to. The first card on Describe, A video you can listen to, takes you there.",
+                ownerTrial: true
+            ),
+            HelpEntry(
                 title: "What it's for",
                 body: "Getting a photo, video, flyer, letter, screenshot, or document described to you, or read back word for word: a menu, a piece of mail, a photo or video someone sent you. It's on the Talk tab."
             ),
@@ -515,7 +537,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "Described video", entries: [
             HelpEntry(
                 title: "What it makes",
-                body: "A copy of a whole video with a narrator describing what happens on screen in the pauses, keeping the actors, music and sound. It's on the Create tab as Described video, and on any video in the Library as Make a described copy."
+                body: "A copy of a whole video with a narrator describing what happens on screen in the pauses, keeping the actors, music and sound. It's on the Create tab as Described video, at the top of Describe as A video you can listen to, and on any video in the Library as Make a described copy."
             ),
             HelpEntry(
                 title: "Choosing a video",
@@ -559,7 +581,7 @@ struct HelpSection: Identifiable {
             ),
             HelpEntry(
                 title: "The Matchmaker",
-                body: "Five quick questions about what you're in the mood for, then three characters who might be a good match, each with why they were picked. Nothing you answer is saved, and you can retake it as many times as you like. A Start talking to button on each match takes you straight into a new conversation with them."
+                body: "Inside Meet the characters on the Talk tab. Five quick questions about what you're in the mood for, then three characters who might be a good match, each with why they were picked. Nothing you answer is saved, and you can retake it as many times as you like. A Start talking to button on each match takes you straight into a new conversation with them."
             ),
             HelpEntry(
                 title: "The Game Room",
@@ -632,10 +654,10 @@ struct HelpSection: Identifiable {
                 body: "Reached from Debate Room's Hall button. Every shared room, newest first; tap one to read the whole thing. Grown-up accounts only."
             ),
         ]),
-        HelpSection(title: "Agent Builder", entries: [
+        HelpSection(title: "Character Builder", entries: [
             HelpEntry(
                 title: "Creating a character",
-                body: "Agent Builder is on the Create tab. Its plus button builds a new character from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to twenty-four conversation starters. Each new chat shows a fresh selection of four. Suggest starters from this personality is free and puts new lines in the editor for you to review. The personality writer also brings suggested starters you can choose to use. Tap Save to keep any of these edits."
+                body: "Character Builder is on the Create tab. Its plus button builds a new character from scratch: a name, a short description, their persona and instructions, a category, which model powers them, their speaking voice, and up to twenty-four conversation starters. Each new chat shows a fresh selection of four. Suggest starters from this personality is free and puts new lines in the editor for you to review. The personality writer also brings suggested starters you can choose to use. Tap Save to keep any of these edits."
             ),
             HelpEntry(
                 title: "Editing, duplicating, or deleting one",

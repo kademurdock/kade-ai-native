@@ -141,7 +141,7 @@ struct AgentEditorView: View {
                 }
                 if isLoadingDetail {
                     ProgressView("Loading…")
-                        .accessibilityLabel("Loading agent details")
+                        .accessibilityLabel("Loading character details")
                 } else {
                     Section("Name") {
                         TextField("Name", text: $name)
@@ -288,7 +288,7 @@ struct AgentEditorView: View {
                         // element keeps it a real button.
                         .accessibilityLabel("Voice")
                         .accessibilityValue(voice.isEmpty ? "Default" : voiceCatalog.displayLabel(voice))
-                        .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this agent speaks in.")
+                        .accessibilityHint("Opens the voice library to browse, preview, and pick the voice this character speaks in.")
                     }
                     conversationStartersSection
                     if !availableTools.isEmpty {
@@ -312,10 +312,10 @@ struct AgentEditorView: View {
                             } label: {
                                 Text("Tools")
                                     .accessibilityLabel("Tools. \(selectedTools.count) turned on.")
-                                    .accessibilityHint("Expands the list of abilities this agent can use, like making pictures or sending phone notifications.")
+                                    .accessibilityHint("Expands the list of abilities this character can use, like making pictures or sending phone notifications.")
                             }
                         } footer: {
-                            Text("\(selectedTools.count) of \(availableTools.count) tools turned on. Tools give this agent real abilities — a picture maker, a phone-call placer, and so on.")
+                            Text("\(selectedTools.count) of \(availableTools.count) tools turned on. Tools give this character real abilities — a picture maker, a phone-call placer, and so on.")
                         }
                     }
                     if existingId != nil {
@@ -331,7 +331,7 @@ struct AgentEditorView: View {
                             }
                             .accessibilityLabel("Avatar photo")
                             .accessibilityValue(pendingAvatarJpeg == nil ? "None chosen yet" : "Photo chosen, uploads when you save")
-                            .accessibilityHint("Picks a photo from your library to use as this agent's picture.")
+                            .accessibilityHint("Picks a photo from your library to use as this character's picture.")
                             if let avatarNote {
                                 Text(avatarNote)
                                     .font(.footnote)
@@ -353,7 +353,7 @@ struct AgentEditorView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(isPainting ? "Painting their portrait. About fifteen seconds." : "Paint their portrait. Costs three cents of picture credit.")
-                            .accessibilityHint("Paints a portrait from their name and description, in the same warm style as the marketplace faces. It uploads when you save.")
+                            .accessibilityHint("Paints a portrait from their name and description, in the same warm style as the other character faces. It uploads when you save.")
                             if let paintNote {
                                 Text(paintNote)
                                     .font(.footnote)
@@ -392,7 +392,7 @@ struct AgentEditorView: View {
                             // a Form row or it stops being a pressable
                             // button for VoiceOver (build 135 lesson).
                             .accessibilityLabel("Knowledge files")
-                            .accessibilityHint("Documents this agent can search and answer from. Add PDFs, Word files, or text.")
+                            .accessibilityHint("Documents this character can search and answer from. Add PDFs, Word files, or text.")
 
                             Button {
                                 showingConnections = true
@@ -408,7 +408,7 @@ struct AgentEditorView: View {
                             .buttonStyle(.plain)
                             // Same Form-row rule as the Voice button above.
                             .accessibilityLabel("Connections")
-                            .accessibilityHint("Characters this agent can hand a conversation off to mid-chat.")
+                            .accessibilityHint("Other characters this one can hand a conversation off to mid-chat.")
 
                             Button {
                                 showingActions = true
@@ -424,7 +424,7 @@ struct AgentEditorView: View {
                             .buttonStyle(.plain)
                             // Same Form-row rule as the Voice button above.
                             .accessibilityLabel("Actions")
-                            .accessibilityHint("Outside services this agent can call. Review and remove here; new ones are created on the web.")
+                            .accessibilityHint("Outside services this character can call. Review and remove here; new ones are created on the web.")
                         } header: {
                             Text("Knowledge, connections, and actions")
                         }
@@ -452,17 +452,17 @@ struct AgentEditorView: View {
                                     get: { isPublic },
                                     set: { want in if want != isPublic { pendingPublic = want } }
                                 )) {
-                                    Text("Share on the marketplace")
+                                    Text("Share in Meet the characters")
                                 }
                                 .disabled(!isPublicLoaded || shareBusy)
-                                .accessibilityLabel("Share on the marketplace")
+                                .accessibilityLabel("Share in Meet the characters")
                                 .accessibilityValue(!isPublicLoaded ? "Checking" : (isPublic ? "On. Everyone on Kade-AI can find this character." : "Off. Only you can see this character."))
                                 .accessibilityHint("Asks you to confirm, then puts this character where everyone on Kade-AI can find and talk to them. Turn it off to make them private again.")
                                 if let shareNote {
                                     Text(shareNote).font(.caption).foregroundStyle(.secondary)
                                 }
                             } header: {
-                                Text("Marketplace")
+                                Text("Meet the characters")
                             } footer: {
                                 Text(isPublic
                                     ? "Public. Anyone on Kade-AI can find and talk to this character."
@@ -475,7 +475,7 @@ struct AgentEditorView: View {
                     }
                 }
             }
-            .navigationTitle(existingId == nil ? "New agent" : "Edit agent")
+            .navigationTitle(existingId == nil ? "New character" : "Edit character")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingVoicePicker) {
                 // Part 116 gave the picker THIS character's own lines; Part 116.8
@@ -487,10 +487,10 @@ struct AgentEditorView: View {
                 VoicePickerView(apiClient: apiClient, selection: $voice, defaultLabel: "No specific voice (default)", deliveryAgentId: existingId, previewSpeed: speakingRate)
             }
             .alert(
-                pendingPublic == true ? "Share on the marketplace?" : "Take it off the marketplace?",
+                pendingPublic == true ? "Share in Meet the characters?" : "Take it out of Meet the characters?",
                 isPresented: Binding(get: { pendingPublic != nil }, set: { if !$0 { pendingPublic = nil } })
             ) {
-                Button(pendingPublic == true ? "Share it" : "Take it off") {
+                Button(pendingPublic == true ? "Share it" : "Take it out") {
                     if let want = pendingPublic { Task { await applyPublic(want) } }
                     pendingPublic = nil
                 }
@@ -520,7 +520,7 @@ struct AgentEditorView: View {
                     AgentActionsView(
                         apiClient: apiClient,
                         agentId: existingId,
-                        agentName: name.isEmpty ? "This agent" : name
+                        agentName: name.isEmpty ? "This character" : name
                     )
                 }
             }
@@ -529,7 +529,7 @@ struct AgentEditorView: View {
                     AgentConnectionsView(
                         apiClient: apiClient,
                         agentId: existingId,
-                        agentName: name.isEmpty ? "This agent" : name
+                        agentName: name.isEmpty ? "This character" : name
                     )
                 }
             }
@@ -538,7 +538,7 @@ struct AgentEditorView: View {
                     AgentKnowledgeView(
                         apiClient: apiClient,
                         agentId: existingId,
-                        agentName: name.isEmpty ? "This agent" : name
+                        agentName: name.isEmpty ? "This character" : name
                     )
                 }
             }
@@ -724,7 +724,7 @@ struct AgentEditorView: View {
             authorId = detail.author
             loadError = nil
         } catch {
-            loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that agent."
+            loadError = (error as? AgentBuilderService.AgentBuilderError)?.message ?? "Couldn't load that character."
         }
         isLoadingDetail = false
         // Sharing state is a second, fail-soft read: a 403 here (not the
@@ -753,7 +753,7 @@ struct AgentEditorView: View {
             Earcons.shared.play(.actionDone)
             KadeHaptics.success()
             let said = want
-                ? "\(name.isEmpty ? "This character" : name) is on the marketplace now. Everyone on Kade-AI can find them."
+                ? "\(name.isEmpty ? "This character" : name) is in Meet the characters now. Everyone on Kade-AI can find them."
                 : "\(name.isEmpty ? "This character" : name) is private again."
             shareNote = said
             UIAccessibility.post(notification: .announcement, argument: said)

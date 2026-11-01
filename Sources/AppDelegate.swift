@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let call = AgentCallPayload(
                 planId: planId,
                 agentId: (payload["agentId"] as? String) ?? "",
-                agentName: (payload["agentName"] as? String) ?? "Your agent",
+                agentName: (payload["agentName"] as? String) ?? "Your character",
                 purpose: (payload["purpose"] as? String) ?? ""
             )
             Task { @MainActor in

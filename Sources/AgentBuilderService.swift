@@ -155,7 +155,7 @@ final class AgentBuilderService: ObservableObject {
             )
             let (data, http) = try await client.send(req)
             guard http.statusCode == 200 else {
-                loadError = "Couldn't load your agents. Try again."
+                loadError = "Couldn't load your characters. Try again."
                 return []
             }
             let page = try decoder.decode(AgentsPage.self, from: data)
@@ -163,7 +163,7 @@ final class AgentBuilderService: ObservableObject {
                 .filter { $0.author == authoredByUserId }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         } catch {
-            loadError = "Couldn't load your agents. Try again."
+            loadError = "Couldn't load your characters. Try again."
             return []
         }
     }
@@ -172,7 +172,7 @@ final class AgentBuilderService: ObservableObject {
         let req = client.request(path: "api/agents/\(id)/expanded", authorized: true)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load that agent."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load that character."))
         }
         return try decoder.decode(AgentDetail.self, from: data)
     }
@@ -233,7 +233,7 @@ final class AgentBuilderService: ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: bodyJSON(fields))
         let (data, http) = try await client.send(req)
         guard (200...299).contains(http.statusCode) else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't create the agent."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't create the character."))
         }
         announceAgentsChanged()
         return try decoder.decode(AgentDetail.self, from: data)
@@ -255,7 +255,7 @@ final class AgentBuilderService: ObservableObject {
         let req = client.request(path: "api/agents/\(id)", method: "DELETE", authorized: true)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't delete that agent."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't delete that character."))
         }
         announceAgentsChanged()
     }
@@ -267,7 +267,7 @@ final class AgentBuilderService: ObservableObject {
         let req = client.request(path: "api/agents/\(id)/duplicate", method: "POST", authorized: true)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 201 else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't duplicate that agent."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't duplicate that character."))
         }
         struct DuplicateResponse: Decodable { let agent: AgentDetail }
         announceAgentsChanged()
@@ -308,7 +308,7 @@ final class AgentBuilderService: ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: isPublic ? "Couldn't share on the marketplace." : "Couldn't take it off the marketplace."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: isPublic ? "Couldn't share this character." : "Couldn't make this character private."))
         }
         announceAgentsChanged()
     }
@@ -392,7 +392,7 @@ final class AgentBuilderService: ObservableObject {
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load that agent."))
+            throw AgentBuilderError(message: errorMessage(from: data, fallback: "Couldn't load that character."))
         }
         return obj
     }

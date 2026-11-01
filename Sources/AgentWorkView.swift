@@ -110,7 +110,7 @@ struct AgentWorkView: View {
                     .disabled(blocked || loading || openingID != nil)
                 }
                 Text("About these statuses").font(.headline).accessibilityAddTraits(.isHeader)
-                Text("Reply saved means the agent's reply is in the chat. Read it for evidence of any action. Interrupted means a finished reply could not be confirmed; check the chat and action receipts before sending again. Stopping a run does not undo actions it already performed.")
+                Text("Reply saved means the character's reply is in the chat. Read it for evidence of any action. Interrupted means a finished reply could not be confirmed; check the chat and action receipts before sending again. Stopping a run does not undo actions it already performed.")
                 Text("Temporary chats, regenerated replies and separate voice or coding sessions may not appear. Interrupted work does not automatically restart.")
                     .font(.subheadline)
             }
@@ -119,7 +119,7 @@ struct AgentWorkView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Agent work")
+        .navigationTitle("Saved replies")
         .navigationBarTitleDisplayMode(.inline)
         .task { if !loaded { await load() } }
         .onDisappear { loadTask?.cancel() }
