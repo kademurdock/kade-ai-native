@@ -407,6 +407,20 @@ struct SpeechStreamer {
             guard hasSpeechAfterDirection(piece) else { return nil }
             return piece
         }
+        /* NOV 6 2026 — A TAG THAT OPENS THE PIECE BUT IS NO DIRECTION IS NEVER
+         * CARRIED, AND NEVER SENT ALONE EITHER.
+         *
+         * leadingDirection() now refuses a blank pair (a stray `%%%` line), a
+         * long one and one that holds a sentence stop, so such a piece falls
+         * through to the carry below like a piece that opened with a sound.
+         * What it must NOT do is lose PART 92.11's rule on the way: a piece
+         * that is only such a tag, with nothing after it, used to be dropped
+         * here as a bare direction, and sent on it would cost a synthesis
+         * call that comes back empty (the error boop). Sounds are exempt:
+         * `%%%laugh%%%` alone is a real thing to synthesise. */
+        if let body = leadingTagBody(of: piece), !Self.isCarriableDirection(body), !hasSpeechAfterDirection(piece) {
+            return nil
+        }
         if let carried = carriedDirection {
             // Spent: the direction has coloured its thought and the next beat
             // or two. Return to her own register, same as a written reset.
@@ -431,15 +445,22 @@ struct SpeechStreamer {
         return !piece[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The words between a piece's opening `%%%` and the next `%%%`, trimmed of
+    /// blanks AND line breaks, or nil when the piece does not open with a
+    /// complete tag. May be empty: a stray `%%%` line makes a blank pair.
+    private func leadingTagBody(of piece: String) -> String? {
+        guard piece.hasPrefix("%%%"),
+              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+        else { return nil }
+        return String(piece[piece.index(piece.startIndex, offsetBy: 3)..<close.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// A leading `%%%…%%%` tag, if this piece opens with one. Non-verbal cues
     /// (laugh, sigh, gasp…) are one-shots and are deliberately NOT carried
     /// forward — carrying "laugh" would make her laugh through the whole reply.
     private func leadingDirection(of piece: String) -> String? {
-        guard piece.hasPrefix("%%%"),
-              let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
-        else { return nil }
-        let inner = String(piece[piece.index(piece.startIndex, offsetBy: 3)..<close.lowerBound])
-            .trimmingCharacters(in: .whitespaces)
+        guard let inner = leadingTagBody(of: piece), Self.isCarriableDirection(inner) else { return nil }
         return Self.isNonVerbalSound(inner) ? nil : inner
     }
 
@@ -450,10 +471,28 @@ struct SpeechStreamer {
               let close = piece.range(of: "%%%", range: open.upperBound..<piece.endIndex) {
             let inner = String(piece[open.upperBound..<close.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !inner.isEmpty && !Self.isNonVerbalSound(inner) { last = inner }
+            if Self.isCarriableDirection(inner) && !Self.isNonVerbalSound(inner) { last = inner }
             position = close.upperBound
         }
         return last
+    }
+
+    /* NOV 6 2026 — WHAT MAY BE CARRIED. Kiana's reply held a stray empty `%%%`
+     * line in front of its real tag; the voice read "warm and curious" aloud.
+     * This lane trimmed only blanks, so the blank pair's inner text was a bare
+     * line break, which counted as a direction: it was carried and stamped as
+     * `%%%` newline `%%% ` in front of the next two pieces. A direction is a few
+     * words. The 7,148 real ones (Nov 2026): median 7 characters, longest 52,
+     * none with a . ! ? or %, none across two lines. Anything else between two
+     * `%%%` runs is speech sitting between stray marks (or nothing at all), and
+     * carrying it would stamp that speech, or an empty tag, in front of every
+     * later piece. Android trims the same way and should refuse the same things. */
+    private static let maxCarriedDirectionCharacters = 60
+
+    private static func isCarriableDirection(_ inner: String) -> Bool {
+        guard !inner.isEmpty, inner.count <= maxCarriedDirectionCharacters else { return false }
+        if inner.rangeOfCharacter(from: .newlines) != nil { return false }
+        return !inner.contains(where: { $0 == "." || $0 == "!" || $0 == "?" || $0 == "\u{2026}" || $0 == "%" })
     }
 
     /* ⭐ PART 95 (Aug 28 2026) — THE SOUND LIST CATCHES UP WITH THE PROXY'S.
