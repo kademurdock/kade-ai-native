@@ -642,6 +642,138 @@ func testInstructionWordsStillCarry() {
 }
 testInstructionWordsStillCarry()
 
+// ─────────────────────────────────────────────────────────────────────────────
+// T22 — A BLANK, LONG OR SENTENCE-SHAPED "DIRECTION" IS NEVER CARRIED.
+// (Nov 6 2026, the voice that read its own stage direction aloud.)
+//
+// Kade, about the last message Kiana sent her: the voice said "warm and
+// curious" out loud. The reply held a stray, empty `%%%` line in front of its
+// real tag (`%%%` newline `%%%warm and curious%%% So what is the shape of it?`).
+// The proxy now repairs the pairing, but this lane fed it. `leadingDirection`
+// trimmed only .whitespaces, so the blank pair's inner text was a bare "\n" —
+// not empty — and it was accepted as THE direction, carried, and stamped as
+// `%%%` newline `%%% ` in front of the next two pieces, each of which the proxy
+// then had to repair again. A direction that is long, or holds a . ! ? or %, is
+// speech sitting between two stray marks, and carrying it would re-read that
+// speech in front of every later piece. The 7,148 real directions (Nov 2026):
+// median 7 characters, longest 52, none with a sentence stop or a percent sign.
+
+/// The raw text between a piece's first two `%%%` runs, untrimmed — what a
+/// stamp (or an authored lead) actually put in front of the speech. nil when
+/// the piece does not open with a complete tag.
+func leadingTagRaw(_ piece: String) -> String? {
+    guard piece.hasPrefix("%%%"),
+          let close = piece.range(of: "%%%", range: piece.index(piece.startIndex, offsetBy: 3)..<piece.endIndex)
+    else { return nil }
+    return String(piece[piece.index(piece.startIndex, offsetBy: 3)..<close.lowerBound])
+}
+
+func isBlank(_ s: String) -> Bool {
+    s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
+func testBlankTagIsNeverCarried() {
+    let strayShapes = [
+        "%%%\n%%%warm and curious%%% ",
+        "%%%\n\n%%%warm and curious%%% ",
+        "%%% \n%%%warm and curious%%% ",
+        "%%%\r\n%%%warm and curious%%% ",
+        "%%%   %%%warm and curious%%% ",
+    ]
+    let body = "So what is the shape of it, really, when you set all of it side by side and look at what you have in front of you right now?\n"
+        + "And then the second thought, which is long enough to stand alone as its own spoken piece, and which has nothing invented in front of it.\n"
+        + "Then a third beat, again long enough to stand alone, and again with nothing in front of it that a stray line at the top of the reply could have made up.\n"
+    var later = 0
+    var blank = 0
+    for shape in strayShapes {
+        for size in [5, 9, 14, 23] {
+            for piece in run(shape + body, chunk: size).dropFirst() {
+                later += 1
+                if let raw = leadingTagRaw(piece), isBlank(raw) { blank += 1 }
+            }
+        }
+    }
+    print("  T22 blank-tag replay: \(blank) of \(later) later pieces were stamped with a blank direction")
+    check("T22: a blank tag is never carried onto later pieces", blank == 0,
+          "\(blank) of \(later) later pieces were stamped with a blank direction")
+}
+testBlankTagIsNeverCarried()
+
+func testBlankTagDoesNotReplaceARealCarry() {
+    // A real direction is in force; later a piece opens with the stray blank
+    // pair. The old code let the blank pair BECOME the carried direction.
+    // (each line before the blank pair is long enough to be a piece of its own,
+    // so the pair opens a piece instead of sitting in the middle of one)
+    let text = "%%%warm%%% I walked up to the door and the porch light was already off, which it never is at that hour, and I told myself there was a perfectly normal reason for that.\n"
+        + "Then the door was standing open about four inches, and I stopped dead on the step because that door sticks and it does not drift open on its own, and I stood there a long moment.\n"
+        + "%%%\n%%%So I called out, and nobody answered, and that was when I knew I would have to go in there myself and see for what it was worth.\n"
+        + "And then I did, slowly, with one hand on the frame, listening for anything at all that sounded like a person in the kitchen or on the stairs.\n"
+        + "It was only the radio, left on low, which is exactly what I would have said it was if you had asked me before I started shaking.\n"
+    for size in [6, 11, 17] {
+        var blank = 0
+        var warm = 0
+        for piece in run(text, chunk: size) {
+            if let raw = leadingTagRaw(piece) {
+                if isBlank(raw) { blank += 1 }
+                if raw == "warm" { warm += 1 }
+            }
+        }
+        check("T22: a blank pair later in a reply never becomes a stamp (chunks of \(size))", blank == 0,
+              "\(blank) pieces opened with a blank direction")
+        check("T22: the real direction is still carried past the blank pair (chunks of \(size))", warm >= 3,
+              "only \(warm) pieces were steered")
+    }
+}
+testBlankTagDoesNotReplaceARealCarry()
+
+func testLongOrSentenceDirectionIsNeverCarried() {
+    let d60 = "a slow, warm, settled voice like someone telling a long tale"
+    let d61 = "a slow, warm, settled voice like someone telling a long story"
+    check("T22: fixtures are exactly 60 and 61 characters", d60.count == 60 && d61.count == 61, "\(d60.count) and \(d61.count)")
+    let rest = " I walked up to the door and the porch light was already off, which it never is at that hour, and I told myself there was a perfectly normal reason for that.\n"
+        + "Then the door was standing open about four inches, and I stopped dead on the step because that door sticks and it does not drift open on its own.\n"
+        + "So I called out, and nobody answered, and that was when I knew I would have to go in there myself and see for what it was worth.\n"
+    func laterStamps(_ lead: String) -> [String] {
+        run("%%%" + lead + "%%%" + rest, chunk: 11).dropFirst().compactMap { leadingTagRaw($0) }
+    }
+    check("T22: a 60-character direction is still carried", !laterStamps(d60).isEmpty, "no later piece carried it")
+    check("T22: a 61-character direction is not carried", laterStamps(d61).isEmpty, "later pieces were stamped with \(laterStamps(d61))")
+    let speech = ["Fine. Whatever you say about it", "Oh no! Not again", "Is that so? Really", "fifty% off", "line one\nline two", "wait\u{2026} what"]
+    for s in speech {
+        let stamps = laterStamps(s)
+        check("T22: \"\(s.replacingOccurrences(of: "\n", with: " / "))\" is speech between stray marks, never carried", stamps.isEmpty,
+              "later pieces were stamped with \(stamps)")
+    }
+}
+testLongOrSentenceDirectionIsNeverCarried()
+
+func testStrayPairInsideAPieceIsNeverCarried() {
+    // The carry also learns from the END of every piece (lastDirection). A pair
+    // of stray marks around a stretch of speech in the middle of a piece must
+    // not become the direction in force.
+    let text = "Okay so the thing is, and I mean this, %%%that was not a thing to say and I know it and nobody could blame you for it at all really%%% and I would have done exactly the same thing.\n"
+        + "And then the second piece, which is long enough to stand alone as its own spoken piece, with nothing at all stamped in front of it by the pair before.\n"
+        + "And a third one right after it, also long enough to stand alone, also with nothing in front of it, because that pair was speech and not a direction.\n"
+    var stamps: [String] = []
+    for size in [7, 9, 13] {
+        stamps += run(text, chunk: size).dropFirst().compactMap { leadingTagRaw($0) }
+    }
+    check("T22: speech between stray marks inside a piece is never carried", stamps.isEmpty, "later pieces were stamped with \(stamps)")
+}
+testStrayPairInsideAPieceIsNeverCarried()
+
+func testJunkOnlyTagIsStillNeverSentAlone() {
+    // PART 92.11's rule survives: a piece that is only a tag costs a synthesis
+    // call that comes back empty, which the app reports as the error boop. A
+    // too-long "direction" with nothing after it used to be dropped as a bare
+    // direction; it must still be.
+    var s = SpeechStreamer()
+    var out = s.push("%%%a long wandering stage direction that nobody could mistake for a mood and that goes on for far more than sixty characters%%%")
+    out += s.flush()
+    check("T22: a long tag with nothing after it is still never sent alone", out.isEmpty, "sent \(out)")
+}
+testJunkOnlyTagIsStillNeverSentAlone()
+
 // ── Part 98: the streaming player's pure half (StreamingWavParser) ──────────
 //
 // The streamed lane's failure modes that ARE catchable here: header math off
