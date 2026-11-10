@@ -28,6 +28,11 @@ struct KadeSearchView: View {
     @State private var libraryTask: Task<Void, Never>?
     @State private var announceTask: Task<Void, Never>?
     @AccessibilityFocusState private var libraryFocusedID: String?
+    /// Nov 10 review: the first row a Show more added. VoiceOver is moved to
+    /// it one render later (onChange in body), the way the Library catalog
+    /// does it, because a focus request made in the same update that inserts
+    /// the row can be dropped.
+    @State private var libraryFirstNewID: String?
     @ObservedObject private var describedVideo = DescribedVideoAccess.shared
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -223,6 +228,9 @@ struct KadeSearchView: View {
             }
         }
         .task { await agentsService.loadIfNeeded() }
+        .onChange(of: libraryFirstNewID) { _, id in
+            if let id { libraryFocusedID = id }
+        }
         .onChange(of: query) { _, _ in
             scheduleLibrarySearch()
             scheduleSummaryAnnouncement()
@@ -333,6 +341,7 @@ struct KadeSearchView: View {
         libraryMore = false
         libraryLoadingMore = false
         libraryFocusedID = nil
+        libraryFirstNewID = nil
         guard q.count >= 3 else {
             librarySearching = false
             return
@@ -376,7 +385,7 @@ struct KadeSearchView: View {
             libraryMore = found.more == true && !found.items.isEmpty
             if page > 0 {
                 UIAccessibility.post(notification: .announcement, argument: "\(added.count) more Library results. \(libraryResults.count) shown.")
-                libraryFocusedID = added.first?.id
+                libraryFirstNewID = added.first?.id
             }
         } catch {
             guard !Task.isCancelled, generation == libraryGeneration, q == trimmed else { return }

@@ -94,13 +94,34 @@ enum LibraryPlayerWords {
         return "\(isAudio ? "Part" : "Chapter") \(n) of \(max(partCount, n))"
     }
 
-    /// What the line shows: a fresh message first, then why the book paused
-    /// itself, then the resting line.
-    static func status(message: String, pausedFor: String?, resting: String) -> String {
+    /// The note beside the clock: a fresh message first, then why the book
+    /// paused itself, else nothing.
+    static func statusNote(message: String, pausedFor: String?) -> String {
         let said = message.trimmingCharacters(in: .whitespacesAndNewlines)
         if !said.isEmpty { return said }
         if let why = pausedFor?.trimmingCharacters(in: .whitespacesAndNewlines), !why.isEmpty { return "Paused for \(why)" }
-        return resting
+        return ""
+    }
+
+    /// The two lines the player shows, always two. The clock (the resting
+    /// line) keeps the first line whatever is being said, so skipping through
+    /// a film never takes the time off the screen; the note sits under it.
+    /// Only when there is no clock to show (a length not known yet) does the
+    /// note take the first line.
+    static func statusLines(message: String, pausedFor: String?, resting: String) -> [String] {
+        let note = statusNote(message: message, pausedFor: pausedFor)
+        let rest = resting.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? [note, ""] : [rest, note]
+    }
+
+    /// The same for VoiceOver when she touches the line: where it is first,
+    /// then the note.
+    static func spokenStatus(message: String, pausedFor: String?, spokenResting: String) -> String {
+        let note = statusNote(message: message, pausedFor: pausedFor)
+        let rest = spokenResting.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rest.isEmpty { return note }
+        if note.isEmpty { return rest }
+        return rest + ". " + note
     }
 
     /// How long a message stays on the line: longer for longer words, never
@@ -148,6 +169,31 @@ enum LibraryPlayerWords {
     /// Pressing the chosen type again clears it; pressing another picks it.
     static func toggledType(current: String, pressed: String) -> String {
         current == pressed ? "" : pressed
+    }
+
+    // MARK: a video file's caption and sound tracks
+
+    /// What is remembered of a chosen caption or sound track, so the choice
+    /// can be found again when the same video is loaded afresh (a bookmark
+    /// jump, a restart, the next part): the player builds a new item each
+    /// time, and the old item's track objects mean nothing to the new one.
+    struct TrackKey: Equatable {
+        let language: String
+        let name: String
+        /// Described audio for a sound track; captions for the deaf and hard
+        /// of hearing for a caption track.
+        let special: Bool
+    }
+
+    /// Which of the new item's tracks is the one she chose before, or nil
+    /// when none clearly is (then nothing is chosen for her). The same
+    /// language, name and kind wins; failing that, the only track with the
+    /// same language and kind.
+    static func rematch(_ wanted: TrackKey, in tracks: [TrackKey]) -> Int? {
+        if let exact = tracks.firstIndex(of: wanted) { return exact }
+        guard !wanted.language.isEmpty else { return nil }
+        let close = tracks.indices.filter { tracks[$0].language == wanted.language && tracks[$0].special == wanted.special }
+        return close.count == 1 ? close[0] : nil
     }
 
     // MARK: private

@@ -235,10 +235,21 @@ struct VideoPane: View {
     @State private var soundGroup: AVMediaSelectionGroup?
     @State private var soundOptions: [AVMediaSelectionOption] = []
     @State private var soundPick = 0
+    /* Nov 10 review: the player builds a new item every time a file is
+     * loaded, also for the same part (a bookmark jump, a restart). The menus
+     * are read again on every load, and what she chose is remembered by
+     * language and name and chosen again on the new item. `choicesItem` is
+     * the item the menus were read from; a pick made before the new item's
+     * tracks are read is remembered and applied when they are. */
+    @State private var choicesItem: ObjectIdentifier?
+    @State private var choicesBook = ""
+    @State private var captionChosen = false
+    @State private var wantedCaption: LibraryPlayerWords.TrackKey?
+    @State private var wantedSound: LibraryPlayerWords.TrackKey?
 
     private var track: RRTrack? { book.tracks.indices.contains(player.s) ? book.tracks[player.s] : nil }
     private var isVideo: Bool { (track?.mime ?? "").hasPrefix("video/") }
-    private var trackChoicesID: String { "\(book.id)|\(player.s)|\(isVideo)" }
+    private var trackChoicesID: String { "\(book.id)|\(player.s)|\(isVideo)|\(player.fileLoads)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -347,52 +358,105 @@ struct VideoPane: View {
         .task(id: trackChoicesID) { await loadTrackChoices() }
     }
 
-    /// Reads which caption and sound tracks this video file carries.
+    /// Reads which caption and sound tracks this video file carries, and
+    /// chooses again what she chose on an earlier load of this item.
     private func loadTrackChoices() async {
+        if choicesBook != book.id {
+            choicesBook = book.id
+            captionChosen = false
+            wantedCaption = nil
+            wantedSound = nil
+        }
+        guard isVideo, let item = player.avPlayer?.currentItem else {
+            clearTrackChoices()
+            return
+        }
+        let asset = item.asset
+        let legible = try? await asset.loadMediaSelectionGroup(for: .legible)
+        guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
+        let audible = try? await asset.loadMediaSelectionGroup(for: .audible)
+        guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
+
+        var captions: [AVMediaSelectionOption] = []
+        var captionIndex = -1
+        if let group = legible {
+            captions = group.options.filter { !$0.hasMediaCharacteristic(.containsOnlyForcedSubtitles) }
+            let keys = captions.map { trackKey($0) }
+            if captionChosen, let wanted = wantedCaption, let i = LibraryPlayerWords.rematch(wanted, in: keys) {
+                item.select(captions[i], in: group)
+                captionIndex = i
+            } else if captionChosen, wantedCaption == nil {
+                item.select(nil, in: group)
+            } else if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = captions.firstIndex(of: chosen) {
+                captionIndex = i
+            }
+        }
+        var sounds: [AVMediaSelectionOption] = []
+        var soundIndex = 0
+        if let group = audible {
+            sounds = group.options
+            let keys = sounds.map { trackKey($0) }
+            if let wanted = wantedSound, let i = LibraryPlayerWords.rematch(wanted, in: keys) {
+                item.select(sounds[i], in: group)
+                soundIndex = i
+            } else if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = sounds.firstIndex(of: chosen) {
+                soundIndex = i
+            }
+        }
+        captionGroup = legible
+        captionOptions = captions
+        captionPick = captionIndex
+        soundGroup = audible
+        soundOptions = sounds
+        soundPick = soundIndex
+        choicesItem = ObjectIdentifier(item)
+    }
+
+    private func clearTrackChoices() {
         captionGroup = nil
         captionOptions = []
         captionPick = -1
         soundGroup = nil
         soundOptions = []
         soundPick = 0
-        guard isVideo, let item = player.avPlayer?.currentItem else { return }
-        let asset = item.asset
-        if let group = try? await asset.loadMediaSelectionGroup(for: .legible) {
-            guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
-            let options = group.options.filter { !$0.hasMediaCharacteristic(.containsOnlyForcedSubtitles) }
-            captionGroup = group
-            captionOptions = options
-            if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = options.firstIndex(of: chosen) {
-                captionPick = i
-            }
-        }
-        if let group = try? await asset.loadMediaSelectionGroup(for: .audible) {
-            guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
-            soundGroup = group
-            soundOptions = group.options
-            if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = group.options.firstIndex(of: chosen) {
-                soundPick = i
-            }
-        }
+        choicesItem = nil
+    }
+
+    private func trackKey(_ option: AVMediaSelectionOption) -> LibraryPlayerWords.TrackKey {
+        let special = option.hasMediaCharacteristic(.describesVideoForAccessibility)
+            || option.hasMediaCharacteristic(.describesMusicAndSoundForAccessibility)
+            || option.hasMediaCharacteristic(.transcribesSpokenDialogForAccessibility)
+        return LibraryPlayerWords.TrackKey(language: option.extendedLanguageTag ?? "", name: option.displayName, special: special)
+    }
+
+    /// The item the menus were read from, if it is still the one playing.
+    /// The old item's groups and options change nothing on a new item.
+    private var choicesLiveItem: AVPlayerItem? {
+        guard let item = player.avPlayer?.currentItem, choicesItem == ObjectIdentifier(item) else { return nil }
+        return item
     }
 
     private func chooseCaptions(_ index: Int) {
-        guard let group = captionGroup, let item = player.avPlayer?.currentItem else { return }
+        guard let group = captionGroup else { return }
+        captionChosen = true
         if captionOptions.indices.contains(index) {
             captionPick = index
-            item.select(captionOptions[index], in: group)
+            wantedCaption = trackKey(captionOptions[index])
+            choicesLiveItem?.select(captionOptions[index], in: group)
             announce("Captions: \(captionOptions[index].displayName).")
         } else {
             captionPick = -1
-            item.select(nil, in: group)
+            wantedCaption = nil
+            choicesLiveItem?.select(nil, in: group)
             announce("Captions off.")
         }
     }
 
     private func chooseSound(_ index: Int) {
-        guard let group = soundGroup, let item = player.avPlayer?.currentItem, soundOptions.indices.contains(index) else { return }
+        guard let group = soundGroup, soundOptions.indices.contains(index) else { return }
         soundPick = index
-        item.select(soundOptions[index], in: group)
+        wantedSound = trackKey(soundOptions[index])
+        choicesLiveItem?.select(soundOptions[index], in: group)
         announce("Sound track: \(soundName(soundOptions[index])).")
     }
 

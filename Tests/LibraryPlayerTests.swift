@@ -66,10 +66,50 @@ check("resting, spoken", W.spokenRestingStatus(isAudio: true, position: 40, dura
 check("resting, spoken: a book", W.spokenRestingStatus(isAudio: false, position: 0, duration: 0, part: 0, partCount: 3), "Chapter 1 of 3")
 check("part words never count past the total", W.partWords(isAudio: true, part: 7, partCount: 3), "Part 8 of 8")
 
-check("status: a message wins", W.status(message: "Bookmark placed.", pausedFor: "a call", resting: "0:40 of 2:05"), "Bookmark placed.")
-check("status: then why it paused itself", W.status(message: "", pausedFor: "a call", resting: "0:40 of 2:05"), "Paused for a call")
-check("status: then the resting line", W.status(message: "  ", pausedFor: nil, resting: "0:40 of 2:05"), "0:40 of 2:05")
-check("status: a blank reason is no reason", W.status(message: "", pausedFor: " ", resting: "x"), "x")
+check("status note: a message wins", W.statusNote(message: "Bookmark placed.", pausedFor: "a call"), "Bookmark placed.")
+check("status note: then why it paused itself", W.statusNote(message: "", pausedFor: "a call"), "Paused for a call")
+check("status note: nothing to say is nothing", W.statusNote(message: "  ", pausedFor: nil), "")
+check("status note: a blank reason is no reason", W.statusNote(message: "", pausedFor: " "), "")
+// Nov 10 review: a skip, a part change or a bookmark jump must never take the
+// clock off the screen. The clock keeps the first line whatever is said.
+let restingClock = W.restingStatus(isAudio: true, position: 40, duration: 125, part: 0, partCount: 1)
+let saidLines = ["Forward 10 seconds.", "Back 10 seconds.", "Part 2 of 5: The storm", "Bookmark placed.", "The voice did not answer (HTTP 502). Press Play to try again, or pick another voice first.", ""]
+let pausedReasons: [String?] = [nil, "a call", "a voice message"]
+for said in saidLines {
+    for why in pausedReasons {
+        let tag = "(" + said + ", " + (why ?? "playing") + ")"
+        let lines = W.statusLines(message: said, pausedFor: why, resting: restingClock)
+        check("status lines: always two " + tag, lines.count, 2)
+        check("status lines: the clock keeps the first line " + tag, lines.first ?? "", restingClock)
+        check("status lines: the clock is shown " + tag, lines.joined(separator: " ").contains("0:40 of 2:05"), true)
+    }
+}
+check("status lines: the message sits under the clock", W.statusLines(message: "Forward 10 seconds.", pausedFor: nil, resting: restingClock), [restingClock, "Forward 10 seconds."])
+check("status lines: the paused reason sits under the clock", W.statusLines(message: "", pausedFor: "a call", resting: restingClock), [restingClock, "Paused for a call"])
+check("status lines: at rest the second line is empty", W.statusLines(message: "", pausedFor: nil, resting: restingClock), [restingClock, ""])
+check("status lines: with no clock yet the note takes the first line", W.statusLines(message: "Bookmark placed.", pausedFor: nil, resting: ""), ["Bookmark placed.", ""])
+check("status lines: nothing at all is two empty lines", W.statusLines(message: "", pausedFor: nil, resting: " "), ["", ""])
+let restingSpoken = W.spokenRestingStatus(isAudio: true, position: 40, duration: 125, part: 0, partCount: 1)
+check("spoken status: the place first, then the note", W.spokenStatus(message: "Forward 10 seconds.", pausedFor: nil, spokenResting: restingSpoken), restingSpoken + ". Forward 10 seconds.")
+check("spoken status: at rest only the place", W.spokenStatus(message: "", pausedFor: nil, spokenResting: restingSpoken), restingSpoken)
+check("spoken status: no place yet, only the note", W.spokenStatus(message: "Bookmark placed.", pausedFor: nil, spokenResting: ""), "Bookmark placed.")
+check("spoken status: never holds a colon clock", W.spokenStatus(message: "", pausedFor: "a call", spokenResting: restingSpoken).contains("0:40"), false)
+
+// Nov 10 review: a chosen caption or sound track is found again on a freshly
+// loaded copy of the video, and nothing is chosen for her when none matches.
+let english = W.TrackKey(language: "en", name: "English", special: false)
+let englishSDH = W.TrackKey(language: "en", name: "English SDH", special: true)
+let spanish = W.TrackKey(language: "es", name: "Spanish", special: false)
+let describedTrack = W.TrackKey(language: "en", name: "English, described", special: true)
+let noMatch: Int? = nil
+check("rematch: the same track is found", W.rematch(english, in: [spanish, english, englishSDH]), 1)
+check("rematch: the kind matters", W.rematch(englishSDH, in: [english, englishSDH]), 1)
+check("rematch: a renamed track with the same language and kind is found when it is the only one", W.rematch(W.TrackKey(language: "en", name: "English (CC)", special: false), in: [spanish, english, englishSDH]), 1)
+check("rematch: two candidates is no match", W.rematch(W.TrackKey(language: "en", name: "Commentary", special: false), in: [english, W.TrackKey(language: "en", name: "English 2", special: false)]), noMatch)
+check("rematch: another language is no match", W.rematch(spanish, in: [english, englishSDH]), noMatch)
+check("rematch: a described track is not swapped for a plain one", W.rematch(describedTrack, in: [english]), noMatch)
+check("rematch: no tracks is no match", W.rematch(english, in: []), noMatch)
+check("rematch: a track with no language only matches exactly", W.rematch(W.TrackKey(language: "", name: "Track 2", special: false), in: [W.TrackKey(language: "", name: "Track 1", special: false)]), noMatch)
 check("status time: a short line stays six seconds", W.statusSeconds(for: "Saved."), 6)
 check("status time: a long line stays longer", W.statusSeconds(for: "The voice did not answer (HTTP 502). Press Play to try again, or pick another voice first.") > 9, true)
 check("status time: never past fifteen seconds", W.statusSeconds(for: String(repeating: "word ", count: 200)), 15)

@@ -695,9 +695,10 @@ struct ReadingRoomView: View {
         LibraryPlayerWords.playWord(playing: player.isPlayingOrResuming, pausedFor: nowPlaying.pausedFor)
     }
 
-    /// The status line: the last thing this screen said, else why the book
-    /// paused itself, else where it is and how much is left. Two lines of
-    /// room are always kept, so the controls under it never move. VoiceOver
+    /// The status line: where the recording is and how much is left, and
+    /// under that the last thing this screen said, else why the book paused
+    /// itself. Two lines of room are always kept, so the controls under it
+    /// never move. VoiceOver
     /// has already heard each message as an announcement; touching the line
     /// reads the current one again.
     private var statusRow: some View {
@@ -706,14 +707,27 @@ struct ReadingRoomView: View {
         let count = book?.partCount ?? 0
         let resting = LibraryPlayerWords.restingStatus(isAudio: isAudio, position: player.filePosition, duration: player.fileDuration, part: player.s, partCount: count)
         let spokenResting = LibraryPlayerWords.spokenRestingStatus(isAudio: isAudio, position: player.filePosition, duration: player.fileDuration, part: player.s, partCount: count)
-        let shown = LibraryPlayerWords.status(message: statusLine, pausedFor: nowPlaying.pausedFor, resting: resting)
-        let spoken = LibraryPlayerWords.status(message: statusLine, pausedFor: nowPlaying.pausedFor, resting: spokenResting)
-        return Text(shown.isEmpty ? " " : shown)
+        // Nov 10 review: the clock keeps the first line whatever is being
+        // said, so skipping through a film never takes the time off the
+        // screen. The message or the paused reason sits under it. Always two
+        // one-line texts, so nothing under them moves.
+        let lines = LibraryPlayerWords.statusLines(message: statusLine, pausedFor: nowPlaying.pausedFor, resting: resting)
+        let spoken = LibraryPlayerWords.spokenStatus(message: statusLine, pausedFor: nowPlaying.pausedFor, spokenResting: spokenResting)
+        let first = lines.first ?? ""
+        let second = lines.count > 1 ? lines[1] : ""
+        return VStack(spacing: 0) {
+            Text(first.isEmpty ? " " : first)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(second.isEmpty ? " " : second)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
             .font(.footnote.monospacedDigit())
             .foregroundStyle(highContrast ? Color.primary : Color.secondary)
             .multilineTextAlignment(.center)
-            .lineLimit(2, reservesSpace: true)
             .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Status")
             .accessibilityValue(spoken.isEmpty ? "Nothing to report" : spoken)
     }

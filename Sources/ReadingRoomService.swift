@@ -733,6 +733,11 @@ final class ReadingRoomPlayer: ObservableObject {
     }
     // file engine — `avPlayer` is read by the VideoPane's VideoPlayer
     private(set) var avPlayer: AVPlayer?
+    /// Nov 10 2026: goes up each time a file is loaded, also when the SAME
+    /// part is loaded again (a bookmark jump, a restart). Every load builds a
+    /// new player item, so the video pane reads the file's caption and sound
+    /// tracks again whenever this changes.
+    @Published private(set) var fileLoads = 0
     /// The library's eyes on the phone: when on, the player pauses at each
     /// described scene, speaks it, and carries on (extended audio description).
     @Published var describedMode = false
@@ -1152,6 +1157,7 @@ final class ReadingRoomPlayer: ObservableObject {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         avPlayer = player
+        fileLoads &+= 1
         fileDuration = book.tracks[index].seconds ?? 0
         filePosition = seconds
         nowText = book.tracks[index].title
