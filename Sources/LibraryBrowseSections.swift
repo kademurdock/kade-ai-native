@@ -7,6 +7,7 @@ struct LibraryBrowseSections: View {
     @ObservedObject var actions: LibraryRowActions
     @FocusState private var searchEditing: Bool
     @AccessibilityFocusState private var firstNewItem: String?
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
 
     var body: some View {
         Group {
@@ -19,6 +20,7 @@ struct LibraryBrowseSections: View {
                         .onSubmit { search() }
                     Button("Search") { search() }
                 }
+                quickTypes
                 Picker("Type", selection: $catalog.query.type) {
                     Text("All types").tag("")
                     ForEach(typeFacets) { facet in Text("\(facet.typeTitle) (\(facet.count.formatted()))").tag(facet.id) }
@@ -67,6 +69,44 @@ struct LibraryBrowseSections: View {
             }
             .onChange(of: catalog.firstNewID) { _, id in firstNewItem = id }
         }
+    }
+
+    /// Nov 10 2026: one tap to Movies, Television, Commercials and the rest,
+    /// for browsing by eye. Each button sets the same Type the menu under it
+    /// sets, and pressing the chosen one clears it. Always the same buttons
+    /// in the same order, so the row is there before the catalog loads and
+    /// never moves. Under VoiceOver the row steps out of the swipe order
+    /// (her Sep 25 rule for a second way to do the same thing): the Type
+    /// menu is the one stop that does this by ear. It stays for sight,
+    /// Voice Control and Switch Control.
+    private var quickTypes: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(LibraryPlayerWords.quickTypes) { quick in
+                    quickTypeButton(quick)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .accessibilityHidden(voiceOverOn)
+    }
+
+    private func quickTypeButton(_ quick: LibraryPlayerWords.QuickType) -> some View {
+        let chosen = catalog.query.type == quick.id
+        return Button {
+            catalog.query.type = LibraryPlayerWords.toggledType(current: catalog.query.type, pressed: quick.id)
+            searchEditing = false
+        } label: {
+            Label(quick.title, systemImage: chosen ? "checkmark" : quick.symbol)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 4)
+                .frame(minHeight: 36)
+        }
+        .buttonStyle(.bordered)
+        .tint(chosen ? Color.accentColor : Color.brown)
+        .accessibilityLabel(quick.title)
+        .accessibilityValue(chosen ? "Chosen" : "")
+        .accessibilityHint(chosen ? "Shows every type again." : "Shows only \(quick.title.lowercased()).")
     }
 
     private var typeFacets: [LibraryBrowseFacet] { facets(catalog.paging.types, selected: catalog.query.type) }

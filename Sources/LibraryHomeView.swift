@@ -2,8 +2,14 @@ import SwiftUI
 import UIKit
 
 /// One BARD-style catalog list, with Type, Decade and Format filters.
-/// Continue and Family history remain easy to reach. The older folders,
-/// saved uploads and collections stay in one closed optional-views group.
+/// Continue, Springfield and the Ozarks and Family history remain easy to
+/// reach. The older folders, saved uploads and collections stay in one
+/// closed optional-views group.
+///
+/// Nov 10 2026: Springfield and the Ozarks is the second row again (her Sep
+/// 27 rule, commit 1e558cc; the Oct 7 single-catalog change had folded it
+/// into the closed group, one step further away than Family history). The
+/// local material is the first thing she wants people to find.
 struct LibraryHomeView: View {
     @ObservedObject private var service: ReadingRoomService
     @ObservedObject private var nowPlaying: LibraryNowPlaying
@@ -34,10 +40,10 @@ struct LibraryHomeView: View {
         List {
             Section {
                 continueRow
+                localRow
                 familyRow
                 familyAskRow
                 DisclosureGroup("Other library views") {
-                    localRow
                     mediaRow("Video folders", root: "Videos", icon: "film")
                     mediaRow("Audio folders", root: "Audio", icon: "waveform")
                     mediaRow("Book folders", root: "Books", icon: "book.closed")
@@ -137,7 +143,7 @@ struct LibraryHomeView: View {
         return (item.isAudio ? "Part " : "Chapter ") + w
     }
 
-    /// Springfield and the Ozarks remains in Other library views. It opens in the family
+    /// Springfield and the Ozarks, the second row. It opens in the family
     /// library. Anywhere else (an outside seat, the App Review seat) it stays
     /// where it is, greyed out with the Family feature pack's reason: her
     /// Sep 25 rule for pack features is greyed, never hidden. Until that is
