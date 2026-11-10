@@ -774,6 +774,90 @@ func testJunkOnlyTagIsStillNeverSentAlone() {
 }
 testJunkOnlyTagIsStillNeverSentAlone()
 
+// ─────────────────────────────────────────────────────────────────────────────
+// T23 — A REFUSED TAG WITH WORDS IN IT ENDS THE CARRY.
+// (Nov 10 2026, the rule Android took the same day in its commit 35d4a05.)
+//
+// T22 refuses "whispering..." as a direction. With a carry already in force the
+// OLDER direction was then stamped in front of the newer tag
+// (`%%%excited%%% %%%whispering...%%% Come closer`) and again on the piece after
+// it. Before T22 the newer tag simply replaced the carry. A refused tag with
+// words in it is never carried, but it is the newest thing the writer asked
+// for, so it ends the carry: the piece goes out as written and the next piece
+// is not stamped. A blank pair and a sound are not a new direction, so the
+// carry runs on past them.
+
+func testRefusedTagEndsTheCarry() {
+    let first = "This first sentence is long enough to go out as a piece all on its own today. "
+    let second = "Come closer and listen, because I am only going to say this one single time and I do not "
+        + "want anybody out in the hallway to hear a word of it while the door is still open like that. "
+    let third = "And this is the next sentence, which is also long enough to stand as a piece by itself "
+        + "once the reply has finished arriving and the last of it has been flushed out to the voice."
+    var cases = 0
+    var doubleStamped = 0
+    var staleOnNewTag = 0
+    var staleOnNext = 0
+    var wrongShape: [String] = []
+    for odd in ["whispering...", "whispering!", "whispering\u{2026}", "really?", String(repeating: "x", count: 61)] {
+        for size in [1, 7, 40, 5000] {
+            cases += 1
+            let pieces = run("%%%excited%%% " + first + "%%%" + odd + "%%% " + second + third, chunk: size)
+            if pieces.contains(where: { $0.contains("%%% %%%") }) { doubleStamped += 1 }
+            if let newTag = pieces.first(where: { $0.contains("Come closer") }), !newTag.hasPrefix("%%%" + odd + "%%% Come closer") {
+                staleOnNewTag += 1
+            }
+            if let next = pieces.first(where: { $0.contains("And this is the next") }), !next.hasPrefix("And this is the next") {
+                staleOnNext += 1
+            }
+            if pieces.count != 3 || !(pieces.first ?? "").hasPrefix("%%%excited%%% This first") {
+                wrongShape.append("\(odd.prefix(14)) at \(size): \(pieces.count) pieces")
+            }
+        }
+    }
+    print("  T23 refused-tag replay: \(doubleStamped) double stamps, \(staleOnNewTag) stale leads, \(staleOnNext) stale next pieces, in \(cases) replies")
+    check("T23: the older direction is never stamped in front of a refused tag", doubleStamped == 0,
+          "\(doubleStamped) of \(cases) replies held two tags back to back")
+    check("T23: the piece with the refused tag goes out as written", staleOnNewTag == 0,
+          "\(staleOnNewTag) of \(cases) replies changed it")
+    check("T23: the piece after a refused tag is not stamped", staleOnNext == 0,
+          "\(staleOnNext) of \(cases) replies stamped it")
+    check("T23: each reply is still three pieces, the first one steered", wrongShape.isEmpty, wrongShape.joined(separator: "; "))
+
+    // Control: a plain direction in the same place replaces the carry, as it always did.
+    let plain = run("%%%excited%%% " + first + "%%%whispering%%% " + second + third, chunk: 5000)
+    check("T23 control: a plain direction still replaces the carry",
+          plain.count == 3 && plain[1].hasPrefix("%%%whispering%%% Come closer") && plain[2].hasPrefix("%%%whispering%%% And this"),
+          "\(plain)")
+    // A blank pair is not a new direction: the carry runs on past it.
+    let blank = run("%%%excited%%% " + first + "%%%\n%%% " + second + third, chunk: 5000)
+    check("T23: a blank pair leaves the carry alone", blank.count >= 2 && blank[1].hasPrefix("%%%excited%%% "), "\(blank)")
+    // Neither is a sound, even one written with a stop in it.
+    let sound = run("%%%excited%%% " + first + "%%%laughs!%%% " + second + third, chunk: 5000)
+    check("T23: a sound leaves the carry alone", sound.count >= 2 && sound[1].hasPrefix("%%%excited%%% %%%laughs!%%% Come closer"), "\(sound)")
+
+    // The same in the middle of a piece: the refused tag ends the carry for the piece after.
+    var s = SpeechStreamer(firstPieceChars: 1, minPieceChars: 1, maxPieceChars: 8000)
+    _ = s.push("%%%warm%%% I was hoping you would call. ")
+    let middle = s.push("Well, %%%wry!%%% that certainly went somewhere. ")
+    let next = s.push("I had a different plan for lunch. ")
+    check("T23: a refused tag in the middle of a piece does not stop that piece's own stamp",
+          (middle.first ?? "").hasPrefix("%%%warm%%% Well, %%%wry!%%%"), "\(middle)")
+    check("T23: a refused tag in the middle of a piece ends the carry for the next one",
+          next == ["I had a different plan for lunch."], "\(next)")
+
+    // PART 92.11's drop still holds for a refused tag with nothing after it,
+    // and a sound alone is still a real thing to speak.
+    var alone = SpeechStreamer()
+    var out = alone.push("%%%Well. That was something!%%%")
+    out += alone.flush()
+    check("T23: a sentence-shaped tag with nothing after it is never sent alone", out.isEmpty, "sent \(out)")
+    var laugh = SpeechStreamer()
+    var heard = laugh.push("%%%laugh%%%")
+    heard += laugh.flush()
+    check("T23: a sound alone is still spoken", heard == ["%%%laugh%%%"], "sent \(heard)")
+}
+testRefusedTagEndsTheCarry()
+
 // ── Part 98: the streaming player's pure half (StreamingWavParser) ──────────
 //
 // The streamed lane's failure modes that ARE catchable here: header math off
