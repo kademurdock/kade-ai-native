@@ -421,19 +421,6 @@ struct SpeechStreamer {
         if let body = leadingTagBody(of: piece), !Self.isCarriableDirection(body), !hasSpeechAfterDirection(piece) {
             return nil
         }
-        /* NOV 10 2026 - A REFUSED TAG WITH WORDS IN IT ENDS THE CARRY (the
-         * rule Android took the same day, commit 35d4a05, so both phones
-         * follow one rule). "whispering..." or "excited!" is refused as a
-         * direction, but it is still the newest thing the writer asked for.
-         * With a carry active the older direction was stamped in front of it
-         * (TAG excited TAG TAG whispering... TAG Come closer) and again on the
-         * piece after. Now the piece goes out exactly as written and the
-         * carry ends. A blank pair and a sound are not a new direction, so
-         * the carry runs on past them, as before. */
-        if let body = leadingTagBody(of: piece), Self.endsTheCarry(body) {
-            clearCarry()
-            return piece
-        }
         if let carried = carriedDirection {
             // Spent: the direction has coloured its thought and the next beat
             // or two. Return to her own register, same as a written reset.
@@ -484,12 +471,7 @@ struct SpeechStreamer {
               let close = piece.range(of: "%%%", range: open.upperBound..<piece.endIndex) {
             let inner = String(piece[open.upperBound..<close.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if Self.isCarriableDirection(inner) && !Self.isNonVerbalSound(inner) {
-                last = inner
-            } else if Self.endsTheCarry(inner) {
-                // Refused, but newer than the carry: end it, carry nothing.
-                last = Self.resetWord
-            }
+            if Self.isCarriableDirection(inner) && !Self.isNonVerbalSound(inner) { last = inner }
             position = close.upperBound
         }
         return last
@@ -512,15 +494,6 @@ struct SpeechStreamer {
         if inner.rangeOfCharacter(from: .newlines) != nil { return false }
         return !inner.contains(where: { $0 == "." || $0 == "!" || $0 == "?" || $0 == "\u{2026}" || $0 == "%" })
     }
-
-    /// A tag with words in it that is neither a carriable direction nor a
-    /// sound: never carried, but it ends an older carry (Nov 10 2026).
-    private static func endsTheCarry(_ inner: String) -> Bool {
-        !inner.isEmpty && !isCarriableDirection(inner) && !isNonVerbalSound(inner)
-    }
-
-    /// What lastDirection(of:) answers for such a tag; isResetTag reads it.
-    private static let resetWord = "reset"
 
     /* ⭐ PART 95 (Aug 28 2026) — THE SOUND LIST CATCHES UP WITH THE PROXY'S.
      *
