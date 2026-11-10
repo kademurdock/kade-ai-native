@@ -1197,6 +1197,9 @@ final class ReadingRoomPlayer: ObservableObject {
         filePosition = max(0, seconds)
         spokenScenes = Set(scenes.indices.filter { scenes[$0].t < seconds - 1 })
         scheduleSave()
+        // Nov 10 2026: the lock screen learns the new place at once. While
+        // paused the clock that used to tell it does not tick.
+        updateNowPlayingTime()
     }
 
     /// Speak one line through the platform voice; waits until it has been said.
@@ -1228,6 +1231,7 @@ final class ReadingRoomPlayer: ObservableObject {
         p.seek(to: CMTime(seconds: target + (book?.tracks[s].clipBegin ?? 0), preferredTimescale: 1000))
         filePosition = target
         scheduleSave()
+        updateNowPlayingTime()
     }
 
     // MARK: progress
@@ -1273,6 +1277,16 @@ final class ReadingRoomPlayer: ObservableObject {
         center.nextTrackCommand.isEnabled = true
         center.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.nextPart() }; return .success }
         center.stopCommand.isEnabled = false
+        // Nov 10 2026: the lock screen's own position bar can be dragged for a
+        // recording or a video (it could only be looked at before). A text
+        // book is read aloud chunk by chunk and has no such bar.
+        center.changePlaybackPositionCommand.isEnabled = book?.isAudio ?? false
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let change = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            let target = change.positionTime
+            Task { @MainActor in self?.seekFile(to: target) }
+            return .success
+        }
     }
     /// Sep 23 2026 (A2): the book now outlives its screen, so a call can start
     /// while it is open. The call screen wires play/pause to its own barge-in
@@ -1287,9 +1301,11 @@ final class ReadingRoomPlayer: ObservableObject {
         guard remoteWired else { return }
         remoteWired = false
         let center = MPRemoteCommandCenter.shared()
-        for cmd in [center.playCommand, center.pauseCommand, center.togglePlayPauseCommand, center.skipBackwardCommand, center.skipForwardCommand, center.previousTrackCommand, center.nextTrackCommand] {
+        let commands: [MPRemoteCommand] = [center.playCommand, center.pauseCommand, center.togglePlayPauseCommand, center.skipBackwardCommand, center.skipForwardCommand, center.previousTrackCommand, center.nextTrackCommand, center.changePlaybackPositionCommand]
+        for cmd in commands {
             cmd.removeTarget(nil)
         }
+        center.changePlaybackPositionCommand.isEnabled = false
         center.skipBackwardCommand.isEnabled = false
         center.skipForwardCommand.isEnabled = false
         center.nextTrackCommand.isEnabled = false

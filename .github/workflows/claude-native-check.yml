@@ -43,6 +43,8 @@ jobs:
           if [ -f run-ask-to-join-tests.sh ]; then bash run-ask-to-join-tests.sh 2>&1 | tail -n 40; fi
           if [ -f run-soul-tests.sh ]; then bash run-soul-tests.sh 2>&1 | tail -n 20; fi
           if [ -f run-arcade-tests.sh ]; then bash run-arcade-tests.sh 2>&1 | tail -n 20; fi
+          if [ -f run-library-browse-tests.sh ]; then bash run-library-browse-tests.sh 2>&1 | tail -n 20; fi
+          if [ -f run-library-player-tests.sh ]; then bash run-library-player-tests.sh 2>&1 | tail -n 40; fi
 
       - name: Generate the simulator project
         timeout-minutes: 10

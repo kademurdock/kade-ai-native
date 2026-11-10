@@ -223,9 +223,22 @@ struct VideoPane: View {
     /// server lets into the described-video trial.
     @ObservedObject private var describedVideo = DescribedVideoAccess.shared
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+    /* Nov 10 2026: the video file's own caption tracks and sound tracks (a
+     * second sound track is how a film carries its described audio). Apple's
+     * player has had them inside its own controls all along, three taps deep;
+     * here each is one labelled menu right under the picture. A menu shows
+     * only when the file really has the tracks, so a commercial with neither
+     * gains nothing to step past. */
+    @State private var captionGroup: AVMediaSelectionGroup?
+    @State private var captionOptions: [AVMediaSelectionOption] = []
+    @State private var captionPick = -1
+    @State private var soundGroup: AVMediaSelectionGroup?
+    @State private var soundOptions: [AVMediaSelectionOption] = []
+    @State private var soundPick = 0
 
     private var track: RRTrack? { book.tracks.indices.contains(player.s) ? book.tracks[player.s] : nil }
     private var isVideo: Bool { (track?.mime ?? "").hasPrefix("video/") }
+    private var trackChoicesID: String { "\(book.id)|\(player.s)|\(isVideo)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -238,6 +251,42 @@ struct VideoPane: View {
                     AirPlayPicker().frame(width: 44, height: 44)
                     Text("AirPlay").font(.footnote).foregroundStyle(.secondary)
                     Spacer()
+                }
+            }
+            if isVideo {
+                // Nov 10 2026: the ways to follow the picture sit together,
+                // right under it: the library's own described scenes, the
+                // file's captions, the file's described sound track.
+                if desc?.state == "done" {
+                    Toggle("Play with descriptions (pauses to describe each scene)", isOn: $player.describedMode)
+                }
+                if !captionOptions.isEmpty {
+                    HStack {
+                        Text("Captions").accessibilityHidden(true)
+                        Spacer()
+                        Picker("Captions", selection: Binding(get: { captionPick }, set: { chooseCaptions($0) })) {
+                            Text("Off").tag(-1)
+                            ForEach(Array(captionOptions.enumerated()), id: \.offset) { i, option in
+                                Text(option.displayName).tag(i)
+                            }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("Captions")
+                    }
+                }
+                if soundOptions.count > 1 {
+                    HStack {
+                        Text("Sound track").accessibilityHidden(true)
+                        Spacer()
+                        Picker("Sound track", selection: Binding(get: { soundPick }, set: { chooseSound($0) })) {
+                            ForEach(Array(soundOptions.enumerated()), id: \.offset) { i, option in
+                                Text(soundName(option)).tag(i)
+                            }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("Sound track")
+                        .accessibilityHint("A film's described audio, when it has one, is a sound track here.")
+                    }
                 }
             }
             if isVideo && describedVideo.allowed {
@@ -262,9 +311,6 @@ struct VideoPane: View {
                         if desc?.state == "done" {
                             Button("Read it") { Task { await readDescription() } }
                         }
-                    }
-                    if desc?.state == "done" {
-                        Toggle("Play with descriptions (pauses to describe each scene)", isOn: $player.describedMode)
                     }
                     if !descStatus.isEmpty { Text(descStatus).font(.footnote).foregroundStyle(.secondary) }
                     if let s = desc?.summary, !s.isEmpty { Text(s) }
@@ -298,6 +344,65 @@ struct VideoPane: View {
         .onChange(of: player.s) { _, _ in desc = track?.description; recap = track?.recaps?.last; player.scenes = desc?.scenes ?? [] }
         .onChange(of: desc) { _, d in player.scenes = d?.scenes ?? [] }
         .onChange(of: recapRequest) { _, _ in if isVideo { Task { await startRecap() } } }
+        .task(id: trackChoicesID) { await loadTrackChoices() }
+    }
+
+    /// Reads which caption and sound tracks this video file carries.
+    private func loadTrackChoices() async {
+        captionGroup = nil
+        captionOptions = []
+        captionPick = -1
+        soundGroup = nil
+        soundOptions = []
+        soundPick = 0
+        guard isVideo, let item = player.avPlayer?.currentItem else { return }
+        let asset = item.asset
+        if let group = try? await asset.loadMediaSelectionGroup(for: .legible) {
+            guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
+            let options = group.options.filter { !$0.hasMediaCharacteristic(.containsOnlyForcedSubtitles) }
+            captionGroup = group
+            captionOptions = options
+            if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = options.firstIndex(of: chosen) {
+                captionPick = i
+            }
+        }
+        if let group = try? await asset.loadMediaSelectionGroup(for: .audible) {
+            guard !Task.isCancelled, player.avPlayer?.currentItem === item else { return }
+            soundGroup = group
+            soundOptions = group.options
+            if let chosen = item.currentMediaSelection.selectedMediaOption(in: group), let i = group.options.firstIndex(of: chosen) {
+                soundPick = i
+            }
+        }
+    }
+
+    private func chooseCaptions(_ index: Int) {
+        guard let group = captionGroup, let item = player.avPlayer?.currentItem else { return }
+        if captionOptions.indices.contains(index) {
+            captionPick = index
+            item.select(captionOptions[index], in: group)
+            announce("Captions: \(captionOptions[index].displayName).")
+        } else {
+            captionPick = -1
+            item.select(nil, in: group)
+            announce("Captions off.")
+        }
+    }
+
+    private func chooseSound(_ index: Int) {
+        guard let group = soundGroup, let item = player.avPlayer?.currentItem, soundOptions.indices.contains(index) else { return }
+        soundPick = index
+        item.select(soundOptions[index], in: group)
+        announce("Sound track: \(soundName(soundOptions[index])).")
+    }
+
+    /// A sound track's name, saying so when it is the described one and its
+    /// own name does not.
+    private func soundName(_ option: AVMediaSelectionOption) -> String {
+        let name = option.displayName
+        let described = option.hasMediaCharacteristic(.describesVideoForAccessibility)
+        if described, name.range(of: "descri", options: .caseInsensitive) == nil { return name + ", described audio" }
+        return name
     }
 
     private func startDescribe() async {

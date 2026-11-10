@@ -61,6 +61,7 @@ jobs:
           run_gate bash run-memory-receipt-tests.sh
           run_gate bash run-reply-focus-tests.sh
           run_gate bash run-library-browse-tests.sh
+          run_gate bash run-library-player-tests.sh
           run_gate python3 VoiceSelectionTests/run.py
           run_gate bash run-world-tests.sh
           run_gate bash run-arcade-tests.sh

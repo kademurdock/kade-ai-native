@@ -90,6 +90,13 @@ struct ReadingRoomView: View {
     /// Part 292: Kade's painted pictures here are all silent (see KadeArt).
     @KadeArtShown private var artShown: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// Nov 10 2026: the player's status line. Every line the screen speaks is
+    /// also shown here for a while, in a space that is always there, so
+    /// nothing moves when it changes (Part 296 took the old inserted status
+    /// line out because it pushed everything under her finger).
+    @State private var statusLine = ""
+    @State private var statusClear: Task<Void, Never>?
+    @KadeContrastPolicy private var highContrast: Bool
 
     /// Add and requests (and a file from the share sheet).
     init(apiClient: KadeAPIClient, incomingFile: URL? = nil, incomingName: String? = nil) {
@@ -515,12 +522,13 @@ struct ReadingRoomView: View {
                     .background(followAlong && player.isPlaying ? Color.yellow.opacity(0.22) : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
                     .accessibilityLabel("Now: " + (player.nowText.isEmpty ? player.partTitle : player.nowText))
 
-                if book.isAudio {
-                    Text("\(ReadingRoomPlayer.clock(player.filePosition)) of \(ReadingRoomPlayer.clock(player.fileDuration))")
-                        .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                // Nov 10 2026: the clock lives in the status line over the
+                // transport now, with the time left. A one-part item (most
+                // commercials and clips) has no Part menu: it could only
+                // ever offer "1".
+                if LibraryPlayerWords.showsPartControls(partCount: book.partCount) {
+                    chapterPicker(book)
                 }
-
-                chapterPicker(book)
                 if !book.isAudio {
                     Toggle("Highlight the spoken passage", isOn: $followAlong)
                         .accessibilityHint("Larger text and a highlighted passage while reading. Passage timing, not individual words. VoiceOver focus stays where you put it.")
@@ -632,6 +640,7 @@ struct ReadingRoomView: View {
 
     private var transport: some View {
         VStack(spacing: 10) {
+            statusRow
             if player.isAudio, player.fileDuration > 0 {
                 Slider(value: Binding(get: { scrubbing ? scrubPosition : player.filePosition }, set: { scrubPosition = $0 }),
                        in: 0...max(1, player.fileDuration), onEditingChanged: { editing in
@@ -639,16 +648,27 @@ struct ReadingRoomView: View {
                     if !editing { player.seekFile(to: scrubPosition) }
                 })
                 .accessibilityLabel("Playback position")
-                .accessibilityValue("\(ReadingRoomPlayer.clock(player.filePosition)) of \(ReadingRoomPlayer.clock(player.fileDuration))")
+                // Nov 10 2026: spoken as time ("40 seconds of 2 minutes 5
+                // seconds"), and one swipe moves further in a longer
+                // recording: 10 seconds, 30 past ten minutes, a minute past
+                // an hour. The hint names the step.
+                .accessibilityValue(LibraryPlayerWords.spokenPosition(scrubbing ? scrubPosition : player.filePosition, of: player.fileDuration))
+                .accessibilityHint(LibraryPlayerWords.seekHint(duration: player.fileDuration))
                 .accessibilityAdjustableAction { direction in
-                    if direction == .increment { player.forward() }
-                    else if direction == .decrement { player.back() }
+                    let step = LibraryPlayerWords.seekStep(duration: player.fileDuration)
+                    if direction == .increment { player.skip(seconds: step) }
+                    else if direction == .decrement { player.skip(seconds: -step) }
                 }
             }
             HStack(spacing: 10) {
-                bigButton(player.isAudio ? "Previous part" : "Previous chapter", icon: "backward.end.fill", hint: "") { player.previousPart() }
+                // Nov 10 2026: Previous and Next only when there is more than one part.
+                if LibraryPlayerWords.showsPartControls(partCount: player.partCount) {
+                    bigButton(player.isAudio ? "Previous part" : "Previous chapter", icon: "backward.end.fill", hint: "") { player.previousPart() }
+                }
                 bigButton("Bookmark", icon: "bookmark.fill", hint: "Marks this spot so you can come back to it.") { Task { await addBookmark() } }
-                bigButton(player.isAudio ? "Next part" : "Next chapter", icon: "forward.end.fill", hint: "") { player.nextPart() }
+                if LibraryPlayerWords.showsPartControls(partCount: player.partCount) {
+                    bigButton(player.isAudio ? "Next part" : "Next chapter", icon: "forward.end.fill", hint: "") { player.nextPart() }
+                }
             }
             HStack(spacing: 12) {
                 seekButton(backward: true)
@@ -656,17 +676,46 @@ struct ReadingRoomView: View {
                     VStack(spacing: 4) {
                         // A skip still loading counts as playing (it plays when it lands).
                         Image(systemName: player.isPlayingOrResuming ? "pause.fill" : "play.fill").font(.title)
-                        Text(player.isPlayingOrResuming ? "Pause" : "Play").font(.footnote.bold())
+                        Text(playWord).font(.footnote.bold())
                     }
                     .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 .buttonStyle(.borderedProminent)
-                .accessibilityLabel(player.isPlayingOrResuming ? "Pause" : "Play")
+                .accessibilityLabel(playWord)
                 .accessibilityFocused($focus, equals: .play)
                 .accessibilityActions { if let book = openBook { bookActions(book) } }
                 seekButton(backward: false)
             }
         }
+    }
+
+    /// "Resume" after the book paused itself for a call or a voice message,
+    /// the same word the Now Playing bar uses for the same moment.
+    private var playWord: String {
+        LibraryPlayerWords.playWord(playing: player.isPlayingOrResuming, pausedFor: nowPlaying.pausedFor)
+    }
+
+    /// The status line: the last thing this screen said, else why the book
+    /// paused itself, else where it is and how much is left. Two lines of
+    /// room are always kept, so the controls under it never move. VoiceOver
+    /// has already heard each message as an announcement; touching the line
+    /// reads the current one again.
+    private var statusRow: some View {
+        let book = openBook
+        let isAudio = book?.isAudio ?? false
+        let count = book?.partCount ?? 0
+        let resting = LibraryPlayerWords.restingStatus(isAudio: isAudio, position: player.filePosition, duration: player.fileDuration, part: player.s, partCount: count)
+        let spokenResting = LibraryPlayerWords.spokenRestingStatus(isAudio: isAudio, position: player.filePosition, duration: player.fileDuration, part: player.s, partCount: count)
+        let shown = LibraryPlayerWords.status(message: statusLine, pausedFor: nowPlaying.pausedFor, resting: resting)
+        let spoken = LibraryPlayerWords.status(message: statusLine, pausedFor: nowPlaying.pausedFor, resting: spokenResting)
+        return Text(shown.isEmpty ? " " : shown)
+            .font(.footnote.monospacedDigit())
+            .foregroundStyle(highContrast ? Color.primary : Color.secondary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2, reservesSpace: true)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Status")
+            .accessibilityValue(spoken.isEmpty ? "Nothing to report" : spoken)
     }
 
     private func seekButton(backward: Bool) -> some View {
@@ -907,8 +956,21 @@ struct ReadingRoomView: View {
 
     /// Part 296: spoken only. The old status line was inserted above the
     /// list after every announcement and moved everything under her finger.
+    ///
+    /// Nov 10 2026: also shown, on the player's status line (statusRow), which
+    /// keeps its own fixed room, so a sighted person sees "Bookmark placed" or
+    /// an error instead of nothing. The line goes back to the clock by itself.
     private func announce(_ message: String) {
         UIAccessibility.post(notification: .announcement, argument: message)
+        guard isPlayerScreen else { return }
+        statusClear?.cancel()
+        statusLine = message
+        let seconds = LibraryPlayerWords.statusSeconds(for: message)
+        statusClear = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            statusLine = ""
+        }
     }
 }
 
