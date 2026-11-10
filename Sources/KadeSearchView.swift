@@ -19,9 +19,15 @@ struct KadeSearchView: View {
     @FocusState private var fieldFocused: Bool
     @State private var libraryResults: [RRItem] = []
     @State private var librarySearching = false
+    @State private var libraryLoadingMore = false
+    @State private var libraryMore = false
+    @State private var libraryPage = 0
+    @State private var libraryQuery: String?
+    @State private var libraryGeneration = UUID()
     @State private var libraryError: String?
     @State private var libraryTask: Task<Void, Never>?
     @State private var announceTask: Task<Void, Never>?
+    @AccessibilityFocusState private var libraryFocusedID: String?
     @ObservedObject private var describedVideo = DescribedVideoAccess.shared
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -165,13 +171,11 @@ struct KadeSearchView: View {
                             ProgressView().accessibilityHidden(true)
                             Text("Searching the Library…").foregroundStyle(.secondary)
                         }
-                    } else if let libraryError {
-                        Text(libraryError).foregroundStyle(.secondary)
-                    } else if libraryResults.isEmpty {
+                    } else if libraryResults.isEmpty, libraryError == nil {
                         Text(trimmed.count < 3 ? "Type at least three letters to search the Library." : "Nothing in the Library matches.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(libraryResults.prefix(25)) { item in
+                        ForEach(libraryResults) { item in
                             Button {
                                 // Part 296: the player opens on top of the
                                 // Library tab's place; Back returns there.
@@ -183,7 +187,21 @@ struct KadeSearchView: View {
                             .labelStyle(KadeRowLabelStyle(tint: .brown, caption: libraryDetail(item)))
                             .accessibilityLabel(libraryDetail(item).isEmpty ? item.title : "\(item.title). \(libraryDetail(item))")
                             .accessibilityHint("Opens it in the Library.")
+                            .accessibilityFocused($libraryFocusedID, equals: item.id)
                         }
+                    }
+                    if let libraryError {
+                        Text(libraryError).foregroundStyle(.secondary)
+                        if libraryResults.isEmpty {
+                            Button("Try again") { scheduleLibrarySearch() }
+                        }
+                    }
+                    if libraryMore && !librarySearching {
+                        Button(libraryLoadingMore ? "Loading more…" : "Show more Library results") {
+                            loadMoreLibraryResults()
+                        }
+                        .disabled(libraryLoadingMore)
+                        .accessibilityHint("Adds the next results and moves to the first new item.")
                     }
                 } header: {
                     heading("Library")
@@ -194,6 +212,7 @@ struct KadeSearchView: View {
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            if trimmed.count >= 3, libraryQuery != trimmed { scheduleLibrarySearch() }
             // Focus the field only if nothing's typed yet; returning from a
             // result must not throw the keyboard back up.
             if query.isEmpty {
@@ -210,6 +229,9 @@ struct KadeSearchView: View {
         }
         .onDisappear {
             libraryTask?.cancel()
+            libraryGeneration = UUID()
+            librarySearching = false
+            libraryLoadingMore = false
             announceTask?.cancel()
         }
     }
@@ -292,7 +314,7 @@ struct KadeSearchView: View {
         if places > 0 { bits.append(places == 1 ? "1 place" : "\(places) places") }
         if characters > 0 { bits.append(characters == 1 ? "1 character" : "\(characters) characters") }
         if chats > 0 { bits.append(chats == 1 ? "1 chat" : "\(chats) chats") }
-        if !libraryResults.isEmpty { bits.append(libraryResults.count == 1 ? "1 Library item" : "\(min(libraryResults.count, 25)) Library items") }
+        if !libraryResults.isEmpty { bits.append(libraryResults.count == 1 ? "1 Library item" : "\(libraryResults.count) Library items") }
         if bits.isEmpty { return librarySearching ? "Searching…" : "Nothing found yet. Try a different word." }
         return "Found " + bits.joined(separator: ", ") + "."
     }
@@ -302,9 +324,16 @@ struct KadeSearchView: View {
     private func scheduleLibrarySearch() {
         libraryTask?.cancel()
         let q = trimmed
+        let generation = UUID()
+        libraryGeneration = generation
         libraryError = nil
+        libraryResults = []
+        libraryQuery = nil
+        libraryPage = 0
+        libraryMore = false
+        libraryLoadingMore = false
+        libraryFocusedID = nil
         guard q.count >= 3 else {
-            libraryResults = []
             librarySearching = false
             return
         }
@@ -312,16 +341,48 @@ struct KadeSearchView: View {
         libraryTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard !Task.isCancelled else { return }
-            do {
-                let found = try await ReadingRoomService(client: apiClient).search(q)
-                guard !Task.isCancelled, q == trimmed else { return }
-                libraryResults = found
-            } catch {
-                guard !Task.isCancelled else { return }
-                libraryResults = []
-                libraryError = "The Library didn't answer. Try again in a moment."
+            await fetchLibraryPage(q, page: 0, generation: generation)
+        }
+    }
+
+    private func loadMoreLibraryResults() {
+        guard !librarySearching, !libraryLoadingMore, libraryMore,
+              let q = libraryQuery, q == trimmed else { return }
+        libraryLoadingMore = true
+        libraryError = nil
+        let generation = libraryGeneration
+        let nextPage = libraryPage + 1
+        libraryTask = Task { @MainActor in
+            await fetchLibraryPage(q, page: nextPage, generation: generation)
+        }
+    }
+
+    @MainActor
+    private func fetchLibraryPage(_ q: String, page: Int, generation: UUID) async {
+        defer {
+            if generation == libraryGeneration {
+                librarySearching = false
+                libraryLoadingMore = false
             }
-            librarySearching = false
+        }
+        do {
+            let found = try await ReadingRoomService(client: apiClient).searchPage(q, page: page)
+            guard !Task.isCancelled, generation == libraryGeneration, q == trimmed else { return }
+            var known = Set(libraryResults.map { $0.id })
+            let added = found.items.filter { known.insert($0.id).inserted }
+            libraryResults.append(contentsOf: added)
+            libraryPage = page
+            libraryQuery = q
+            libraryMore = found.more == true && !found.items.isEmpty
+            if page > 0 {
+                UIAccessibility.post(notification: .announcement, argument: "\(added.count) more Library results. \(libraryResults.count) shown.")
+                libraryFocusedID = added.first?.id
+            }
+        } catch {
+            guard !Task.isCancelled, generation == libraryGeneration, q == trimmed else { return }
+            libraryError = page == 0
+                ? "The Library didn't answer. Try again in a moment."
+                : "More Library results could not be loaded. Try again."
         }
     }
 
