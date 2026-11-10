@@ -239,8 +239,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.17: Voice speed in numbers, characters on Talk",
+                title: "Newest build, 2.2.18: A clearer Library player, quicker browsing",
                 body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.17: Voice speed in numbers, characters on Talk",
+                body: "Voice speed now shows real numbers, from 0.75x to 1.5x, in Settings and beside Hear replies, and calls use your number too. Character's speed is the default and plays a character's own voice the way its builder set it. Character Builder has a Speed row to set that number. A voice you picked yourself plays at 1x unless you choose a number. The Library's speed list uses the same numbers. The Marketplace moved from Play to the Talk tab as Meet the characters, with the Matchmaker inside it. On the More tab, a closed Power tools group holds Saved replies, Workspaces, Prompts and Bookmarks. The app says character now where it said agent, so Agent Builder is Character Builder and Agent work is Saved replies. Help and About pages say who the house cast are: synthetic souls, digital beings with their own memory, days and opinions. If your account can make described videos, Describe now starts with a card, A video you can listen to, that leads there."
             ),
             HelpEntry(
                 title: "In 2.2.8: More room for your character",
@@ -439,7 +443,7 @@ struct HelpSection: Identifiable {
         HelpSection(title: "The Library", entries: [
             HelpEntry(
                 title: "One screen at a time",
-                body: "The Library works like the Files app. Its first screen is a short list that never changes order: Continue, Springfield and the Ozarks, Video, Audio, Books, Search the Library, Recently added, Recently opened, My uploads, Collections, Family history, Talk to the Librarian, and Add and requests. Each one opens its own screen, and so does every shelf and the player, with Back at the top left. Tapping the Library tab again comes back to the first screen."
+                body: "The Library works like the Files app. Its first screen starts with a short list that never changes order: Continue, Springfield and the Ozarks, Family history, Other library views, Talk to the Librarian, and Add and requests. Other library views is a closed group that holds Video folders, Audio folders, Book folders, Recently added, Recently opened, My uploads and Collections. Under the list is the catalog of everything your account can open, with search and the Type, Decade and Format menus. Each row opens its own screen, and so does every shelf and the player, with Back at the top left. Tapping the Library tab again comes back to the first screen."
             ),
             HelpEntry(
                 title: "Shelves and counts",
