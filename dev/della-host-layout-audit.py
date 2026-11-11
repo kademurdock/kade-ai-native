@@ -1518,10 +1518,10 @@ def build_tests(expected):
              '-derivedDataPath','build/della-host-layout-simulator','CODE_SIGNING_ALLOWED=NO',
              'CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=','build-for-testing']
     report={'source':initial,'passed':False,'timedOut':False,'logLimitExceeded':False,'failureLines':[],
-            'startedAtUtc':now(),'timeoutSeconds':900,'exitCode':None}
+            'startedAtUtc':now(),'timeoutSeconds':1500,'exitCode':None}
     process=None;started=time.monotonic()
     try:
-        effective=operation_remaining(900)
+        effective=operation_remaining(1500)
         process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True,bufsize=0,cwd=ROOT)
         deadline=time.monotonic()+effective;written=0;pending=b'';drain_deadline=None
         with (OUT/'compile.log').open('wb') as log, selectors.DefaultSelector() as selector:

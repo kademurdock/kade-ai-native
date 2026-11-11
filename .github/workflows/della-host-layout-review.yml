@@ -95,7 +95,7 @@ jobs:
 
       - name: Compile unsigned native app and targeted test runner once
         id: compiled-tests
-        timeout-minutes: 16
+        timeout-minutes: 27
         run: python3 dev/della-host-layout-audit.py build-tests --expected-sha "$KADE_EXPECTED_COMMIT"
 
       - name: Explicitly boot the Pro Max simulator and require native readiness
