@@ -431,6 +431,11 @@ final class StreamingCallService: NSObject, ObservableObject {
         // audio that costs nothing to rule out.
         task.maximumMessageSize = 16 * 1024 * 1024
         webSocketTask = task
+        // DESC-3: a new socket starts with no frame in flight; bumping the
+        // number makes a late completion from the old socket a no-op.
+        frameSendSeq &+= 1
+        frameSendStartedAt = nil
+        frameHoldUntil = .distantPast
         heardLog = CallHeardLog() // clip numbers count from 1 on each socket, reconnects included
         task.resume()
         // Session 26 (Kade: re-calling inside an open conversation must
@@ -563,13 +568,55 @@ final class StreamingCallService: NSObject, ObservableObject {
         liveNotice = nil
     }
 
+    /// DESC-3 (Nov 12 2026 audit): camera frames share the socket with the
+    /// microphone. Only one frame may be in flight: while one is still being
+    /// written the next is dropped, so pictures never queue up in front of
+    /// her voice on a slow uplink. The camera offers a newer one 0.7 s later
+    /// (her choice: the cadence stays at 0.7 s; only this gate is new).
+    /// `frameSendStartedAt` is nil when nothing is in flight. A frame "in
+    /// flight" for more than ten seconds is treated as lost, so a completion
+    /// that never arrives cannot blind the Spotter for the rest of the call.
+    /// `frameSendSeq` makes a late completion from an old socket harmless
+    /// after a reconnect.
+    private var frameSendStartedAt: Date?
+    private var frameSendSeq = 0
+    /// After a slow frame, pictures wait as long as that frame took to write
+    /// (at most 4 s), so her voice gets at least half of a thin uplink. On a
+    /// good connection this is about zero.
+    private var frameHoldUntil: Date = .distantPast
+    /// Kill switch, no build needed on a test device: UserDefaults
+    /// `kade.spotter.frameGate` = false sends every frame as before.
+    private static var frameGateOn: Bool {
+        UserDefaults.standard.object(forKey: "kade.spotter.frameGate") as? Bool ?? true
+    }
+
     /// One camera frame while Spotter/Live (or the plain video-sight lane)
     /// is active. `jpegData` should already be resized/compressed by the
     /// caller (`CameraCaptureController`) -- this just base64-wraps and
     /// ships it, matching the server's `{type:'frame', data: <base64 jpeg>}`
     /// contract exactly (`video-sight.js`/`video-live.js` both read it).
     func sendFrame(jpegData: Data) {
-        sendJSON(["type": "frame", "data": jpegData.base64EncodedString()])
+        guard Self.frameGateOn else {
+            sendJSON(["type": "frame", "data": jpegData.base64EncodedString()])
+            return
+        }
+        guard let task = webSocketTask else { return }
+        let now = Date()
+        if let started = frameSendStartedAt, now.timeIntervalSince(started) < 10 { return }
+        guard now >= frameHoldUntil else { return }
+        // Base64 has no character JSON must escape, so the message is written directly.
+        let text = "{\"type\":\"frame\",\"data\":\"" + jpegData.base64EncodedString() + "\"}"
+        frameSendSeq &+= 1
+        let seq = frameSendSeq
+        frameSendStartedAt = now
+        task.send(.string(text)) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.frameSendSeq == seq else { return }
+                self.frameSendStartedAt = nil
+                let took = Date().timeIntervalSince(now)
+                self.frameHoldUntil = Date().addingTimeInterval(min(max(took, 0), 4))
+            }
+        }
     }
 
     // MARK: - Ticket
