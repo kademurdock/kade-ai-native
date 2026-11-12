@@ -70,6 +70,13 @@ struct ConversationDetailView: View {
     /// must not upload it twice, which is what `sharedFileConsumed` guards.
     var initialSharedFileURL: URL? = nil
     @State private var sharedFileConsumed = false
+    /// Nov 12 2026 audit (IOS-1): `.task` runs again on EVERY re-appearance
+    /// (closing the reading view, a call, the camera, a push-pop), so the
+    /// "Hear replies" seed in `.task` must happen once per instance, the same
+    /// consume-once shape as `sharedFileConsumed` above. Without it, a chat
+    /// where she had turned Hear replies off came back from the reading view
+    /// with it silently on again.
+    @State private var readAloudSeeded = false
     /// True only for the ONE call site below that presents a fresh
     /// instance of this very view as the ROOT of its own sheet-hosted
     /// `NavigationStack` (the post-call transcript handoff). That instance
@@ -531,6 +538,10 @@ struct ConversationDetailView: View {
     /// Session 26: launch-instance Spotter call — see `showSpotterShortcut`.
     @State private var showingSpotterCall = false
     @State private var voiceOverride = ""
+    /// IOS-8 (Nov 12 2026 audit): the value the Voice button seeded
+    /// `voiceOverride` with, so the onChange below can tell the seed from
+    /// her pick and never announces (or saves) a change she did not make.
+    @State private var voiceOverrideSeed: String?
     @State private var preparingVoiceMessageId: String?
     @State private var deletingMessage: KadeMessage?
     @State private var showingSpeedPicker = false
@@ -749,11 +760,29 @@ struct ConversationDetailView: View {
         .onAppear {
             KadeChatPresence.shared.appeared()
             chatOnScreen = true
+            // IOS-4: back on screen mid-turn (reading view, camera, a call,
+            // another tab): the bubbles return. Before the voice has started
+            // this mirrors the send-start rule below; after it, the Part 109
+            // gap policy decides. Never after Stop (IOS-2).
+            if isSending, !live.waitCueHalted {
+                if !voiceService.isClipPlaying, !spokenTurnStarted {
+                    Earcons.shared.startWaitingLoop(fadeIn: 0.45)
+                } else {
+                    scheduleThinkingResume()
+                }
+            }
         }
         .onDisappear {
             messageSendingService.cancelMemoryReceiptRecovery()
             KadeChatPresence.shared.disappeared()
             chatOnScreen = false
+            // IOS-4: every stop path for the thinking loop is an onChange on
+            // THIS view, and none of them runs once it is gone. sendTask is
+            // unstructured and keeps running, so stop here and let the
+            // chatOnScreen guards keep the orphaned turn from restarting it.
+            Earcons.shared.stopWaitingLoop()
+            speechGapResume?.cancel()
+            speechGapResume = nil
             // A camera cover hides this view during intentional capture.
             // Leaving chat otherwise cancels preparation and ignores late data.
             if !showingAttachCamera {
@@ -887,11 +916,15 @@ struct ConversationDetailView: View {
             // speech and whatnot"): seed this view's own "Hear replies"
             // toggle (called "Voice messages" until the Sep 23 2026
             // redesign) from the persisted app-wide default the FIRST time
-            // this instance appears -- every ConversationDetailView
-            // instance started this at a hardcoded `false` before this,
-            // so there is no existing per-conversation choice this could
-            // ever clobber; it only changes what the starting point is.
-            readAloudEnabled = voiceService.defaultReadAloudOn
+            // this instance appears -- it only changes what the starting
+            // point is. Nov 12 2026 audit (IOS-1): "the first time" is now
+            // enforced. This task re-runs on every re-appearance, and the
+            // unguarded seed there overwrote the choice she had made in
+            // THIS chat (see `readAloudSeeded`).
+            if !readAloudSeeded {
+                readAloudSeeded = true
+                readAloudEnabled = voiceService.defaultReadAloudOn
+            }
             thinkMode = Self.thinkModeGlobal
             // Prompt Library handoff: pre-type the chosen prompt. Empty
             // check = the never-clobber guarantee promised at the
@@ -925,7 +958,20 @@ struct ConversationDetailView: View {
                 conversationId = conversation?.conversationId
             }
             if conversation != nil {
-                await load()
+                /* Nov 12 2026 audit (IOS-1): `load()` swaps the WHOLE
+                 * transcript (and the composer) for "Loading messages", which
+                 * is right only while nothing is on screen yet: the first
+                 * appearance (`isLoading` starts true) or after a failed load
+                 * (the error state is all there is to lose, and a first load
+                 * cut off by a quick Call tap lands there too). Coming back
+                 * to a transcript she was reading refreshes it IN PLACE, so
+                 * VoiceOver keeps its place and the reading view's onDismiss
+                 * still has a row to hand focus back to. */
+                if isLoading || loadError != nil {
+                    await load()
+                } else {
+                    await refreshInPlace()
+                }
             } else {
                 isLoading = false
                 // Session 26 (her ask, verbatim: "They might not all vibe
@@ -1054,6 +1100,11 @@ struct ConversationDetailView: View {
                 try? await Task.sleep(nanoseconds: 1_700_000_000)
             }
         }
+        // IOS-3 (Nov 12 2026 audit): VoiceOver's two-finger double-tap, from
+        // anywhere in the chat. Declared so the gesture never falls through
+        // to the system Now Playing target (the Library book or the last
+        // music app starting over a reply).
+        .accessibilityAction(.magicTap) { magicTap() }
     }
 
     var body: some View {
@@ -1101,6 +1152,12 @@ struct ConversationDetailView: View {
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     guard waitGeneration == speechWaitGeneration, !Task.isCancelled else {
                         KadeBreadcrumbs.drop("thinking loop: skipped, wait ended within 450ms")
+                        return
+                    }
+                    // IOS-4: she left within the 450ms. onAppear restarts the
+                    // loop if she comes back while this send is still running.
+                    guard chatOnScreen else {
+                        KadeBreadcrumbs.drop("thinking loop: skipped, chat left the screen")
                         return
                     }
                     if case .sending = sendState, !voiceService.isClipPlaying, !spokenTurnStarted {
@@ -1394,16 +1451,14 @@ struct ConversationDetailView: View {
             }
         }
         // Save the user's voice pick for the current agent whenever it
-        // changes in the picker. Idempotent: setUserVoiceOverride no-ops if
-        // the value hasn't actually changed (e.g. the seed on open).
+        // changes in the picker. IOS-8: the seed on open is not her pick, and
+        // VoicePickerView already confirms a real pick aloud, so this line
+        // says nothing (it used to announce the seed as a change, and every
+        // real pick twice).
         .onChange(of: voiceOverride) { _, v in
-            guard let id = selectedAgentId else { return }
-            Task {
-                await voiceService.setUserVoiceOverride(agentId: id, voice: v.isEmpty ? nil : v)
-                UIAccessibility.post(notification: .announcement, argument: v.isEmpty
-                    ? "\(agentDisplayLabel) will speak in the voice their creator chose."
-                    : "\(agentDisplayLabel) will now speak in \(v).")
-            }
+            guard let id = selectedAgentId, v != voiceOverrideSeed else { return }   // the seed, not her pick
+            voiceOverrideSeed = v
+            Task { await voiceService.setUserVoiceOverride(agentId: id, voice: v.isEmpty ? nil : v) }
         }
         .alert(
             "Delete this message?",
@@ -1442,10 +1497,10 @@ struct ConversationDetailView: View {
         } message: {
             Text(fillersDialogMessage)
         }
-        .onChange(of: conversationsService.actionMessage) { _, message in
-            guard let message else { return }
+        .onChange(of: conversationsService.actionMessage) { _, _ in
+            // IOS-22: take-and-clear, so exactly one live observer speaks it.
+            guard let message = conversationsService.takeActionMessage() else { return }
             UIAccessibility.post(notification: .announcement, argument: message)
-            conversationsService.actionMessage = nil
         }
     }
 
@@ -2223,16 +2278,47 @@ struct ConversationDetailView: View {
             transcriptWindow += Self.transcriptWindowStep * 2
             noteTranscriptWindow()
             rebuildRotorItems()
+            let remaining = max(0, messages.count - transcriptWindow)
             if let anchorId {
                 DispatchQueue.main.async { proxy.scrollTo(anchorId, anchor: .top) }
             }
-            let remaining = max(0, messages.count - transcriptWindow)
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: remaining > 0
-                    ? "Loaded earlier messages. \(remaining) older messages still folded away."
-                    : "Loaded the whole conversation."
-            )
+            // IOS-10 (Nov 12 2026 audit): with nothing left to load, this
+            // button is removed from under her VoiceOver cursor, and VoiceOver
+            // would fall back to the status bar or the first element. Hand
+            // focus to the newest row this tap revealed: the one just above
+            // where she was.
+            var revealedId: String?
+            if remaining == 0, let anchorId,
+               let index = messages.firstIndex(where: { $0.id == anchorId }), index > 0 {
+                revealedId = messages[index - 1].id
+            }
+            if let revealedId, UIAccessibility.isVoiceOverRunning {
+                Task { @MainActor in
+                    // Not in the tap's own commit: the revealed row has to
+                    // exist in the accessibility tree first, and VoiceOver
+                    // has to finish noticing its button is gone.
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard UIAccessibility.isVoiceOverRunning,
+                          visibleMessages.contains(where: { $0.id == revealedId }) else { return }
+                    a11yFocus = .message(revealedId)
+                }
+                // Low priority: the row she lands on is read first, and this
+                // line waits its turn instead of cutting the row off.
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: NSAttributedString(
+                        string: "Loaded the whole conversation.",
+                        attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                    )
+                )
+            } else {
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: remaining > 0
+                        ? "Loaded earlier messages. \(remaining) older messages still folded away."
+                        : "Loaded the whole conversation."
+                )
+            }
         } label: {
             Text("Show earlier messages (\(hiddenEarlierCount) more)")
                 .font(.footnote.weight(.semibold))
@@ -2269,6 +2355,43 @@ struct ConversationDetailView: View {
         }
         isLoading = false
         await refreshContextProjection()
+    }
+
+    /// Nov 12 2026 audit (IOS-1): the re-appearance twin of `load()`. No
+    /// spinner, no `isLoading` flip: the transcript, the composer and
+    /// VoiceOver's cursor stay where they are while the server is asked
+    /// whether anything moved on (a call's lines, another device). It writes
+    /// `messages` only when the server's copy really differs, and stands
+    /// aside entirely while a turn owns the transcript:
+    ///   - sending: the turn's own authoritative reload is the one writer;
+    ///   - failed: the optimistic row stays on purpose and Retry reuses it
+    ///     (`retry()` never replaces `messages` on a guess, nor may this);
+    ///   - anything that rewrote `messages` while this fetch waited (a send
+    ///     that began and even finished inside the wait, a delete, a call's
+    ///     in-place reload): that writer is newer, so this answer is dropped.
+    private func refreshInPlace() async {
+        guard let conversationId, sendState == .idle else { return }
+        let before = Self.transcriptStamp(of: messages)
+        guard let fresh = try? await conversationsService.fetchMessages(conversationId: conversationId),
+              !Task.isCancelled,
+              sendState == .idle,
+              Self.transcriptStamp(of: messages) == before,
+              Self.transcriptStamp(of: fresh) != before
+        else { return }
+        messages = fresh
+        KadeBreadcrumbs.drop("re-appear refresh: transcript changed (\(fresh.count) msgs)")
+        // An in-place change to the last message moves neither the count nor
+        // the last id, so `rotorSignature` cannot see it; rebuild directly
+        // (deferred inside, same as every other caller).
+        rebuildRotorItems()
+        await refreshContextProjection()
+    }
+
+    /// Cheap transcript fingerprint for `refreshInPlace()`: the count, the
+    /// last id and the last message's text. O(1) in the conversation's
+    /// length, same spirit as `rotorSignature`.
+    private static func transcriptStamp(of list: [KadeMessage]) -> String {
+        "\(list.count)|\(list.last?.messageId ?? "")|\(list.last?.displayText ?? "")"
     }
 
     // MARK: - Sep 23 2026 redesign: the first chat's welcome (B4)
@@ -2621,7 +2744,11 @@ struct ConversationDetailView: View {
             Button {
                 activeSheet = .voicePicker
                 if let id = selectedAgentId {
-                    Task { voiceOverride = (await voiceService.voiceOverride(forAgent: id)) ?? "" }
+                    Task {
+                        let current = (await voiceService.voiceOverride(forAgent: id)) ?? ""
+                        voiceOverrideSeed = current      // set first: the onChange sees the seed
+                        voiceOverride = current
+                    }
                 }
             } label: {
                 Image(systemName: "waveform")
@@ -2878,7 +3005,11 @@ struct ConversationDetailView: View {
                     Image(systemName: readAloudEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                     Text(readAloudEnabled ? "Hear replies: On" : "Hear replies: Off")
                         .font(.footnote)
-                    if voiceService.isSpeaking {
+                    // IOS-21: VoiceOver never reads this spinner, and its
+                    // width change sits in the composer inset where the
+                    // build 204-225 freeze hunt lived. Same gate as the
+                    // replying row's spinner.
+                    if voiceService.isSpeaking && !voiceOverOn {
                         ProgressView().scaleEffect(0.7)
                     }
                 }
@@ -3741,6 +3872,15 @@ struct ConversationDetailView: View {
     /// "Stopped." instead of the ordinary failure/Retry path.
     private func stopGenerating() {
         guard isSending else { return }
+        // IOS-2: Stop means quiet now. Pieces spoken as she writes carry no row
+        // key until a successful FINAL adopts one, so after a Stop no row could
+        // pause them. Flags first: stopSpeaking() flips isClipPlaying/isSpeaking,
+        // whose watchers would otherwise re-arm the waiting bubbles, and the
+        // stream keeps delivering text until the abort lands.
+        live.speechHalted = true
+        live.waitCueHalted = true
+        endSpeechWait()
+        voiceService.stopSpeaking()
         UIAccessibility.post(notification: .announcement, argument: "Stopping.")
         Task {
             await messageSendingService.abortActive()
@@ -3779,6 +3919,11 @@ struct ConversationDetailView: View {
         let baseText = lastUser.readableText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !baseText.isEmpty else { return }
         let parentId = lastUser.parentMessageId
+        // IOS-2: the abandoned turn must not speak, and nothing stale may sit in
+        // front of the quick answer. No endSpeechWait() here on purpose: the wait
+        // is still live, and the bubbles should cover the abort and the re-ask.
+        live.speechHalted = true
+        voiceService.stopSpeaking()
         UIAccessibility.post(
             notification: .announcement,
             argument: "Skipping the deep thinking. Getting the quick answer."
@@ -3856,15 +4001,20 @@ struct ConversationDetailView: View {
     /// disarms the watchdog. Safe to call redundantly -- stopWaitingLoop is
     /// a no-op when nothing is looping.
     private func scheduleThinkingResume() {
-        guard speechGapResume == nil,
+        guard !live.waitCueHalted else { return }   // IOS-2: no bubbles after Stop
+        // IOS-4: an off-screen or orphaned turn (onThink/onTool from a sendTask
+        // that outlived the view) must never arm a resume.
+        guard chatOnScreen, speechGapResume == nil,
               SpeechWaitPolicy.shouldResume(phase: speechWorkPhase, turnLive: spokenTurnLive,
                 clipPlaying: voiceService.isClipPlaying, paused: voiceService.isPaused,
                 speechQueued: voiceService.isSpeaking) else { return }
         speechGapResume = Task { @MainActor in
             try? await Task.sleep(nanoseconds: speechGapResumeDelay)
             guard !Task.isCancelled else { return }
+            // Clear the handle BEFORE the on-screen check: a finished handle
+            // left behind would block every later resume (entry guard above).
             speechGapResume = nil
-            guard case .sending = sendState,
+            guard chatOnScreen, !live.waitCueHalted, case .sending = sendState,
                   SpeechWaitPolicy.shouldResume(phase: speechWorkPhase, turnLive: spokenTurnLive,
                     clipPlaying: voiceService.isClipPlaying, paused: voiceService.isPaused,
                     speechQueued: voiceService.isSpeaking) else { return }
@@ -4146,7 +4296,7 @@ struct ConversationDetailView: View {
                      * right since, and the only thing turning it off bought
                      * was more silence. One less row to walk past in
                      * Settings; read-aloud being on is still the gate. */
-                    if readAloudEnabled {
+                    if readAloudEnabled, !live.speechHalted {
                         for piece in live.speech.push(chunk) {
                             live.spokenChars += piece.count
                             voiceService.enqueueSpeak(
@@ -4324,8 +4474,11 @@ struct ConversationDetailView: View {
                                                      isCreatedByUser: $0.isCreatedByUser))
                 })
             }
+            // IOS-2: a Stop whose abort lost the race to the final frame lands
+            // here, not in the cancelled catch. A stopped turn is never spoken.
+            let voiceSilenced = live.speechHalted
             replySpeechFocus.completed(
-                readAloudEnabled: readAloudEnabled,
+                readAloudEnabled: readAloudEnabled && !voiceSilenced,
                 hasAssistantReply: currentReply != nil
             )
             sendState = .idle
@@ -4374,7 +4527,7 @@ struct ConversationDetailView: View {
              * character-counted rather than compared, because the streamer
              * adds carried steering tags the stored reply does not have. */
             let streamedThisTurn = readAloudEnabled && live.spokenChars > 0
-            if streamedThisTurn {
+            if streamedThisTurn, !voiceSilenced {
                 for piece in live.speech.flush() {
                     voiceService.enqueueSpeak(
                         text: piece,
@@ -4397,7 +4550,7 @@ struct ConversationDetailView: View {
                     voiceService.adoptStreamedTurn(as: spoken.id)
                 }
             }
-            if !streamedThisTurn, readAloudEnabled, let reply = currentReply {
+            if !streamedThisTurn, !voiceSilenced, readAloudEnabled, let reply = currentReply {
                 // FIX (session 21, Kade: "Whit replies still come back as
                 // Kiana"). Attribute the spoken reply to whoever ACTUALLY
                 // authored it (`reply.agentId` / `reply.speakerLabel`), not to
@@ -4442,9 +4595,11 @@ struct ConversationDetailView: View {
             //
             // ⚠️ BUILD 254 DELIBERATELY DID NOT GATE THIS ONE on read-aloud
             // the way the completion path above is now gated. Nothing on the
-            // stop path calls `enqueueSpeak` -- a stopped turn is never
-            // spoken -- so VoiceOver is the ONLY voice that can deliver a
-            // partial reply here. Gate it and a stopped reply goes unread by
+            // stop path calls `enqueueSpeak`, and since Nov 12 2026 (IOS-2)
+            // Stop also silences the sentences already spoken as she wrote
+            // and blocks any more (`live.speechHalted`) -- a stopped turn is
+            // never spoken -- so VoiceOver is the ONLY voice that can deliver
+            // a partial reply here. Gate it and a stopped reply goes unread by
             // anything. Check that assumption before copying the gate here.
             a11yFocus = messages.last.map { .message($0.id) }
             UIAccessibility.post(notification: .announcement, argument: "Stopped.")
@@ -4551,6 +4706,59 @@ struct ConversationDetailView: View {
     }
 
     // MARK: - Voice input (Phase 5)
+
+    /// IOS-3: VoiceOver's two-finger double-tap. Always consumes the gesture.
+    /// Her choice (Nov 12 2026): pause, resume or stop speech, and open the
+    /// microphone when nothing is playing.
+    /// 1. Recording or transcribing: same as the mic button (finish, or
+    ///    decline politely). Checked FIRST: `isClipPlaying` stays true for a
+    ///    paused clip, and resuming a reply into an open microphone is the
+    ///    one thing this must never do.
+    /// 2. A clip on deck: pause or resume it. The haptic only fires when it took.
+    /// 3. Speech queued but not yet audible:
+    ///    - turn finished: go quiet (the row's "Play as voice message" replays it);
+    ///    - turn still streaming: do nothing. A stop here would not hold,
+    ///      because the stream loop enqueues the next sentence a moment
+    ///      later, and it would skip text.
+    /// 4. Otherwise (Messages convention): start a recording.
+    private func magicTap() {
+        if voiceService.isRecording || voiceService.isTranscribing {
+            KadeBreadcrumbs.drop("magic tap: recording toggle")
+            Task { await toggleRecording() }
+            return
+        }
+        if voiceService.isClipPlaying {
+            if voiceService.isPaused {
+                voiceService.resumeSpeaking()
+                if !voiceService.isPaused { KadeHaptics.tap() }
+                KadeBreadcrumbs.drop("magic tap: resume (took \(!voiceService.isPaused))")
+            } else {
+                voiceService.pauseSpeaking()
+                if voiceService.isPaused { KadeHaptics.tap() }
+                KadeBreadcrumbs.drop("magic tap: pause (took \(voiceService.isPaused))")
+            }
+            return
+        }
+        if voiceService.hasPendingSpeech {
+            if isSending {
+                KadeBreadcrumbs.drop("magic tap: ignored, speech fetching mid-turn")
+                return
+            }
+            endSpeechWait()
+            voiceService.stopSpeaking()
+            KadeHaptics.tap()
+            KadeBreadcrumbs.drop("magic tap: stopped queued speech")
+            return
+        }
+        // No composer on screen (loading or load error) means no Stop
+        // recording button.
+        guard !isLoading, loadError == nil else {
+            KadeBreadcrumbs.drop("magic tap: ignored, no composer")
+            return
+        }
+        KadeBreadcrumbs.drop("magic tap: recording toggle")
+        Task { await toggleRecording() }   // announces "Still sending." itself while a turn runs
+    }
 
     private func toggleRecording() async {
         // Replaces the old `.disabled(...)` on the button (which retired
@@ -5379,6 +5587,14 @@ private final class LiveStreamBuffers {
      * beside it instead of in State. */
     var speech = SpeechStreamer()
     var spokenChars = 0
+    /// IOS-2: Stop (or Answer now) was pressed during this turn. Nothing more of
+    /// this turn is handed to the voice: not the sentences that keep arriving
+    /// while the abort is on its way, and not the tail or the whole partial reply
+    /// if the stream's final frame beats the cancel. Cleared by resetSpeech().
+    var speechHalted = false
+    /// IOS-2: Stop also means no waiting bubbles for the rest of this turn.
+    /// Answer now leaves this false: its wait is still live.
+    var waitCueHalted = false
 
     /// Exactly the four fields the old inline reset cleared, no more: the two
     /// buffers, the write-progress timer, and the thinking-announced latch.
@@ -5413,6 +5629,8 @@ private final class LiveStreamBuffers {
     func resetSpeech() {
         speech = SpeechStreamer()
         spokenChars = 0
+        speechHalted = false
+        waitCueHalted = false
     }
 }
 

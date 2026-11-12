@@ -434,13 +434,14 @@ struct ConversationListView: View {
         } message: {
             Text("Give this conversation a name you'll recognise later.")
         }
-        .onChange(of: conversationsService.actionMessage) { _, message in
+        .onChange(of: conversationsService.actionMessage) { _, _ in
             // Every row action is announced rather than left to be
             // inferred from a row quietly vanishing -- the whole point of
             // the actions menu is that this screen is worked by ear.
-            guard let message else { return }
+            // `takeActionMessage()` (not the captured value): a chat or the
+            // Archived screen on top observes this too; only one may speak.
+            guard let message = conversationsService.takeActionMessage() else { return }
             UIAccessibility.post(notification: .announcement, argument: message)
-            conversationsService.actionMessage = nil
         }
     }
 

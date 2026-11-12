@@ -173,6 +173,15 @@ struct CallView: View {
                 }
             }
         }
+        // IOS-3 (Nov 12 2026 audit): VoiceOver's two-finger double-tap means
+        // "stop talking and listen", the same meaning the lock-screen pause
+        // already has (StreamingCallService.startNowPlaying). Same
+        // reconnecting guard as the Stop Talking button.
+        .accessibilityAction(.magicTap) {
+            guard callService.status != .reconnecting else { return }
+            callService.barge()
+            KadeHaptics.tap()
+        }
         .onAppear { LibraryNowPlaying.shared.pauseForOtherAudio("a call") }
         .task {
             #if DEBUG && targetEnvironment(simulator)

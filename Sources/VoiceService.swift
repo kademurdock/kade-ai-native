@@ -164,9 +164,28 @@ final class VoiceService: NSObject, ObservableObject {
      * condition it needed. `pumpScheduled` is set SYNCHRONOUSLY, before the
      * Task exists, so the second caller can see it. */
     private var pumpScheduled = false
+    /// IOS-17 (Nov 12 2026 audit): the stop generation the scheduled loop
+    /// serves. A stop bumps cancelGeneration while the old loop may still be
+    /// asleep on a synthesis it will discard; work queued after the stop
+    /// starts a NEW loop instead of being drained (and dropped) by the old
+    /// one. At most one live loop per generation, so the 91.9 second-pump
+    /// race stays closed.
+    private var pumpOwner = 0
     /// isSpeaking can be false before a scheduled pump gets its turn. Chat
     /// wait cleanup must check real queued/pumping work instead of that edge.
-    var hasPendingSpeech: Bool { pumpScheduled || isPumping || !speakQueue.isEmpty || isClipPlaying }
+    var hasPendingSpeech: Bool {
+        (pumpScheduled && pumpOwner == cancelGeneration) || isPumping || !speakQueue.isEmpty || isClipPlaying
+    }
+    private func schedulePumpIfNeeded() {
+        if pumpScheduled, pumpOwner == cancelGeneration { return }
+        pumpScheduled = true
+        pumpOwner = cancelGeneration
+        let owner = pumpOwner
+        Task {
+            await pumpSpeakQueue(generation: owner)
+            if pumpOwner == owner { pumpScheduled = false }
+        }
+    }
     /* Part 91.10 — the pump raises this while it holds a prefetched clip, so
      * stopSpeaking can tell the pump to drop what it is carrying. The pump
      * owns the prefetch task; stop cannot reach into the loop, so it leaves a
@@ -662,9 +681,7 @@ final class VoiceService: NSObject, ObservableObject {
         }
         let characterReplyKey = characterReplyScopes.key(replyScopeKey: replyScopeKey)
         speakQueue.append((trimmed, agentId, agentName, nil, nil, key, characterReplyKey, nil))
-        guard !isPumping, !pumpScheduled else { return }
-        pumpScheduled = true
-        Task { await pumpSpeakQueue(); pumpScheduled = false }
+        schedulePumpIfNeeded()
     }
 
     /// Aug 4 2026 evening (her report, same day the Pause button shipped:
@@ -746,9 +763,7 @@ final class VoiceService: NSObject, ObservableObject {
             supersedePausedClip()
             speakQueue.append((trimmed, nil, nil, voiceId, rate, nil,
                 characterReplyScopes.key(replyScopeKey: nil), continuation))
-            guard !isPumping, !pumpScheduled else { return }
-            pumpScheduled = true
-            Task { await self.pumpSpeakQueue(); self.pumpScheduled = false }
+            schedulePumpIfNeeded()
         }
     }
 
@@ -881,10 +896,13 @@ final class VoiceService: NSObject, ObservableObject {
         await playAudio(data)
     }
 
-    private func pumpSpeakQueue() async {
+    private func pumpSpeakQueue(generation: Int) async {
+        // IOS-17: scheduled, then stopped before this Task got its turn: the
+        // queue it was scheduled for is gone and a newer loop may own the
+        // flags. Touch nothing.
+        guard generation == cancelGeneration else { return }
         isPumping = true
         isSpeaking = true
-        let generation = cancelGeneration
         /* PART 92.12 — TWO CLIPS IN FLIGHT, NOT ONE.
          *
          * 91.10 held exactly one, and its comment argued against two: a deeper
@@ -939,6 +957,7 @@ final class VoiceService: NSObject, ObservableObject {
         /// Fill the pipe up to `current + prefetchDepth` without ever awaiting —
         /// every prefetch started here overlaps the clip already playing.
         func topUp() {
+            guard generation == cancelGeneration else { return }   // IOS-17: a stopped loop adopts nothing new
             while inflight.count <= prefetchDepth, !speakQueue.isEmpty {
                 let next = speakQueue.removeFirst()
                 inflight.append((next, prefetch(next)))
@@ -1011,8 +1030,12 @@ final class VoiceService: NSObject, ObservableObject {
                 pending.item.completion?.resume()
             }
             inflight.removeAll()
-            isSpeaking = false
-            isPumping = false
+            // IOS-17: only while no newer loop has been scheduled: its flags
+            // are not ours.
+            if pumpOwner == generation {
+                isSpeaking = false
+                isPumping = false
+            }
         }
         while !inflight.isEmpty {
             let current = inflight.removeFirst()
@@ -1031,10 +1054,15 @@ final class VoiceService: NSObject, ObservableObject {
                     // `?? streamedTurnKey` covers the pieces that were prefetched
                     // BEFORE the reload handed us an id — they are already out of
                     // speakQueue, so adoptStreamedTurn cannot reach them directly.
-                    if await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
-                        cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey)) {
-                        playedAnything = true
-                    } else { failedPieces += 1 }
+                    let played = await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                        cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
+                    // IOS-17: a stop resumes playAudio with false. That is not a
+                    // failed piece, and it must never reach the earcon below.
+                    if generation != cancelGeneration {
+                        bailCancelled(current)
+                        return
+                    }
+                    if played { playedAnything = true } else { failedPieces += 1 }
                 } else {
                     // Session 23's boop lives on below, at the END of the pump and
                     // only if nothing at all was spoken. See the note up top.
@@ -1087,12 +1115,15 @@ final class VoiceService: NSObject, ObservableObject {
                         self.playingCharacterCue = self.characterCue(for: current.item.text,
                             agentID: current.item.agentId, key: current.item.characterReplyKey)
                     })
-                    streamedClipActive = false
-                    isClipPlaying = false
+                    // IOS-17: check first, then clear. stopSpeaking already
+                    // cleared streamedClipActive and isClipPlaying; a newer
+                    // loop may own them by now.
                     if generation != cancelGeneration {
                         bailCancelled(current)
                         return
                     }
+                    streamedClipActive = false
+                    isClipPlaying = false
                 } else {
                     KadeBreadcrumbs.drop("tts-stream: fetch delivered nothing (\(fetch.failureNote)), falling back to buffered")
                 }
@@ -1120,10 +1151,13 @@ final class VoiceService: NSObject, ObservableObject {
                         return
                     }
                     if let data {
-                        if await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
-                            cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey)) {
-                            playedAnything = true
-                        } else { failedPieces += 1 }
+                        let played = await playAudio(data, key: current.item.key ?? streamedTurnKey, agentID: current.item.agentId,
+                            cue: characterCue(for: current.item.text, agentID: current.item.agentId, key: current.item.characterReplyKey))
+                        if generation != cancelGeneration {
+                            bailCancelled(current)
+                            return
+                        }
+                        if played { playedAnything = true } else { failedPieces += 1 }
                     } else {
                         failedPieces += 1
                         KadeBreadcrumbs.drop("tts: piece had no usable audio, skipped (\(failedPieces) this run)")
@@ -1138,6 +1172,10 @@ final class VoiceService: NSObject, ObservableObject {
             // Sentences that streamed in during playback join the pipe now.
             topUp()
         }
+        // IOS-17: every await above is followed by a generation check, so a
+        // stopped loop cannot get here; this guard keeps that true if a new
+        // await is added.
+        guard generation == cancelGeneration else { return }
         // Session 23's rule, kept and narrowed: a reply that made no sound at
         // all must never be indistinguishable from read-aloud never firing.
         if failedPieces > 0 && !playedAnything {

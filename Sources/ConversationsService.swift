@@ -274,6 +274,21 @@ final class ConversationsService: ObservableObject {
 
     var hasMore: Bool { nextCursor != nil }
 
+    /// IOS-22 (Nov 12 2026 audit): hands the pending action message to
+    /// exactly ONE caller and clears it. Several live screens observe
+    /// `actionMessage` at once (the list stays alive under a pushed chat,
+    /// under the Archived screen and under other tabs), and SwiftUI hands
+    /// each observer's `onChange` the same captured value, so "post, then
+    /// nil" in each of them could speak one result twice. Observers call
+    /// this instead of trusting the captured value: the first one gets the
+    /// message, the rest get nil. Announcements are global, so it does not
+    /// matter which screen wins.
+    func takeActionMessage() -> String? {
+        guard let message = actionMessage else { return nil }
+        actionMessage = nil
+        return message
+    }
+
     /// Called on sign-out so the next sign-in never flashes a stale list.
     func reset() {
         conversations = []

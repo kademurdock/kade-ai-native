@@ -75,20 +75,14 @@ struct ArchivedConversationsView: View {
                 focusedRowID = rows.first?.id
             }
         }
-        // Announcements for restore/delete land here, NOT on the main
-        // list's identical observer: this screen sits pushed ON TOP of
-        // `ConversationListView`, whose own `.onChange` also fires (covered
-        // views stay live) and clears `actionMessage` -- but posting from
-        // here too would risk a double announcement. So this view announces
-        // ONLY messages its own actions produced, marked by the service
-        // leaving them intact: in practice the list-under-the-stack
-        // announces first and nils the message, which is one announcement,
-        // spoken globally -- exactly what's wanted. This observer is the
-        // fallback for the day that screen isn't beneath us.
-        .onChange(of: conversationsService.actionMessage) { _, message in
-            guard let message else { return }
+        // Announcements for restore/delete. This screen sits pushed ON TOP
+        // of `ConversationListView`, whose own observer also fires (covered
+        // views stay live). `takeActionMessage()` (IOS-22) hands the message
+        // to whichever observer runs first and nil to the rest, so it is
+        // spoken once, globally, whether or not the list is beneath us.
+        .onChange(of: conversationsService.actionMessage) { _, _ in
+            guard let message = conversationsService.takeActionMessage() else { return }
             UIAccessibility.post(notification: .announcement, argument: message)
-            conversationsService.actionMessage = nil
         }
     }
 

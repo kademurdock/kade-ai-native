@@ -24,8 +24,13 @@ import UIKit
 /// text block), the close button is focused on open exactly as the web
 /// focuses its close button, and dismissal is announced by the opener
 /// putting focus back on the message row (see the fullScreenCover's
-/// onDismiss in ConversationDetailView). Escape on a hardware keyboard
-/// closes, matching the web's key handling.
+/// onDismiss in ConversationDetailView). Escape on a hardware keyboard and
+/// VoiceOver's two-finger scrub both close, matching the web's key handling.
+/// The open announcement is LOW priority and posted a beat after the cover
+/// appears: posted in onAppear it started speaking before the focus readout
+/// ("Close reading view, button") and one cut the other off. Low priority
+/// only queues behind speech that has already begun, so it has to wait for
+/// the readout to start (Nov 12 2026 audit, IOS-9).
 struct ReadingView: View {
     @EnvironmentObject private var appearance: AppearancePreferences
     @Environment(\.dismiss) private var dismiss
@@ -85,11 +90,23 @@ struct ReadingView: View {
             }
         }
         .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        // VoiceOver's two-finger scrub: a full-screen cover never gets it for free.
+        .accessibilityAction(.escape) { dismiss() }
         .onAppear {
             closeFocused = true
+        }
+        .task {
+            // Let the focus readout begin first; the low-priority announcement
+            // then queues behind it instead of racing it. Cancelled (and so
+            // never spoken over the conversation) if the view closes first.
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
             UIAccessibility.post(
                 notification: .announcement,
-                argument: "Reading view, full screen. \(speaker)'s reply. Swipe right to read paragraph by paragraph."
+                argument: NSAttributedString(
+                    string: "Reading view, full screen. \(speaker)'s reply. Swipe right to read paragraph by paragraph.",
+                    attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
+                )
             )
         }
     }
