@@ -142,8 +142,11 @@ final class KadeAPIClient: ObservableObject {
         let req = request(path: "api/kade/client-config", authorized: true, timeout: 20)
         guard let (data, http) = try? await send(req), http.statusCode == 200,
               let body = try? JSONDecoder().decode(ClientConfigBody.self, from: data),
-              let pacing = body.pacing else {
-            clientConfigAsked = false   // ask again on the next sign-in or launch
+              let pacing = body.pacing, ["legacy", "lanes"].contains(pacing.mode ?? "legacy") else {
+            // Any error or an unknown mode: the old single clock, and no
+            // cached rules outlive a server rollback. Asked again next launch.
+            pacingRules = nil
+            UserDefaults.standard.removeObject(forKey: Self.pacingCacheKey)
             return
         }
         var gaps: [String: Double] = [:]
@@ -196,9 +199,11 @@ final class KadeAPIClient: ObservableObject {
     /// pacing gate, then send. Auth calls and data calls share the same
     /// clock. See `streamBytes(_:)` for the long-lived-connection variant
     /// that shares this same gate and session.
-    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    /// `paced: false` (background account syncs) never takes a slot on the
+    /// clock speech waits on.
+    func send(_ request: URLRequest, paced: Bool = true) async throws -> (Data, HTTPURLResponse) {
         try rejectOfflineHostRequest()
-        await waitForPacingGate(for: request)
+        if paced { await waitForPacingGate(for: request) }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)

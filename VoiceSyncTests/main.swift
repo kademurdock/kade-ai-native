@@ -120,7 +120,17 @@ do {
     let saved = "%%%warm%%% It rained all night in Ozark. The creek is up. Stay off the low road."
     let delivered = "It rained all night in Ozark. The creek is up."
     check(StreamResume.tail(saved: saved, delivered: delivered) == " Stay off the low road.", "tail by 48-character anchor")
-    check(StreamResume.tail(saved: "no no no no no no no no no no", delivered: "x no no no no no no") == nil, "ambiguous anchor refused")
+    // The delivered text is not a prefix of the saved reply, and its last 48
+    // characters appear TWICE in it: the place is ambiguous, so nil.
+    let line = "The creek is over the low road again tonight, so take the ridge way home."
+    let twice = "\(line) \(line) Call when you get in."
+    check(!twice.hasPrefix("Earlier. \(line)") && twice.components(separatedBy: String(line.suffix(48))).count == 3,
+          "the fixture really holds the anchor twice")
+    check(StreamResume.tail(saved: twice, delivered: "Earlier. \(line)") == nil, "ambiguous anchor refused")
+    // The same anchor found once places the rest.
+    check(StreamResume.tail(saved: "\(line) Call when you get in.", delivered: "Earlier. \(line)") == " Call when you get in.",
+          "a single anchor places the rest")
+    check(StreamResume.tail(saved: "Nothing alike here.", delivered: "Earlier. \(line)") == nil, "an anchor not found refuses")
     check(StreamResume.delayNanos(attempt: 1) == 500_000_000 && StreamResume.delayNanos(attempt: 2) == 1_000_000_000
           && StreamResume.delayNanos(attempt: 3) == 2_000_000_000 && StreamResume.delayNanos(attempt: 9) == 4_000_000_000,
           "0.5, 1, 2, then 4 s")

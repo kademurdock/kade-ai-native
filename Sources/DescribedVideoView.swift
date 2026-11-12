@@ -2398,6 +2398,8 @@ struct DescribedVideoView: View {
     }
 
     private func openJob(_ id: String, landing: DVFocus = .jobHeading) async {
+        // Pick 2: another video opening stops listening-while-made.
+        if job?.id != id, listenAhead.jobId != nil { listenAhead.stop() }
         if job?.id == id {
             // Already open: the Describe again section is there only while
             // it still applies.
@@ -3223,6 +3225,7 @@ struct DescribedVideoView: View {
             // Made after she left: not played over another tab.
             guard onScreen else { return }
             LibraryNowPlaying.shared.pauseForOtherAudio("a voice sample")
+            listenAhead.stop()   // pick 2: never a sample over the film's sound
             let session = AVAudioSession.sharedInstance()
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try? session.setActive(true)

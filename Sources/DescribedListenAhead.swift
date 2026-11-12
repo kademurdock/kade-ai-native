@@ -40,6 +40,8 @@ final class ListenAheadPlayer: ObservableObject {
     private var statusWatch: NSKeyValueObservation?
     /// Goes up with every section and on stop, so late callbacks do nothing.
     private var playNumber = 0
+    /// The last section skipped as unplayable (one skip per section).
+    private var skippedIndex: Int?
 
     init() {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -105,6 +107,7 @@ final class ListenAheadPlayer: ObservableObject {
         jobId = nil
         fetch = nil
         sections = []
+        skippedIndex = nil
         at = 0
         making = false
         count = 0
@@ -188,7 +191,8 @@ final class ListenAheadPlayer: ObservableObject {
     }
 
     private func play(_ section: DVReadySections.Section, number: Int) {
-        guard let url = URL(string: section.url) else { skip(number); return }
+        let index = section.index
+        guard let url = URL(string: section.url) else { skip(number, index: index); return }
         unwatch()
         let item = AVPlayerItem(url: url)
         endWatch = NotificationCenter.default.addObserver(
@@ -203,19 +207,23 @@ final class ListenAheadPlayer: ObservableObject {
         failWatch = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.skip(number) }
+            MainActor.assumeIsolated { self?.skip(number, index: index) }
         }
         statusWatch = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
-            Task { @MainActor in self?.skip(number) }
+            Task { @MainActor in self?.skip(number, index: index) }
         }
         player.replaceCurrentItem(with: item)
         player.defaultRate = rate
         if !isPaused { player.playImmediately(atRate: rate) }
     }
 
-    private func skip(_ number: Int) {
-        guard jobId != nil, playNumber == number else { return }
+    /// Once per section: both failure signals for one section can arrive, and
+    /// only the first may move on, or a later section would be skipped too.
+    private func skip(_ number: Int, index: Int) {
+        guard jobId != nil, playNumber == number, at < sections.count, sections[at].index == index,
+              skippedIndex != index else { return }
+        skippedIndex = index
         say("That section could not be played. Moving to the next one.")
         at += 1
         playNext()

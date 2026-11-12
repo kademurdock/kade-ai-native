@@ -35,6 +35,10 @@ final class ListenerVoiceSync {
     private var pushAgain = false
     /// GET answered without `listener` (server switch off): nothing is sent.
     private var serverOff = false
+    /// Goes up at every change she makes here and every write sent. A GET
+    /// that started before the latest one is dropped when it answers, so a
+    /// slow read can never put her old speed back over a newer choice.
+    private var localGeneration = 0
 
     func attach(_ client: KadeAPIClient) { self.client = client }
 
@@ -88,18 +92,21 @@ final class ListenerVoiceSync {
     func paceChanged() {
         guard KadeAppSwitches.voiceSync, !Self.applying else { return }
         UserDefaults.standard.set(true, forKey: Self.paceChosenKey)
+        localGeneration += 1
         var s = state; s.pendingPace = true; state = s
         Task { await pushPending() }
     }
 
     func fillersChanged() {
         guard KadeAppSwitches.voiceSync, !Self.applying else { return }
+        localGeneration += 1
         var s = state; s.pendingFillers = true; state = s
         Task { await pushPending() }
     }
 
     func deliveryChanged(agentId: String) {
         guard KadeAppSwitches.voiceSync, !Self.applying, ListenerVoicePlan.validAgentId(agentId) else { return }
+        localGeneration += 1
         var s = state
         if !s.pendingDelivery.contains(agentId) { s.pendingDelivery.append(agentId) }
         state = s
@@ -118,9 +125,15 @@ final class ListenerVoiceSync {
         fetching = true
         defer { fetching = false }
         lastFetch = Date()
+        let startedAt = localGeneration
         let req = client.request(path: "api/kade/voice-prefs", authorized: true, timeout: 20)
-        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
+        // Unpaced: a background sync never takes a slot speech waits on.
+        guard let (data, http) = try? await client.send(req, paced: false), http.statusCode == 200,
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        guard startedAt == localGeneration else {
+            KadeBreadcrumbs.drop("voice sync: read dropped, she changed something while it was out")
+            return
+        }
         guard let listener = json["listener"] as? [String: Any] else {
             serverOff = true   // the server keeps no listener prefs: local settings only
             return
@@ -202,10 +215,11 @@ final class ListenerVoiceSync {
             body["delivery"] = map
         }
         guard !body.isEmpty else { return }
+        localGeneration += 1   // a GET already out answers from before this write
         var req = client.request(path: "api/kade/voice-prefs", method: "PUT", authorized: true, timeout: 20)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        guard let (data, http) = try? await client.send(req) else { return }   // offline: still pending
+        guard let (data, http) = try? await client.send(req, paced: false) else { return }   // offline: still pending
         if http.statusCode == 404 { serverOff = true; return }
         guard http.statusCode == 200,
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
