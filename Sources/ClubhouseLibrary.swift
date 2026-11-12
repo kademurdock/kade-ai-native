@@ -171,15 +171,11 @@ final class ClubhouseLibraryService: ObservableObject {
         request.timeoutInterval = 10
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, response) = try await client.send(request)
-        if response.statusCode == 401 && retry {
-            let refresh = client.request(path: "api/auth/refresh", method: "POST")
-            let (fresh, http) = try await client.send(refresh)
+        // IOS-15 (Nov 12 2026 audit): the client's single refresh, shared
+        // with every other caller in the app.
+        if response.statusCode == 401 && retry, await client.refreshAccessToken() {
             guard generation == current else { throw CancellationError() }
-            struct Token: Decodable { let token: String }
-            if http.statusCode == 200, let token = try? JSONDecoder().decode(Token.self, from: fresh) {
-                Keychain.set(token.token, for: .accessToken)
-                return try await self.request(path, body: body, retry: false)
-            }
+            return try await self.request(path, body: body, retry: false)
         }
         guard (200..<300).contains(response.statusCode) else {
             struct ServerError: Decodable { let error: String }

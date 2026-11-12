@@ -120,10 +120,6 @@ enum FamilyDiskStore {
     }
 }
 
-/// POST api/auth/refresh.
-private struct FamilyRefreshed: Decodable {
-    let token: String
-}
 
 @MainActor
 final class FamilyHistoryService {
@@ -211,27 +207,11 @@ final class FamilyHistoryService {
 
     // MARK: Plumbing
 
-    /// One refresh in flight for every caller, and none again for a minute
-    /// after one failed (the describer's rule).
-    private static var refreshing: Task<Bool, Never>?
-    private static var refreshFailedAt = Date.distantPast
-
+    /// IOS-15 (Nov 12 2026 audit): the client's single refresh, shared with
+    /// every other caller in the app (one in flight, and a minute's back-off
+    /// after the server says no).
     private static func refreshToken(_ client: KadeAPIClient) async -> Bool {
-        if let running = refreshing { return await running.value }
-        guard Date().timeIntervalSince(refreshFailedAt) > 60 else { return false }
-        let task = Task<Bool, Never> {
-            let req = client.request(path: "api/auth/refresh", method: "POST")
-            guard let (data, http) = try? await client.send(req), http.statusCode == 200,
-                  let fresh = try? JSONDecoder().decode(FamilyRefreshed.self, from: data),
-                  !fresh.token.isEmpty else { return false }
-            Keychain.set(fresh.token, for: .accessToken)
-            return true
-        }
-        refreshing = task
-        let ok = await task.value
-        refreshing = nil
-        if !ok { refreshFailedAt = Date() }
-        return ok
+        await client.refreshAccessToken()
     }
 
     /// Every call asks for the second version (`?v=2`): the answers this app

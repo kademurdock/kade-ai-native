@@ -129,27 +129,32 @@ final class AuthService: ObservableObject {
 
     /// Best-effort token refresh via the httpOnly refresh cookie. Never throws
     /// up to the UI — a failure here only signs the user out on a real 401.
+    /// IOS-15 (Nov 12 2026 audit): goes through the client's single refresh,
+    /// so it can never race a request that 401'd at the same moment (the
+    /// server rotates the refresh cookie, and the loser of a race would sign
+    /// her out).
     private func silentRefresh() async {
-        let req = client.request(path: "api/auth/refresh", method: "POST")
-        guard let (data, http) = try? await client.send(req) else { return }  // offline: stay signed in
-        if http.statusCode == 200,
-           let decoded = try? decoder.decode(LoginResponse.self, from: data) {
-            persist(token: decoded.token, user: decoded.user)
-            state = .signedIn(decoded.user)
-        } else if http.statusCode == 401 {
-            signOut()  // the refresh token is truly gone/expired
+        switch await client.refreshSession(force: true) {
+        case .refreshed(let data):
+            if let decoded = try? decoder.decode(LoginResponse.self, from: data) {
+                persist(token: decoded.token, user: decoded.user)
+                state = .signedIn(decoded.user)
+            }
+        case .rejected(let status):
+            if status == 401 { signOut() }   // the refresh token is truly gone/expired
+        case .unreachable:
+            break                            // offline: stay signed in
         }
-        // any other status: leave the optimistic signed-in state alone
     }
 
     /// Oct 2 2026: a fresh access token from the refresh cookie, for one call
     /// that came back 401 (Change password). True when it worked. Unlike the
     /// launch refresh it never signs out; the caller says what happened.
     func refreshAccessToken() async -> Bool {
-        let req = client.request(path: "api/auth/refresh", method: "POST")
-        guard let (data, http) = try? await client.send(req), http.statusCode == 200,
-              let decoded = try? decoder.decode(LoginResponse.self, from: data) else { return false }
-        persist(token: decoded.token, user: decoded.user)
+        guard case .refreshed(let data) = await client.refreshSession(force: true) else { return false }
+        if let decoded = try? decoder.decode(LoginResponse.self, from: data) {
+            persist(token: decoded.token, user: decoded.user)
+        }
         return true
     }
 

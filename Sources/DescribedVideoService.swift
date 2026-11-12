@@ -984,10 +984,6 @@ extension DVUploadStart {
     }
 }
 
-/// POST api/auth/refresh.
-private struct DVRefreshed: Decodable {
-    let token: String
-}
 
 // MARK: - The service
 
@@ -1030,33 +1026,13 @@ final class DescribedVideoService: ObservableObject {
         return req
     }
 
-    /// One refresh in flight for every caller (a poll, a price and an upload
-    /// chunk can all meet an expired token at once), and none again for a
-    /// minute after one failed: a signed-out phone must not ask twice every
-    /// five seconds while it polls.
-    private static var refreshing: Task<Bool, Never>?
-    private static var refreshFailedAt = Date.distantPast
-
     /// A long upload can outlive the access token. One quiet refresh through
-    /// the httpOnly cookie (the same call AuthService makes at launch), then
-    /// the request is built again with the new token.
+    /// the httpOnly cookie, then the request is built again with the new
+    /// token. IOS-15 (Nov 12 2026 audit): the refresh is the client's single
+    /// one, shared with every other caller in the app (one in flight, and a
+    /// minute's back-off after the server says no).
     private func refreshToken() async -> Bool {
-        if let running = Self.refreshing { return await running.value }
-        guard Date().timeIntervalSince(Self.refreshFailedAt) > 60 else { return false }
-        let client = self.client
-        let task = Task<Bool, Never> {
-            let req = client.request(path: "api/auth/refresh", method: "POST")
-            guard let (data, http) = try? await client.send(req), http.statusCode == 200,
-                  let fresh = try? JSONDecoder().decode(DVRefreshed.self, from: data),
-                  !fresh.token.isEmpty else { return false }
-            Keychain.set(fresh.token, for: .accessToken)
-            return true
-        }
-        Self.refreshing = task
-        let ok = await task.value
-        Self.refreshing = nil
-        if !ok { Self.refreshFailedAt = Date() }
-        return ok
+        await client.refreshAccessToken()
     }
 
     private func exchange(

@@ -103,7 +103,17 @@ final class KadeAPIClient: ObservableObject {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
-        return (data, http)
+        // IOS-15: an access token that expired mid-session gets one shared
+        // refresh and one retry, instead of "Didn't get a reply".
+        guard http.statusCode == 401,
+              let retry = await requestWithFreshToken(request) else { return (data, http) }
+        try Task.checkCancellation()
+        await waitForPacingGate()
+        let (data2, response2) = try await session.data(for: retry)
+        guard let http2 = response2 as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return (data2, http2)
     }
 
     /// Only attachment uploads get a total-transfer deadline. Keep the same
@@ -121,7 +131,15 @@ final class KadeAPIClient: ObservableObject {
         let (data, response) = try await uploadSession.data(for: request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return (data, http)
+        // IOS-15: one shared refresh and one retry after a 401.
+        guard http.statusCode == 401,
+              let retry = await requestWithFreshToken(request) else { return (data, http) }
+        try Task.checkCancellation()
+        await waitForPacingGate()
+        let (data2, response2) = try await uploadSession.data(for: retry)
+        try Task.checkCancellation()
+        guard let http2 = response2 as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (data2, http2)
     }
 
     /// Same pacing gate and session as `send(_:)`, but for a long-lived
@@ -134,9 +152,111 @@ final class KadeAPIClient: ObservableObject {
         await waitForPacingGate()
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
             throw URLError(.badServerResponse)
         }
-        return (bytes, http)
+        // IOS-15: one shared refresh and one retry after a 401.
+        guard http.statusCode == 401,
+              let retry = await requestWithFreshToken(request) else { return (bytes, http) }
+        bytes.task.cancel()               // the 401 connection is no use to anyone
+        try Task.checkCancellation()
+        await waitForPacingGate()
+        let (bytes2, response2) = try await session.bytes(for: retry)
+        guard let http2 = response2 as? HTTPURLResponse else {
+            bytes2.task.cancel()
+            throw URLError(.badServerResponse)
+        }
+        return (bytes2, http2)
+    }
+
+    // MARK: - One refresh for the whole app (IOS-15, Nov 12 2026 audit)
+
+    /// What a refresh came to. `refreshed` carries the response body so
+    /// AuthService can read the user out of it.
+    enum RefreshOutcome {
+        case refreshed(Data)
+        case rejected(status: Int)   // the server answered and said no
+        case unreachable             // no answer, a transient status, or signed out meanwhile
+    }
+
+    private var refreshing: Task<RefreshOutcome, Never>?
+    private var refreshBlockedUntil = Date.distantPast
+    /// Bumped on sign-out, so a refresh that was in flight cannot put the
+    /// session back.
+    private var authEpoch = 0
+    private struct RefreshBody: Decodable { let token: String }
+
+    /// The ONLY place the app posts api/auth/refresh. The server rotates the
+    /// refresh cookie on every call (AuthController.js refreshController), so
+    /// two refreshes at once make one of them fail with 401; every caller,
+    /// the launch refresh included, shares this one task.
+    /// `force` skips the back-off (launch and explicit user actions).
+    func refreshSession(force: Bool = false) async -> RefreshOutcome {
+        if let running = refreshing { return await running.value }
+        if !force, Date() < refreshBlockedUntil { return .unreachable }
+        let epoch = authEpoch
+        let task = Task<RefreshOutcome, Never> { @MainActor in
+            var req = self.request(path: "api/auth/refresh", method: "POST")
+            req.timeoutInterval = 15
+            await self.waitForPacingGate()
+            guard let (data, response) = try? await self.session.data(for: req),
+                  let http = response as? HTTPURLResponse else {
+                self.refreshBlockedUntil = Date().addingTimeInterval(5)
+                return .unreachable
+            }
+            guard epoch == self.authEpoch else {
+                // Signed out while this was in flight: drop what it brought back.
+                self.deleteCookies()
+                return .unreachable
+            }
+            if http.statusCode == 200,
+               let body = try? JSONDecoder().decode(RefreshBody.self, from: data),
+               !body.token.isEmpty {
+                Keychain.set(body.token, for: .accessToken)
+                self.refreshBlockedUntil = .distantPast
+                return .refreshed(data)
+            }
+            // 200 with a plain string means "no refresh cookie"; 401/403 mean
+            // the session is gone. Anything else (429, 5xx) is worth another
+            // try soon.
+            if http.statusCode == 200 || http.statusCode == 401 || http.statusCode == 403 {
+                self.refreshBlockedUntil = Date().addingTimeInterval(60)
+                return .rejected(status: http.statusCode)
+            }
+            self.refreshBlockedUntil = Date().addingTimeInterval(5)
+            return .unreachable
+        }
+        refreshing = task
+        let outcome = await task.value
+        refreshing = nil
+        return outcome
+    }
+
+    /// For callers on their own session (the auxiliary sessions) and the
+    /// older per-service retry code.
+    func refreshAccessToken() async -> Bool {
+        if case .refreshed = await refreshSession() { return true }
+        return false
+    }
+
+    /// After a 401: the same request with a bearer worth trying, or nil when
+    /// a retry cannot help. Never for /api/auth/ calls or requests that
+    /// carried no bearer.
+    private func requestWithFreshToken(_ request: URLRequest) async -> URLRequest? {
+        guard let sent = request.value(forHTTPHeaderField: "Authorization"),
+              sent.hasPrefix("Bearer "),
+              let url = request.url, url.host == baseURL.host,
+              !url.path.hasPrefix("/api/auth/") else { return nil }
+        if let current = Keychain.string(for: .accessToken), "Bearer \(current)" != sent {
+            // Someone refreshed while this request was waiting or in flight:
+            // use their token, do not rotate again.
+        } else {
+            guard case .refreshed = await refreshSession() else { return nil }
+        }
+        guard let token = Keychain.string(for: .accessToken) else { return nil }
+        var retry = request
+        retry.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return retry
     }
 
     private func waitForPacingGate() async {
@@ -235,6 +355,12 @@ final class KadeAPIClient: ObservableObject {
 
     /// Clears this host's cookies (used on sign-out so the next sign-in is clean).
     func clearCookies() {
+        authEpoch += 1                    // IOS-15: an in-flight refresh must not restore the session
+        refreshBlockedUntil = .distantPast
+        deleteCookies()
+    }
+
+    private func deleteCookies() {
         guard let storage = session.configuration.httpCookieStorage,
               let cookies = storage.cookies(for: baseURL) else { return }
         for c in cookies { storage.deleteCookie(c) }
