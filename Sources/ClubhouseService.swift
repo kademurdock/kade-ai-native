@@ -95,6 +95,14 @@ struct ClubQueueRow: Identifiable, Equatable {
 final class ClubhouseService: NSObject, ObservableObject {
     enum Phase { case picker, joining, inRoom }
 
+    /// IOS-11 (Nov 12 2026 audit): true while this room holds
+    /// KadeAudioLanes' two-way lane (chat speech stays off and nobody
+    /// switches the session to `.playback` under the room).
+    private var holdsDuplexLane = false
+    deinit {
+        if holdsDuplexLane { Task { @MainActor in KadeAudioLanes.endDuplex("room (released at deinit)") } }
+    }
+
     @Published var phase: Phase = .picker
     @Published var statusLine = "Opening the Clubhouse…"
     @Published var roomSay = ""
@@ -1010,6 +1018,8 @@ final class ClubhouseService: NSObject, ObservableObject {
         // minimum (the room's music/voice balance is HER slider's job, not
         // Apple's), and platform voice processing follows the clarity pref.
         AudioManager.shared.duckingLevel = .min
+        // IOS-11: the room is about to own a .playAndRecord session.
+        if !holdsDuplexLane { holdsDuplexLane = true; KadeAudioLanes.beginDuplex("room") }
         configureAudioProfile()
 
         var attempt = 0
@@ -1245,6 +1255,8 @@ final class ClubhouseService: NSObject, ObservableObject {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = true
         try? AudioManager.shared.setPlatformVoiceProcessingAllowed(true)
         try? AVAudioSession.sharedInstance().setPreferredInput(nil)
+        // IOS-11: called by leave() and by the connect-failure path.
+        if holdsDuplexLane { holdsDuplexLane = false; KadeAudioLanes.endDuplex("room") }
     }
 
     /// If the current route landed on the tiny ear speaker with no

@@ -19,7 +19,7 @@ def method(name):
 
 production = '\n'.join(method(name) for name in [
     'invalidateVoiceSelections', 'loadUserVoicePrefsIfNeeded',
-    'setUserVoiceOverride', 'resolveVoice', 'characterRate'])
+    'setUserVoiceOverride', 'resolveVoice', 'lookUpVoice', 'characterRate'])
 fixture = (Path(__file__).parent / 'fixture.swift').read_text(encoding='utf-8')
 assert fixture.count('// PRODUCTION_METHODS') == 1
 with tempfile.TemporaryDirectory() as directory:

@@ -320,6 +320,26 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// "socket closed" handling knows not to report it as a dropped call.
     private var stopping = false
 
+    /// IOS-11 (Nov 12 2026 audit): true while this call holds
+    /// KadeAudioLanes' two-way lane. While it is held, chat speech and the
+    /// thinking bubbles stay off and nothing switches the session back to
+    /// `.playback` under the call.
+    private var holdsDuplexLane = false
+    private func claimDuplexLane() {
+        guard !holdsDuplexLane else { return }
+        holdsDuplexLane = true
+        KadeAudioLanes.beginDuplex("call")
+    }
+    private func releaseDuplexLane() {
+        guard holdsDuplexLane else { return }
+        holdsDuplexLane = false
+        KadeAudioLanes.endDuplex("call")
+    }
+    deinit {
+        // Never strand the lane: a leaked claim would silence every reply.
+        if holdsDuplexLane { Task { @MainActor in KadeAudioLanes.endDuplex("call (released at deinit)") } }
+    }
+
     init(apiClient: KadeAPIClient) {
         self.apiClient = apiClient
         super.init()
@@ -350,7 +370,17 @@ final class StreamingCallService: NSObject, ObservableObject {
         stopping = false
         startedAt = Date()
 
-        let (ticket, wsUrl) = try await fetchTicket(agentId: agentId)
+        // IOS-11: claim BEFORE the ticket round trip, so the chat reply stops
+        // the moment she taps Call, not a network wait later.
+        claimDuplexLane()
+        let fetched: (ticket: String, wsUrl: String)
+        do {
+            fetched = try await fetchTicket(agentId: agentId)
+        } catch {
+            releaseDuplexLane()
+            throw error
+        }
+        let (ticket, wsUrl) = fetched
 
         do {
             try startAudioEngine()
@@ -1742,6 +1772,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         // right thing to do regardless, and covers anything else that plays
         // audio without asking first.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // IOS-11: the session is back on .playback; chat speech may use it
+        // again. Idempotent like the rest of this teardown.
+        releaseDuplexLane()
         // August 1 2026 -- Kade's Disconnected.mp3, the audible "receiver
         // going back down" (the web has played this exact file since July
         // 22; the native lane finally catches up). AFTER the session

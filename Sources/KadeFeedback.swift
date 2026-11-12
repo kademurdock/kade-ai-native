@@ -553,6 +553,13 @@ final class Earcons {
     /// byte; a resume passes ~0.45s and the bubbles swell back under the
     /// silence instead of snapping on.
     func startWaitingLoop(fadeIn: TimeInterval = 0) {
+        // IOS-11 (Nov 12 2026 audit): a call, a room or a recording has the
+        // microphone. The chat's bubbles would be picked up by it, so they
+        // stay off until it is released.
+        if KadeAudioLanes.micHeld {
+            if fadeIn == 0 { KadeBreadcrumbs.drop("thinking loop: skipped, the microphone is in use") }
+            return
+        }
         guard FeedbackPrefs.shared.soundEffects else {
             if fadeIn == 0 { KadeBreadcrumbs.drop("thinking loop: skipped, Sound effects is off") }
             return
@@ -752,6 +759,47 @@ final class Earcons {
         str("data"); u32(UInt32(dataBytes))
         for s in samples { var x = s.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
         return d
+    }
+}
+
+// MARK: - KadeAudioLanes
+//
+// IOS-11 (Nov 12 2026 audit). Who holds the microphone. A call or a
+// Clubhouse room claims the two-way lane; a voice recording claims the
+// recording lane. While either is held, chat speech and the thinking bubbles
+// stop, nothing new is spoken, and nobody switches the shared AVAudioSession
+// back to `.playback` (that switch is what took the microphone away from
+// calls and recordings).
+//
+// Every claim must be released. A leaked claim silences every spoken reply
+// until relaunch, so each holder keeps its own flag and releases in deinit
+// too. The trail shows `audio lanes:` crumbs whose counts must return to 0.
+@MainActor
+enum KadeAudioLanes {
+    /// Posted on the main thread at every claim; userInfo["who"] names the holder.
+    static let micTaken = Notification.Name("kadeAudioLaneMicTaken")
+    private(set) static var duplexClaims = 0
+    private(set) static var recordingClaims = 0
+    static var duplexActive: Bool { duplexClaims > 0 }
+    static var micHeld: Bool { duplexClaims > 0 || recordingClaims > 0 }
+
+    static func beginDuplex(_ who: String) {
+        duplexClaims += 1
+        KadeBreadcrumbs.drop("audio lanes: \(who) took the two-way session (\(duplexClaims))")
+        NotificationCenter.default.post(name: micTaken, object: nil, userInfo: ["who": who])
+    }
+    static func endDuplex(_ who: String) {
+        duplexClaims = max(0, duplexClaims - 1)
+        KadeBreadcrumbs.drop("audio lanes: \(who) released the two-way session (\(duplexClaims))")
+    }
+    static func beginRecording(_ who: String) {
+        recordingClaims += 1
+        KadeBreadcrumbs.drop("audio lanes: \(who) took the microphone (\(recordingClaims))")
+        NotificationCenter.default.post(name: micTaken, object: nil, userInfo: ["who": who])
+    }
+    static func endRecording(_ who: String) {
+        recordingClaims = max(0, recordingClaims - 1)
+        KadeBreadcrumbs.drop("audio lanes: \(who) released the microphone (\(recordingClaims))")
     }
 }
 

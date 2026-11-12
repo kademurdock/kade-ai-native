@@ -345,9 +345,14 @@ final class ConversationsService: ObservableObject {
         // hard crash. A branched/regenerated thread is exactly where the
         // server CAN surface a repeated row -- drop exact-id repeats, first
         // occurrence wins, order untouched.
-        let decoded = try decoder.decode([KadeMessage].self, from: data)
-        var seenIds = Set<String>()
-        return decoded.filter { seenIds.insert($0.messageId).inserted }
+        // IOS-20 (Nov 12 2026 audit): the whole-conversation decode and the
+        // de-dupe run off the main actor. This runs at every FINAL, exactly
+        // when VoiceOver is rebuilding the transcript.
+        return try await Task.detached(priority: .userInitiated) {
+            let decoded = try JSONDecoder().decode([KadeMessage].self, from: data)
+            var seenIds = Set<String>()
+            return decoded.filter { seenIds.insert($0.messageId).inserted }
+        }.value
     }
 
     // MARK: - Row actions (session 14)

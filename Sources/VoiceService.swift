@@ -29,7 +29,7 @@ import AVFoundation
 final class VoiceService: NSObject, ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isTranscribing = false
-    @Published private(set) var isSpeaking = false
+    @Published private(set) var isSpeaking = false { didSet { reportSpeechFloor() } }
     /// True only while a TTS clip is actually coming out of the speaker.
     /// `isSpeaking` (above) flips true when the speak QUEUE starts -- i.e.
     /// before the network fetch -- so it cannot tell "fetching" apart from
@@ -37,13 +37,23 @@ final class VoiceService: NSObject, ObservableObject {
     /// finish/stop. It exists for the chat lane's autoplay handoff (see
     /// ConversationDetailView's sendState watcher): the waiting ticks keep
     /// running through the TTS fetch and stop the instant the voice starts.
-    @Published private(set) var isClipPlaying = false
+    @Published private(set) var isClipPlaying = false { didSet { reportSpeechFloor() } }
     /// Aug 4 2026 (Kade: "The stop button on voice messages should prob just
     /// be a pause button"): true while the current clip is paused mid-play.
     /// `isClipPlaying` deliberately STAYS true while paused -- the clip is
     /// still "the thing on deck," which is what the composer button and the
     /// row actions key off to stay enabled.
-    @Published private(set) var isPaused = false
+    @Published private(set) var isPaused = false { didSet { reportSpeechFloor() } }
+    /// IOS-14 (Nov 12 2026 audit): VoiceOver announcements that are not
+    /// answers to something she just did wait for this voice
+    /// (KadeSpeechFloor). A paused clip is silent, so it gives the floor back.
+    private var reportedFloorBusy = false
+    private func reportSpeechFloor() {
+        let busy = (isSpeaking || isClipPlaying) && !isPaused
+        guard busy != reportedFloorBusy else { return }
+        reportedFloorBusy = busy
+        KadeSpeechFloor.shared.appVoice(busy: busy, source: ObjectIdentifier(self))
+    }
     /// The caller-supplied tag (chat uses the message id) of the item
     /// currently playing, so a message row's own "Play as voice message"
     /// action can morph into Pause/Resume for exactly the message that is
@@ -385,6 +395,10 @@ final class VoiceService: NSObject, ObservableObject {
 
     private var voicesListCache: [String]?
     private var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
+    /// IOS-13 (Nov 12 2026 audit): one voice lookup per agent at a time; the
+    /// opener, its companion and the warm-up all share it. The token lets a
+    /// finished lookup clear only itself.
+    private var voiceLookups: [String: (token: UUID, task: Task<(voice: String?, speed: Double?), Never>)] = [:]
     /// Characters' builder voices and speeds, for auditions (voiceMessageSpeed).
     private var agentTTSCache: [String: AgentTTSDetail.TTS?] = [:]
     /// The signed-in user's OWN per-agent voice picks ({agentId: voice}),
@@ -393,6 +407,19 @@ final class VoiceService: NSObject, ObservableObject {
     private var userVoicePrefs: [String: String]?
     private var voiceSelectionRevision = 0
     private var voiceChangeObserver: NSObjectProtocol?
+    /// IOS-6 (Nov 12 2026 audit): a call, Siri or an alarm takes the audio.
+    private var interruptionObserver: NSObjectProtocol?
+    private var mediaResetObserver: NSObjectProtocol?
+    /// True only while a clip is parked because the SYSTEM took the audio
+    /// (call, Siri, alarm). Cleared whenever that clip resumes, is superseded
+    /// or is stopped, so a late `.ended` can never un-pause a clip she paused
+    /// by hand.
+    private var pausedBySystem = false
+    /// IOS-11 (Nov 12 2026 audit): something took the microphone
+    /// (KadeAudioLanes).
+    private var micObserver: NSObjectProtocol?
+    /// True while THIS instance's recording holds KadeAudioLanes' recording lane.
+    private var holdsRecordingLane = false
 
     struct VoiceError: Error {
         let message: String
@@ -407,6 +434,47 @@ final class VoiceService: NSObject, ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.invalidateVoiceSelections() }
         }
+        // IOS-6: an interrupted AVAudioPlayer is paused by the system with no
+        // finish callback, which parked the queue on a continuation nothing
+        // would resume, and every later reply was silent.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let info = note.userInfo ?? [:]
+            guard let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            let shouldResume = AVAudioSession.InterruptionOptions(
+                rawValue: info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0).contains(.shouldResume)
+            // Same reading as WorldService: reason 1 is .appWasSuspended, matched
+            // by raw value because the case is deprecated; the old boolean key is
+            // read by name for the same reason. That notice arrives late, on the
+            // way back, and never gets a matching .ended.
+            let wasSuspended = (info[AVAudioSessionInterruptionReasonKey] as? UInt) == 1
+                || (info["AVAudioSessionInterruptionWasSuspendedKey"] as? Bool ?? false)
+            Task { @MainActor [weak self] in
+                self?.systemInterruption(type, shouldResume: shouldResume, wasSuspended: wasSuspended)
+            }
+        }
+        mediaResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.hasPendingSpeech || self.isSpeaking else { return }
+                KadeBreadcrumbs.drop("tts: media services reset; queue dropped")
+                self.stopSpeaking()
+            }
+        }
+        // IOS-11: every VoiceService (chat, Debate Room, voice picker, each
+        // dictation button) goes quiet the moment anything takes the
+        // microphone. queue nil + a main-thread post = delivered
+        // synchronously, so speech has stopped before the claimer touches
+        // the audio session.
+        micObserver = NotificationCenter.default.addObserver(
+            forName: KadeAudioLanes.micTaken, object: nil, queue: nil
+        ) { [weak self] note in
+            let who = note.userInfo?["who"] as? String ?? "the microphone"
+            MainActor.assumeIsolated { self?.yieldToMicrophone(who) }
+        }
         // Warm the voice catalog at launch so the first reply's speed choice
         // can use the provider map without waiting for it.
         Task { await VoiceCatalog.shared.prefetch() }
@@ -414,12 +482,38 @@ final class VoiceService: NSObject, ObservableObject {
 
     deinit {
         if let voiceChangeObserver { NotificationCenter.default.removeObserver(voiceChangeObserver) }
+        // IOS-6, IOS-11 and IOS-14 (Nov 12 2026 audit), merged here.
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        if let mediaResetObserver { NotificationCenter.default.removeObserver(mediaResetObserver) }
+        if let micObserver { NotificationCenter.default.removeObserver(micObserver) }
+        // Never strand the lane: a leaked claim would silence every reply.
+        if holdsRecordingLane { Task { @MainActor in KadeAudioLanes.endRecording("a recording (released at deinit)") } }
+        // A service freed mid-clip must not hold the speech floor forever.
+        let source = ObjectIdentifier(self)
+        Task { @MainActor in KadeSpeechFloor.shared.appVoice(busy: false, source: source) }
+    }
+
+    /// IOS-11: something else took the microphone (a call, a room, a
+    /// recording). Nothing more is spoken until it is released.
+    private func yieldToMicrophone(_ who: String) {
+        if hasPendingSpeech || isSpeaking {
+            KadeBreadcrumbs.drop("tts: stopped for \(who)")
+            stopSpeaking()
+        }
+        Earcons.shared.stopWaitingLoop()
+    }
+
+    private func releaseRecordingLane() {
+        guard holdsRecordingLane else { return }
+        holdsRecordingLane = false
+        KadeAudioLanes.endRecording("a recording")
     }
 
     private func invalidateVoiceSelections() {
         voiceSelectionRevision += 1
         agentVoiceCache.removeAll()
         agentTTSCache.removeAll()
+        voiceLookups.removeAll()
         userVoicePrefs = nil
     }
 
@@ -472,6 +566,22 @@ final class VoiceService: NSObject, ObservableObject {
             break
         }
 
+        // IOS-11: a call or a Clubhouse room owns the two-way session.
+        // Recording here would re-category it, and stopRecording() would
+        // then deactivate it under the call. Decline with a reason
+        // VoiceOver can read.
+        if KadeAudioLanes.duplexActive {
+            recordError = "The microphone is busy with a call or a room. Finish that first, then record."
+            return false
+        }
+        // She is answering back. Claiming the lane stops anything still
+        // speaking in ANY VoiceService (it would be recorded into her
+        // message) and keeps the next piece from flipping the session out
+        // from under the recorder.
+        if !holdsRecordingLane {
+            holdsRecordingLane = true
+            KadeAudioLanes.beginRecording("a recording")
+        }
         do {
             // Aug 13 2026 — AMBER'S AIRPODS BUG, root-caused. `.playAndRecord`
             // with ONLY `.defaultToSpeaker` makes a Bluetooth headset
@@ -501,6 +611,7 @@ final class VoiceService: NSObject, ObservableObject {
             try session.setCategory(.playAndRecord, options: [.allowBluetooth, .defaultToSpeaker])
             try session.setActive(true)
         } catch {
+            releaseRecordingLane()
             recordError = "Couldn't access the microphone. Try again."
             return false
         }
@@ -620,6 +731,8 @@ final class VoiceService: NSObject, ObservableObject {
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // IOS-11: runs on both failed-start paths and in stopRecording.
+        releaseRecordingLane()
     }
 
     /// Uploads a recorded file to `/api/files/speech/stt` and returns the
@@ -674,6 +787,13 @@ final class VoiceService: NSObject, ObservableObject {
                       replyScopeKey: String? = nil, refreshVoice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // IOS-11: a reply still streaming when a call, room or recording
+        // starts keeps sending pieces here. Drop them before they are
+        // synthesised (paid) and played over the call or into the recording.
+        if KadeAudioLanes.micHeld {
+            KadeBreadcrumbs.drop("tts: piece dropped, the microphone is in use")
+            return
+        }
         if refreshVoice { invalidateVoiceSelections() }
         supersedePausedClip()
         if !hasPendingSpeech {
@@ -726,6 +846,7 @@ final class VoiceService: NSObject, ObservableObject {
         streamingPlayer.stop()
         streamedClipActive = false
         isPaused = false
+        pausedBySystem = false
         isClipPlaying = false
         nowPlayingKey = nil
         nowPlayingAgentID = nil
@@ -759,6 +880,10 @@ final class VoiceService: NSObject, ObservableObject {
     func speakLine(text: String, voiceId: String?, rate: Double?) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if KadeAudioLanes.micHeld {
+            KadeBreadcrumbs.drop("tts: room line dropped, the microphone is in use")
+            return
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             supersedePausedClip()
             speakQueue.append((trimmed, nil, nil, voiceId, rate, nil,
@@ -792,6 +917,7 @@ final class VoiceService: NSObject, ObservableObject {
         isSpeaking = false
         isClipPlaying = false
         isPaused = false
+        pausedBySystem = false
         nowPlayingKey = nil
         nowPlayingAgentID = nil
         playingCharacterCue = .neutral
@@ -799,6 +925,55 @@ final class VoiceService: NSObject, ObservableObject {
         pausedCharacterElapsed = 0
         isPumping = false
         streamedTurnKey = nil
+    }
+
+    /// IOS-6 (Nov 12 2026 audit): a call, Siri or an alarm pauses the player
+    /// with no finish callback, which parked the queue on a continuation
+    /// nothing would resume. Park it as a PAUSE instead: the row offers
+    /// Resume, the next reply supersedes it, and .shouldResume carries on by
+    /// itself.
+    private func systemInterruption(_ type: AVAudioSession.InterruptionType,
+                                    shouldResume: Bool, wasSuspended: Bool) {
+        switch type {
+        case .began:
+            if wasSuspended { return }
+            /* The streamed player's engine is stopped by the system and its
+             * scheduled buffers are not known to survive that. Resuming it
+             * could play nothing while play(fetch:) stays parked with isPaused
+             * false, which is the hostage bug again. End the reply instead:
+             * never a stall, and Read aloud brings it back. */
+            if streamedClipActive {
+                KadeBreadcrumbs.drop("tts: system interruption mid streamed clip; reply stopped")
+                stopSpeaking()
+                return
+            }
+            guard isClipPlaying, !isPaused else { return }
+            // The system may already have paused the player, in which case
+            // pauseSpeaking() returns at its isPlaying guard: keep the playhead
+            // for the face and force the paused state ourselves.
+            let playhead = currentPlayer?.currentTime
+            pauseSpeaking()
+            if !isPaused {
+                if let playhead { pausedCharacterElapsed = playhead }
+                isPaused = true
+            }
+            pausedBySystem = true
+            KadeBreadcrumbs.drop("tts: system interruption mid-clip; parked as paused")
+        case .ended:
+            guard pausedBySystem else { return }
+            pausedBySystem = false
+            guard isClipPlaying, isPaused else { return }
+            guard shouldResume, !isRecording else {
+                KadeBreadcrumbs.drop("tts: interruption ended without resume (shouldResume \(shouldResume), recording \(isRecording)); left paused")
+                return
+            }
+            resumeSpeaking()
+            KadeBreadcrumbs.drop(isPaused
+                ? "tts: interruption ended; resume refused, left paused"
+                : "tts: interruption ended; resumed")
+        @unknown default:
+            break
+        }
     }
 
     /// Aug 4 2026: pause the clip that's playing right now, resumable with
@@ -839,13 +1014,22 @@ final class VoiceService: NSObject, ObservableObject {
         if LiveFaceSession.shared.isPausedClip, isPaused {
             LiveFaceSession.shared.resume()
             isPaused = false
+            pausedBySystem = false
             LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
             return
         }
         if streamedClipActive, isPaused {
             prepareOutputSession()
-            streamingPlayer.resume()
+            guard streamingPlayer.resume() else {
+                // IOS-6: the engine would not come back (an interruption
+                // stopped it). Drop this clip so the pump moves on; never a
+                // parked await.
+                KadeBreadcrumbs.drop("tts-stream: resume failed; clip dropped so the queue moves on")
+                supersedePausedClip()
+                return
+            }
             isPaused = false
+            pausedBySystem = false
             // Known bug #2: the book may have been resumed while this clip
             // was paused; a clip coming back pauses it again.
             LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
@@ -855,6 +1039,7 @@ final class VoiceService: NSObject, ObservableObject {
         prepareOutputSession()
         if player.play() {
             isPaused = false
+            pausedBySystem = false
             LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
         }
     }
@@ -1348,6 +1533,11 @@ final class VoiceService: NSObject, ObservableObject {
     /// Fail-soft on purpose: if the category can't be set for some reason,
     /// still play. Wrong-sounding output beats silence.
     private func prepareOutputSession() {
+        // IOS-11: a recording, a call or a Clubhouse room owns a session with
+        // a microphone in it. Switching it to .playback here takes that
+        // microphone away. (Anything that still reaches this point, such as
+        // a voice audition, plays in their session instead.)
+        if isRecording || KadeAudioLanes.micHeld { return }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try? session.setActive(true)
@@ -1637,9 +1827,31 @@ final class VoiceService: NSObject, ObservableObject {
         if userVoicePrefs == nil { userVoicePrefs = [:] }
         userVoicePrefs?[agentId] = normalized
         agentVoiceCache[agentId] = nil   // force a re-resolve with the new pick
+        voiceLookups[agentId] = nil
+    }
+
+    /// IOS-13: resolves the voice before the first reply needs it, so the
+    /// first spoken piece does not wait on two cold lookups. Safe to call
+    /// twice; shares any lookup already running.
+    func warmVoice(agentId: String, agentName: String?) async {
+        _ = await resolveVoice(agentId: agentId, agentName: agentName)
     }
 
     private func resolveVoice(agentId: String?, agentName: String?) async -> (voice: String?, speed: Double?) {
+        guard let agentId else { return await lookUpVoice(agentId: nil, agentName: agentName) }
+        if let cached = agentVoiceCache[agentId] { return cached }
+        if let running = voiceLookups[agentId] { return await running.task.value }
+        let token = UUID()
+        let task = Task { @MainActor () -> (voice: String?, speed: Double?) in
+            let result = await self.lookUpVoice(agentId: agentId, agentName: agentName)
+            if self.voiceLookups[agentId]?.token == token { self.voiceLookups[agentId] = nil }
+            return result
+        }
+        voiceLookups[agentId] = (token, task)
+        return await task.value
+    }
+
+    private func lookUpVoice(agentId: String?, agentName: String?) async -> (voice: String?, speed: Double?) {
         if let agentId, let cached = agentVoiceCache[agentId] {
             return cached
         }
@@ -1672,7 +1884,7 @@ final class VoiceService: NSObject, ObservableObject {
         }
 
         guard revision == voiceSelectionRevision else {
-            return await resolveVoice(agentId: agentId, agentName: agentName)
+            return await lookUpVoice(agentId: agentId, agentName: agentName)
         }
         let result = (resolvedVoice, resolvedSpeed)
         if let agentId {

@@ -46,6 +46,7 @@ actor VoiceCatalog {
     var voiceSelectionRevision = 0
     var agentVoiceCache: [String: (voice: String?, speed: Double?)] = [:]
     var agentTTSCache: [String: AgentTTSDetail.TTS?] = [:]
+    var voiceLookups: [String: (token: UUID, task: Task<(voice: String?, speed: Double?), Never>)] = [:]
     var userVoicePrefs: [String: String]?
     struct AgentTTSDetail: Codable {
         struct TTS: Codable { let voiceId: String?; let speakingRate: Double? }
@@ -122,6 +123,18 @@ actor VoiceCatalog {
         selection.refresh()
         let voicelessPickSpeed = await selection.lookupSpeed("kiana")
         check(voicelessPickSpeed == nil, "a listener's voice on a voice-less character does not get its speed")
+        // IOS-13 (Nov 12 2026 audit): two callers at once (the opener and its
+        // companion, or the warm-up and the first piece) share one lookup.
+        client.prefs = [:]; client.voiceless = []
+        selection.refresh()
+        client.delay = 30_000_000
+        let before = client.reads
+        async let first = selection.lookup("forge")
+        async let second = selection.lookup("forge")
+        let both = await (first, second)
+        check(client.reads - before == 2, "two callers share one prefs read and one agent read")
+        check(both.0 == "forge voice" && both.1 == "forge voice", "both callers get the same voice")
+        client.delay = 0
         print("Voice selection: \(count) checks passed using production methods; no audio requested.")
     }
 }

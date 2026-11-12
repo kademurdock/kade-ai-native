@@ -900,10 +900,11 @@ struct ConversationDetailView: View {
             let type = (note.userInfo?["type"] as? String) ?? ""
             guard type == "update" || type == "delete" else { return }
             KadeHaptics.success()
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: type == "delete" ? "A memory was forgotten." : "Memory saved."
-            )
+            // IOS-14 (Nov 12 2026 audit): waits for the character's voice;
+            // low priority, never interrupts. The haptic above still fires
+            // at once.
+            KadeSpeechFloor.shared.announce(
+                type == "delete" ? "A memory was forgotten." : "Memory saved.", kind: .memory)
         }
         .task {
             #if DEBUG && targetEnvironment(simulator)
@@ -996,6 +997,12 @@ struct ConversationDetailView: View {
                 }
             }
             await agentsService.loadIfNeeded()
+            // IOS-13 (Nov 12 2026 audit): resolve the voice now, so the first
+            // spoken piece of the first reply does not wait on two cold
+            // lookups. Single-flight inside VoiceService; cached after once.
+            if let id = selectedAgentId, let name = agentsService.name(for: id) {
+                Task { await voiceService.warmVoice(agentId: id, agentName: name) }
+            }
             /* Sep 23 2026 redesign (B4): "Pick up where you left off" reads
              * the conversation list. A chat the root opened is usually pushed
              * over a list that already loaded, so this rarely fires; when it
@@ -1429,6 +1436,7 @@ struct ConversationDetailView: View {
             case .agentPicker:
                 AgentPickerView(currentAgentId: selectedAgentId) { agent in
                     selectedAgentId = agent.id
+                    Task { await voiceService.warmVoice(agentId: agent.id, agentName: agent.name) }   // IOS-13
                     a11yFocus = .agentButton
                 }
                 .environmentObject(agentsService)
@@ -4252,6 +4260,7 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            KadeSpeechFloor.shared.retract(.tool)   // IOS-14: a held tool line is no longer true
             live.resetTurn()
             live.resetSpeech()
             liveThinkExpanded = false
@@ -4267,7 +4276,11 @@ struct ConversationDetailView: View {
                 requestId: turnRequestId,
                 onText: { chunk in
                     guard !chunk.isEmpty else { return }
-                    if speechWorkPhase != .reply { speechWorkPhase = .reply }
+                    if speechWorkPhase != .reply {
+                        speechWorkPhase = .reply
+                        // IOS-14: reply text resumed, so the tool is over.
+                        KadeSpeechFloor.shared.retract(.tool)
+                    }
                     speechGapResume?.cancel()
                     speechGapResume = nil
                     if spokenTurnStarted { Earcons.shared.stopWaitingLoop() }
@@ -4395,15 +4408,15 @@ struct ConversationDetailView: View {
                         // announcements wait for silence instead of
                         // interrupting whatever VoiceOver is mid-way
                         // through.
-                        live.lastThinkProgressAnnounce = Date()
                         let rounded = max((live.thinkRaw.count / 100) * 100, 100)
-                        UIAccessibility.post(
-                            notification: .announcement,
-                            argument: NSAttributedString(
-                                string: "Still thinking — about \(rounded) characters so far.",
-                                attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
-                            )
-                        )
+                        // IOS-14: dropped while the app voice is talking; the
+                        // 20 s clock only restarts when the line was really
+                        // queued.
+                        if KadeSpeechFloor.shared.announce(
+                            "Still thinking — about \(rounded) characters so far.",
+                            kind: .thinking, staleAfterVoice: true) {
+                            live.lastThinkProgressAnnounce = Date()
+                        }
                     }
                 },
                 onTool: { spoken in
@@ -4431,13 +4444,11 @@ struct ConversationDetailView: View {
                           Date().timeIntervalSince(live.lastToolAnnounce) >= 4 else { return }
                     live.lastToolAnnounce = Date()
                     live.lastToolSpoken = spoken
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: NSAttributedString(
-                            string: spoken,
-                            attributes: [.accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low]
-                        )
-                    )
+                    // IOS-14: if the character is mid-sentence this waits for
+                    // her to finish, and is retracted if the reply resumes
+                    // first. Held, never dropped (a long tool run must still
+                    // be heard once).
+                    KadeSpeechFloor.shared.announce(spoken, kind: .tool)
                 },
                 onCompletedReply: { completedReplyId = $0 }
             )
@@ -4451,6 +4462,7 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            KadeSpeechFloor.shared.retract(.tool)   // IOS-14: a held tool line is no longer true
             live.resetTurn()
             liveThinkExpanded = false
             conversationId = resolvedConversationId
@@ -4631,6 +4643,7 @@ struct ConversationDetailView: View {
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
+            KadeSpeechFloor.shared.retract(.tool)   // IOS-14: a held tool line is no longer true
             live.resetTurn()
             live.resetSpeech()
             liveThinkExpanded = false

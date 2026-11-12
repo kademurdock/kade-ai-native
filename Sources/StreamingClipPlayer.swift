@@ -343,8 +343,12 @@ final class StreamingClipPlayer {
          * Fail-soft on purpose, same as the buffered path: if the category
          * cannot be set, still try to play. Wrong-sounding beats silent. */
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        try? session.setActive(true)
+        // IOS-11 (Nov 12 2026 audit): never take the session from a call, a
+        // room or a recording.
+        if !KadeAudioLanes.micHeld {
+            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? session.setActive(true)
+        }
 
         do {
             if !engine.isRunning { try engine.start() }
@@ -374,8 +378,10 @@ final class StreamingClipPlayer {
                     // One attempt only, bounded by the same half-second probe.
                     KadeBreadcrumbs.drop("tts-stream: start clock stalled; recovering queued audio rate=\(rate) engine=\(engine.isRunning) route=\(session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ","))")
                     do {
-                        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                        try session.setActive(true)
+                        if !KadeAudioLanes.micHeld {
+                            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                            try session.setActive(true)
+                        }
                         if !engine.isRunning { try engine.start() }
                         node.pause()
                         node.play()
@@ -459,8 +465,21 @@ final class StreamingClipPlayer {
         node.pause()
     }
 
-    func resume() {
+    /// False when the engine could not be brought back (IOS-6, Nov 12 2026
+    /// audit). An interruption stops the engine, and node.play() on a
+    /// stopped engine raises an ObjC exception, so never reach it in that
+    /// state.
+    @discardableResult
+    func resume() -> Bool {
+        guard graphBuilt, !stopped else { return false }
+        if !engine.isRunning {
+            do { try engine.start() } catch {
+                KadeBreadcrumbs.drop("tts-stream: engine restart on resume failed (\(error.localizedDescription))")
+                return false
+            }
+        }
         node.play()
+        return true
     }
 
     /// Stop the current clip and drop everything scheduled. Safe to call
