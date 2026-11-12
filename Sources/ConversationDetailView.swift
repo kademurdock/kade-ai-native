@@ -599,6 +599,16 @@ struct ConversationDetailView: View {
         /// button is stable across the whole send (same Button, label flips
         /// Send -> Stop), says one word, and is already under her thumb.
         case sendButton
+        /// IOS-12 (Nov 12 2026 audit): rows that exist only while a reply is
+        /// being made. They are focus targets ONLY so the send path can tell
+        /// when VoiceOver is sitting on a row it is about to remove, and hand
+        /// the cursor on instead of letting iOS drop it on the status bar.
+        /// Nothing ever moves focus ONTO the thinking bubble, Answer-now or
+        /// the tool line.
+        case replyingRow
+        case liveThinking
+        case answerNow
+        case toolNote
     }
     @AccessibilityFocusState private var a11yFocus: A11yFocus?
     /// Keyboard editing is separate from VoiceOver's cursor. A send ends
@@ -1783,7 +1793,9 @@ struct ConversationDetailView: View {
                     }
                     if !liveThink.isEmpty, case .sending = sendState {
                         liveThinkingBubble
+                            .accessibilityFocused($a11yFocus, equals: .liveThinking)
                         answerNowButton
+                            .accessibilityFocused($a11yFocus, equals: .answerNow)
                     }
                     if !liveReply.isEmpty, case .sending = sendState {
                         liveReplyBubble
@@ -1800,9 +1812,12 @@ struct ConversationDetailView: View {
                             .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityLabel(liveToolNote)
+                            .accessibilityFocused($a11yFocus, equals: .toolNote)
                     }
                     if case .sending = sendState {
-                        replyingRow.id(Self.replyingRowId)
+                        replyingRow
+                            .accessibilityFocused($a11yFocus, equals: .replyingRow)
+                            .id(Self.replyingRowId)
                     }
                     transcriptChatOptions
                 }
@@ -4096,6 +4111,48 @@ struct ConversationDetailView: View {
         }
     }
 
+    /// IOS-12 (Nov 12 2026 audit). Called at successful FINAL with the cursor
+    /// as it was just before the reload replaced the rows. Does nothing
+    /// unless that cursor was on a row that no longer exists. Hear replies
+    /// on: the send button (the voice is already reading). Off: the reply
+    /// itself, which is what she was waiting on (her choice, Nov 12 2026).
+    /// Her own pending message: the same message under its server id.
+    private func handOffVanishedFocus(from before: A11yFocus?, pendingRowId: String, reply: KadeMessage?) {
+        guard UIAccessibility.isVoiceOverRunning, let before else { return }
+        var target: A11yFocus
+        switch before {
+        case .replyingRow, .liveThinking, .answerNow, .toolNote:
+            if !readAloudEnabled, let reply {
+                target = .message(reply.id)
+            } else {
+                target = .sendButton
+            }
+        case .message(let id) where id == pendingRowId && !messages.contains(where: { $0.messageId == id }):
+            if let mine = messages.last(where: { $0.isCreatedByUser }) {
+                target = .message(mine.id)
+            } else {
+                target = .sendButton
+            }
+        default:
+            return
+        }
+        // A row the transcript is not rendering (search filter, window)
+        // cannot take focus; the send button always can.
+        if case .message(let id) = target, !visibleMessages.contains(where: { $0.id == id }) {
+            target = .sendButton
+        }
+        let handTo = target
+        Task { @MainActor in
+            await Self.nextRunLoopTurn()   // let the reloaded rows exist first
+            // A new send already took the anchor: leave it alone.
+            guard case .idle = sendState else { return }
+            // She has already put the cursor somewhere real: leave it alone.
+            if let now = a11yFocus, now != before { return }
+            a11yFocus = handTo
+            KadeBreadcrumbs.drop("focus handed off a removed row at FINAL")
+        }
+    }
+
     /// The shared guts of every send -- a plain Send tap (via `send()`
     /// above), "Edit and Resend," and "Regenerate" all fund here,
     /// differing only in which text and which parent they pass.
@@ -4459,6 +4516,24 @@ struct ConversationDetailView: View {
             // summary got wrong by guessing (the real reply was 1,860 chars,
             // not the essay the workup assumed).
             KadeBreadcrumbs.drop("stream finished (reply \(live.replyRaw.count) chars, think \(live.thinkRaw.count) chars)")
+            /* IOS-12: the thinking bubble, Answer-now and the tool line are
+             * removed by the clears just below, a whole network reload BEFORE
+             * FINAL. If VoiceOver is on one of them, step it onto a row that
+             * survives the reload first: the send button when the voice is
+             * reading the reply, else the replying row (handed on to the reply
+             * itself once it exists). Own commit, per build 211's
+             * one-mutation-per-commit rule. Untouched path when focus is
+             * anywhere else. */
+            if UIAccessibility.isVoiceOverRunning, let onLiveRow = a11yFocus {
+                switch onLiveRow {
+                case .liveThinking, .answerNow, .toolNote:
+                    a11yFocus = readAloudEnabled ? .sendButton : .replyingRow
+                    await Self.nextRunLoopTurn()
+                    KadeBreadcrumbs.drop("focus stepped off a live row before it clears")
+                default:
+                    break
+                }
+            }
             liveThink = ""
             liveReply = ""
             liveToolNote = ""
@@ -4471,9 +4546,14 @@ struct ConversationDetailView: View {
             // shape) rather than trusting the SSE payload's exact field set
             // — see MessageSendingService's type doc for why.
             KadeBreadcrumbs.drop("authoritative reload started")
-            messages = try await conversationsService.fetchMessages(
+            let reloadedMessages = try await conversationsService.fetchMessages(
                 conversationId: resolvedConversationId
             )
+            // IOS-12: read her cursor AFTER the network wait and immediately
+            // before the rows change, so a swipe made during the reload is
+            // respected. No await between here and `sendState = .idle`.
+            let focusAtFinal: A11yFocus? = UIAccessibility.isVoiceOverRunning ? a11yFocus : nil
+            messages = reloadedMessages
             KadeBreadcrumbs.drop("reply landed (\(messages.count) msgs)")
             // Session 28: decide the autoplay handoff BEFORE sendState
             // flips -- the sendState watcher reads this flag to know whether
@@ -4500,6 +4580,13 @@ struct ConversationDetailView: View {
             }
             // Successful FINAL never moves VoiceOver to a row or composer,
             // in either Hear mode. Arrival feedback and manual reading stay.
+            // One exception (IOS-12): a cursor that was on a row FINAL just
+            // removed is handed on, because there is no place left to keep.
+            handOffVanishedFocus(
+                from: focusAtFinal,
+                pendingRowId: optimisticMessage.messageId,
+                reply: currentReply
+            )
             if wasNewConversation {
                 // Session 24 (Kade: new chats "all say new chat"): now that
                 // the first send carries the NO_PARENT sentinel (see

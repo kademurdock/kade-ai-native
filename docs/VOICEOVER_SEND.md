@@ -23,6 +23,15 @@ replies modes, including a voice that never starts. Arrival earcon/haptic and
 manual reading remain. Deliberate Stop, errors and recording review retain
 their existing focus and announcement paths.
 
+One exception (IOS-12, Nov 12 2026 audit): the replying row, the live thinking
+bubble, Answer now, the tool line and the optimistic `pending-` row do not
+survive FINAL. If the cursor is on one of them when it is removed, focus is
+handed on instead of being left for iOS to drop on the status bar: to the send
+button when Hear replies is on, to the new reply when it is off (her choice),
+and from the pending row to the same message under its server id. A cursor
+anywhere else is never moved, and a cursor she moves during the reload is
+respected.
+
 Streaming also exposed a second focus bug: FINAL rearmed the first-clip wait
 even if character playback had already started. If the last clip was playing
 at FINAL, draining it could focus the reply as though speech had failed.
