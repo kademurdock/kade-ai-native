@@ -66,8 +66,9 @@ final class ListenerVoiceSync {
     private func localValues() -> ListenerVoicePlan.Local {
         let defaults = UserDefaults.standard
         let word = defaults.string(forKey: Self.paceKey) ?? "character"
-        let number = ListenerVoicePlan.paceNumber(word: word) ?? .some(nil)
-        let known = ListenerVoicePlan.paceNumber(word: word) != nil
+        let parsed = ListenerVoicePlan.paceNumber(word: word)   // nil = a word the list does not have
+        let known = parsed != nil
+        let number: Double? = parsed.flatMap { $0 }           // nil = Character's speed
         let paceSaved = defaults.bool(forKey: Self.paceChosenKey) || (known && word != "character")
         let fillersKey = VoiceFillerPolicy.defaultsKey
         let fillersSaved = defaults.object(forKey: fillersKey) != nil
