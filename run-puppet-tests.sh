@@ -10,6 +10,7 @@ trap 'rm -rf "$OUT"' EXIT
   "$ROOT/Sources/PuppetScene.swift" "$ROOT/Sources/PuppetMotion.swift" "$ROOT/Sources/PuppetRenderer.swift" \
   "$ROOT/Sources/PuppetRecipe.swift" \
   "$ROOT/Sources/CharacterPerformance.swift" "$ROOT/Sources/CharacterAnimationBudget.swift" \
+  "$ROOT/Sources/KadeTimingTrack.swift" \
   "$ROOT/PuppetTests/main.swift" -o "$OUT/puppet-tests"
 PUPPET_FIXTURES="${PUPPET_FIXTURES:-$ROOT/PuppetTests/fixtures}" \
   PUPPET_BUILDER_SAMPLE="${PUPPET_BUILDER_SAMPLE:-$ROOT/Sources/PuppetBuilderSample.json}" "$OUT/puppet-tests"

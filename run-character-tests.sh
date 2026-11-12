@@ -4,6 +4,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 "${SWIFTC:-swiftc}" -D CHARACTER_MODEL_TESTS "$ROOT/Sources/CharacterMotion.swift" "$ROOT/Sources/CharacterAppearance.swift" "$ROOT/Sources/CharacterPerformance.swift" \
+  "$ROOT/Sources/KadeTimingTrack.swift" \
   "$ROOT/Sources/CharacterFacialPolicy.swift" \
   "$ROOT/Sources/CharacterAnimationBudget.swift" "$ROOT/CharacterMotionTests/CharacterAnimationBudgetTests.swift" \
   "$ROOT/CharacterMotionTests/CharacterBodyPerformanceTests.swift" \

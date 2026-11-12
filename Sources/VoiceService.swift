@@ -94,7 +94,20 @@ final class VoiceService: NSObject, ObservableObject {
             laughing: playingCharacterCue.laughing(at: elapsed),
             outputEpisodeKey: characterCueState.outputEpisodeKey, outputPhase: .playing,
             outputSpeakerID: nowPlayingAgentID)
+            .timed(playingTimingTrack())
     }
+    /// Nov 11 2026: the timing track of the clip that is audible right now, if
+    /// its WAV carried one. A live video face plays its own clips (and moves
+    /// its own lips), so it never gets one.
+    private func playingTimingTrack() -> KadeTimingTrack? {
+        if LiveFaceSession.shared.isPlayingClip { return nil }
+        if streamedClipActive { return streamingPlayer.characterTimingTrack }
+        guard let player = currentPlayer, let held = bufferedTimingTrack,
+              held.player == ObjectIdentifier(player) else { return nil }
+        return held.track
+    }
+    /// The buffered clip's track, tied to the exact player it belongs to.
+    private var bufferedTimingTrack: (player: ObjectIdentifier, track: KadeTimingTrack)?
     func characterLevel() -> Double {
         guard isClipPlaying, !isPaused else { return 0 }
         if LiveFaceSession.shared.isPlayingClip { return LiveFaceSession.shared.level() }
@@ -1178,6 +1191,8 @@ final class VoiceService: NSObject, ObservableObject {
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: agentId) { fields.append(("delivery", delivery)) }
         if let fillers = Self.fillersField(agentId: agentId, explicitVoice: explicitVoice) { fields.append(("fillers", fillers)) }
+        // Nov 11 2026: Inworld's mouth shapes, only while this speaker's face shows.
+        if KadeFaceTimings.shouldAsk(agentID: agentId) { fields.append(("timing", "true")) }
 
         /* ⭐ PART 94 — ONE RETRY, BECAUSE THE FAILURE CLASS HERE IS LATENCY.
          *
@@ -1264,6 +1279,9 @@ final class VoiceService: NSObject, ObservableObject {
         fields.append(("speed", String(tuned)))
         if let delivery = Self.delivery(forAgent: item.agentId) { fields.append(("delivery", delivery)) }
         if let fillers = Self.fillersField(agentId: item.agentId, explicitVoice: item.explicitVoice) { fields.append(("fillers", fillers)) }
+        // Nov 11 2026: the streamed lane itself carries no track; a response the
+        // proxy buffers instead (a long piece) does, and the player reads it.
+        if KadeFaceTimings.shouldAsk(agentID: item.agentId) { fields.append(("timing", "true")) }
         return client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
     }
 
@@ -1298,7 +1316,13 @@ final class VoiceService: NSObject, ObservableObject {
     }
 
     @discardableResult
-    private func playAudio(_ data: Data, key: String? = nil, agentID: String? = nil, cue: CharacterCue = .neutral) async -> Bool {
+    private func playAudio(_ rawData: Data, key: String? = nil, agentID: String? = nil, cue: CharacterCue = .neutral) async -> Bool {
+        /* Nov 11 2026: a clip asked for with `timing` carries a `kdtm` chunk
+         * between `fmt ` and `data`. Read the track, then hand every player the
+         * plain WAV with that chunk cut out (byte-identical when there is none),
+         * so no reader here ever has to skip it. */
+        let timingTrack = KadeTimingTrack.read(wav: rawData)
+        let data = KadeTimingTrack.strippingTrack(rawData)
         #if DEBUG && targetEnvironment(simulator)
         CharacterAuditCheckpoint.mark("Preparing voice audio session")
         #endif
@@ -1357,6 +1381,11 @@ final class VoiceService: NSObject, ObservableObject {
                 #if DEBUG && targetEnvironment(simulator)
                 CharacterAuditCheckpoint.mark("Voice player created")
                 #endif
+                if let track = timingTrack, track.fits(seconds: player.duration) {
+                    bufferedTimingTrack = (player: ObjectIdentifier(player), track: track)
+                } else {
+                    bufferedTimingTrack = nil
+                }
                 player.delegate = self
                 // `enableRate` MUST be set before `play()` -- setting it
                 // afterwards silently does nothing, which is the kind of

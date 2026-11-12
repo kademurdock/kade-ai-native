@@ -107,10 +107,13 @@ struct PuppetStageView: View {
         }
         let speaking = performance.activity == .speaking && performance.outputPhase != .queuedGap
             && performance.outputPhase != .paused && performance.outputPhase != .stopped
+        let raw = speaking ? level() : 0
+        // Nov 11 2026: the clip's own mouth shapes, when it carried a timing track.
         let input = PuppetMotion.Input(speaking: speaking,
-            level: speaking ? PuppetMotion.voiceLevel(level()) : 0,
+            level: speaking ? PuppetMotion.voiceLevel(raw) : 0,
             listening: !speaking && (listening || performance.activity == .listening),
-            reduceMotion: false)
+            reduceMotion: false,
+            viseme: speaking ? performance.timingPanel(strength: KadeTimingTrack.strength(level: raw)) : nil)
         return clock.channels(renderer: renderer, agentID: agentID, time: time, input: input, expression: expression)
     }
 }

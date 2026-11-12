@@ -161,6 +161,9 @@ struct CharacterPresentation {
     var outputEpisodeKey: String? = nil
     var outputPhase: CharacterOutputPhase = .unspecified
     var outputSpeakerID: String? = nil
+    /// Nov 11 2026: the playing clip's own timing track (KadeTimingTrack), when
+    /// its WAV carried one; `elapsed` is then that clip's playhead.
+    var timingTrack: KadeTimingTrack? = nil
     var face: CharacterFace {
         if laughing { return .laugh }
         if expression == .neutral && activity == .thinking { return .thoughtful }
@@ -168,6 +171,36 @@ struct CharacterPresentation {
         return expression.face
     }
     static let idle = CharacterPresentation()
+}
+
+extension CharacterPresentation {
+    /// The track's mouth panel for this frame, or nil: no track, the clip is
+    /// not audibly playing, or the track does not cover this moment. Every
+    /// caller falls back to its loudness method on nil.
+    func timingPanel(strength: Double) -> Int? {
+        guard let track = timingTrack, activity == .speaking, outputPhase == .playing else { return nil }
+        return track.panel(atSeconds: elapsed, strength: strength)
+    }
+
+    /// This presentation with the clip's track attached. A little sound the
+    /// voice made ([laugh], [sigh]) shows on the face when it is heard, for the
+    /// same 0.8 s a leading %%%laugh%%% direction holds, starting 0.12 s early
+    /// as the website's expressionSchedule does.
+    func timed(_ track: KadeTimingTrack?) -> CharacterPresentation {
+        guard let track else { return self }
+        var value = self
+        value.timingTrack = track
+        guard activity == .speaking, outputPhase == .playing, elapsed.isFinite, elapsed >= 0 else { return value }
+        for sound in track.sounds.reversed() {
+            let start = max(0, sound.ms / 1000 - 0.12)
+            guard elapsed >= start, elapsed < start + 0.8 else { continue }
+            guard let moment = CharacterCue.fromSpeech("%%%" + sound.tag + "%%%").moment else { continue }
+            value.expression = moment
+            value.laughing = moment == .amused
+            break
+        }
+        return value
+    }
 }
 
 /// Pure reply-scoped authored directions. No words, audio or message body are
@@ -264,20 +297,26 @@ struct CharacterPlaybackTimeline {
         let end: Double
         let identity: CharacterAudioIdentity?
         let episodeKey: String?
+        /// Nov 11 2026: the clip's timing track, when its WAV carried one.
+        var track: KadeTimingTrack? = nil
     }
     private(set) var clips: [Clip] = []
     private var end = 0.0
     private var blocked = false
     private var serial: UInt64 = 0
     private var lastEndedClip: Clip?
+    /// Clips appended since the last reset (HeardPosition).
+    private(set) var started = 0
     static let queueGap = 1.2
     mutating func reset() {
         clips.removeAll(keepingCapacity: true)
         end = 0
         blocked = false
         lastEndedClip = nil
+        started = 0
     }
-    mutating func append(identity: CharacterAudioIdentity?, duration: Double, now: Double) {
+    mutating func append(identity: CharacterAudioIdentity?, duration: Double, now: Double,
+                         track: KadeTimingTrack? = nil) {
         guard !blocked else { return }
         guard duration.isFinite, duration > 0, duration <= 120, now.isFinite, now >= 0 else { reset(); blocked = true; return }
         if let ended = clips.last(where: { $0.end <= now }) { lastEndedClip = ended }
@@ -298,8 +337,9 @@ struct CharacterPlaybackTimeline {
                 episodeKey = "call-\(serial)"
             }
         }
-        clips.append(Clip(start: start, end: finish, identity: identity, episodeKey: episodeKey))
+        clips.append(Clip(start: start, end: finish, identity: identity, episodeKey: episodeKey, track: track))
         end = finish
+        started &+= 1
     }
     func presentation(at time: Double, expectedID: String?) -> CharacterPresentation? {
         guard time.isFinite, time >= 0, let expectedID,
@@ -309,6 +349,44 @@ struct CharacterPlaybackTimeline {
         return CharacterPresentation(activity: .speaking, expression: identity.cue.expression(at: elapsed),
             elapsed: elapsed, laughing: identity.cue.laughing(at: elapsed),
             outputEpisodeKey: clip.episodeKey, outputPhase: .playing, outputSpeakerID: identity.speakerID)
+            .timed(clip.track)
+    }
+
+    /* Nov 11 2026: HOOK FOR THE INTERRUPT FIX ("keep only what was heard").
+     * The bridge task that trims a barged-in reply to what the caller really
+     * heard is designed separately; it may want the app to say where playback
+     * stood when it was cut. This is that answer, pure and tested: which clip
+     * was audible, how far into it, how long it was, and (when the clip carried
+     * a timing track) the words that had finished. StreamingCallService reads it
+     * just before a flush (`playbackPositionAtFlush`), and sends nothing until
+     * the bridge's message shape is defined. */
+    struct HeardPosition: Equatable {
+        /// Clips appended since the last reset, the audible one included.
+        let clipsStarted: Int
+        /// 1-based count of the audible clip among those, 0 when none is.
+        let clipNumber: Int
+        let elapsedMs: Int
+        let durationMs: Int
+        let speakerID: String?
+        /// Whole words heard before the cut, when the clip had a track.
+        let wordsHeard: [String]?
+    }
+
+    func heardPosition(at time: Double) -> HeardPosition? {
+        guard time.isFinite, time >= 0, started > 0 else { return nil }
+        guard let index = clips.firstIndex(where: { $0.start <= time && time < $0.end }) else {
+            return HeardPosition(clipsStarted: started, clipNumber: 0, elapsedMs: 0, durationMs: 0,
+                speakerID: nil, wordsHeard: nil)
+        }
+        let clip = clips[index]
+        // Clips that ended were dropped from `clips`; count back from the newest.
+        let number = started - (clips.count - 1 - index)
+        let elapsed = time - clip.start
+        return HeardPosition(clipsStarted: started, clipNumber: number,
+            elapsedMs: Int((elapsed * 1000).rounded(.down)),
+            durationMs: Int(((clip.end - clip.start) * 1000).rounded()),
+            speakerID: clip.identity?.speakerID,
+            wordsHeard: clip.track?.wordsHeard(beforeMs: elapsed * 1000))
     }
 
     /// Only the call's speaking state may request this short presentation hold.

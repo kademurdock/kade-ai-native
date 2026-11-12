@@ -432,6 +432,13 @@ final class StreamingCallService: NSObject, ObservableObject {
         if let listenerRate = VoicePacePolicy.listenerRate(VoiceService.loadVoicePace()) {
             hello["speed"] = listenerRate
         }
+        // Nov 11 2026: a character's face is on the call stage, so ask the
+        // bridge for Inworld's mouth shapes with the call's own speech, as the
+        // website's hello does (bridge BRIDGE_FACE_TIMINGS). Each clip then
+        // carries a `kdtm` chunk that enqueueWav reads and cuts out.
+        if KadeFaceTimings.shouldAskOnCall(agentID: callAgentId) {
+            hello["faces"] = true
+        }
         sendJSON(hello)
         startReceiveLoop()
     }
@@ -1370,7 +1377,13 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// can't be tested on-device before shipping. Mirrors the temp-file
     /// pattern `VoiceService`/`MessageSendingService` already use elsewhere
     /// in this app for audio.
-    private func enqueueWav(_ data: Data, character: CharacterAudioIdentity?) {
+    private func enqueueWav(_ wav: Data, character: CharacterAudioIdentity?) {
+        // Nov 11 2026: a clip may carry a timing track (`kdtm`, between `fmt `
+        // and `data`) when the hello asked for faces. Read it, then hand Apple's
+        // parser the plain WAV with that chunk cut out (byte-identical when
+        // there is none), so the audio never depends on skipping it.
+        let track = KadeTimingTrack.read(wav: wav)
+        let data = KadeTimingTrack.strippingTrack(wav)
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kade-call-clip-\(UUID().uuidString).wav")
         do {
@@ -1381,7 +1394,9 @@ final class StreamingCallService: NSObject, ObservableObject {
                 pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)
             ) else { return }
             try file.read(into: raw)
-            schedule(raw, from: file.processingFormat, character: character)
+            let seconds = Double(raw.frameLength) / file.processingFormat.sampleRate
+            let fitted: KadeTimingTrack? = track?.fits(seconds: seconds) == true ? track : nil
+            schedule(raw, from: file.processingFormat, character: character, track: fitted)
         } catch {
             // One bad clip must never kill the call -- same fail-soft
             // philosophy as every other audio path in this app. Counted,
@@ -1443,7 +1458,8 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// time) queues gaplessly behind whatever's already scheduled as long
     /// as the node is playing -- no manual playhead-tracking needed here,
     /// unlike the web client's Web Audio workaround.
-    private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, character: CharacterAudioIdentity? = nil) {
+    private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, character: CharacterAudioIdentity? = nil,
+                          track: KadeTimingTrack? = nil) {
         guard engineRunning else { return }
         // The engine can be stopped out from under us by an interruption
         // (another app taking the session, a real phone call) without this
@@ -1473,7 +1489,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         // conversion at all, and skipping the converter removes one more
         // place a silent failure could hide.
         if sourceFormat == playerFormat {
-            scheduleOnTimeline(buffer, character: character)
+            scheduleOnTimeline(buffer, character: character, track: track)
             return
         }
         guard let converter = AVAudioConverter(from: sourceFormat, to: playerFormat) else {
@@ -1496,7 +1512,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             clipFailures += 1
             return
         }
-        scheduleOnTimeline(outBuffer, character: character)
+        scheduleOnTimeline(outBuffer, character: character, track: track)
     }
 
     /// Schedules a `playerFormat` buffer pinned to a running sample-time
@@ -1515,7 +1531,8 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// clips ride the same one timeline as LIVE PCM here, matching the web
     /// client, which shares one playhead across both lanes so they can
     /// never overlap.
-    private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer, character: CharacterAudioIdentity?) {
+    private func scheduleOnTimeline(_ buffer: AVAudioPCMBuffer, character: CharacterAudioIdentity?,
+                                    track: KadeTimingTrack? = nil) {
         let confirmPlayed: () -> Void = { [weak self] in
             Task { @MainActor in
                 self?.clipsPlayed += 1
@@ -1538,7 +1555,8 @@ final class StreamingCallService: NSObject, ObservableObject {
         // is a far better problem than no sound at all, and a real device is
         // needed to tune it anyway.
         characterTimeline.append(identity: character,
-            duration: Double(buffer.frameLength) / buffer.format.sampleRate, now: characterPlayerTime ?? 0)
+            duration: Double(buffer.frameLength) / buffer.format.sampleRate, now: characterPlayerTime ?? 0,
+            track: track)
         playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
         // Oct 28 2026: a live video face on the call stage follows the same
         // audio (the page is muted on a call; this engine keeps the sound).
@@ -1553,6 +1571,12 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// scheduled buffer, same net effect as the web client's
     /// `flushPlayback()` stopping every live `AudioBufferSourceNode`.
     private func flushPlayback() {
+        // Nov 11 2026, HOOK(interrupt-fix): where playback stood at the cut,
+        // read before the timeline is cleared. Nothing is sent yet; see
+        // reportPlaybackPosition below.
+        if let time = characterPlayerTime, let heard = characterTimeline.heardPosition(at: time) {
+            reportPlaybackPosition(heard, reason: "clear")
+        }
         portraitMeter.reset()
         characterTimeline.reset()
         pendingCharacterAudio = nil
@@ -1560,6 +1584,28 @@ final class StreamingCallService: NSObject, ObservableObject {
         playerNode.stop()
         playerNode.play()
         nextPlayheadSample = nil   // stop() cleared the queue and reset the timeline
+    }
+
+    /* Nov 11 2026: HOOK FOR THE INTERRUPT FIX ("keep only what was heard").
+     * A separate bridge task trims a barged-in reply to what the caller really
+     * heard; it is designed elsewhere and may want the app to say where its
+     * playback stood. `CharacterPlaybackTimeline.heardPosition(at:)` is that
+     * answer (which clip was audible, how far in, its length, and the whole
+     * words heard when the clip carried a timing track). When the bridge's
+     * message is defined, send it here, behind `sendsPlaybackPosition`, with
+     * the exact field names the bridge reads. Until then this keeps only the
+     * latest answer for diagnostics and sends nothing. */
+    static var sendsPlaybackPosition = false
+    private(set) var lastPlaybackPosition: CharacterPlaybackTimeline.HeardPosition?
+    private func reportPlaybackPosition(_ heard: CharacterPlaybackTimeline.HeardPosition, reason: String) {
+        lastPlaybackPosition = heard
+        guard Self.sendsPlaybackPosition else { return }
+        // Placeholder shape until the bridge's report names the real one.
+        var message: [String: Any] = ["type": "playback-position", "reason": reason,
+            "clipsStarted": heard.clipsStarted, "clip": heard.clipNumber,
+            "elapsedMs": heard.elapsedMs, "durationMs": heard.durationMs]
+        if let words = heard.wordsHeard { message["wordsHeard"] = words }
+        sendJSON(message)
     }
 
     private func installPortraitMeter() {

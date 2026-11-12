@@ -249,6 +249,11 @@ final class StreamingClipPlayer {
         return Double(time.sampleTime) / time.sampleRate
     }
     var characterElapsed: Double { characterTime() ?? 0 }
+    /// Nov 11 2026: the clip's timing track. The streamed lane never carries
+    /// one (its header leaves before any timings exist); a response the proxy
+    /// buffered instead can, between `fmt ` and `data`, and the header parser
+    /// below already walks past it to the audio.
+    private(set) var characterTimingTrack: KadeTimingTrack?
     func characterLevel() -> Double {
         guard node.isPlaying, !stopped, outstandingBuffers > 0, let time = characterTime() else { return 0 }
         return characterEnvelope.level(at: time)
@@ -272,6 +277,7 @@ final class StreamingClipPlayer {
         stopped = false
         characterEnvelope.reset()
         characterEnd = 0
+        characterTimingTrack = nil
         activeFetch = fetch
         defer {
             if generation == playbackGeneration {
@@ -284,7 +290,9 @@ final class StreamingClipPlayer {
 
         // Header first: accumulate until parseable. The proxy's first flush
         // is the 44-byte header plus the opening PCM, so one chunk normally
-        // does it; the loop covers a torn header anyway.
+        // does it; the loop covers a torn header anyway. A header with a
+        // timing track (kdtm) is longer; parseHeader walks the chunks, so the
+        // PCM still starts exactly at `pcmStart`, never at a fixed 44.
         var headerData = Data()
         var format: StreamingWavFormat?
         var pcmTail = Data()
@@ -294,6 +302,7 @@ final class StreamingClipPlayer {
             if let parsed = StreamingWavParser.parseHeader(headerData) {
                 format = parsed.format
                 pcmTail = headerData.subdata(in: headerData.startIndex + parsed.pcmStart ..< headerData.endIndex)
+                characterTimingTrack = KadeTimingTrack.read(wav: headerData, headerOnly: true)
             } else if headerData.count > 64 * 1024 {
                 // 64KB without a parseable header is not a WAV stream; bail
                 // so the pump can count the piece honestly.

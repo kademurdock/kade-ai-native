@@ -61,6 +61,8 @@ struct CharacterPortraitView: View {
     @State private var faceClock = CharacterFaceClock()
     @AppStorage(LivingPaintingSetting.key) private var livingPaintingsSetting = LivingPaintingSetting.defaultOn
     @State private var livingClock = LivingPaintingClock()
+    /// The character this portrait reported to KadeFaceTimingDemand.
+    @State private var timingDemandID: String? = nil
 
     private var path: String? { agents.agents.first { $0.id == agentID }?.avatar?.filepath }
     private var prepared: Bool { CharacterMotion.prepared(id: agentID, path: path) }
@@ -247,8 +249,13 @@ struct CharacterPortraitView: View {
                 let frame = geometry.frame(in: .global)
                 return frame.intersects(viewportBounds) && frame.width > 0 && frame.height > 0
             }) { onScreen = $0 }
-            .onAppear { visible = true }
+            .onAppear {
+                visible = true
+                // Nov 11 2026: read-aloud asks for timing tracks only while a face shows.
+                KadeFaceTimingDemand.shared.appeared(agentID); timingDemandID = agentID
+            }
             .onDisappear {
+                KadeFaceTimingDemand.shared.disappeared(timingDemandID); timingDemandID = nil
                 visible = false; bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
                 if stage { LiveFaceSession.shared.detach(agentID: agentID) }
             }
@@ -259,6 +266,10 @@ struct CharacterPortraitView: View {
             }
             .onChange(of: RenderIdentity(agentID: agentID, avatarPath: path)) { _, _ in
                 bodyClock.reset(); angelFaceClock.reset(); faceClock.reset(); livingClock.reset()
+                if visible, timingDemandID != agentID {
+                    KadeFaceTimingDemand.shared.disappeared(timingDemandID)
+                    KadeFaceTimingDemand.shared.appeared(agentID); timingDemandID = agentID
+                }
             }
             .task { await agents.loadIfNeeded() }
             .task(id: agentID) {
@@ -602,10 +613,12 @@ struct CharacterPortraitView: View {
         let expression = PuppetMotion.expressionName(for: performance)
         var channels: [Double]
         if active {
+            // Nov 11 2026: the clip's own mouth shapes, when it carried a timing track.
             channels = livingClock.channels(identity: (agentID ?? "unknown") + "|" + (path ?? ""), time: time,
                 input: PuppetMotion.Input(speaking: speaking,
                     level: speaking ? PuppetMotion.voiceLevel(level) : 0,
-                    listening: !speaking && (listening || performance.activity == .listening)),
+                    listening: !speaking && (listening || performance.activity == .listening),
+                    viseme: speaking ? performance.timingPanel(strength: KadeTimingTrack.strength(level: level)) : nil),
                 expression: expression)
         } else {
             livingClock.pause()

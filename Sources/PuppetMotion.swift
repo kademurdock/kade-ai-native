@@ -38,7 +38,27 @@ final class PuppetMotion {
         var listening = false
         var reduceMotion = false
         var look: (Double, Double)? = nil
+        /// Nov 11 2026: the mouth panel (0...8) from the clip's timing track
+        /// (KadeTimingTrack), when it carries Inworld's own mouth shapes. nil
+        /// keeps the random pick per syllable (Fish voices, clips with no track).
+        /// The website's input.viseme with visemeSource 'track'.
+        var viseme: Int? = nil
     }
+
+    /// Mouth panel -> the engine's [wide, round, press] shape, used instead of
+    /// the random pick while a track drives the mouth. Same values as the
+    /// website's TRACK_SHAPES (puppet-motion.mjs).
+    static let trackShapes: [[Double]] = [
+        [0, 0, 0], // 0 closed
+        [0.2, 0.2, 0], // 1 slightly open
+        [0.3, 0, 0], // 2 open
+        [0, 0.6, 0], // 3 round "oh"
+        [0, 0.75, 0.15], // 4 pursed "oo"
+        [0.7, 0, 0], // 5 spread "ee"
+        [0, 0, 0.6], // 6 pressed
+        [0.45, 0, 0.3], // 7 teeth nearly together
+        [0.25, 0, 0], // 8 wide open
+    ]
 
     /// Channel targets per expression. Values are offsets from neutral.
     static let expressions: [String: [(PuppetChannel, Double)]] = [
@@ -163,6 +183,7 @@ final class PuppetMotion {
     private var emoUntil = 0.0
     private var level = 0.0, prevLevel = 0.0, onsetCooldown = 0.0
     private var shape = [0.0, 0.0, 0.0], shapeTarget = [0.0, 0.0, 0.0]
+    private var trackViseme = -1
     private var nod = 0.0, nodV = 0.0, browLift = 0.0
     private var nodAt: Double
     private var hair = 0.0, hairV = 0.0, prevYaw = 0.0, prevRoll = 0.0
@@ -267,16 +288,30 @@ final class PuppetMotion {
         let inputLevel = Self.clamp(input.level.isNaN ? 0 : input.level, 0, 1)
         level = Self.approach(level, speaking ? inputLevel : 0, dt, inputLevel > level ? 0.035 : 0.085)
         onsetCooldown -= dt
+        var tracked: [Double]? = nil
+        if let panel = input.viseme, panel >= 0, panel < Self.trackShapes.count { tracked = Self.trackShapes[panel] }
+        if tracked == nil {
+            trackViseme = -1
+        } else if speaking, let panel = input.viseme, panel != trackViseme, let target = tracked {
+            // the real shape changed: follow it now, not only at a loudness onset
+            trackViseme = panel
+            shapeTarget = target
+        }
         if speaking && level - prevLevel > 0.06 && onsetCooldown <= 0 && level > 0.18 {
             // a syllable onset: pick a new mouth shape, sometimes nod and lift the brows
             onsetCooldown = 0.11
-            let pick = r()
-            shapeTarget = pick < 0.3 ? [0.7, 0, 0] : pick < 0.52 ? [0, 0.75, 0] : pick < 0.66 ? [0, 0, 0.6] : [0.2, 0.2, 0]
+            if tracked == nil {
+                let pick = r()
+                shapeTarget = pick < 0.3 ? [0.7, 0, 0] : pick < 0.52 ? [0, 0.75, 0] : pick < 0.66 ? [0, 0, 0.6] : [0.2, 0.2, 0]
+            }
             if r() < 0.35 * energy.nod && !reduce { nodV += 2.2 * (0.6 + expressiveness * 0.6) }
             if r() < 0.25 { browLift = max(browLift, 0.3 * expressiveness + 0.08) }
         }
         prevLevel = level
-        if !speaking { shapeTarget = [0, 0, 0] }
+        if !speaking {
+            shapeTarget = [0, 0, 0]
+            trackViseme = -1
+        }
         for i in 0..<3 { shape[i] = Self.approach(shape[i], shapeTarget[i], dt, 0.06) }
         // nod spring (pitch down then back)
         nodV += (-nod * 60 - nodV * 9) * dt

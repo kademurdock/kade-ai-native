@@ -158,7 +158,9 @@ enum CharacterMotion {
         let faceBlend = facial.map { $0.faceBlend.isFinite ? min(1, max(0, $0.faceBlend)) : 1 } ?? 1
         return CharacterPose(mouth: mouth, blink: blink, tilt: tilt, lift: lift,
             brow: presentation.expression == .neutral ? bodyEnergy * (0.35 + 0.25 * oscillation(0.65 * tempo)) + max(0, oscillation(0.43 * tempo)) * 0.12 * (1 - bodyEnergy) : 0,
-            viseme: viseme(time: time, strength: mouth, seed: seed),
+            // Nov 11 2026: Inworld's own mouth shape when the clip carried a
+            // timing track that covers this moment; otherwise the hash below.
+            viseme: presentation.timingPanel(strength: mouth) ?? viseme(time: time, strength: mouth, seed: seed),
             scale: animatedIDs.contains(id) ? 1.012 + oscillation(tempo * 0.85) * 0.004 + bodyEnergy * 0.012 * quiet : 1,
             priorFace: facial?.priorFace ?? .neutral, faceBlend: faceBlend)
     }
