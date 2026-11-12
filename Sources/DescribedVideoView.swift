@@ -45,6 +45,9 @@ struct DescribedVideoView: View {
     /// draws them itself for anyone watching with her.
     @AppStorage("kade.describedVideo.readCaptions") private var readCaptions = false
 
+    /// Phase 4 pick 2: the finished sections of a video still being made.
+    @StateObject private var listenAhead = ListenAheadPlayer()
+
     // Opening
     @State private var config: DVConfig?
     @State private var loaded = false
@@ -365,6 +368,7 @@ struct DescribedVideoView: View {
                 stopPolling()
                 estimateTask?.cancel()
                 samplePlayer?.stop()
+                listenAhead.stop()   // pick 2: its polling belongs to this screen
                 removeSharedFile()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -629,7 +633,56 @@ struct DescribedVideoView: View {
                     .font(.footnote)
                 chooseButtons
             }
+            if offersListenAhead(current) {
+                listenAheadControls(current)
+            }
             jobButtons(current)
+        }
+    }
+
+    /// Phase 4 pick 2: offered only when the server says so, at least one
+    /// section is done, and the job is running, failed or cancelled (or she
+    /// is already listening to it).
+    private func offersListenAhead(_ current: DVJob) -> Bool {
+        guard KadeAppSwitches.listenAhead, config?.listenAhead == true else { return false }
+        if listenAhead.jobId == current.id { return true }
+        return (current.done ?? 0) >= 1 && ["running", "failed", "cancelled"].contains(current.state)
+    }
+
+    @ViewBuilder
+    private func listenAheadControls(_ current: DVJob) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if listenAhead.jobId == current.id {
+                Button(listenAhead.isPaused ? "Carry on listening" : "Pause listening") {
+                    listenAhead.togglePause()
+                }
+                .buttonStyle(.bordered)
+                Button("Stop listening") { listenAhead.stop() }
+                    .buttonStyle(.bordered)
+                if !listenAhead.status.isEmpty {
+                    Text(listenAhead.status)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                Button("Listen now, sound only, while the rest is made") {
+                    startListenAhead(current)
+                }
+                .buttonStyle(KadeCardButtonStyle())
+                .accessibilityHint("Plays the finished sections in order, film sound with descriptions. It waits for the next section if you catch up.")
+            }
+        }
+    }
+
+    private func startListenAhead(_ current: DVJob) {
+        // The main player and the voice sample stop first: never two soundtracks.
+        samplePlayer?.stop()
+        let service = self.service
+        let rate = rememberedPlaybackRate
+        Task {
+            await listenAhead.start(jobId: current.id, rate: rate) { jobId, from in
+                try? await service.readySections(jobId: jobId, from: from)
+            }
         }
     }
 
@@ -2372,6 +2425,7 @@ struct DescribedVideoView: View {
     /// `focusChoose` false when the caller says something first and moves
     /// VoiceOver after it (a deletion, a video that has gone).
     private func closeJob(focusChoose: Bool = true) {
+        listenAhead.stop()   // pick 2
         stopPolling()
         estimateTask?.cancel()
         job = nil
@@ -3219,6 +3273,8 @@ struct DescribedVideoView: View {
             // links. A cached one may have little of its six hours left, and
             // a two-hour film (longer when slowed or paused) outlives it.
             files = nil
+            // Pick 2: the main player starting stops listening-while-made.
+            listenAhead.stop()
             let links = try await currentFiles(current)
             // She may have opened another video, or left, while the links came.
             guard job?.id == current.id, onScreen else { return }

@@ -386,6 +386,10 @@ struct DVConfig: Decodable {
     let linkImport: DVLinkImport?
     /// Part 293: this person's Family feature pack map (absent on older servers).
     let features: KadeFamilyFeatures?
+    /// Phase 4 pick 2 (Nov 12 2026): the server offers the finished sections
+    /// of a video still being made (GET /jobs/:id/sections/ready).
+    /// Absent on older servers and false with KADE_DESCRIPTION_LISTEN_AHEAD=0.
+    let listenAhead: Bool?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
@@ -395,6 +399,7 @@ struct DVConfig: Decodable {
         case myDefaultVoice, houseVoice, favorites, recent, maxFavorites, suggested, fish, fishNote, curate
         case speeds
         case linkImport, features
+        case listenAhead
     }
 
     /// Part 293: the reason the link import is greyed out, or nil when it can
@@ -487,7 +492,27 @@ extension DVConfig {
         speeds = c.dvValue(.speeds)
         linkImport = c.dvValue(.linkImport)
         features = c.dvValue(.features)
+        listenAhead = c.dvBool(.listenAhead)
     }
+}
+
+/// Phase 4 pick 2: GET /jobs/:id/sections/ready. The unbroken run of finished
+/// sections from `from` on, as signed links to their sound (the film's own
+/// sound with the descriptions mixed in).
+struct DVReadySections: Decodable {
+    struct Section: Decodable {
+        let index: Int
+        let seconds: Double?
+        /// Its look failed: the film's own sound is there, the descriptions are not.
+        let undescribed: Bool?
+        let url: String
+    }
+    let state: String?
+    let making: Bool?
+    let sections: [Section]
+    let next: Int?
+    let count: Int?
+    let waitSeconds: Double?
 }
 
 /// Sep 25 2026, Kade: "people should be able to have it remember the speeds
@@ -1116,6 +1141,12 @@ final class DescribedVideoService: ObservableObject {
 
     func job(_ id: String) async throws -> DVJob {
         try await get("jobs/\(id)", fallback: "Couldn't read that video.")
+    }
+
+    /// Phase 4 pick 2: the finished sections from `from` on.
+    func readySections(jobId: String, from: Int) async throws -> DVReadySections {
+        try await get("jobs/\(jobId)/sections/ready", query: [URLQueryItem(name: "from", value: String(max(0, from)))],
+                      fallback: "The finished sections could not be loaded.")
     }
 
     func files(jobId: String, version: Int) async throws -> DVFiles {
