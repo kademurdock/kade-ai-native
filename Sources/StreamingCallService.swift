@@ -907,6 +907,25 @@ final class StreamingCallService: NSObject, ObservableObject {
         // format that was about to change out from under it.
         do {
             try input.setVoiceProcessingEnabled(true)
+            // IOS-5 (Nov 12 2026 audit, SUSPECTED, needs a device listen):
+            // from iOS 17 the voice-processing unit ducks every sound that is
+            // not the call itself, and for a VoiceOver user "other" may
+            // include VoiceOver. Ask for the lightest duck Apple allows.
+            // Advanced ducking is deliberately OFF: it ducks HARDER whenever
+            // either side is talking, which is exactly when she needs
+            // VoiceOver audible over the agent, and it would make VoiceOver's
+            // loudness pump with speech. Only set once voice processing
+            // really turned on (inside this `do`), so the fail-soft path
+            // below is untouched. The setting lives on the input node and
+            // `audioEngine` is a `let`, so it survives the engine restarts in
+            // recoverEngineAfterReconfig(). If louder VoiceOver leaks into the
+            // mic (false barge-ins, VoiceOver's words as her turn), try `.mid`
+            // or delete these lines.
+            input.voiceProcessingOtherAudioDuckingConfiguration =
+                AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false,
+                    duckingLevel: .min
+                )
         } catch {
             // Fail-soft: a handful of audio route configurations don't
             // support voice processing. The call still works without it --
