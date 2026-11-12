@@ -378,9 +378,12 @@ final class MessageSendingService: ObservableObject {
         let kade: Extras?
         /// Only meaningful on an SSE `event: error` line.
         let errorText: String?
+        /// Only on a `kade_gap` event (pick 4): why the server could not
+        /// resume exactly ("other-job", "out-of-range", "no-log").
+        let gapReason: String?
 
         private enum CodingKeys: String, CodingKey {
-            case event, final, responseMessage, data, kade, error, message
+            case event, final, responseMessage, data, kade, error, message, reason
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -392,8 +395,34 @@ final class MessageSendingService: ObservableObject {
             let err = try? c.decodeIfPresent(String.self, forKey: .error)
             let msg = try? c.decodeIfPresent(String.self, forKey: .message)
             errorText = err ?? msg
+            gapReason = try? c.decodeIfPresent(String.self, forKey: .reason)
         }
     }
+
+    /// Pick 4 (Nov 12 2026): the last event id the worker has read, shared
+    /// between the detached line reader and the resume loop. Every element
+    /// the worker yields is consumed before a drop is thrown, so an id here
+    /// never runs ahead of what the chat view was handed.
+    private final class StreamCursor: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _id: String?
+        private var _progressed = false
+        /// Set on the main actor after a kade_gap: later words are not spoken.
+        var gap = false
+        var id: String? { lock.lock(); defer { lock.unlock() }; return _id }
+        func record(_ id: String) { lock.lock(); _id = id; _progressed = true; lock.unlock() }
+        /// True once since the last call if a new id arrived.
+        func takeProgress() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            let was = _progressed
+            _progressed = false
+            return was
+        }
+    }
+
+    /// Pick 4: true when the last reply's stream had a hole the server could
+    /// not fill; the chat view then speaks the rest from the saved reply.
+    private(set) var lastStreamHadGap = false
 
     /// The frames `waitForFinal` acts on. Everything else on the wire
     /// (on_run_step_delta, created, step-completed...) is dropped in the
@@ -405,22 +434,30 @@ final class MessageSendingService: ObservableObject {
 
     /// Bytes -> lines -> decoded frames, entirely off the main actor.
     /// `sseEvent` is the SSE `event:` line ("message" unless the server named one).
-    nonisolated private static func frames(from bytes: URLSession.AsyncBytes)
+    nonisolated private static func frames(from bytes: URLSession.AsyncBytes, cursor: StreamCursor? = nil)
         -> AsyncThrowingStream<(sseEvent: String, frame: StreamFrame?), Error> {
         AsyncThrowingStream { continuation in
             let worker = Task.detached(priority: .userInitiated) {
                 let decoder = JSONDecoder()
                 var currentEvent = "message"
+                var pendingId: String?
                 do {
                     for try await rawLine in bytes.lines {
-                        if rawLine.hasPrefix("event:") {
+                        if rawLine.hasPrefix("id:") {
+                            // Pick 4: the latest valid id; anything else is ignored.
+                            if cursor != nil, let id = StreamResume.cursor(fromIdLine: rawLine) { pendingId = id }
+                        } else if rawLine.hasPrefix("event:") {
                             currentEvent = String(rawLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)
                         } else if rawLine.hasPrefix("data:") {
                             let jsonText = String(rawLine.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                             let frame = try? decoder.decode(StreamFrame.self, from: Data(jsonText.utf8))
                             let sseEvent = currentEvent
                             currentEvent = "message"
-                            if sseEvent == "error" {
+                            if let id = pendingId {
+                                cursor?.record(id)
+                                pendingId = nil
+                            }
+                            if sseEvent == "error" || sseEvent == "kade_gap" {
                                 // Always delivered, even unparseable: the caller must throw.
                                 continuation.yield((sseEvent, frame))
                             } else if let frame,
@@ -523,9 +560,49 @@ final class MessageSendingService: ObservableObject {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Pick 4 (Nov 12 2026): a stream that drops mid-reply is picked back up
+    /// from the last event id the phone holds, up to eight tries at 0.5, 1,
+    /// 2, then 4 s (counting again after any try that made progress). A
+    /// server that sends no ids is never retried: today's error and Retry.
     private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) async throws -> String? {
-        var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true)
+        lastStreamHadGap = false
+        guard KadeAppSwitches.streamResume else {
+            return try await readStream(streamId: streamId, cursor: nil, resuming: false,
+                                        onThink: onThink, onText: onText, onTool: onTool)
+        }
+        let cursor = StreamCursor()
+        var attempt = 0
+        var dropped = false
+        while true {
+            do {
+                return try await readStream(streamId: streamId, cursor: cursor, resuming: dropped,
+                                            onThink: onThink, onText: onText, onTool: onTool)
+            } catch {
+                if Task.isCancelled { throw error }
+                // An error frame from the server, or a refused request, is never retried.
+                if let known = error as? SendError {
+                    guard case .streamEndedWithoutFinal = known else { throw known }
+                }
+                // No id ever seen = the server keeps no log: today's behaviour.
+                guard cursor.id != nil else { throw error }
+                if cursor.takeProgress() { attempt = 0 }
+                attempt += 1
+                guard attempt <= StreamResume.maxAttempts else { throw error }
+                dropped = true
+                KadeBreadcrumbs.drop("stream dropped; picking it up (try \(attempt))")
+                try await Task.sleep(nanoseconds: StreamResume.delayNanos(attempt: attempt))
+            }
+        }
+    }
+
+    private func readStream(streamId: String, cursor: StreamCursor?, resuming: Bool,
+                            onThink: ((String) -> Void)?, onText: ((String) -> Void)?,
+                            onTool: ((String) -> Void)?) async throws -> String? {
+        // Pick 4: ask for ids (kadeSeq=1) and send the cursor when resuming.
+        var req = client.request(path: "api/agents/chat/stream/\(streamId)", authorized: true,
+                                 queryItems: cursor != nil ? [URLQueryItem(name: "kadeSeq", value: "1")] : nil)
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if resuming, let id = cursor?.id { req.setValue(id, forHTTPHeaderField: "Last-Event-ID") }
         // Generous on purpose: the generation job lives server-side,
         // independent of this HTTP connection, so there's no correctness
         // cost to waiting a while for a slow, tool-heavy agent turn — only
@@ -535,6 +612,9 @@ final class MessageSendingService: ObservableObject {
 
         let (bytes, http) = try await client.streamBytes(req)
         if http.statusCode == 404 {
+            // Pick 4: after a drop, a 404 means the reply finished while we
+            // were away: reload the saved messages and speak the rest.
+            if resuming { lastStreamHadGap = true }
             return nil  // no guessed historical reply id
         }
         guard http.statusCode == 200 else { throw SendError.server(http.statusCode) }
@@ -542,9 +622,20 @@ final class MessageSendingService: ObservableObject {
         /* IOS-20 (Nov 12 2026 audit): line splitting and JSON decoding happen
          * in a detached worker (one decode per event, was up to five on the
          * main actor). Only frames this loop acts on arrive here. */
-        for try await (sseEvent, frame) in Self.frames(from: bytes) {
+        for try await (sseEvent, frame) in Self.frames(from: bytes, cursor: cursor) {
             if sseEvent == "error" {
                 throw SendError.streamError(frame?.errorText ?? "The assistant hit an error.")
+            }
+            if sseEvent == "kade_gap" {
+                // Pick 4: the server could not resume exactly. Words after
+                // this are not spoken out of place; the chat view speaks the
+                // rest from the saved reply at the end.
+                cursor?.gap = true
+                lastStreamHadGap = true
+                KadeBreadcrumbs.drop("stream resume not exact (\(frame?.gapReason ?? "unknown"))")
+                // The turn was replaced: reload the saved messages.
+                if frame?.gapReason == "other-job" { return nil }
+                continue
             }
             guard let frame else { continue }
 
@@ -565,7 +656,7 @@ final class MessageSendingService: ObservableObject {
                 // streaming on this wire too (on_message_delta frames). onText
                 // hands each text chunk up the moment it arrives; the chat view
                 // grows a live reply from it.
-                guard let onText else { break }
+                guard let onText, cursor?.gap != true else { break }
                 for part in frame.data?.delta?.content ?? [] where part.type == "text" {
                     if let text = part.text, !text.isEmpty { onText(text) }
                 }

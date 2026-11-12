@@ -4603,6 +4603,9 @@ struct ConversationDetailView: View {
             // summary got wrong by guessing (the real reply was 1,860 chars,
             // not the essay the workup assumed).
             KadeBreadcrumbs.drop("stream finished (reply \(live.replyRaw.count) chars, think \(live.thinkRaw.count) chars)")
+            // Pick 4: what the stream delivered, read before resetTurn clears
+            // it, so a resume that was not exact can speak only the rest.
+            let deliveredReply = live.replyRaw
             /* IOS-12: the thinking bubble, Answer-now and the tool line are
              * removed by the clears just below, a whole network reload BEFORE
              * FINAL. If VoiceOver is on one of them, step it onto a row that
@@ -4714,6 +4717,27 @@ struct ConversationDetailView: View {
              * adds carried steering tags the stored reply does not have. */
             let streamedThisTurn = readAloudEnabled && live.spokenChars > 0
             if streamedThisTurn, !voiceSilenced {
+                /* Pick 4 (Nov 12 2026): the stream had a hole the server could
+                 * not fill, so words after it were not spoken. Speak the rest
+                 * from the saved reply, placed by a 48-character anchor; if
+                 * the place cannot be found safely, say so once instead of
+                 * guessing (a repeated sentence is the worse failure). */
+                if messageSendingService.lastStreamHadGap, let reply = currentReply {
+                    if let rest = StreamResume.tail(saved: reply.displayText, delivered: deliveredReply) {
+                        for piece in live.speech.push(rest) {
+                            voiceService.enqueueSpeak(
+                                text: piece,
+                                agentId: selectedAgentId,
+                                agentName: agentDisplayLabel,
+                                key: nil,
+                                replyScopeKey: turnRequestId
+                            )
+                        }
+                    } else {
+                        UIAccessibility.post(notification: .announcement,
+                            argument: "The rest of this reply was not spoken. It is on screen.")
+                    }
+                }
                 for piece in live.speech.flush() {
                     voiceService.enqueueSpeak(
                         text: piece,
