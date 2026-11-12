@@ -85,12 +85,18 @@ struct KadeMessage: Codable, Identifiable {
 
     var imageFiles: [KadeMessageFile] { displayFiles.filter(\.isImage) }
     var kadeInputSource: String? = nil
+    /// Phase 3 A2 (Nov 12 2026): the server's own readable text for this row
+    /// (what a person reads and a screen reader says), from
+    /// GET /api/kade/messages. Absent from older servers, tool-only and failed
+    /// replies; then the app's own sanitizer is used, as before.
+    var kade: KadeMessageExtras? = nil
 
     enum CodingKeys: String, CodingKey {
         case messageId, conversationId, createdAt, isCreatedByUser, sender, text, content
         case parentMessageId
         case tokenCount
         case files, attachments, kadeInputSource
+        case kade
         case agentId = "model"
     }
 
@@ -150,7 +156,13 @@ struct KadeMessage: Codable, Identifiable {
     /// raw "%%%" tags aloud in the native chat view -- this property didn't
     /// exist before, `displayText` was shown/spoken directly.
     var readableText: String {
-        MessageTextSanitizer.forDisplay(displayText)
+        // Phase 3 A2: the server's readable text when present and not empty.
+        if KadeAppSwitches.readableText,
+           let server = kade?.readableText,
+           !server.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return server
+        }
+        return MessageTextSanitizer.forDisplay(displayText)
     }
 
     /// The reply's THINKING, joined and sanitized -- nil when this message
@@ -200,6 +212,20 @@ struct KadeMessage: Codable, Identifiable {
 /// and decodes to nil safely. The lenient `init(from:)` below additionally
 /// makes sure one odd/future block shape can never fail the whole message
 /// (and therefore the whole conversation) out of loading.
+/// Phase 3 A2: the `kade` object on a saved row. Read leniently: an odd
+/// value is ignored, never a reason to drop the message.
+struct KadeMessageExtras: Codable {
+    var readableText: String?
+
+    init(readableText: String? = nil) { self.readableText = readableText }
+
+    private enum CodingKeys: String, CodingKey { case readableText }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        readableText = try? c.decodeIfPresent(String.self, forKey: .readableText)
+    }
+}
+
 struct ContentBlock: Codable {
     let type: String
     let text: String?
@@ -331,7 +357,31 @@ final class ConversationsService: ObservableObject {
         }
     }
 
+    /// Phase 3 A2: false once this launch has seen the app route missing (an
+    /// older server), so it is not asked again until the next launch.
+    private var kadeMessagesRouteMissing = false
+    private struct KadeMessagesBody: Decodable { let messages: [KadeMessage] }
+
     func fetchMessages(conversationId: String) async throws -> [KadeMessage] {
+        // Phase 3 A2: the app route answers the same rows plus each row's
+        // kade.readableText, as an OBJECT ({ messages: [...] }, not the bare
+        // array below; separate parsers on purpose). Any failure falls back
+        // to LibreChat's own route, exactly as before.
+        if KadeAppSwitches.readableText, !kadeMessagesRouteMissing {
+            let req = client.request(path: "api/kade/messages/\(conversationId)", authorized: true)
+            if let (data, http) = try? await client.send(req) {
+                if http.statusCode == 200,
+                   let rows = try? await Task.detached(priority: .userInitiated, operation: { () -> [KadeMessage] in
+                       let decoded = try JSONDecoder().decode(KadeMessagesBody.self, from: data).messages
+                       var seenIds = Set<String>()
+                       return decoded.filter { seenIds.insert($0.messageId).inserted }
+                   }).value {
+                    return rows
+                }
+                if http.statusCode == 404 { kadeMessagesRouteMissing = true }
+            }
+            try Task.checkCancellation()
+        }
         let req = client.request(path: "api/messages/\(conversationId)", authorized: true)
         let (data, http) = try await client.send(req)
         guard http.statusCode == 200 else { throw ConversationsError.server(http.statusCode) }
