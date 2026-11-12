@@ -403,6 +403,31 @@ struct ConversationDetailView: View {
     private static let transcriptWindowMaxTested = 48
     @State private var transcriptWindowWarned = false
 
+    /* Nov 12 2026 (her choice, both apps: "Grow, don't drop rows" while a
+     * screen reader is on; audit AND-3 and 08_phase3 part C). The window
+     * above SLIDES: every new row (her optimistic message, the reply at
+     * FINAL) pushes the oldest row out of the transcript, and if VoiceOver
+     * was resting on it, that element is gone from under her cursor. With
+     * VoiceOver on, the window's top row is now HELD: `transcriptTopAnchor`
+     * is the oldest row on screen, and new rows widen the window instead of
+     * pushing it out. The streaming thin-to-12 (Part 70.8) cannot cut above
+     * the anchor either, for the same reason.
+     *
+     * ⚠️ The freeze history above still applies: the transcript stays an
+     * EAGER VStack (no Lazy stacks -- build 225), so a very long sitting
+     * under VoiceOver lays out more rows on every send. Past
+     * `transcriptWindowMaxTested` the trail gets one "transcript held window
+     * past tested max" crumb, so a freeze after a long session reads as
+     * this in words. A fresh open (a new instance of this view) starts at
+     * the newest 12 again. Kill switch, no build needed for a test device:
+     * UserDefaults `kade.transcript.growWithVoiceOver` = false slides as
+     * before. */
+    @State private var transcriptTopAnchor: String?
+    @State private var transcriptGrowWarned = false
+    private static var growWindowWithVoiceOver: Bool {
+        UserDefaults.standard.object(forKey: "kade.transcript.growWithVoiceOver") as? Bool ?? true
+    }
+
     /// Part 70.8 (Aug 16 2026 -- her three send-time freezes ON 208, all in
     /// one heavy conversation, stacks in the ring): the freezes fire at the
     /// send-moment transcript update, BEFORE any reply chunk exists, so
@@ -1588,18 +1613,13 @@ struct ConversationDetailView: View {
     private var visibleMessages: [KadeMessage] {
         let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard messageSearchActive, !query.isEmpty else {
-            // The window (see transcriptWindow's doc comment). suffix keeps
-            // the NEWEST rows — the conversation's living end. During an
-            // active stream the window narrows further (Part 70.8, see
-            // streamingWindowRows) unless she asked for earlier rows.
-            var effectiveWindow = transcriptWindow
-            if case .sending = sendState, !streamThinDisabledByUser {
-                effectiveWindow = min(effectiveWindow, Self.streamingWindowRows)
-            }
-            if messages.count > effectiveWindow {
-                return Array(messages.suffix(effectiveWindow))
-            }
-            return messages
+            // The window (see transcriptWindow's doc comment). It keeps the
+            // NEWEST rows — the conversation's living end. During an active
+            // stream the window narrows further (Part 70.8, see
+            // streamingWindowRows) unless she asked for earlier rows. Under
+            // VoiceOver its top row is held (see transcriptTopAnchor).
+            let start = transcriptWindowStart
+            return start > 0 ? Array(messages[start...]) : messages
         }
         return messages.filter {
             $0.readableText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -1611,11 +1631,52 @@ struct ConversationDetailView: View {
     private var hiddenEarlierCount: Int {
         let query = messageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if messageSearchActive && !query.isEmpty { return 0 }
+        return transcriptWindowStart
+    }
+
+    /// Index of the first row the window shows (outside search). The sliding
+    /// rule, unless VoiceOver is on and the held top row (Nov 12 2026, her
+    /// "grow, don't drop rows") is older: then the window grows down to it.
+    private var transcriptWindowStart: Int {
         var effectiveWindow = transcriptWindow
         if case .sending = sendState, !streamThinDisabledByUser {
             effectiveWindow = min(effectiveWindow, Self.streamingWindowRows)
         }
-        return max(0, messages.count - effectiveWindow)
+        let sliding = max(0, messages.count - effectiveWindow)
+        if let held = heldTranscriptTop, held < sliding { return held }
+        return sliding
+    }
+
+    /// Where the held top row sits now, or nil when nothing is held. Searched
+    /// from the end: the anchor is near the living end of the conversation.
+    private var heldTranscriptTop: Int? {
+        guard voiceOverOn, Self.growWindowWithVoiceOver, let anchor = transcriptTopAnchor else { return nil }
+        return messages.lastIndex(where: { $0.id == anchor })
+    }
+
+    /// Keeps `transcriptTopAnchor` on the window's oldest row. Runs after
+    /// every change in the number of messages and when VoiceOver turns on or
+    /// off. Once set it stays put while its row exists, which is the whole
+    /// point: a new row widens the window rather than sliding it. Only when
+    /// the anchored row itself is gone (a delete, a failed send's row, a
+    /// re-keyed pending row) is it moved to the current top.
+    private func holdTranscriptTop(reset: Bool = false) {
+        guard voiceOverOn, Self.growWindowWithVoiceOver else {
+            if transcriptTopAnchor != nil { transcriptTopAnchor = nil }
+            return
+        }
+        if !reset, let anchor = transcriptTopAnchor, messages.contains(where: { $0.id == anchor }) {
+            let shown = messages.count - transcriptWindowStart
+            if shown > Self.transcriptWindowMaxTested, !transcriptGrowWarned {
+                transcriptGrowWarned = true
+                KadeBreadcrumbs.drop(
+                    "transcript held window past tested max (\(shown) rows > \(Self.transcriptWindowMaxTested), eager VStack, VoiceOver grow)"
+                )
+            }
+            return
+        }
+        let top = messages.isEmpty ? nil : messages[max(0, messages.count - transcriptWindow)].id
+        if transcriptTopAnchor != top { transcriptTopAnchor = top }
     }
 
     private var messageSearchSummary: String {
@@ -1863,6 +1924,10 @@ struct ConversationDetailView: View {
                 )
             }
             .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
+            // Nov 12 2026 (her "grow, don't drop rows"): hold the window's
+            // top row while VoiceOver is on.
+            .onChange(of: messages.count) { _, _ in holdTranscriptTop() }
+            .onChange(of: voiceOverOn) { _, _ in holdTranscriptTop(reset: true) }
             .onChange(of: sendState) { _, _ in
                 /* ⭐ BUILD 217: the `scrollToBottom(proxy)` that used to sit
                  * here is GONE. On a send BOTH of these hooks fire -- the
@@ -2233,7 +2298,7 @@ struct ConversationDetailView: View {
     /// every body evaluation.
     private var rotorSignature: String {
         let search = messageSearchActive ? messageSearchText : ""
-        return "\(messages.count)|\(messages.last?.id ?? "")|\(search)|\(transcriptWindow)"
+        return "\(messages.count)|\(messages.last?.id ?? "")|\(search)|\(transcriptWindow)|\(transcriptTopAnchor ?? "")"
     }
 
     /* ⭐⭐ BUILD 225 — THE STATE WRITE MOVES OFF THE COMMIT.
@@ -2313,8 +2378,11 @@ struct ConversationDetailView: View {
             let anchorId = visibleMessages.first?.id
             transcriptWindow += Self.transcriptWindowStep * 2
             noteTranscriptWindow()
+            // Her ask widens the window: the held top (VoiceOver grow) moves
+            // up with it, so the next new row cannot slide these away.
+            holdTranscriptTop(reset: true)
             rebuildRotorItems()
-            let remaining = max(0, messages.count - transcriptWindow)
+            let remaining = hiddenEarlierCount   // the held top (VoiceOver grow) can show more than the window
             if let anchorId {
                 DispatchQueue.main.async { proxy.scrollTo(anchorId, anchor: .top) }
             }
