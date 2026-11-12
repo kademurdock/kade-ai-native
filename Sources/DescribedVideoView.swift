@@ -176,6 +176,9 @@ struct DescribedVideoView: View {
         /// Nov 12 2026 audit).
         let jobId: String
         let version: Int
+        /// DESC-9 (Nov 12 2026 audit): job, version and file, what the player
+        /// keeps her place under. Video and audio copies keep separate places.
+        var positionKey: String { "\(jobId)/\(version)/\(isVideo ? "video" : "audio")" }
     }
 
     fileprivate enum DVSheet: Identifiable {
@@ -439,7 +442,8 @@ struct DescribedVideoView: View {
         case .player(let item):
             DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions,
                                       playbackRate: rememberedPlaybackRate, onPlaybackRate: { value in keepPlaybackRate(value) },
-                                      freshURL: { await freshPlaybackURL(for: item) })
+                                      freshURL: { await freshPlaybackURL(for: item) },
+                                      positionKey: item.positionKey)
         case .transcript(let text, let title):
             DescribedTranscriptSheet(text: text, title: title)
         case .share(let item):

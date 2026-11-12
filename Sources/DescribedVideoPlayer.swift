@@ -78,6 +78,10 @@ final class DescribedVideoPlayback: ObservableObject {
     /// True while the app, not AVKit, shows the captions: VoiceOver is on, she
     /// has not asked for them to be read, and the film plays on the phone.
     @Published private(set) var drawsCaptions = false
+    /// DESC-9 (Nov 12 2026 audit): set while the film waits, paused, where
+    /// she stopped last time: that place in words ("1 hour 12 minutes").
+    /// nil once it plays.
+    @Published private(set) var waitingAt: String?
 
     private var title = ""
     private var isVideo = true
@@ -115,6 +119,15 @@ final class DescribedVideoPlayback: ObservableObject {
     private var lastSeconds = 0.0
     private var stallTask: Task<Void, Never>?
 
+    /// DESC-9: where she stopped in this copy, kept on the phone per job,
+    /// version and file (kade.describedVideo.position.<job>/<version>/<file>).
+    private var positionKey: String?
+    /// False until the open film has been put where she stopped (or has
+    /// started from the top), so a film still loading, or one that never
+    /// loads, cannot overwrite or clear her place.
+    private var keepsPosition = false
+    private var keptSecond = -1
+
     init() {
         // THE background fix (see 1 above).
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -125,12 +138,20 @@ final class DescribedVideoPlayback: ObservableObject {
     /// Opens the film and plays it. Her caption choice comes in with it, so
     /// the text track it calls for (none while quiet) is set before it plays
     /// (see 3 above).
-    func open(url: URL, title: String, isVideo: Bool, voiceOver: Bool, readAloud: Bool) async {
+    func open(url: URL, title: String, isVideo: Bool, voiceOver: Bool, readAloud: Bool,
+              positionKey: String? = nil) async {
         guard player.currentItem == nil else { return }
         self.title = title
         self.isVideo = isVideo
         self.voiceOver = voiceOver
         self.readAloud = readAloud
+        // DESC-9: her place in this copy, read before anything plays.
+        self.positionKey = positionKey
+        keepsPosition = false
+        keptSecond = -1
+        waitingAt = nil
+        let saved = positionKey
+            .flatMap { UserDefaults.standard.object(forKey: Self.defaultsKey($0)) as? Double } ?? 0
         // Not mixing: a mixing session is never the Now Playing app, so the
         // headphone and Lock Screen buttons would do nothing (the Library's
         // lesson). close() puts the app's usual mixing session back.
@@ -157,7 +178,7 @@ final class DescribedVideoPlayback: ObservableObject {
         watches = [
             player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in
-                    self?.updateNowPlaying()
+                    self?.statusChanged()
                     self?.stallChanged()
                 }
             },
@@ -182,12 +203,45 @@ final class DescribedVideoPlayback: ObservableObject {
         await applyCaptions()
         // Done or the escape gesture while it loaded: close() already ran.
         guard player.currentItem === item else { return }
+        // DESC-9 (her choice, Nov 12 2026: "Ask me first"): a film she
+        // stopped part-way opens paused where she stopped, with "Play from
+        // here" and "Play from the beginning" on the sheet.
+        if saved > 30, await ready(item) {
+            let landed = await player.seek(to: CMTime(seconds: saved, preferredTimescale: 600))
+            // Closed while it looked for the place: say nothing.
+            guard player.currentItem === item else { return }
+            if landed {
+                // Her Library rule: Play is always her press. It waits where
+                // she stopped; the sheet shows that with its two buttons, and
+                // it is said once VoiceOver has landed on the sheet.
+                keepsPosition = true
+                waitingAt = Self.spoken(saved)
+                updateNowPlaying()
+                let line = "Paused at \(Self.spoken(saved)), where you stopped. "
+                    + "Play from here carries on. Play from the beginning starts over."
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    guard let self, self.player.currentItem === item, self.waitingAt != nil else { return }
+                    KadeAnnounce.high(line)
+                }
+                return
+            }
+        }
+        guard player.currentItem === item else { return }
+        // No place kept: play from the top, as before. If a kept place could
+        // not be reached (the film never became ready), it is left alone.
+        keepsPosition = saved <= 30
         wantsPlay = true
         player.play()
         updateNowPlaying()
     }
 
     func close() {
+        // DESC-9: her place, kept before anything is torn down.
+        keepPosition(player.currentTime().seconds)
+        keepsPosition = false
+        positionKey = nil
+        waitingAt = nil
         player.pause()
         itemNumber += 1
         wantsPlay = false
@@ -206,6 +260,66 @@ final class DescribedVideoPlayback: ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.replaceCurrentItem(with: nil)
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+    }
+
+    // MARK: Where she stopped (Nov 12 2026 audit, DESC-9)
+
+    private static func defaultsKey(_ key: String) -> String { "kade.describedVideo.position.\(key)" }
+
+    /// Waits (15 s at most) for the film to be ready to seek. False if it
+    /// failed, was closed, or is still not ready.
+    private func ready(_ item: AVPlayerItem) async -> Bool {
+        for _ in 0..<150 {
+            if player.currentItem !== item || item.status == .failed { return false }
+            if item.status == .readyToPlay { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    /// Kept past the first 30 seconds; forgotten in the first 30 seconds
+    /// (she went back to the start) and in the last minute (she finished).
+    private func keepPosition(_ seconds: Double) {
+        guard keepsPosition, let positionKey, seconds.isFinite,
+              let item = player.currentItem, item.status == .readyToPlay else { return }
+        let key = Self.defaultsKey(positionKey)
+        let duration = item.duration.seconds
+        if seconds <= 30 || (duration.isFinite && duration > 0 && seconds > duration - 60) {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(seconds, forKey: key)
+        }
+    }
+
+    /// "Play from the beginning": forgets the place and plays from the top.
+    func playFromStart() {
+        guard let item = player.currentItem else { return }
+        if let positionKey { UserDefaults.standard.removeObject(forKey: Self.defaultsKey(positionKey)) }
+        waitingAt = nil
+        // Not kept until the film is really at the top: the clock still
+        // reads the old place while the seek is on its way.
+        keepsPosition = false
+        player.seek(to: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.player.currentItem === item else { return }
+                self.keepsPosition = true
+                self.play()
+            }
+        }
+    }
+
+    private func statusChanged() {
+        if player.timeControlStatus != .paused { waitingAt = nil }
+        updateNowPlaying()
+    }
+
+    private static func spoken(_ seconds: Double) -> String {
+        let total = Int(seconds), hours = total / 3600, minutes = (total % 3600) / 60
+        if hours == 0 && minutes == 0 { return "\(total) seconds" }
+        let m = "\(minutes) minute\(minutes == 1 ? "" : "s")"
+        let h = "\(hours) hour\(hours == 1 ? "" : "s")"
+        if hours == 0 { return m }
+        return minutes == 0 ? h : "\(h) \(m)"
     }
 
     // MARK: Reconnecting (Nov 12 2026 audit, DESC-5)
@@ -478,6 +592,11 @@ final class DescribedVideoPlayback: ObservableObject {
         // The Lock Screen's clock, once a second (and on every seek: the
         // periodic observer also fires when time jumps).
         let second = Int(seconds)
+        // DESC-9: her place, every five seconds of film (one write, not one per tick).
+        if second != keptSecond, second % 5 == 0 {
+            keptSecond = second
+            keepPosition(seconds)
+        }
         if second != nowPlayingSecond {
             nowPlayingSecond = second
             updateNowPlaying()
@@ -617,6 +736,8 @@ struct DescribedVideoPlayerSheet: View {
     var onPlaybackRate: ((Double) -> Void)? = nil
     /// DESC-5: a fresh signed link for this film, for when its link stops working.
     var freshURL: (@MainActor () async -> URL?)? = nil
+    /// DESC-9: job, version and file, for keeping her place (nil keeps nothing).
+    var positionKey: String? = nil
     @State private var speed: Double = 1
     @State private var keptSpeed: Double = 1
     static let playbackSpeeds: [Double] = [0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -630,6 +751,7 @@ struct DescribedVideoPlayerSheet: View {
             VideoPlayer(player: playback.player) {
                 captionOverlay
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) { resumeBar }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             // `.task` can start before onAppear, so the player opens here.
@@ -643,7 +765,8 @@ struct DescribedVideoPlayerSheet: View {
                 // holds from the first frame, not only once the captions file
                 // has downloaded.
                 await playback.open(url: url, title: title, isVideo: isVideo,
-                                    voiceOver: voiceOverOn, readAloud: readCaptions)
+                                    voiceOver: voiceOverOn, readAloud: readCaptions,
+                                    positionKey: positionKey)
                 await playback.loadCaptions(from: captionsURL)
                 await playback.setCaptionChoice(voiceOver: voiceOverOn, readAloud: readCaptions)
             }
@@ -680,6 +803,30 @@ struct DescribedVideoPlayerSheet: View {
                 }
             }
             .accessibilityAction(.escape) { dismiss() }
+        }
+    }
+
+    /// DESC-9: shown only while the film waits where she stopped last time:
+    /// the place, in words, and her two ways on. Gone as soon as it plays.
+    @ViewBuilder
+    private var resumeBar: some View {
+        if let place = playback.waitingAt {
+            VStack(spacing: 10) {
+                Text("Paused at \(place), where you stopped.")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    Button("Play from here") { playback.play() }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityHint("Carries on from \(place).")
+                    Button("Play from the beginning") { playback.playFromStart() }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Forgets this place and starts the film over.")
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(.bar)
         }
     }
 
