@@ -349,15 +349,27 @@ final class MessageSendingService: ObservableObject {
             }
         }
 
+        /// Phase 3 A1 (Nov 12 2026): the server's spoken names for this step's
+        /// tool calls, `toolLabels[i]` for `tool_calls[i]`; "" means say nothing.
+        struct Extras: Decodable {
+            let toolLabels: [String]?
+            private enum CodingKeys: String, CodingKey { case toolLabels }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                toolLabels = try? c.decodeIfPresent([String].self, forKey: .toolLabels)
+            }
+        }
+
         let event: String?
         let final: Bool?
         let responseMessage: Reply?
         let data: Payload?
+        let kade: Extras?
         /// Only meaningful on an SSE `event: error` line.
         let errorText: String?
 
         private enum CodingKeys: String, CodingKey {
-            case event, final, responseMessage, data, error, message
+            case event, final, responseMessage, data, kade, error, message
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -365,6 +377,7 @@ final class MessageSendingService: ObservableObject {
             final = try? c.decodeIfPresent(Bool.self, forKey: .final)
             responseMessage = try? c.decodeIfPresent(Reply.self, forKey: .responseMessage)
             data = try? c.decodeIfPresent(Payload.self, forKey: .data)
+            kade = try? c.decodeIfPresent(Extras.self, forKey: .kade)
             let err = try? c.decodeIfPresent(String.self, forKey: .error)
             let msg = try? c.decodeIfPresent(String.self, forKey: .message)
             errorText = err ?? msg
@@ -549,7 +562,16 @@ final class MessageSendingService: ObservableObject {
                 /* The tool announcement: one line per tool the agent picks
                  * up, so a long chain reads as progress instead of a hang. */
                 guard let onTool else { break }
-                for call in frame.data?.stepDetails?.tool_calls ?? [] {
+                // Phase 3 A1: the server's label for each call, by the call's
+                // own index, wins; spokenToolName is only the fallback for an
+                // older server (keep it, but stop adding names to it).
+                let labels = KadeAppSwitches.toolLabels ? frame.kade?.toolLabels : nil
+                for (index, call) in (frame.data?.stepDetails?.tool_calls ?? []).enumerated() {
+                    if let labels, index < labels.count {
+                        let label = labels[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !label.isEmpty { onTool(label) }
+                        continue
+                    }
                     if let n = call.toolName, !n.isEmpty { onTool(Self.spokenToolName(n)) }
                 }
             case "attachment":
