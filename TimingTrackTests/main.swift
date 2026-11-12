@@ -241,6 +241,8 @@ let streamedPlain = wav([("fmt ", fmtBody())], pcmBytes: 48000, riffSize: 0xFFFF
 check(KadeTimingTrack.strippingTrack(sentinel) == streamedPlain, "a streamed size sentinel stays a sentinel")
 check(KadeTimingTrack.strippingTrack(Data("ID3abc".utf8)) == Data("ID3abc".utf8), "not a WAV: untouched")
 check(StreamingWavParser.parseHeader(KadeTimingTrack.strippingTrack(tracked))?.pcmStart == 44, "stripped audio starts at 44")
+check(KadeTimingTrack.strippingTrack(tracked + plain) == plain + plain,
+      "a joined answer: the first RIFF's size is its own, never the whole buffer")
 
 // MARK: - The presentation, the call timeline and the puppet engine
 
@@ -319,6 +321,52 @@ if let defaults = UserDefaults(suiteName: suite) {
     demand.disappeared(speaker); demand.disappeared(speaker)
     check(!demand.isShowing(speaker), "counts never go below zero")
 } else { check(false, "a test defaults suite") }
+
+// MARK: - The heard report for the bridge (CallHeardLog, a port of heard-report.mjs)
+
+do {
+    var log = CallHeardLog()
+    check(log.flushReport(at: 1) == CallHeardLog.Report(seq: 0, ms: 0), "nothing played yet: seq 0")
+    let one = log.noteClipReceived(), two = log.noteClipReceived(), three = log.noteClipReceived()
+    check(one == 1 && two == 2 && three == 3, "clips are numbered from 1 on arrival")
+    log.noteScheduled(seq: one, duration: 1.0, now: 10)
+    log.noteScheduled(seq: 0, duration: 0.5, now: 10)      // a LIVE buffer takes room, never reported
+    log.noteScheduled(seq: two, duration: 1.0, now: 10.2)  // queues behind both
+    // clip three failed to decode: counted, never scheduled
+    check(log.heard(at: 10.4) == CallHeardLog.Report(seq: 1, ms: 400), "mid first clip")
+    check(log.heard(at: 11.2) == CallHeardLog.Report(seq: 1, ms: 1000), "in the LIVE gap the first clip played whole")
+    check(log.heard(at: 11.8) == CallHeardLog.Report(seq: 2, ms: 300), "the second clip starts after the LIVE buffer")
+    check(log.heard(at: 20) == CallHeardLog.Report(seq: 2, ms: 1000), "a finished clip reports its length")
+    let report = log.flushReport(at: 11.8)
+    check(report == CallHeardLog.Report(seq: 2, ms: 300), "the flush reports where it stood")
+    check(log.heard(at: 0.5) == report, "after a flush with nothing new started, the last report repeats")
+    let four = log.noteClipReceived()
+    check(four == 4, "a flush never resets the count (the bridge counted every clip it sent)")
+    log.noteScheduled(seq: four, duration: 2.0, now: 0.1)
+    check(log.heard(at: 0.05) == report, "scheduled but not started: the last report again")
+    check(log.flushReport(at: 0.6) == CallHeardLog.Report(seq: 4, ms: 500), "the next clip after the flush")
+    let five = log.noteClipReceived()
+    log.noteScheduled(seq: five, duration: 1.0, now: 3)
+    log.dropQueue()
+    check(log.heard(at: 3.5) == CallHeardLog.Report(seq: 4, ms: 500), "a dropped queue keeps the last report")
+    check(log.received == 5, "and the count")
+    let message = CallHeardLog.message(CallHeardLog.Report(seq: 7, ms: 1234))
+    check(message["type"] as? String == "heard" && message["seq"] as? Int == 7 && message["ms"] as? Int == 1234
+          && message.count == 3, "the message is exactly {type: heard, seq, ms}")
+    let suite = "kade.heard.tests.\(ProcessInfo.processInfo.processIdentifier)"
+    if let defaults = UserDefaults(suiteName: suite) {
+        check(CallHeardLog.sends(defaults: defaults), "on by default")
+        defaults.set(false, forKey: CallHeardLog.switchKey)
+        check(!CallHeardLog.sends(defaults: defaults), "the local switch turns it off")
+        defaults.removePersistentDomain(forName: suite)
+    } else { check(false, "a heard defaults suite") }
+    var many = CallHeardLog()
+    for _ in 0..<70 {
+        let next = many.noteClipReceived()
+        many.noteScheduled(seq: next, duration: 0.1, now: 0)
+    }
+    check(many.heard(at: 100) == CallHeardLog.Report(seq: 70, ms: 100), "the log keeps the newest clips")
+}
 
 print("timing tracks: \(count) checks, \(failures.count) failures")
 for failure in failures.prefix(40) { print("FAIL: \(failure)") }

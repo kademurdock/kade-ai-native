@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 "${SWIFTC:-swiftc}" -D PUPPET_MODEL_TESTS \
-  "$ROOT/Sources/KadeTimingTrack.swift" "$ROOT/Sources/StreamingWavParser.swift" \
+  "$ROOT/Sources/KadeTimingTrack.swift" "$ROOT/Sources/StreamingWavParser.swift" "$ROOT/Sources/CallHeardLog.swift" \
   "$ROOT/Sources/PuppetScene.swift" "$ROOT/Sources/PuppetMotion.swift" \
   "$ROOT/Sources/CharacterPerformance.swift" "$ROOT/Sources/CharacterAnimationBudget.swift" \
   "$ROOT/TimingTrackTests/main.swift" -o "$OUT/timing-track-tests"

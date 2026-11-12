@@ -290,7 +290,9 @@ struct CharacterAudioIdentity {
 }
 
 /// Presentation-only queue against the existing player's source clock. It never
-/// supplies times to the audio scheduler, and retains no sound or transcript.
+/// supplies times to the audio scheduler and retains no sound. Since Nov 11 2026 a
+/// clip may hold its timing track (the spoken words with their times), in memory
+/// only, at most 128 clips, dropped on reset.
 struct CharacterPlaybackTimeline {
     struct Clip {
         let start: Double
@@ -357,9 +359,9 @@ struct CharacterPlaybackTimeline {
      * heard is designed separately; it may want the app to say where playback
      * stood when it was cut. This is that answer, pure and tested: which clip
      * was audible, how far into it, how long it was, and (when the clip carried
-     * a timing track) the words that had finished. StreamingCallService reads it
-     * just before a flush (`playbackPositionAtFlush`), and sends nothing until
-     * the bridge's message shape is defined. */
+     * a timing track) the words that had finished. StreamingCallService keeps it
+     * as `lastPlaybackPosition` for diagnostics; the bridge's own report is
+     * CallHeardLog (wire clip number + ms), sent after a clear or the Stop button. */
     struct HeardPosition: Equatable {
         /// Clips appended since the last reset, the audible one included.
         let clipsStarted: Int

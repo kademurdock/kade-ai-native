@@ -42,14 +42,22 @@ The website went live with real Inworld mouth shapes on Nov 11 2026 (proxy
   clip, and the presentation uses `time - clip.start`.
 - A live video face plays its own clips and moves its own lips: no track.
 
-## Interrupt-fix hook
+## The interrupt fix: telling the bridge what was heard
 
-`CharacterPlaybackTimeline.heardPosition(at:)` says which clip was audible,
-how far in, its length, and the whole words heard when the clip had a track.
-`StreamingCallService.flushPlayback` reads it before clearing and hands it to
-`reportPlaybackPosition`, which sends nothing until the bridge's message is
-defined (`sendsPlaybackPosition` is false; the field names there are a
-placeholder).
+The bridge (kade-ai-bridge heard-cut.js) stores an interrupted reply as only
+what the caller heard. On the `/ws/web-voice` socket the app sends
+`{"type":"heard","seq":<int>,"ms":<int>}` after every flush for the bridge's
+`clear`, and from `barge()` right after `{"type":"barge"}`; never on hang-up.
+`seq` numbers every WAV binary frame from 1 on each socket (LIVE frames are not
+counted; a clip that failed to decode still counts), `ms` is how much of that
+clip had played. `Sources/CallHeardLog.swift` is the port of the website's
+`heard-report.mjs`: each scheduled WAV keeps its number, start (queued behind
+everything before it on the player's timeline) and length; at the flush the
+player time less `AVAudioSession.outputLatency` picks the highest-numbered clip
+that had started, or repeats the previous report when none had. UserDefaults
+`kadeHeardReport` = false stops it. Old bridges ignore the message.
+`CharacterPlaybackTimeline.heardPosition(at:)` (words heard with a track) is
+kept as `lastPlaybackPosition` for diagnostics only.
 
 ## Tests
 

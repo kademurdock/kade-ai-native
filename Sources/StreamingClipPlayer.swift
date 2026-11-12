@@ -303,9 +303,11 @@ final class StreamingClipPlayer {
                 format = parsed.format
                 pcmTail = headerData.subdata(in: headerData.startIndex + parsed.pcmStart ..< headerData.endIndex)
                 characterTimingTrack = KadeTimingTrack.read(wav: headerData, headerOnly: true)
-            } else if headerData.count > 64 * 1024 {
+            } else if headerData.count > (64 + 512) * 1024 {
                 // 64KB without a parseable header is not a WAV stream; bail
-                // so the pump can count the piece honestly.
+                // so the pump can count the piece honestly. Nov 11 2026: plus
+                // room for a timing track (kdtm, at most 512 KB) that sits
+                // between fmt and data on a buffered, tracked answer.
                 KadeBreadcrumbs.drop("tts-stream: no parseable header in \(headerData.count) bytes")
                 return false
             }

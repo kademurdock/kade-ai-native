@@ -201,7 +201,9 @@ struct KadeTimingTrack {
         out.append(data.subdata(in: data.startIndex ..< data.startIndex + chunk.lowerBound))
         out.append(data.subdata(in: data.startIndex + chunk.upperBound ..< data.endIndex))
         if !walk.streamingSizes {
-            let size = UInt32(clamping: max(0, out.count - 8))
+            // The original RIFF size less the chunk, never "the whole buffer": a joined answer
+            // (the fork joins several WAVs for a very long input) keeps its later RIFFs separate.
+            let size = UInt32(clamping: max(4, Int(Self.u32(data, 4)) - chunk.count))
             for k in 0..<4 { out[out.startIndex + 4 + k] = UInt8(truncatingIfNeeded: size >> (UInt32(k) * 8)) }
         }
         return out
