@@ -206,6 +206,9 @@ struct CallView: View {
             camera.onFrame = { jpeg in
                 callService.sendFrame(jpegData: jpeg)
             }
+            // DESC-1 (Nov 12 2026 audit): the auto-flash notice waits for a
+            // gap in the call's voice.
+            camera.voiceIsAudible = { callService.isVoiceAudible }
             await beginCall()
         }
         .onDisappear {

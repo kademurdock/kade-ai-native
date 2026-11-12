@@ -49,6 +49,12 @@ final class CameraCaptureController: ObservableObject {
     /// critical path (only the call itself is hopped to MainActor -- see
     /// `FrameSampler` below for why).
     var onFrame: ((Data) -> Void)?
+    /// DESC-1 (Nov 12 2026 audit): CallView sets this to "is the call's
+    /// voice coming out right now". The auto-flash notice waits for a gap
+    /// instead of talking over the Spotter (two voices at once). Unset, the
+    /// notice is spoken at once, as before.
+    var voiceIsAudible: (() -> Bool)?
+    private var torchNoticeTask: Task<Void, Never>?
 
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "com.kademurdock.kadeai.camera")
@@ -104,12 +110,29 @@ final class CameraCaptureController: ObservableObject {
         guard currentPosition == .back else { return }
         if !torchOn, brightness < 0.10 {
             applyTorch(true)
-            UIAccessibility.post(
-                notification: .announcement,
-                argument: "It's dark. Flashlight on."
-            )
+            announceAutoTorch()
         } else if torchOn, brightness > 0.22 {
+            torchNoticeTask?.cancel()
+            torchNoticeTask = nil
             applyTorch(false)
+        }
+    }
+
+    /// DESC-1: says "It's dark. Flashlight on." in the first gap in the
+    /// call's voice (checked every quarter second, for at most 20 s).
+    /// Dropped if the light went back off, the camera stopped, or no gap
+    /// came: by then the Spotter has seen the light itself.
+    private func announceAutoTorch() {
+        torchNoticeTask?.cancel()
+        torchNoticeTask = Task { [weak self] in
+            for _ in 0..<80 {
+                guard let self, !Task.isCancelled else { return }
+                if !(self.voiceIsAudible?() ?? false) { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard let self, !Task.isCancelled, self.isRunning, self.torchOn,
+                  !(self.voiceIsAudible?() ?? false) else { return }
+            UIAccessibility.post(notification: .announcement, argument: "It's dark. Flashlight on.")
         }
     }
 
@@ -193,6 +216,8 @@ final class CameraCaptureController: ObservableObject {
     func stop() {
         rotationObservation = nil
         rotationCoordinator = nil
+        torchNoticeTask?.cancel()
+        torchNoticeTask = nil
         let s = session
         queue.async { s.stopRunning() }
         isRunning = false

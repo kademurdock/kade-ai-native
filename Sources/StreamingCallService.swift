@@ -163,12 +163,20 @@ final class StreamingCallService: NSObject, ObservableObject {
     private var clipsScheduled = 0
     private var clipsPlayed = 0
     private var clipFailures = 0
-    /// Rearmed to `false` every time a FRESH Spotter/Live segment starts
-    /// (`liveOn` false -> true); flipped `true` the first time that
-    /// segment's own audio is actually scheduled, gating a one-shot
-    /// confirmation tone distinct from the whole-call connect tone -- see
-    /// `playLiveStartTone()`.
-    private var liveTonePlayed = false
+    /// DESC-1 (Nov 12 2026 audit): the Spotter's chime plays when the
+    /// Spotter is ARMED, on a quiet line, never on its first audio (there it
+    /// masked the first four seconds of the first answer). In a character
+    /// call the bridge speaks "Hold on -- I'm putting X on the line." while
+    /// live comes up, so the chime waits here until that line has played.
+    /// See `armLiveChime()`.
+    private var liveChimeTask: Task<Void, Never>?
+    /// DESC-1: wall-clock estimate of when everything queued on `playerNode`
+    /// will have played. Advanced per scheduled buffer, cleared by a flush.
+    /// Lets a chime or a VoiceOver notice wait for a gap instead of landing
+    /// on a voice.
+    private var outputBusyUntil: Date = .distantPast
+    /// True while the call's own voice (character clip or Spotter audio) is coming out.
+    var isVoiceAudible: Bool { engineRunning && Date() < outputBusyUntil }
     /// Aug 9 2026: when the connect chime last actually played — the live
     /// arm skips its own chime inside this window so a Spotter-DIRECT call
     /// (engine start and live arm seconds apart) chimes once, not twice.
@@ -703,11 +711,15 @@ final class StreamingCallService: NSObject, ObservableObject {
         case "live-state":
             let wasLive = liveOn
             liveOn = msg.on ?? false
-            // A fresh Spotter/Live segment starting (not just staying on
-            // across an unrelated live-state update) rearms the one-shot
-            // "Spotter's own audio is really flowing" tone -- see
-            // `playLiveStartTone()`.
-            if liveOn && !wasLive { liveTonePlayed = false }
+            // DESC-1: a fresh Spotter segment (not a repeat live-state, not a
+            // reconnect, which keeps liveOn true) arms the chime -- see
+            // `armLiveChime()`.
+            if liveOn && !wasLive {
+                armLiveChime()
+            } else if !liveOn {
+                liveChimeTask?.cancel()
+                liveChimeTask = nil
+            }
             if let name = msg.spotterName { spotterName = name }
             liveMinutesLeft = msg.minutesLeft
             if let m = msg.message { liveNotice = m }
@@ -1290,6 +1302,48 @@ final class StreamingCallService: NSObject, ObservableObject {
         }
     }
 
+    /// DESC-1 (Nov 12 2026 audit): plays the Spotter's arming chime on a
+    /// quiet line. Direct Spotter call: nobody is talking when live comes
+    /// up, so it plays now (and `playLiveStartTone` skips it when the
+    /// connect chime is seconds old: one chime). Character call: the
+    /// bridge's handoff line is in the air or on its way, so wait until
+    /// nothing has been audible for 1.2 s, then chime. If the Spotter speaks
+    /// first, `enqueueLivePCM` cancels this and there is no chime at all.
+    private func armLiveChime() {
+        liveChimeTask?.cancel()
+        liveChimeTask = nil
+        if callSpotterDirect {
+            playLiveStartTone()
+            return
+        }
+        liveChimeTask = Task { [weak self] in
+            var quietTicks = 0
+            for _ in 0..<80 { // 12 s at most, then give up: a late chime means nothing
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard let self, !Task.isCancelled, self.liveOn, self.engineRunning, !self.stopping else { return }
+                quietTicks = self.isVoiceAudible ? 0 : quietTicks + 1
+                if quietTicks >= 8 {
+                    self.liveChimeTask = nil
+                    self.playLiveStartTone()
+                    return
+                }
+            }
+        }
+    }
+
+    /// DESC-1: nothing rings over a voice while the Spotter has the call.
+    /// stop() on a node with nothing queued, or on a stopped engine, is
+    /// harmless (teardown does the same).
+    private func stopEarcons() {
+        if earconNode.isPlaying { earconNode.stop() }
+        if let chime = Self.connectPlayer, chime.isPlaying { chime.stop() }
+    }
+
+    /// DESC-1 (Nov 12 2026): the Spotter's arming cue is now played when the
+    /// Spotter comes on the line (`armLiveChime()`), not on its first audio
+    /// chunk, where it put four seconds of chime over the first answer.
+    /// History below.
+    ///
     /// Session 17/18 (Kade, after a Spotter call went silent: "Spotter
     /// should prob beep like normal calls do"). The connect tone above
     /// proves the ENGINE/OUTPUT PATH works at the moment a call starts --
@@ -1316,7 +1370,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         // engine-start chime fired seconds ago, so a second one inside the
         // window is skipped — one chime per arming, never a double. The
         // synth blip below survives only as the no-bundle fail-soft.
-        if Date().timeIntervalSince(lastChimeAt) < 2.5 { return }
+        // DESC-1: a direct Spotter call's 4 s connect chime started a few
+        // seconds before live comes up: one chime, not two.
+        if Date().timeIntervalSince(lastChimeAt) < 6 { return }
         if audioEngine.isRunning,
            let chime = Self.bundledEngineBuffer(named: "CallConnected", ext: "mp3", convertedTo: playerFormat) {
             // Build 196 GUARD (same crash class as 195's WorldTones fix):
@@ -1476,10 +1532,11 @@ final class StreamingCallService: NSObject, ObservableObject {
     private func enqueueLivePCM(_ data: Data) {
         let sampleCount = (data.count - 4) / 2
         guard sampleCount > 0 else { return }
-        if liveOn, !liveTonePlayed {
-            liveTonePlayed = true
-            playLiveStartTone()
-        }
+        // DESC-1: the Spotter is talking, so a chime still waiting for a
+        // quiet line is not needed. (A chime already playing is stopped in
+        // schedule().)
+        liveChimeTask?.cancel()
+        liveChimeTask = nil
         // ROOT-CAUSE FIX (session 21d, Kade: Spotter "all clips received,
         // none played," while a NORMAL call's WAV voice plays fine and only
         // the connect tone -- the other thing that isn't WAV -- is also
@@ -1520,6 +1577,10 @@ final class StreamingCallService: NSObject, ObservableObject {
     private func schedule(_ buffer: AVAudioPCMBuffer, from sourceFormat: AVAudioFormat, character: CharacterAudioIdentity? = nil,
                           track: KadeTimingTrack? = nil, clipSeq: Int = 0) {
         guard engineRunning else { return }
+        // DESC-1: while the Spotter has the call, any voice (its own audio,
+        // or a bridge line such as the handoff or the silence notice) cuts a
+        // chime that is still ringing.
+        if liveOn { stopEarcons() }
         // The engine can be stopped out from under us by an interruption
         // (another app taking the session, a real phone call) without this
         // service ever hearing about it -- and once stopped, every
@@ -1533,6 +1594,7 @@ final class StreamingCallService: NSObject, ObservableObject {
             nextPlayheadSample = nil   // the restart reset the node's timeline
             characterTimeline.reset()
             heardLog.dropQueue()
+            outputBusyUntil = .distantPast
         }
         // Session 21: a RUNNING ENGINE is not the same as a PLAYING NODE. A
         // prior `stop()` (barge-in / flush / a clear before the Spotter
@@ -1620,6 +1682,8 @@ final class StreamingCallService: NSObject, ObservableObject {
         // A LIVE buffer (clipSeq 0) takes its room in the queue but is never reported.
         heardLog.noteScheduled(seq: clipSeq, duration: Double(buffer.frameLength) / buffer.format.sampleRate,
             now: characterPlayerTime ?? 0)
+        outputBusyUntil = max(Date(), outputBusyUntil)
+            .addingTimeInterval(Double(buffer.frameLength) / buffer.format.sampleRate)
         playerNode.scheduleBuffer(buffer, completionHandler: confirmPlayed)
         // Oct 28 2026: a live video face on the call stage follows the same
         // audio (the page is muted on a call; this engine keeps the sound).
@@ -1649,6 +1713,7 @@ final class StreamingCallService: NSObject, ObservableObject {
         portraitMeter.reset()
         characterTimeline.reset()
         pendingCharacterAudio = nil
+        outputBusyUntil = .distantPast
         guard engineRunning else { return heardReport }
         playerNode.stop()
         playerNode.play()
@@ -1745,6 +1810,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         characterTimeline.reset()
         heardLog.dropQueue()
         pendingCharacterAudio = nil
+        liveChimeTask?.cancel()
+        liveChimeTask = nil
+        outputBusyUntil = .distantPast
         if portraitTapInstalled { playerNode.removeTap(onBus: 0); portraitTapInstalled = false }
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
