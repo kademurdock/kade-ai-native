@@ -4722,8 +4722,9 @@ struct ConversationDetailView: View {
                  * from the saved reply, placed by a 48-character anchor; if
                  * the place cannot be found safely, say so once instead of
                  * guessing (a repeated sentence is the worse failure). */
-                if messageSendingService.lastStreamHadGap, let reply = currentReply {
-                    if let rest = StreamResume.tail(saved: reply.displayText, delivered: deliveredReply) {
+                if messageSendingService.lastStreamHadGap {
+                    if let reply = currentReply,
+                       let rest = StreamResume.tail(saved: reply.displayText, delivered: deliveredReply) {
                         for piece in live.speech.push(rest) {
                             voiceService.enqueueSpeak(
                                 text: piece,
@@ -4734,8 +4735,13 @@ struct ConversationDetailView: View {
                             )
                         }
                     } else {
+                        // No saved reply to speak from (not found or not
+                        // reloaded), or no safe place in it: never silence
+                        // with no cue. "On screen" only when it really is.
                         UIAccessibility.post(notification: .announcement,
-                            argument: "The rest of this reply was not spoken. It is on screen.")
+                            argument: currentReply != nil
+                                ? "The rest of this reply was not spoken. It is on screen."
+                                : "The rest of this reply was not spoken.")
                     }
                 }
                 for piece in live.speech.flush() {

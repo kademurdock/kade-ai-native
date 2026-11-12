@@ -151,6 +151,9 @@ final class MessageSendingService: ObservableObject {
             replyId = await completedReplyId(requestId: turnRequestId, conversationId: start.conversationId)
         }
         if Task.isCancelled { throw URLError(.cancelled) }
+        // Pick 4: the resume found no job and no saved reply turned up: not a
+        // silent success. The ordinary error and Retry (same request id).
+        if replyId == nil, lastResumeNotFound { throw SendError.streamEndedWithoutFinal }
         onCompletedReply?(replyId)
         if let replyId, memoryReceiptLease.accepts(memoryReceiptGeneration) {
             recoverMemoryReceipts(scope: .init(conversationId: start.conversationId, messageId: replyId),
@@ -566,6 +569,7 @@ final class MessageSendingService: ObservableObject {
     /// server that sends no ids is never retried: today's error and Retry.
     private func waitForFinal(streamId: String, onThink: ((String) -> Void)? = nil, onText: ((String) -> Void)? = nil, onTool: ((String) -> Void)? = nil) async throws -> String? {
         lastStreamHadGap = false
+        lastResumeNotFound = false
         guard KadeAppSwitches.streamResume else {
             return try await readStream(streamId: streamId, cursor: nil, resuming: false,
                                         onThink: onThink, onText: onText, onTool: onTool)
@@ -573,27 +577,61 @@ final class MessageSendingService: ObservableObject {
         let cursor = StreamCursor()
         var attempt = 0
         var dropped = false
+        /// When the drops began with no progress since: a total budget of
+        /// 300 s, the same as one stream's own idle timeout.
+        var stalledSince: Date?
         while true {
             do {
                 return try await readStream(streamId: streamId, cursor: cursor, resuming: dropped,
                                             onThink: onThink, onText: onText, onTool: onTool)
             } catch {
-                if Task.isCancelled { throw error }
+                // Stop: always the calm "Stopped." path, never Retry.
+                if Task.isCancelled { throw URLError(.cancelled) }
                 // An error frame from the server, or a refused request, is never retried.
                 if let known = error as? SendError {
                     guard case .streamEndedWithoutFinal = known else { throw known }
+                } else if let urlError = error as? URLError {
+                    // Only a real connection loss is resumed. The 300 s idle
+                    // timeout is the server's hung-turn cap (its heartbeat
+                    // stops after 240 s): retrying it would undo that cap.
+                    guard Self.resumableNetworkCodes.contains(urlError.code) else { throw error }
+                } else {
+                    throw error
                 }
                 // No id ever seen = the server keeps no log: today's behaviour.
                 guard cursor.id != nil else { throw error }
-                if cursor.takeProgress() { attempt = 0 }
+                if cursor.takeProgress() {
+                    attempt = 0
+                    stalledSince = nil
+                }
+                let firstDrop = stalledSince ?? Date()
+                stalledSince = firstDrop
+                guard Date().timeIntervalSince(firstDrop) < 300 else { throw error }
                 attempt += 1
                 guard attempt <= StreamResume.maxAttempts else { throw error }
                 dropped = true
                 KadeBreadcrumbs.drop("stream dropped; picking it up (try \(attempt))")
-                try await Task.sleep(nanoseconds: StreamResume.delayNanos(attempt: attempt))
+                do {
+                    try await Task.sleep(nanoseconds: StreamResume.delayNanos(attempt: attempt))
+                } catch {
+                    throw URLError(.cancelled)   // Stop during the wait: "Stopped."
+                }
             }
         }
     }
+
+    /// Pick 4: the connection losses worth picking up again. Everything else
+    /// (a timeout, a refused certificate, a bad URL) ends the turn as before.
+    private static let resumableNetworkCodes: Set<URLError.Code> = [
+        .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
+        .dnsLookupFailed, .secureConnectionFailed, .dataNotAllowed, .internationalRoamingOff,
+        .callIsActive, .resourceUnavailable,
+    ]
+
+    /// Pick 4: a resume answered 404 (the job is gone, for example after a
+    /// server redeploy). If no saved reply turns up either, send() throws so
+    /// she gets the ordinary error and Retry with the same request id.
+    private(set) var lastResumeNotFound = false
 
     private func readStream(streamId: String, cursor: StreamCursor?, resuming: Bool,
                             onThink: ((String) -> Void)?, onText: ((String) -> Void)?,
@@ -614,7 +652,10 @@ final class MessageSendingService: ObservableObject {
         if http.statusCode == 404 {
             // Pick 4: after a drop, a 404 means the reply finished while we
             // were away: reload the saved messages and speak the rest.
-            if resuming { lastStreamHadGap = true }
+            if resuming {
+                lastStreamHadGap = true
+                lastResumeNotFound = true
+            }
             return nil  // no guessed historical reply id
         }
         guard http.statusCode == 200 else { throw SendError.server(http.statusCode) }
