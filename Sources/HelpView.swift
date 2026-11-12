@@ -239,8 +239,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.19: Truer talking faces, interruptions remembered right",
+                title: "Newest build, 2.2.20: Speech that keeps going, quicker replies",
                 body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.19: Truer talking faces, interruptions remembered right",
+                body: "On Inworld voices, a character's face now moves its mouth with the voice's own mouth shapes, on calls and when a reply is read aloud with the portrait showing, so the lips close on p, b and m and open on the vowels. Fish voices move the way they did before. On a call, when you talk over a character or press Stop, the character now remembers only the part of its reply you actually heard, so it no longer carries on as if you heard the rest. The voice list has 89 new voices."
             ),
             HelpEntry(
                 title: "In 2.2.18: A clearer Library player, quicker browsing",

@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: Truer talking faces, interruptions remembered right"
-    static let body = "On Inworld voices, a character's face now moves its mouth with the voice's own mouth shapes, on calls and when a reply is read aloud with the portrait showing, so the lips close on p, b and m and open on the vowels. Fish voices move the way they did before. On a call, when you talk over a character or press Stop, the character now remembers only the part of its reply you actually heard, so it no longer carries on as if you heard the rest. The voice list has 89 new voices."
+    static let title = "What's new: Speech that keeps going, quicker replies"
+    static let body = "Spoken replies no longer go silent after a phone call, Siri or another app's sound, and chat speech no longer takes the microphone from a call, a Clubhouse room or a recording. Stop now stops the voice too. In a chat, Magic Tap pauses and resumes the voice, and starts the microphone when nothing is playing; on a call it stops the character talking. The chat list no longer drops the message under your finger when a reply finishes, and with VoiceOver on, older messages stay in place. Announcements wait for the voice instead of talking over it. Voice speed, delivery style and fillers follow your account, so every device sounds the same. Replies you hear start sooner, and a reply cut off by a weak connection picks itself back up. The Spotter keeps the screen awake for the whole camera call and skips pictures that have not changed. A described film you part watched opens paused where you stopped, with Play from here and Play from the beginning, and you can listen to a described video while it is still being made."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false
