@@ -171,6 +171,11 @@ struct DescribedVideoView: View {
         /// The captions file's signed link (video only), for the captions
         /// the player draws itself while VoiceOver is on.
         let captions: URL?
+        /// Which job and copy this is, so the player can ask for a fresh
+        /// signed link for the same film if its link stops working (DESC-5,
+        /// Nov 12 2026 audit).
+        let jobId: String
+        let version: Int
     }
 
     fileprivate enum DVSheet: Identifiable {
@@ -433,7 +438,8 @@ struct DescribedVideoView: View {
             voiceSheet
         case .player(let item):
             DescribedVideoPlayerSheet(url: item.url, title: item.title, isVideo: item.isVideo, captionsURL: item.captions,
-                                      playbackRate: rememberedPlaybackRate, onPlaybackRate: { value in keepPlaybackRate(value) })
+                                      playbackRate: rememberedPlaybackRate, onPlaybackRate: { value in keepPlaybackRate(value) },
+                                      freshURL: { await freshPlaybackURL(for: item) })
         case .transcript(let text, let title):
             DescribedTranscriptSheet(text: text, title: title)
         case .share(let item):
@@ -3188,11 +3194,27 @@ struct DescribedVideoView: View {
         return fresh
     }
 
+    /// DESC-5 (Nov 12 2026 audit): a new signed link for the film that is
+    /// playing, when its old one stopped working mid-film. Always asked
+    /// from the server, for the job and copy the player was opened with.
+    private func freshPlaybackURL(for item: DVPlayerItem) async -> URL? {
+        guard let fresh = try? await service.files(jobId: item.jobId, version: item.version) else { return nil }
+        if filesKey == "\(item.jobId)/\(item.version)" {
+            files = fresh
+            filesAt = Date()
+        }
+        return (item.isVideo ? fresh.video : fresh.audio).flatMap { URL(string: $0) }
+    }
+
     private func play(video: Bool) async {
         guard let current = job, fetching.isEmpty, viewVersion > 0 else { return }
         fetching = video ? "play-video" : "play-audio"
         defer { fetching = "" }
         do {
+            // DESC-5 (Nov 12 2026 audit): playing always starts from fresh
+            // links. A cached one may have little of its six hours left, and
+            // a two-hour film (longer when slowed or paused) outlives it.
+            files = nil
             let links = try await currentFiles(current)
             // She may have opened another video, or left, while the links came.
             guard job?.id == current.id, onScreen else { return }
@@ -3207,7 +3229,9 @@ struct DescribedVideoView: View {
                 url: url,
                 title: video ? "\(current.title), described" : "\(current.title), described audio",
                 isVideo: video,
-                captions: captions
+                captions: captions,
+                jobId: current.id,
+                version: viewVersion
             ))
         } catch {
             fail(error)

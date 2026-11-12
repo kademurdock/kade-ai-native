@@ -97,6 +97,24 @@ final class DescribedVideoPlayback: ObservableObject {
     private var remoteWired = false
     private var nowPlayingSecond = -1
 
+    // DESC-5 (Nov 12 2026 audit): a film that stops on its own is opened again.
+    /// Asked for a fresh signed link (DescribedVideoView.freshPlaybackURL).
+    var freshURL: (@MainActor () async -> URL?)?
+    /// She has the film playing. Follows the player's own rate, because
+    /// AVKit's on-screen Play and Pause never pass through play()/pause().
+    private var wantsPlay = false
+    private var rateWatch: NSObjectProtocol?
+    private var failureWatch: NSObjectProtocol?
+    private var itemWatch: NSKeyValueObservation?
+    /// Goes up with every item and on close, so late callbacks from an
+    /// older item (or after Done) do nothing.
+    private var itemNumber = 0
+    private var reopening = false
+    private var reopenTimes: [Date] = []
+    /// The last place the film was known to be playing or parked.
+    private var lastSeconds = 0.0
+    private var stallTask: Task<Void, Never>?
+
     init() {
         // THE background fix (see 1 above).
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -128,6 +146,8 @@ final class DescribedVideoPlayback: ObservableObject {
         // moment an item becomes current.
         player.appliesMediaSelectionCriteriaAutomatically = plan.systemMayPick
         player.replaceCurrentItem(with: item)
+        lastSeconds = 0
+        reopenTimes = []
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 4),
             queue: .main
@@ -136,25 +156,25 @@ final class DescribedVideoPlayback: ObservableObject {
         }
         watches = [
             player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-                Task { @MainActor in self?.updateNowPlaying() }
+                Task { @MainActor in
+                    self?.updateNowPlaying()
+                    self?.stallChanged()
+                }
             },
             player.observe(\.isExternalPlaybackActive, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor in await self?.applyCaptions() }
             },
-            // Ready to play is when AVPlayer and AVKit settle the text
-            // tracks, so her choice goes back on top then.
-            item.observe(\.status, options: [.new]) { [weak self] item, _ in
-                guard item.status == .readyToPlay else { return }
-                Task { @MainActor in await self?.applyCaptions() }
-            },
         ]
-        selectionWatch = NotificationCenter.default.addObserver(
-            forName: AVPlayerItem.mediaSelectionDidChangeNotification,
-            object: item,
+        rateWatch = NotificationCenter.default.addObserver(
+            forName: AVPlayer.rateDidChangeNotification,
+            object: player,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.holdChoice() }
+        ) { [weak self] note in
+            let reason = note.userInfo?[AVPlayer.rateDidChangeReasonKey] as? String
+            let failed = reason == AVPlayer.RateDidChangeReason.setRateFailed.rawValue
+            Task { @MainActor in self?.rateChanged(failed: failed) }
         }
+        watch(item)
         wireRemote()
         // Her choice of text track is in place BEFORE Play. Their list comes
         // from the same header AVPlayer reads before it can play, so this adds
@@ -162,24 +182,172 @@ final class DescribedVideoPlayback: ObservableObject {
         await applyCaptions()
         // Done or the escape gesture while it loaded: close() already ran.
         guard player.currentItem === item else { return }
+        wantsPlay = true
         player.play()
         updateNowPlaying()
     }
 
     func close() {
         player.pause()
+        itemNumber += 1
+        wantsPlay = false
+        stallTask?.cancel()
+        stallTask = nil
+        unwatchItem()
+        if let rateWatch { NotificationCenter.default.removeObserver(rateWatch) }
+        rateWatch = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         watches.forEach { $0.invalidate() }
         watches = []
-        if let selectionWatch { NotificationCenter.default.removeObserver(selectionWatch) }
-        selectionWatch = nil
         legible = nil
         legibleNames = []
         unwireRemote()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.replaceCurrentItem(with: nil)
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+    }
+
+    // MARK: Reconnecting (Nov 12 2026 audit, DESC-5)
+    //
+    // A film that stops on its own (its six-hour signed link ran out, or the
+    // network dropped it) is opened again from a fresh link at the same place.
+    // Silence mid-film is never left unexplained: she hears "Reconnecting",
+    // and then either the film, or that it is paused, or that it could not
+    // reconnect. Her Library rule holds: the film carries on only if it was
+    // playing when it stopped.
+
+    /// Everything that listens to one item: its text-track changes (3 above),
+    /// ready to play (her caption choice goes back on top), and failure.
+    private func watch(_ item: AVPlayerItem) {
+        unwatchItem()
+        stallTask?.cancel()
+        stallTask = nil
+        itemNumber += 1
+        let number = itemNumber
+        itemWatch = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            switch item.status {
+            case .readyToPlay:
+                // Ready to play is when AVPlayer and AVKit settle the text
+                // tracks, so her choice goes back on top then.
+                Task { @MainActor in await self?.applyCaptions() }
+            case .failed:
+                Task { @MainActor in await self?.reopen(number) }
+            default:
+                break
+            }
+        }
+        selectionWatch = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.mediaSelectionDidChangeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.holdChoice() }
+        }
+        failureWatch = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.reopen(number) }
+        }
+    }
+
+    private func unwatchItem() {
+        itemWatch?.invalidate()
+        itemWatch = nil
+        if let selectionWatch { NotificationCenter.default.removeObserver(selectionWatch) }
+        selectionWatch = nil
+        if let failureWatch { NotificationCenter.default.removeObserver(failureWatch) }
+        failureWatch = nil
+    }
+
+    /// Play and Pause from anywhere (AVKit's buttons, the Lock Screen, a
+    /// call). A stop caused by the film failing is not her pause.
+    private func rateChanged(failed: Bool) {
+        if player.rate != 0 {
+            wantsPlay = true
+            return
+        }
+        guard !failed, let item = player.currentItem, item.status != .failed, item.error == nil else { return }
+        wantsPlay = false
+    }
+
+    /// Waiting for the network while she has it playing: say so after six
+    /// seconds, and after twenty more treat it as a lost connection (an
+    /// expired link can show up as an endless wait instead of a failure).
+    private func stallChanged() {
+        let waiting = player.currentItem != nil && player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        guard waiting, !reopening else {
+            if !waiting {
+                stallTask?.cancel()
+                stallTask = nil
+            }
+            return
+        }
+        guard stallTask == nil else { return }
+        let number = itemNumber
+        stallTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, let self, number == self.itemNumber,
+                  self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+            UIAccessibility.post(notification: .announcement, argument: "The video is buffering.")
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled, number == self.itemNumber,
+                  self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+            // Let go of this task first: reopen() must not cancel itself.
+            self.stallTask = nil
+            await self.reopen(number)
+        }
+    }
+
+    private func reopen(_ number: Int) async {
+        guard number == itemNumber, !reopening, let old = player.currentItem, let freshURL else { return }
+        // Three tries in ten minutes, then it is left for her.
+        let now = Date()
+        reopenTimes.removeAll { now.timeIntervalSince($0) > 600 }
+        guard reopenTimes.count < 3 else {
+            KadeAnnounce.high("The video could not reconnect. Choose Done, then play it again.")
+            return
+        }
+        reopenTimes.append(now)
+        reopening = true
+        defer { reopening = false }
+        stallTask?.cancel()
+        stallTask = nil
+        let current = player.currentTime().seconds
+        let at = lastSeconds > 0 ? lastSeconds : (current.isFinite ? current : 0)
+        KadeAnnounce.high("The video lost its connection. Reconnecting.")
+        let url = await freshURL()
+        // Done while the link came (close() ran), or another item: say nothing.
+        guard number == itemNumber, player.currentItem === old else { return }
+        guard let url else {
+            KadeAnnounce.high("The video could not reconnect. Choose Done, then play it again.")
+            return
+        }
+        let item = AVPlayerItem(url: url)
+        item.externalMetadata = old.externalMetadata
+        // The place, two seconds back, set on the item before it is current:
+        // a seek with a completion handler is not allowed until it is ready.
+        let start = max(0, at - 2)
+        if start > 0 {
+            item.seek(to: CMTime(seconds: start, preferredTimescale: 600), completionHandler: nil)
+        }
+        // The old film's list of text tracks does not belong to this item.
+        legible = nil
+        legibleNames = []
+        player.appliesMediaSelectionCriteriaAutomatically = plan.systemMayPick
+        player.replaceCurrentItem(with: item)
+        watch(item)
+        lastSeconds = start
+        await applyCaptions()
+        guard player.currentItem === item else { return }
+        if wantsPlay {
+            player.play()
+        } else {
+            KadeAnnounce.high("The video is connected again, and paused.")
+        }
+        updateNowPlaying()
     }
 
     // MARK: Captions
@@ -296,6 +464,10 @@ final class DescribedVideoPlayback: ObservableObject {
 
     private func tick(_ seconds: Double) {
         guard seconds.isFinite else { return }
+        // DESC-5: the last place known good, for a reconnect.
+        if let item = player.currentItem, item.status == .readyToPlay, item.error == nil {
+            lastSeconds = seconds
+        }
         // The backstop for 3 above: a track that changed without the
         // notification goes back within a quarter of a second.
         holdChoice()
@@ -315,11 +487,19 @@ final class DescribedVideoPlayback: ObservableObject {
     // MARK: Transport (the Lock Screen and headphone buttons)
 
     func play() {
+        wantsPlay = true
+        // DESC-5: her Play on a film that has stopped working tries the link again.
+        if let item = player.currentItem, item.status == .failed {
+            let number = itemNumber
+            Task { await reopen(number) }
+            return
+        }
         player.play()
         updateNowPlaying()
     }
 
     func pause() {
+        wantsPlay = false
         player.pause()
         updateNowPlaying()
     }
@@ -435,6 +615,8 @@ struct DescribedVideoPlayerSheet: View {
     /// goes to be kept (her account, via the describer screen).
     var playbackRate: Double = 1
     var onPlaybackRate: ((Double) -> Void)? = nil
+    /// DESC-5: a fresh signed link for this film, for when its link stops working.
+    var freshURL: (@MainActor () async -> URL?)? = nil
     @State private var speed: Double = 1
     @State private var keptSpeed: Double = 1
     static let playbackSpeeds: [Double] = [0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -456,6 +638,7 @@ struct DescribedVideoPlayerSheet: View {
                 keptSpeed = start
                 speed = start
                 playback.setSpeed(start)
+                playback.freshURL = freshURL
                 // Her caption choice goes in with the film (Part 295), so it
                 // holds from the first frame, not only once the captions file
                 // has downloaded.
