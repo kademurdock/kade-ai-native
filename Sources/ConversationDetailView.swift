@@ -253,6 +253,19 @@ struct ConversationDetailView: View {
     }
 
     private func scheduleLiveReplyFlush(retry: Bool = false) {
+        // IOS-18 (Nov 12 2026 audit): VoiceOver never reads the live bubble
+        // (it is accessibilityHidden), and an account that said "No, I
+        // listen" has nobody looking at it: skip the whole-screen re-render
+        // each flush costs. The working line (Part 91.4) hides itself on
+        // `liveReply.isEmpty`, which now stays true on this path, so retire
+        // it here by hand -- once reply text is arriving, the text (spoken
+        // sentence by sentence from live.replyRaw) is the signal. One state
+        // write per tool note, not four a second.
+        if UIAccessibility.isVoiceOverRunning,
+           UserDefaults.standard.string(forKey: SightSetting.key) == SightSetting.nonvisual {
+            if !liveToolNote.isEmpty { liveToolNote = "" }
+            return
+        }
         guard !live.replyFlushScheduled else { return }
         live.replyFlushScheduled = true
         let delay = retry ? 1.0 : liveFlushDelay(forLength: live.replyRaw.count)
@@ -4988,7 +5001,6 @@ private struct MessageRow: View {
     /// button can change"): the phase THIS message is in. While it is the
     /// one speaking, the row's "Play as voice message" action reads
     /// "Pause voice message" (or "Resume..."), driven by `onPauseResume`.
-    @EnvironmentObject private var characterVoice: VoiceService
     let voicePlayback: VoicePlaybackPhase
     let onReadAloud: () -> Void
     let onPauseResume: () -> Void

@@ -15,6 +15,29 @@ enum KadeDateFormatting {
         return f
     }()
 
+    /// IOS-18 (Nov 12 2026 audit): these are built ONCE. Every message row
+    /// asks for its stamp several times per body pass, and building a
+    /// DateFormatter is an ICU job. Configured once and never mutated
+    /// afterwards, so they are safe to read from any thread. Locale is set
+    /// BEFORE the template so the template resolves for the user's region.
+    private static func make(_ configure: (DateFormatter) -> Void) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.timeZone = .autoupdatingCurrent
+        configure(f)
+        return f
+    }
+    private static let shortTime = make { $0.dateStyle = .none; $0.timeStyle = .short }
+    private static let weekday = make { $0.setLocalizedDateFormatFromTemplate("EEEE") }
+    private static let monthDay = make { $0.setLocalizedDateFormatFromTemplate("MMM d") }
+    private static let monthDayYear = make { $0.setLocalizedDateFormatFromTemplate("MMM d, yyyy") }
+    private static let relativeFull: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        f.locale = .autoupdatingCurrent
+        return f
+    }()
+
     static func date(from iso: String) -> Date? {
         isoWithFractional.date(from: iso) ?? isoPlain.date(from: iso)
     }
@@ -22,9 +45,7 @@ enum KadeDateFormatting {
     /// "2 hours ago" — for conversation list rows. VoiceOver reads this naturally.
     static func relative(from iso: String) -> String? {
         guard let d = date(from: iso) else { return nil }
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .full
-        return f.localizedString(for: d, relativeTo: Date())
+        return relativeFull.localizedString(for: d, relativeTo: Date())
     }
 
     /// Part 126 (Sep 4 2026), her ask: "it would be nice if the messages were
@@ -37,27 +58,19 @@ enum KadeDateFormatting {
     static func stamp(from iso: String, now: Date = Date()) -> String? {
         guard let d = date(from: iso) else { return nil }
         let cal = Calendar.current
-        let tf = DateFormatter(); tf.dateStyle = .none; tf.timeStyle = .short
-        let t = tf.string(from: d)
+        let t = shortTime.string(from: d)
         if cal.isDateInToday(d) { return "Today \(t)" }
         if cal.isDateInYesterday(d) { return "Yesterday \(t)" }
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: now)).day ?? 99
-        if days >= 0 && days < 7 {
-            let wf = DateFormatter(); wf.setLocalizedDateFormatFromTemplate("EEEE")
-            return "\(wf.string(from: d)) \(t)"
-        }
-        let df = DateFormatter()
-        df.setLocalizedDateFormatFromTemplate(cal.component(.year, from: d) == cal.component(.year, from: now) ? "MMM d" : "MMM d, yyyy")
-        return "\(df.string(from: d)), \(t)"
+        if days >= 0 && days < 7 { return "\(weekday.string(from: d)) \(t)" }
+        let sameYear = cal.component(.year, from: d) == cal.component(.year, from: now)
+        return "\((sameYear ? monthDay : monthDayYear).string(from: d)), \(t)"
     }
 
     /// A short clock time — for individual message timestamps.
     static func time(from iso: String) -> String? {
         guard let d = date(from: iso) else { return nil }
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f.string(from: d)
+        return shortTime.string(from: d)
     }
 
     /// The current moment in the same shape as `date(from:)` expects back —
