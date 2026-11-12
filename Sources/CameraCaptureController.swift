@@ -390,9 +390,17 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
             format: .RGBA8,
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
-        return stride(from: 0, to: rgba.count, by: 4).map {
-            UInt8((299 * Int(rgba[$0]) + 587 * Int(rgba[$0 + 1]) + 114 * Int(rgba[$0 + 2])) / 1000)
+        // Rec. 601 luma per cell, written out step by step: the one-line
+        // map was too much for the type checker.
+        var grey = [UInt8](repeating: 0, count: width * height)
+        for cell in 0..<(width * height) {
+            let p = cell * 4
+            let red: Int = 299 * Int(rgba[p])
+            let green: Int = 587 * Int(rgba[p + 1])
+            let blue: Int = 114 * Int(rgba[p + 2])
+            grey[cell] = UInt8((red + green + blue) / 1000)
         }
+        return grey
     }
 
     /// DESC-11: still when the mean grey difference is under 6 AND no single
