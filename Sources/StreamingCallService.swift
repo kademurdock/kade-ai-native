@@ -595,15 +595,19 @@ final class StreamingCallService: NSObject, ObservableObject {
     /// caller (`CameraCaptureController`) -- this just base64-wraps and
     /// ships it, matching the server's `{type:'frame', data: <base64 jpeg>}`
     /// contract exactly (`video-sight.js`/`video-live.js` both read it).
-    func sendFrame(jpegData: Data) {
+    /// True when the frame went out (or the gate is off); false when the
+    /// gate dropped it, so the camera's still-scene check (DESC-11) does not
+    /// treat a picture the Spotter never saw as the last one sent.
+    @discardableResult
+    func sendFrame(jpegData: Data) -> Bool {
         guard Self.frameGateOn else {
             sendJSON(["type": "frame", "data": jpegData.base64EncodedString()])
-            return
+            return true
         }
-        guard let task = webSocketTask else { return }
+        guard let task = webSocketTask else { return false }
         let now = Date()
-        if let started = frameSendStartedAt, now.timeIntervalSince(started) < 10 { return }
-        guard now >= frameHoldUntil else { return }
+        if let started = frameSendStartedAt, now.timeIntervalSince(started) < 10 { return false }
+        guard now >= frameHoldUntil else { return false }
         // Base64 has no character JSON must escape, so the message is written directly.
         let text = "{\"type\":\"frame\",\"data\":\"" + jpegData.base64EncodedString() + "\"}"
         frameSendSeq &+= 1
@@ -617,6 +621,7 @@ final class StreamingCallService: NSObject, ObservableObject {
                 self.frameHoldUntil = Date().addingTimeInterval(min(max(took, 0), 4))
             }
         }
+        return true
     }
 
     // MARK: - Ticket

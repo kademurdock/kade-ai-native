@@ -48,7 +48,9 @@ final class CameraCaptureController: ObservableObject {
     /// Called with an already-JPEG-encoded frame, off the main actor's
     /// critical path (only the call itself is hopped to MainActor -- see
     /// `FrameSampler` below for why).
-    var onFrame: ((Data) -> Void)?
+    /// Returns whether the frame really went out (DESC-3's in-flight gate can
+    /// drop it); a dropped frame is not remembered by the still check.
+    var onFrame: ((Data) -> Bool)?
     /// DESC-1 (Nov 12 2026 audit): CallView sets this to "is the call's
     /// voice coming out right now". The auto-flash notice waits for a gap
     /// instead of talking over the Spotter (two voices at once). Unset, the
@@ -103,8 +105,18 @@ final class CameraCaptureController: ObservableObject {
                 MainActor.assumeIsolated { self?.onPaused?(false) }
             },
         ]
-        sampler.onEncodedFrame = { [weak self] jpeg in
-            Task { @MainActor in self?.onFrame?(jpeg) }
+        let sampler = self.sampler
+        let queue = self.queue
+        sampler.onEncodedFrame = { [weak self] jpeg, seq in
+            Task { @MainActor in
+                guard let self, let onFrame = self.onFrame else { return }
+                // DESC-3 + DESC-11: the call dropped it (a frame still in
+                // flight, or the hold-off). Forget it on the capture queue,
+                // so the next frame is compared with what was really sent.
+                if !onFrame(jpeg) {
+                    queue.async { sampler.frameWasDropped(seq: seq) }
+                }
+            }
         }
         sampler.onBrightness = { [weak self] level in
             Task { @MainActor in self?.considerAutoTorch(brightness: level) }
@@ -284,7 +296,21 @@ final class CameraCaptureController: ObservableObject {
 /// `StreamingCallService.pcm16Data` -- see that file's comment for the full
 /// reasoning.
 private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    var onEncodedFrame: ((Data) -> Void)?
+    /// The JPEG and its send number (see `frameWasDropped(seq:)`).
+    var onEncodedFrame: ((Data, Int) -> Void)?
+    /// Goes up every time a frame is handed on as sent; only touched on the
+    /// capture queue.
+    private var sentSeq = 0
+
+    /// Called on the capture queue when the call's gate dropped frame `seq`.
+    /// If no newer frame has been handed on since, the still check forgets
+    /// it: the next checked frame is sent rather than compared with a
+    /// picture the Spotter never received.
+    func frameWasDropped(seq: Int) {
+        guard seq == sentSeq else { return }
+        lastThumb = []
+        lastSentAt = .distantPast
+    }
     /// Mean luminance of the frame that was just checked, 0...1. Reported
     /// on the same cadence as the frame checks (sent or skipped as still)
     /// rather than per raw camera frame: this is a "is the room dark"
@@ -365,7 +391,8 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
         guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: live ? 0.78 : 0.65) else { return }
         lastSentAt = now
         lastThumb = thumb // empty in the plain lane or when the thumbnail failed: the next live frame is sent
-        onEncodedFrame?(jpeg)
+        sentSeq &+= 1
+        onEncodedFrame?(jpeg, sentSeq)
     }
 
     /// DESC-11: a 16x12 grey thumbnail of the frame, for the still check.

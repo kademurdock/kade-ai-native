@@ -204,6 +204,8 @@ struct CallView: View {
             // the bridge forwards to the live vision model (verified against
             // voice-stream.js `type:'frame'` -> forwardFrame).
             camera.onFrame = { jpeg in
+                // Whether the frame really went out (DESC-3 gate), so the
+                // still check (DESC-11) only remembers frames that were sent.
                 callService.sendFrame(jpegData: jpeg)
             }
             // DESC-1 (Nov 12 2026 audit): the auto-flash notice waits for a
