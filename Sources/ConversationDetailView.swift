@@ -4417,6 +4417,7 @@ struct ConversationDetailView: View {
                 files: files,
                 inputSource: inputSource,
                 requestId: turnRequestId,
+                hearReplies: readAloudEnabled,   // GW-6
                 onText: { chunk in
                     guard !chunk.isEmpty else { return }
                     if speechWorkPhase != .reply {

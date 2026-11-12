@@ -115,6 +115,7 @@ final class MessageSendingService: ObservableObject {
         files: [[String: Any]]? = nil,
         inputSource: String? = nil,
         requestId: String? = nil,
+        hearReplies: Bool = false,
         onText: ((String) -> Void)? = nil,
         onThink: ((String) -> Void)? = nil,
         onTool: ((String) -> Void)? = nil,
@@ -131,7 +132,8 @@ final class MessageSendingService: ObservableObject {
             agentId: agentId,
             files: files,
             inputSource: inputSource,
-            requestId: turnRequestId
+            requestId: turnRequestId,
+            hearReplies: hearReplies
         )
         /* Build 212: the second half of the send-prologue bisect (see the
          * long note in ConversationDetailView.performSend). startGeneration
@@ -191,7 +193,8 @@ final class MessageSendingService: ObservableObject {
         agentId: String?,
         files: [[String: Any]]? = nil,
         inputSource: String? = nil,
-        requestId: String? = nil
+        requestId: String? = nil,
+        hearReplies: Bool = false
     ) async throws -> StartResponse {
         var body: [String: Any] = [
             "text": text,
@@ -249,6 +252,14 @@ final class MessageSendingService: ObservableObject {
         // exact userLocation discipline above).
         if UserDefaults.standard.bool(forKey: "kade.speech.whisperMode") {
             body["kadeWhisper"] = true
+        }
+        // GW-6 (Nov 12 2026 audit): this phone speaks the reply as it streams
+        // when Hear replies is on, so it says so. The fork forwards it to the
+        // gateway as kade_live (KADE_SEND_LIVE=0 stops that); the gateway
+        // acts on it only once KADE_SCREEN_LIVE is set. Absent otherwise, so
+        // the body is byte-identical to before. Switch: kade.switch.kadeLive.
+        if hearReplies, KadeAppSwitches.kadeLive {
+            body["kadeLive"] = true
         }
 
         var req = client.request(path: "api/agents/chat/agents", method: "POST", authorized: true)
