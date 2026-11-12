@@ -307,12 +307,112 @@ final class MessageSendingService: ObservableObject {
 
     // MARK: - Phase B: subscribe until `final`
 
-    private struct FinalFlag: Decodable {
+    /// IOS-20 (Nov 12 2026 audit): one SSE event, decoded ONCE, off the main
+    /// actor (it used to be decoded up to five times per line, on main).
+    /// Every field is optional and each top-level key is decoded on its own,
+    /// so one odd field (a final carrying `error: true`, the `created` frame
+    /// whose `message` is an object) can never make the whole frame
+    /// unreadable. Fail-soft, exactly as before: an unparseable frame is just
+    /// skipped.
+    private struct StreamFrame: Decodable {
+        struct Part: Decodable { let type: String?; let think: String?; let text: String? }
+        struct Delta: Decodable { let content: [Part]? }
+        struct ToolCall: Decodable {
+            struct Fn: Decodable { let name: String? }
+            let name: String?
+            let function: Fn?
+            var toolName: String? { name ?? function?.name }
+        }
+        struct StepDetails: Decodable { let type: String?; let tool_calls: [ToolCall]? }
         struct Reply: Decodable { let messageId: String?; let conversationId: String? }
+        struct Payload: Decodable {
+            let delta: Delta?
+            let stepDetails: StepDetails?
+            let type: String?
+            let toolCallId: String?
+            let messageId: String?
+            let conversationId: String?
+            let memory: MemoryReceipt.Change?
+
+            private enum CodingKeys: String, CodingKey {
+                case delta, stepDetails, type, toolCallId, messageId, conversationId, memory
+            }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                delta = try? c.decodeIfPresent(Delta.self, forKey: .delta)
+                stepDetails = try? c.decodeIfPresent(StepDetails.self, forKey: .stepDetails)
+                type = try? c.decodeIfPresent(String.self, forKey: .type)
+                toolCallId = try? c.decodeIfPresent(String.self, forKey: .toolCallId)
+                messageId = try? c.decodeIfPresent(String.self, forKey: .messageId)
+                conversationId = try? c.decodeIfPresent(String.self, forKey: .conversationId)
+                memory = try? c.decodeIfPresent(MemoryReceipt.Change.self, forKey: .memory)
+            }
+        }
+
+        let event: String?
         let final: Bool?
         let responseMessage: Reply?
+        let data: Payload?
+        /// Only meaningful on an SSE `event: error` line.
+        let errorText: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case event, final, responseMessage, data, error, message
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            event = try? c.decodeIfPresent(String.self, forKey: .event)
+            final = try? c.decodeIfPresent(Bool.self, forKey: .final)
+            responseMessage = try? c.decodeIfPresent(Reply.self, forKey: .responseMessage)
+            data = try? c.decodeIfPresent(Payload.self, forKey: .data)
+            let err = try? c.decodeIfPresent(String.self, forKey: .error)
+            let msg = try? c.decodeIfPresent(String.self, forKey: .message)
+            errorText = err ?? msg
+        }
     }
-    private struct ErrorFrame: Codable { let error: String?; let message: String? }
+
+    /// The frames `waitForFinal` acts on. Everything else on the wire
+    /// (on_run_step_delta, created, step-completed...) is dropped in the
+    /// worker so it never costs a main-actor hop. A future event type must
+    /// be added here or it is dropped.
+    nonisolated private static let handledStreamEvents: Set<String> = [
+        "on_reasoning_delta", "on_message_delta", "on_run_step", "attachment",
+    ]
+
+    /// Bytes -> lines -> decoded frames, entirely off the main actor.
+    /// `sseEvent` is the SSE `event:` line ("message" unless the server named one).
+    nonisolated private static func frames(from bytes: URLSession.AsyncBytes)
+        -> AsyncThrowingStream<(sseEvent: String, frame: StreamFrame?), Error> {
+        AsyncThrowingStream { continuation in
+            let worker = Task.detached(priority: .userInitiated) {
+                let decoder = JSONDecoder()
+                var currentEvent = "message"
+                do {
+                    for try await rawLine in bytes.lines {
+                        if rawLine.hasPrefix("event:") {
+                            currentEvent = String(rawLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        } else if rawLine.hasPrefix("data:") {
+                            let jsonText = String(rawLine.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                            let frame = try? decoder.decode(StreamFrame.self, from: Data(jsonText.utf8))
+                            let sseEvent = currentEvent
+                            currentEvent = "message"
+                            if sseEvent == "error" {
+                                // Always delivered, even unparseable: the caller must throw.
+                                continuation.yield((sseEvent, frame))
+                            } else if let frame,
+                                      frame.final == true || handledStreamEvents.contains(frame.event ?? "") {
+                                continuation.yield((sseEvent, frame))
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in worker.cancel() }
+        }
+    }
 
     /// Session 35 encore (her ask: "see the deepthink bubble as it's
     /// generating... see the thoughts populate as they stream"): the
@@ -330,22 +430,6 @@ final class MessageSendingService: ObservableObject {
     /// turns into a spoken + felt cue. Fail-soft: unparseable = skipped.
     static let memoryArtifactNotification = Notification.Name("kadeMemoryArtifact")
 
-    private struct DeltaFrame: Decodable {
-        struct DataBox: Decodable {
-            struct Delta: Decodable {
-                struct Part: Decodable {
-                    let type: String?
-                    let think: String?
-                    let text: String?
-                }
-                let content: [Part]?
-            }
-            let delta: Delta?
-        }
-        let event: String?
-        let data: DataBox?
-    }
-
     /* PART 91.4 — WHY THE PHONE GOES QUIET WHEN AN AGENT USES A TOOL.
      *
      * This stream handled exactly three events: on_reasoning_delta,
@@ -358,24 +442,8 @@ final class MessageSendingService: ObservableObject {
      * minutes of silence on Kade's phone.
      *
      * Silence and death are indistinguishable by ear. That rule is written all
-     * over this platform, and this was the last place still breaking it. */
-    private struct RunStepFrame: Decodable {
-        struct DataBox: Decodable {
-            struct StepDetails: Decodable {
-                struct ToolCall: Decodable {
-                    struct Fn: Decodable { let name: String? }
-                    let name: String?
-                    let function: Fn?
-                    var toolName: String? { name ?? function?.name }
-                }
-                let type: String?
-                let tool_calls: [ToolCall]?
-            }
-            let stepDetails: StepDetails?
-        }
-        let event: String?
-        let data: DataBox?
-    }
+     * over this platform, and this was the last place still breaking it.
+     * (Its frame is StreamFrame's `data.stepDetails` since IOS-20.) */
 
     /// Tool names are plumbing (`startHarnessRun_action_a2FkZS1oYX`,
     /// `kade_read_page`). This turns one into something worth hearing.
@@ -447,86 +515,62 @@ final class MessageSendingService: ObservableObject {
         }
         guard http.statusCode == 200 else { throw SendError.server(http.statusCode) }
 
-        var currentEvent = "message"
-        for try await rawLine in bytes.lines {
-            if rawLine.hasPrefix("event:") {
-                currentEvent = String(rawLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-            } else if rawLine.hasPrefix("data:") {
-                let jsonText = String(rawLine.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                let jsonData = Data(jsonText.utf8)
+        /* IOS-20 (Nov 12 2026 audit): line splitting and JSON decoding happen
+         * in a detached worker (one decode per event, was up to five on the
+         * main actor). Only frames this loop acts on arrive here. */
+        for try await (sseEvent, frame) in Self.frames(from: bytes) {
+            if sseEvent == "error" {
+                throw SendError.streamError(frame?.errorText ?? "The assistant hit an error.")
+            }
+            guard let frame else { continue }
 
-                if currentEvent == "error" {
-                    let parsed = try? decoder.decode(ErrorFrame.self, from: jsonData)
-                    let message = parsed?.error ?? parsed?.message ?? "The assistant hit an error."
-                    throw SendError.streamError(message)
+            if frame.final == true {
+                guard frame.responseMessage?.conversationId == streamId else { return nil }
+                return frame.responseMessage?.messageId
+            }
+
+            switch frame.event {
+            case "on_reasoning_delta":
+                guard let onThink else { break }
+                for part in frame.data?.delta?.content ?? [] where part.type == "think" {
+                    if let think = part.think, !think.isEmpty { onThink(think) }
                 }
-
-                if let flag = try? decoder.decode(FinalFlag.self, from: jsonData), flag.final == true {
-                    guard flag.responseMessage?.conversationId == streamId else { return nil }
-                    return flag.responseMessage?.messageId
-                }
-
-                if let onThink,
-                   let frame = try? decoder.decode(DeltaFrame.self, from: jsonData),
-                   frame.event == "on_reasoning_delta",
-                   let parts = frame.data?.delta?.content {
-                    for part in parts where part.type == "think" {
-                        if let think = part.think, !think.isEmpty {
-                            onThink(think)
-                        }
-                    }
-                }
-
+            case "on_message_delta":
                 // Aug 7 2026 (her "even with deep think off it takes forever...
                 // still seems like she's thinking"): the reply TEXT was always
-                // streaming on this wire too (on_message_delta frames) — native
-                // just never rendered it, so a 40-second essay looked like 40
-                // seconds of thinking. onText hands each text chunk up the
-                // moment it arrives; the chat view grows a live reply from it.
-                if let onText,
-                   let frame = try? decoder.decode(DeltaFrame.self, from: jsonData),
-                   frame.event == "on_message_delta",
-                   let parts = frame.data?.delta?.content {
-                    for part in parts where part.type == "text" {
-                        if let text = part.text, !text.isEmpty {
-                            onText(text)
-                        }
-                    }
+                // streaming on this wire too (on_message_delta frames). onText
+                // hands each text chunk up the moment it arrives; the chat view
+                // grows a live reply from it.
+                guard let onText else { break }
+                for part in frame.data?.delta?.content ?? [] where part.type == "text" {
+                    if let text = part.text, !text.isEmpty { onText(text) }
                 }
-
+            case "on_run_step":
                 /* The tool announcement: one line per tool the agent picks
                  * up, so a long chain reads as progress instead of a hang. */
-                if let onTool,
-                   let frame = try? decoder.decode(RunStepFrame.self, from: jsonData),
-                   frame.event == "on_run_step",
-                   let calls = frame.data?.stepDetails?.tool_calls {
-                    for call in calls {
-                        if let n = call.toolName, !n.isEmpty {
-                            onTool(Self.spokenToolName(n))
-                        }
-                    }
+                guard let onTool else { break }
+                for call in frame.data?.stepDetails?.tool_calls ?? [] {
+                    if let n = call.toolName, !n.isEmpty { onTool(Self.spokenToolName(n)) }
                 }
-
-                if let frame = try? decoder.decode(ReceiptAttachmentFrame.self, from: jsonData),
-                   frame.event == "attachment", let receipt = frame.data,
-                   receipt.conversationId == streamId,
-                   let messageId = receipt.messageId {
+            case "attachment":
+                if let d = frame.data, d.conversationId == streamId, let messageId = d.messageId {
+                    let receipt = MemoryReceipt(type: d.type, toolCallId: d.toolCallId, messageId: d.messageId,
+                                                conversationId: d.conversationId, memory: d.memory)
                     var tracker = MemoryReceiptTracker(
                         scope: .init(conversationId: streamId, messageId: messageId), seen: liveMemoryCalls
                     )
                     for verified in tracker.consume([receipt]) { announceMemoryReceipt(verified) }
                     liveMemoryCalls = tracker.seen
                 }
-
-                currentEvent = "message"
+            default:
+                break
             }
         }
+        // A cancelled consumer makes AsyncThrowingStream end quietly (nil, no
+        // throw). Rethrow as the cancel the chat view's calm "Stopped." path
+        // catches, never as streamEndedWithoutFinal (that one shows Retry).
+        if Task.isCancelled { throw URLError(.cancelled) }
         throw SendError.streamEndedWithoutFinal
-    }
-
-    private struct ReceiptAttachmentFrame: Decodable {
-        let event: String?
-        let data: MemoryReceipt?
     }
     private struct ReceiptMessages: Decodable {
         struct Reply: Decodable {
