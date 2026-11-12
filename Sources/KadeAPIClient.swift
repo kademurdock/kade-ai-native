@@ -80,16 +80,116 @@ final class KadeAPIClient: ObservableObject {
     /// The pacing clock, for a caller that sends on its own session. Auth
     /// calls, data calls and the streamed voice lane all wait on the same one
     /// — that is the whole point of the note at the top of this file.
-    func awaitPacingGate() async {
-        await waitForPacingGate()
+    /// Phase 3 A3: pass the lane the request belongs to (the streamed voice
+    /// lane passes `.speech`); with the server's legacy numbers, or with no
+    /// config at all, every lane shares the one clock as before.
+    func awaitPacingGate(_ lane: PacingLane = .standard) async {
+        await waitForPacingGate(lane: lane)
     }
 
-    /// How long a send started right now would wait at the pacing gate.
-    /// Read-only. The Clubhouse library player (Sep 29 2026) starts its
-    /// round-trip clock after this wait, so the gate is not mistaken for
-    /// network delay when it lines the room's timeline up.
+    /// How long a standard-lane send started right now would wait at the
+    /// pacing gate. Read-only. The Clubhouse library player (Sep 29 2026)
+    /// starts its round-trip clock after this wait, so the gate is not
+    /// mistaken for network delay when it lines the room's timeline up.
     var pacingWaitRemaining: TimeInterval {
-        max(0, minGap - Date().timeIntervalSince(lastRequestAt))
+        if let rules = activePacing, rules.mode == "lanes", let gap = rules.gaps[PacingLane.standard.rawValue] {
+            guard gap > 0 else { return 0 }
+            return max(0, (laneNext[PacingLane.standard.rawValue] ?? 0) - ProcessInfo.processInfo.systemUptime)
+        }
+        return max(0, minGap - Date().timeIntervalSince(lastRequestAt))
+    }
+
+    // MARK: - Phase 3 A3: the server's pacing numbers (Nov 12 2026)
+
+    /// The fork's request budgets, named as GET /api/kade/client-config names them.
+    enum PacingLane: String { case message, auth, speech, bulk, standard }
+
+    /// What the server answered, kept on the phone so the next launch starts
+    /// with it. `mode` "legacy" (today's answer) means one shared 1.5 s clock,
+    /// exactly as before; "lanes" means one clock per lane with the server's
+    /// gaps. Paths in `unpaced` (the stream subscribe and Stop) never wait.
+    private struct PacingRules: Codable {
+        var mode: String
+        var gaps: [String: Double]
+        var unpaced: [String]
+    }
+    private struct ClientConfigBody: Decodable {
+        struct Lane: Decodable { let minGapMs: Double? }
+        struct Pacing: Decodable { let mode: String?; let lanes: [String: Lane]?; let unpaced: [String]? }
+        let pacing: Pacing?
+    }
+    nonisolated private static let pacingCacheKey = "kade.clientConfig.pacing"
+    private var pacingRules: PacingRules? = KadeAPIClient.cachedPacingRules()
+    private var clientConfigAsked = false
+    /// Next free slot per lane, on the monotonic uptime clock (lanes mode only).
+    private var laneNext: [String: TimeInterval] = [:]
+
+    /// The rules in force: none while the switch is off or nothing was ever cached.
+    private var activePacing: PacingRules? {
+        KadeAppSwitches.clientConfig ? pacingRules : nil
+    }
+
+    nonisolated private static func cachedPacingRules() -> PacingRules? {
+        guard let data = UserDefaults.standard.data(forKey: pacingCacheKey) else { return nil }
+        return try? JSONDecoder().decode(PacingRules.self, from: data)
+    }
+
+    /// Reads the server's pacing once per launch (after sign-in). A failure
+    /// keeps whatever was cached, or the 1.5 s floor with nothing cached.
+    func loadClientConfig() async {
+        guard KadeAppSwitches.clientConfig, !clientConfigAsked else { return }
+        clientConfigAsked = true
+        let req = request(path: "api/kade/client-config", authorized: true, timeout: 20)
+        guard let (data, http) = try? await send(req), http.statusCode == 200,
+              let body = try? JSONDecoder().decode(ClientConfigBody.self, from: data),
+              let pacing = body.pacing else {
+            clientConfigAsked = false   // ask again on the next sign-in or launch
+            return
+        }
+        var gaps: [String: Double] = [:]
+        for (name, lane) in pacing.lanes ?? [:] {
+            // Never below a tenth of a second, never above five seconds.
+            if let ms = lane.minGapMs, ms.isFinite { gaps[name] = min(5, max(0.1, ms / 1000)) }
+        }
+        let rules = PacingRules(mode: pacing.mode ?? "legacy", gaps: gaps,
+                                unpaced: (pacing.unpaced ?? []).filter { $0.hasPrefix("/") })
+        pacingRules = rules
+        if let encoded = try? JSONEncoder().encode(rules) {
+            UserDefaults.standard.set(encoded, forKey: Self.pacingCacheKey)
+        }
+        KadeBreadcrumbs.drop("client config: pacing \(rules.mode), \(rules.unpaced.count) unpaced paths")
+    }
+
+    /// The lane a request belongs to, by its path.
+    private static func lane(for request: URLRequest) -> PacingLane {
+        let path = request.url?.path ?? ""
+        if path == "/api/agents/chat/agents" { return .message }
+        if path.hasPrefix("/api/auth/") { return .auth }
+        if path.hasPrefix("/api/files/speech/") { return .speech }
+        if path.hasPrefix("/api/kade/arcade") || path.hasPrefix("/api/kade/agent-body") { return .bulk }
+        return .standard
+    }
+
+    private func waitForPacingGate(for request: URLRequest) async {
+        if let rules = activePacing, let path = request.url?.path,
+           rules.unpaced.contains(where: { path.hasPrefix($0) }) {
+            return   // the stream subscribe and Stop never wait
+        }
+        await waitForPacingGate(lane: Self.lane(for: request))
+    }
+
+    private func waitForPacingGate(lane: PacingLane) async {
+        guard let rules = activePacing, rules.mode == "lanes", let gap = rules.gaps[lane.rawValue] else {
+            await waitForPacingGate()   // legacy: one shared clock, exactly as before
+            return
+        }
+        // Lanes: reserve this lane's next slot BEFORE sleeping, so callers
+        // that arrive together queue one gap apart.
+        let now = ProcessInfo.processInfo.systemUptime
+        let slot = max(now, laneNext[lane.rawValue] ?? 0)
+        laneNext[lane.rawValue] = slot + gap
+        let wait = slot - now
+        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
     }
 
     /// The one choke point every buffered request goes through: enforce the
@@ -98,7 +198,7 @@ final class KadeAPIClient: ObservableObject {
     /// that shares this same gate and session.
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         try rejectOfflineHostRequest()
-        await waitForPacingGate()
+        await waitForPacingGate(for: request)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -108,7 +208,7 @@ final class KadeAPIClient: ObservableObject {
         guard http.statusCode == 401,
               let retry = await requestWithFreshToken(request) else { return (data, http) }
         try Task.checkCancellation()
-        await waitForPacingGate()
+        await waitForPacingGate(for: retry)
         let (data2, response2) = try await session.data(for: retry)
         guard let http2 = response2 as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -122,7 +222,7 @@ final class KadeAPIClient: ObservableObject {
     func sendUpload(_ request: URLRequest, resourceTimeout: TimeInterval) async throws -> (Data, HTTPURLResponse) {
         try rejectOfflineHostRequest()
         try Task.checkCancellation()
-        await waitForPacingGate()
+        await waitForPacingGate(for: request)
         try Task.checkCancellation()
         let config = Self.baseConfiguration()
         config.timeoutIntervalForResource = resourceTimeout
@@ -135,7 +235,7 @@ final class KadeAPIClient: ObservableObject {
         guard http.statusCode == 401,
               let retry = await requestWithFreshToken(request) else { return (data, http) }
         try Task.checkCancellation()
-        await waitForPacingGate()
+        await waitForPacingGate(for: retry)
         let (data2, response2) = try await uploadSession.data(for: retry)
         try Task.checkCancellation()
         guard let http2 = response2 as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -149,7 +249,7 @@ final class KadeAPIClient: ObservableObject {
     /// `send(_:)`.
     func streamBytes(_ request: URLRequest) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
         try rejectOfflineHostRequest()
-        await waitForPacingGate()
+        await waitForPacingGate(for: request)
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             bytes.task.cancel()
@@ -160,7 +260,7 @@ final class KadeAPIClient: ObservableObject {
               let retry = await requestWithFreshToken(request) else { return (bytes, http) }
         bytes.task.cancel()               // the 401 connection is no use to anyone
         try Task.checkCancellation()
-        await waitForPacingGate()
+        await waitForPacingGate(for: retry)
         let (bytes2, response2) = try await session.bytes(for: retry)
         guard let http2 = response2 as? HTTPURLResponse else {
             bytes2.task.cancel()
@@ -198,7 +298,7 @@ final class KadeAPIClient: ObservableObject {
         let task = Task<RefreshOutcome, Never> { @MainActor in
             var req = self.request(path: "api/auth/refresh", method: "POST")
             req.timeoutInterval = 15
-            await self.waitForPacingGate()
+            await self.waitForPacingGate(lane: .auth)
             guard let (data, response) = try? await self.session.data(for: req),
                   let http = response as? HTTPURLResponse else {
                 self.refreshBlockedUntil = Date().addingTimeInterval(5)

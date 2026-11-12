@@ -76,7 +76,7 @@ final class StreamingClipFetch: NSObject, URLSessionDataDelegate, @unchecked Sen
                 self.finish(ok: false)
                 return
             }
-            await client.awaitPacingGate()
+            await client.awaitPacingGate(.speech)   // Phase 3 A3: the speech lane
             self.lock.lock()
             let cancelled = self.finished
             if !cancelled {

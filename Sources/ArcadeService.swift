@@ -790,7 +790,7 @@ final class ArcadeService: ObservableObject {
         let session = client.makeAuxiliarySession(delegate: delegate, timeout: 60)
         defer { session.finishTasksAndInvalidate() }
         // One pacing wait per pack, not per file (KadeAPIClient's note).
-        await client.awaitPacingGate()
+        await client.awaitPacingGate(.bulk)   // Phase 3 A3: the arcade lane
         try await delegate.run(session: session, url: url)
     }
 
