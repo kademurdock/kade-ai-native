@@ -161,15 +161,27 @@ struct KadeAIApp: App {
                     switch newState {
                     case .signedIn(let user):
                         pushService.setUserId(user.id)
+                        // Phase 3 A3: the server's pacing numbers, once per
+                        // launch. Decision 24: her voice settings from her
+                        // account (speech never waits on either).
+                        Task {
+                            await client.loadClientConfig()
+                            ListenerVoiceSync.shared.attach(client)
+                            await ListenerVoiceSync.shared.sync()
+                        }
                     case .signedOut:
                         pushService.setUserId(nil)
+                        ListenerVoiceSync.shared.signedOut()
                     default:
                         break
                     }
                 }
                 .onChange(of: scenePhase) { _, phase in
                     guard !offlineCharacterReview else { return }
-                    if phase == .active { pushService.refreshRegistration() }
+                    if phase == .active {
+                        pushService.refreshRegistration()
+                        ListenerVoiceSync.shared.foregrounded()   // Decision 24, at most once a minute
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .kadeAccessTokenChanged)) { _ in
                     guard !offlineCharacterReview else { return }

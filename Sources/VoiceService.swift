@@ -231,7 +231,11 @@ final class VoiceService: NSObject, ObservableObject {
     /// One voice speed for every voice (Oct 16 2026). Generation preferences
     /// apply to the next request; they never stretch playing audio.
     @Published var voicePace: String = VoiceService.loadVoicePace() {
-        didSet { UserDefaults.standard.set(voicePace, forKey: Self.voicePaceKey) }
+        didSet {
+            UserDefaults.standard.set(voicePace, forKey: Self.voicePaceKey)
+            // Decision 24: her change follows her account (never awaited).
+            ListenerVoiceSync.shared.paceChanged()
+        }
     }
     private static let voicePaceKey = "kade.voiceMessage.pace"
     /// First run after the merge: the older Fish pace and Classic rate
@@ -275,6 +279,8 @@ final class VoiceService: NSObject, ObservableObject {
         } else {
             UserDefaults.standard.removeObject(forKey: deliveryKey(agentId))
         }
+        // Decision 24: only this character's delivery is sent.
+        ListenerVoiceSync.shared.deliveryChanged(agentId: agentId)
     }
 
     // MARK: Filler words and little sounds (Oct 16 2026)
@@ -282,7 +288,10 @@ final class VoiceService: NSObject, ObservableObject {
     /// Settings > Voice & Audio > "Filler words and little sounds", on by
     /// default. Bound by the Settings switch and the chat's Voice speed list.
     @Published var fillersOn: Bool = VoiceService.fillersSwitchOn {
-        didSet { UserDefaults.standard.set(fillersOn, forKey: VoiceFillerPolicy.defaultsKey) }
+        didSet {
+            UserDefaults.standard.set(fillersOn, forKey: VoiceFillerPolicy.defaultsKey)
+            ListenerVoiceSync.shared.fillersChanged()   // Decision 24
+        }
     }
     /// Read when each request is built, so every VoiceService (the voice
     /// picker stands up its own) follows the switch the moment it moves.
@@ -420,6 +429,8 @@ final class VoiceService: NSObject, ObservableObject {
     private var micObserver: NSObjectProtocol?
     /// True while THIS instance's recording holds KadeAudioLanes' recording lane.
     private var holdsRecordingLane = false
+    /// Decision 24: values from her account were written to UserDefaults.
+    private var listenerPrefsObserver: NSObjectProtocol?
 
     struct VoiceError: Error {
         let message: String
@@ -475,6 +486,21 @@ final class VoiceService: NSObject, ObservableObject {
             let who = note.userInfo?["who"] as? String ?? "the microphone"
             MainActor.assumeIsolated { self?.yieldToMicrophone(who) }
         }
+        // Decision 24: her account's speed and filler switch reach every
+        // VoiceService at once (posted on the main thread, delivered
+        // synchronously while ListenerVoiceSync.applying is true, so these
+        // writes are not sent back as her change).
+        listenerPrefsObserver = NotificationCenter.default.addObserver(
+            forName: ListenerVoiceSync.applied, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let pace = VoiceService.loadVoicePace()
+                if self.voicePace != pace { self.voicePace = pace }
+                let fillers = VoiceService.fillersSwitchOn
+                if self.fillersOn != fillers { self.fillersOn = fillers }
+            }
+        }
         // Warm the voice catalog at launch so the first reply's speed choice
         // can use the provider map without waiting for it.
         Task { await VoiceCatalog.shared.prefetch() }
@@ -486,6 +512,7 @@ final class VoiceService: NSObject, ObservableObject {
         if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
         if let mediaResetObserver { NotificationCenter.default.removeObserver(mediaResetObserver) }
         if let micObserver { NotificationCenter.default.removeObserver(micObserver) }
+        if let listenerPrefsObserver { NotificationCenter.default.removeObserver(listenerPrefsObserver) }
         // Never strand the lane: a leaked claim would silence every reply.
         if holdsRecordingLane { Task { @MainActor in KadeAudioLanes.endRecording("a recording (released at deinit)") } }
         // A service freed mid-clip must not hold the speech floor forever.
