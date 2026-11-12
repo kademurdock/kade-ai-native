@@ -164,6 +164,8 @@ final class AuthService: ObservableObject {
         if let encoded = try? JSONEncoder().encode(user) {
             Keychain.set(encoded, for: .user)
         }
+        // IOS-19: PushService registers again with the fresh token.
+        NotificationCenter.default.post(name: .kadeAccessTokenChanged, object: nil)
     }
 
     private struct LoginResponse: Codable {
@@ -187,4 +189,11 @@ enum AuthError: Error {
             return "The server returned an error (\(code)). Try again in a moment."
         }
     }
+}
+
+extension Notification.Name {
+    /// IOS-19 (Nov 12 2026 audit): a new access token was stored (sign-in or
+    /// refresh). PushService registers again on it, so the bridge link carries
+    /// a token that proves the user.
+    static let kadeAccessTokenChanged = Notification.Name("kadeAccessTokenChanged")
 }

@@ -33,10 +33,22 @@ final class PushService: ObservableObject {
     private var lastSentUserId: String?
     private var lastSentRingtone: String?
     private var isSyncing = false
+    /// IOS-19 (Nov 12 2026 audit): a sync was asked for while a request was
+    /// in flight. A failed request (a 401 on an access token that was
+    /// refreshed meanwhile) then goes round once more instead of waiting for
+    /// the next foreground.
+    private var resyncRequested = false
     private let send: (URLRequest) async throws -> (Data, URLResponse)
+    /// IOS-19: the signed-in user's access token. The bridge links this
+    /// device to the user the token proves, not to the id in the body.
+    /// Defaults to none so this file still compiles alone
+    /// (run-push-tests.sh); KadeAIApp passes the Keychain reader.
+    private let bearer: () -> String?
 
-    init(send: @escaping (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }) {
+    init(send: @escaping (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) },
+         bearer: @escaping () -> String? = { nil }) {
         self.send = send
+        self.bearer = bearer
     }
     /// Part 75: the Settings agent-call ringtone pick, stored here so the
     /// bridge learns the user's DEFAULT ring on the same register call.
@@ -64,35 +76,43 @@ final class PushService: ObservableObject {
     }
 
     private func syncIfNeeded() async {
-        guard !isSyncing else { return }
+        guard !isSyncing else { resyncRequested = true; return }
         isSyncing = true
         defer { isSyncing = false }
         while let token = deviceTokenHex {
+            resyncRequested = false
             let sendingUserId = userId
             let ringtone = UserDefaults.standard.string(forKey: Self.ringtoneDefaultsKey)
             if token == lastSentToken && sendingUserId == lastSentUserId && ringtone == lastSentRingtone { return }
             var req = URLRequest(url: bridgeURL)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // IOS-19: only a LINK needs proof. Sign-out sends none (the
+            // token is already gone).
+            if sendingUserId != nil, let jwt = bearer(), !jwt.isEmpty {
+                req.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+            }
             var body: [String: Any] = ["token": token, "platform": "ios"]
             if let sendingUserId { body["userId"] = sendingUserId }
             else { body["userId"] = NSNull() }
             if let ringtone { body["ringtone"] = ringtone }
             req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            var acknowledged = false
             do {
                 let (_, response) = try await send(req)
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     lastSentToken = token
                     lastSentUserId = sendingUserId
                     lastSentRingtone = ringtone
-                } else {
-                    return
+                    acknowledged = true
                 }
                 // Any other status: fail-soft, next foreground/state-change retries.
             } catch {
                 // Offline or bridge unreachable: fail-soft, retried on next change.
-                return
             }
+            // Refused or unreachable: stop, unless something asked again while
+            // this request was out (a fresh access token, a state change).
+            if !acknowledged && !resyncRequested { return }
             // State may have changed during the request. Send its latest value
             // next; an older login response must never acknowledge a later logout.
         }

@@ -42,6 +42,35 @@ import Foundation
         service.refreshRegistration()
         for _ in 0..<100 { await Task.yield() }
         precondition(requests.count == 3, "Acknowledged state must not be sent again")
-        print("Push registration tests passed: sign-out, account switch, ordering, and deduplication")
+        precondition(requests[0].value(forHTTPHeaderField: "Authorization") == nil,
+                     "No bearer reader means no Authorization header")
+
+        // IOS-19 (Nov 12 2026 audit): a link carries the signed-in user's
+        // bearer; a sign-out never does.
+        var proofRequests: [URLRequest] = []
+        let proven = PushService(send: { request in
+            proofRequests.append(request)
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, bearer: { "tok" })
+        func waitForProof(_ count: Int) async {
+            for _ in 0..<10000 {
+                if proofRequests.count == count { return }
+                await Task.yield()
+            }
+            fatalError("Expected \(count) proof requests, got \(proofRequests.count)")
+        }
+        proven.setUserId("linked-account")
+        proven.setDeviceToken(Data([4,5,6]))
+        await waitForProof(1)
+        for _ in 0..<100 { await Task.yield() }
+        precondition(proofRequests[0].value(forHTTPHeaderField: "Authorization") == "Bearer tok",
+                     "A link must carry the signed-in user's bearer")
+        proven.setUserId(nil)
+        await waitForProof(2)
+        let signOutBody = try! JSONSerialization.jsonObject(with: proofRequests[1].httpBody!) as! [String: Any]
+        precondition(signOutBody["userId"] is NSNull, "Sign-out must explicitly clear the server link")
+        precondition(proofRequests[1].value(forHTTPHeaderField: "Authorization") == nil,
+                     "Sign-out must not send a bearer")
+        print("Push registration tests passed: sign-out, account switch, ordering, deduplication, and link proof")
     }
 }

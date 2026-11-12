@@ -29,7 +29,9 @@ struct KadeAIApp: App {
     @StateObject private var puppetStore: PuppetStore
     // Phase 6: no KadeAPIClient dependency (a different host, see its own
     // doc comment), so a plain default-initialized StateObject is enough.
-    @StateObject private var pushService = PushService()
+    // IOS-19 (Nov 12 2026 audit): the bridge links this device to the user
+    // the access token proves (log mode first; enforce later).
+    @StateObject private var pushService = PushService(bearer: { Keychain.string(for: .accessToken) })
     // Session 17 (Kade: "a native way to access settings like speech and
     // whatnot. Accessability low vision stuff like that.") -- on-device
     // only, no server dependency either, same reasoning as pushService.
@@ -168,6 +170,12 @@ struct KadeAIApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     guard !offlineCharacterReview else { return }
                     if phase == .active { pushService.refreshRegistration() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .kadeAccessTokenChanged)) { _ in
+                    guard !offlineCharacterReview else { return }
+                    // IOS-19: the launch register often carries an expired
+                    // access token (15 minutes). Try again with the fresh one.
+                    pushService.refreshRegistration()
                 }
         }
     }
