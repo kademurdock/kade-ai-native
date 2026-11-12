@@ -4179,6 +4179,11 @@ struct ConversationDetailView: View {
     ) async {
         // Retry and Regenerate bypass send(); block them before any send state changes.
         guard !attachmentIsBusy else { return }
+        // IOS-16 Part A (Nov 12 2026 audit): a declared background task so a
+        // phone locked right after sending does not freeze the turn before
+        // its first spoken word. Held until a clip is really sounding.
+        let backgroundTurn = KadeBackgroundTurn.begin()
+        defer { backgroundTurn.endWhenSpeechSettles(voiceService, hearReplies: readAloudEnabled) }
         failedAttempt = nil
         // Bug #6 (Sep 29 2026): this turn's request id, agent and attachment
         // are fixed here, once, so a failure can hand the exact same three
