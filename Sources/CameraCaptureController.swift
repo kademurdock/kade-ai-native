@@ -275,8 +275,9 @@ final class CameraCaptureController: ObservableObject {
 /// Deliberately NOT @MainActor: `AVCaptureVideoDataOutput` invokes this
 /// delegate synchronously on the plain background `DispatchQueue` given to
 /// `setSampleBufferDelegate`, always serially (one frame at a time, never
-/// concurrently with itself) -- so a plain, non-actor-isolated stored
-/// `lastSentAt` is safe here without extra locking. Keeping the throttle
+/// concurrently with itself) -- so the plain, non-actor-isolated stored
+/// `lastSentAt`, `lastCheckedAt`, `lastThumb` and `wasLive` are safe here
+/// without extra locking. Keeping the throttle
 /// check AND the (comparatively expensive) JPEG encode entirely off the
 /// main actor, and only crossing over with the final small `Data`, mirrors
 /// the same isolation-boundary fix applied to the mic tap in
@@ -284,13 +285,35 @@ final class CameraCaptureController: ObservableObject {
 /// reasoning.
 private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onEncodedFrame: ((Data) -> Void)?
-    /// Mean luminance of the frame that was just encoded, 0...1. Reported
-    /// on the SAME 2-second cadence as the frames themselves rather than
-    /// per raw camera frame: this is a "is the room dark" question, not a
+    /// Mean luminance of the frame that was just checked, 0...1. Reported
+    /// on the same cadence as the frame checks (sent or skipped as still)
+    /// rather than per raw camera frame: this is a "is the room dark"
+    /// question, not a
     /// light meter, and running a reduction filter 30 times a second to
     /// answer it would burn battery on a call that is already expensive.
     var onBrightness: ((Double) -> Void)?
     private var lastSentAt: Date = .distantPast
+    /// DESC-11 (Nov 12 2026 audit, her choice: skip same pictures): the
+    /// cadence clock. `lastSentAt` is now the key-frame clock only.
+    private var lastCheckedAt: Date = .distantPast
+    /// The last frame SENT while live, as a 16x12 grey thumbnail. While live,
+    /// a frame that barely differs from it is skipped unless 3 s have
+    /// passed: Gemini Live keeps every frame in its context and bills the
+    /// whole context each turn, so a still scene no longer pays for the same
+    /// picture. Emptied whenever live turns on or off, so a new Spotter
+    /// always gets a picture straight away. Only touched on the capture
+    /// queue, like `lastSentAt`.
+    private var lastThumb: [UInt8] = []
+    private var wasLive = false
+    private let stillKeyframe: TimeInterval = 3
+    /// Mean absolute grey difference (0...255) under which the whole picture counts as unchanged.
+    private let stillDifference = 6
+    /// ...and no single cell may differ by this much: a finger on the page or a dropped pill
+    /// changes a few cells a lot and the mean hardly at all.
+    private let stillCellDifference = 32
+    /// Kill switch, read once per call, no build needed on a test device:
+    /// UserDefaults `kade.spotter.skipStillFrames` = false sends every frame.
+    private let skipStillFrames = UserDefaults.standard.object(forKey: "kade.spotter.skipStillFrames") as? Bool ?? true
     /// Aug 4 2026 (her go: "fix frames"): while Spotter/Live is actually ON,
     /// frames flow at ~1.4 per second instead of one every two -- follow-the-
     /// action help (reading mail page by page, tracking a dropped thing)
@@ -309,10 +332,29 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
         _ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection
     ) {
         let now = Date()
-        guard now.timeIntervalSince(lastSentAt) >= minInterval else { return }
+        guard now.timeIntervalSince(lastCheckedAt) >= minInterval else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard ciImage.extent.width > 0 else { return }
+        lastCheckedAt = now
+        let live = liveMode
+        if live != wasLive {
+            // Live just turned on or off: whoever listens next has not seen this picture.
+            wasLive = live
+            lastThumb = []
+        }
+        // Brightness on every checked frame, sent or skipped, so the automatic flashlight
+        // reacts as fast in a still room as it did before still frames were skipped.
+        if let brightness = meanLuminance(of: ciImage) {
+            onBrightness?(brightness)
+        }
+        var thumb: [UInt8] = []
+        if live, skipStillFrames, let made = thumbnail(ciImage) {
+            thumb = made
+            if now.timeIntervalSince(lastSentAt) < stillKeyframe, isStill(made, comparedWith: lastThumb) {
+                return
+            }
+        }
         let scale = targetWidth / ciImage.extent.width
         let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
@@ -320,12 +362,51 @@ private final class FrameSampler: NSObject, AVCaptureVideoDataOutputSampleBuffer
         // frames encode at 0.78 — noticeably cleaner text and edges for the
         // small-print reads Spotters do, ~40% more bytes ONLY while live is
         // on. The plain snapshot lane keeps 0.65 (web parity, cheap).
-        guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: liveMode ? 0.78 : 0.65) else { return }
+        guard let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: live ? 0.78 : 0.65) else { return }
         lastSentAt = now
+        lastThumb = thumb // empty in the plain lane or when the thumbnail failed: the next live frame is sent
         onEncodedFrame?(jpeg)
-        if let brightness = meanLuminance(of: ciImage) {
-            onBrightness?(brightness)
+    }
+
+    /// DESC-11: a 16x12 grey thumbnail of the frame, for the still check.
+    private func thumbnail(_ image: CIImage) -> [UInt8]? {
+        let width = 16, height = 12
+        guard image.extent.width > 0, image.extent.height > 0,
+              let filter = CIFilter(name: "CILanczosScaleTransform") else { return nil }
+        let scale = CGFloat(height) / image.extent.height
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(scale, forKey: kCIInputScaleKey)
+        filter.setValue((CGFloat(width) / image.extent.width) / scale, forKey: kCIInputAspectRatioKey)
+        guard let small = filter.outputImage else { return nil }
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        ciContext.render(
+            small,
+            toBitmap: &rgba,
+            rowBytes: width * 4,
+            bounds: CGRect(
+                x: small.extent.origin.x, y: small.extent.origin.y,
+                width: CGFloat(width), height: CGFloat(height)
+            ),
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        return stride(from: 0, to: rgba.count, by: 4).map {
+            UInt8((299 * Int(rgba[$0]) + 587 * Int(rgba[$0 + 1]) + 114 * Int(rgba[$0 + 2])) / 1000)
         }
+    }
+
+    /// DESC-11: still when the mean grey difference is under 6 AND no single
+    /// cell differs by 32 or more (a finger on one line still counts as a change).
+    private func isStill(_ thumb: [UInt8], comparedWith sent: [UInt8]) -> Bool {
+        guard !sent.isEmpty, thumb.count == sent.count else { return false }
+        var total = 0
+        var worst = 0
+        for index in 0..<thumb.count {
+            let difference = abs(Int(thumb[index]) - Int(sent[index]))
+            total += difference
+            if difference > worst { worst = difference }
+        }
+        return total < stillDifference * thumb.count && worst < stillCellDifference
     }
 
     /// Mean luminance via `CIAreaAverage`, which reduces the whole image to
