@@ -209,6 +209,13 @@ struct CallView: View {
             // DESC-1 (Nov 12 2026 audit): the auto-flash notice waits for a
             // gap in the call's voice.
             camera.voiceIsAudible = { callService.isVoiceAudible }
+            // DESC-4 (Nov 12 2026 audit): iOS took the camera (the phone
+            // locked, the app left the screen) or gave it back. Only worth
+            // telling while a camera lane is on.
+            camera.onPaused = { paused in
+                guard callService.liveOn || callService.videoOn else { return }
+                callService.sendCameraState(on: !paused)
+            }
             await beginCall()
         }
         .onDisappear {

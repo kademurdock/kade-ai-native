@@ -650,6 +650,14 @@ final class StreamingCallService: NSObject, ObservableObject {
 
     // MARK: - WebSocket send/receive
 
+    /// DESC-4 (Nov 12 2026 audit): the phone's camera stopped (on: false) or
+    /// came back (on: true). The bridge tells the Spotter, which says so in
+    /// its own voice (`voice-stream.js` `type:'camera'` -> `video-live.js`
+    /// noteCamera). An older bridge ignores the message.
+    func sendCameraState(on: Bool) {
+        sendJSON(["type": "camera", "on": on])
+    }
+
     private func sendJSON(_ obj: [String: Any]) {
         guard let task = webSocketTask,
               let data = try? JSONSerialization.data(withJSONObject: obj),

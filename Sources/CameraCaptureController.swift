@@ -55,6 +55,13 @@ final class CameraCaptureController: ObservableObject {
     /// notice is spoken at once, as before.
     var voiceIsAudible: (() -> Bool)?
     private var torchNoticeTask: Task<Void, Never>?
+    /// DESC-4 (Nov 12 2026 audit): called with true when iOS takes the
+    /// camera away (the phone locked, the app left the screen, another app
+    /// took the camera) and false when it gives it back. `CallView` wires it
+    /// to `StreamingCallService.sendCameraState(on:)` so the Spotter can say
+    /// it lost the picture instead of describing the last one as now.
+    var onPaused: ((Bool) -> Void)?
+    private var interruptionWatches: [NSObjectProtocol] = []
 
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "com.kademurdock.kadeai.camera")
@@ -87,6 +94,15 @@ final class CameraCaptureController: ObservableObject {
         // that starts the camera. We own the audio session entirely, so tell
         // capture to keep its hands off it.
         session.automaticallyConfiguresApplicationAudioSession = false
+        let center = NotificationCenter.default
+        interruptionWatches = [
+            center.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onPaused?(true) }
+            },
+            center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onPaused?(false) }
+            },
+        ]
         sampler.onEncodedFrame = { [weak self] jpeg in
             Task { @MainActor in self?.onFrame?(jpeg) }
         }
@@ -94,6 +110,8 @@ final class CameraCaptureController: ObservableObject {
             Task { @MainActor in self?.considerAutoTorch(brightness: level) }
         }
     }
+
+    deinit { for watch in interruptionWatches { NotificationCenter.default.removeObserver(watch) } }
 
     /// Called once per sampled frame with that frame's mean luminance
     /// (0 = black, 1 = white). Two separate thresholds on purpose: turning
@@ -200,6 +218,13 @@ final class CameraCaptureController: ObservableObject {
         torchAvailable = device.hasTorch
         torchManuallySet = false
         applyTorch(false)
+        // DESC-4 (Nov 12 2026 audit, her choice: keep the screen awake for
+        // the whole camera call): once it auto-locks, iOS stops the camera
+        // while the call (background audio) carries on, and the Spotter
+        // would describe its last picture as now. Set only here, after the
+        // device guard, so a failed start never leaves the screen stuck on;
+        // `stop()` hands the idle timer back.
+        UIApplication.shared.isIdleTimerDisabled = true
         let s = session
         queue.async { [weak self] in
             s.startRunning()
@@ -218,6 +243,7 @@ final class CameraCaptureController: ObservableObject {
         rotationCoordinator = nil
         torchNoticeTask?.cancel()
         torchNoticeTask = nil
+        UIApplication.shared.isIdleTimerDisabled = false   // DESC-4
         let s = session
         queue.async { s.stopRunning() }
         isRunning = false
