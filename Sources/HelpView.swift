@@ -239,8 +239,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.18: A clearer Library player, quicker browsing",
+                title: "Newest build, 2.2.19: Truer talking faces, interruptions remembered right",
                 body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.18: A clearer Library player, quicker browsing",
+                body: "The Library player has a status line over its buttons. It shows the time and how much is left, and under that anything the player just said, such as Bookmark placed, or why it paused. VoiceOver reads the position slider as time, and one swipe moves further in a long recording: ten seconds, thirty seconds or a minute. A recording with only one part no longer shows Previous part, Next part or the Part menu. Play says Resume after the player paused itself for a call. On a video, Play with descriptions sits right under the picture, with Captions and Sound track menus when the file carries those tracks. The lock screen's position bar can be dragged. Springfield and the Ozarks is the second row of the Library again. Over the catalog, a row of quick buttons picks Movies, Television, Commercials, Radio, Music, Audiobooks, Books or Newspapers; with VoiceOver on, the Type menu does the same in one stop. Search everything shows every Library result, with Show more Library results. A voice direction that ends in a full stop or a question mark is no longer repeated in front of the sentences after it."
             ),
             HelpEntry(
                 title: "In 2.2.17: Voice speed in numbers, characters on Talk",

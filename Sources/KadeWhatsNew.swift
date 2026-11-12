@@ -14,8 +14,8 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: A clearer Library player, quicker browsing"
-    static let body = "The Library player has a status line over its buttons. It shows the time and how much is left, and under that anything the player just said, such as Bookmark placed, or why it paused. VoiceOver reads the position slider as time, and one swipe moves further in a long recording: ten seconds, thirty seconds or a minute. A recording with only one part no longer shows Previous part, Next part or the Part menu. Play says Resume after the player paused itself for a call. On a video, Play with descriptions sits right under the picture, with Captions and Sound track menus when the file carries those tracks. The lock screen's position bar can be dragged. Springfield and the Ozarks is the second row of the Library again. Over the catalog, a row of quick buttons picks Movies, Television, Commercials, Radio, Music, Audiobooks, Books or Newspapers; with VoiceOver on, the Type menu does the same in one stop. Search everything shows every Library result, with Show more Library results. A voice direction that ends in a full stop or a question mark is no longer repeated in front of the sentences after it."
+    static let title = "What's new: Truer talking faces, interruptions remembered right"
+    static let body = "On Inworld voices, a character's face now moves its mouth with the voice's own mouth shapes, on calls and when a reply is read aloud with the portrait showing, so the lips close on p, b and m and open on the vowels. Fish voices move the way they did before. On a call, when you talk over a character or press Stop, the character now remembers only the part of its reply you actually heard, so it no longer carries on as if you heard the rest. The voice list has 89 new voices."
 
     private let seenKey = "kade.whatsNew.seenVersion"
     @Published private(set) var showCard = false
