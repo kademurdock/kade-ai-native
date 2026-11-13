@@ -2299,7 +2299,7 @@ def main():
         recorded=json.loads((OUT/'source.json').read_text())
         _OPERATION_DEADLINE=datetime.fromisoformat(recorded['operationDeadlineUtc']).timestamp()
         if args.action in ('run-ui','build-tests','boot-ui'):
-            guard=UI_GUARD_SECONDS[args.device] if args.action=='run-ui' else BOOT_SECONDS+30 if args.action=='boot-ui' else 960
+            guard=UI_GUARD_SECONDS[args.device] if args.action=='run-ui' else BOOT_SECONDS+30 if args.action=='boot-ui' else 1560
             action_deadline=time.time()+guard-30
             if action_deadline<_OPERATION_DEADLINE:
                 _OPERATION_DEADLINE=action_deadline;_DEADLINE_ROLE='actionGuardDeadline'
