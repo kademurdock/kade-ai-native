@@ -100,6 +100,30 @@ enum ListenerVoicePlan {
         !id.isEmpty && id.count <= 64 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
+    /// Nov 13 2026 (sweep): the voice settings saved on this phone were chosen
+    /// under ANOTHER account. Rule 5 (seed the account from the phone) must
+    /// then never fire, or one person's speed, filler switch and per-character
+    /// delivery would be written into the next person's account. A stamp that
+    /// no server ever sends stands in as "seen" for all three fields: a real
+    /// account stamp still differs from it and is applied, and her own change
+    /// on this phone (pending) is still sent.
+    static let otherAccountStamp = "phone-settings-from-another-account"
+
+    static func stateForOtherAccount() -> State {
+        var state = State()
+        state.seenPace = otherAccountStamp
+        state.seenFillers = otherAccountStamp
+        state.seenDelivery = otherAccountStamp
+        return state
+    }
+
+    /// True when the phone's settings are known to belong to someone else.
+    /// No owner on record (a phone updated from an older build) counts as hers.
+    static func belongsToAnother(owner: String?, userId: String) -> Bool {
+        guard let owner, !owner.isEmpty, !userId.isEmpty else { return false }
+        return owner != userId
+    }
+
     /// What to do with the account's values. Pure.
     static func plan(account: Account?, local: Local, state: State) -> Plan {
         var plan = Plan(state: state)

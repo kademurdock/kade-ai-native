@@ -167,7 +167,7 @@ struct KadeAIApp: App {
                         Task {
                             await client.loadClientConfig()
                             ListenerVoiceSync.shared.attach(client)
-                            await ListenerVoiceSync.shared.sync()
+                            await ListenerVoiceSync.shared.sync(userId: user.id)
                         }
                     case .signedOut:
                         pushService.setUserId(nil)

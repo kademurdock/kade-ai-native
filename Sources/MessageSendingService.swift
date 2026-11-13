@@ -580,6 +580,7 @@ final class MessageSendingService: ObservableObject {
         /// When the drops began with no progress since: a total budget of
         /// 300 s, the same as one stream's own idle timeout.
         var stalledSince: Date?
+        var waitingForSignal = false
         while true {
             do {
                 return try await readStream(streamId: streamId, cursor: cursor, resuming: dropped,
@@ -607,12 +608,22 @@ final class MessageSendingService: ObservableObject {
                 let firstDrop = stalledSince ?? Date()
                 stalledSince = firstDrop
                 guard Date().timeIntervalSince(firstDrop) < 300 else { throw error }
-                attempt += 1
-                guard attempt <= StreamResume.maxAttempts else { throw error }
+                // Sweep, Nov 13 2026: with no route at all every try fails at
+                // once, so those are not counted (eight of them took 24 s);
+                // they wait 4 s at a time inside the 300 s budget above.
+                let counted = StreamResume.countsAsAttempt(error)
+                if counted {
+                    attempt += 1
+                    guard attempt <= StreamResume.maxAttempts else { throw error }
+                    KadeBreadcrumbs.drop("stream dropped; picking it up (try \(attempt))")
+                } else if !waitingForSignal {
+                    KadeBreadcrumbs.drop("stream dropped with no signal; waiting for it to come back")
+                }
+                waitingForSignal = !counted
                 dropped = true
-                KadeBreadcrumbs.drop("stream dropped; picking it up (try \(attempt))")
                 do {
-                    try await Task.sleep(nanoseconds: StreamResume.delayNanos(attempt: attempt))
+                    try await Task.sleep(nanoseconds: counted ? StreamResume.delayNanos(attempt: attempt)
+                                                              : StreamResume.noRouteWaitNanos)
                 } catch {
                     throw URLError(.cancelled)   // Stop during the wait: "Stopped."
                 }

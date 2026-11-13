@@ -109,6 +109,37 @@ do {
     check(P.validPace(nil) && P.validPace(1.5) && !P.validPace(0.4) && !P.validPace(.nan), "validPace")
 }
 
+// Nov 13 2026 sweep: another account signs in on a phone that holds someone
+// else's saved voice settings. Nothing of theirs may be written into it.
+do {
+    let theirs = local(pace: 1.2, paceSaved: true, fillers: false, fillersSaved: true,
+                       delivery: ["agent_abc": "CREATIVE"])
+    let empty = P.Account(delivery: [:])
+    // The shape of the bug: with a fresh state the phone's values seed the account.
+    check(P.plan(account: empty, local: theirs, state: P.State()).pushesAnything, "a fresh state would seed (the old leak)")
+    let guarded = P.stateForOtherAccount()
+    let plan = P.plan(account: empty, local: theirs, state: guarded)
+    check(!plan.pushesAnything, "another account is never seeded from this phone")
+    check(plan.applyPace == nil && plan.applyFillers == nil && plan.applyDelivery == nil, "and nothing is applied from an empty account")
+    check(plan.state == guarded, "the guard is kept for the next read")
+    // The new account's own saved values still come down to the phone.
+    let own = P.plan(account: P.Account(pace: .some(0.9), paceAt: "t1", fillers: true, fillersAt: "t2",
+                                        delivery: ["agent_xyz": "STABLE"], deliveryAt: "t3"),
+                     local: theirs, state: guarded)
+    check(own.applyPace == .some(.some(0.9)) && own.applyFillers == true
+          && own.applyDelivery == ["agent_xyz": "STABLE"] && !own.pushesAnything, "the account's own values are applied")
+    check(own.state.seenPace == "t1" && own.state.seenFillers == "t2" && own.state.seenDelivery == "t3", "real stamps replace the guard")
+    // A change the new account makes on this phone is still sent, and only that.
+    var changed = guarded; changed.pendingPace = true
+    let sent = P.plan(account: empty, local: local(pace: 1.4, paceSaved: true, fillers: false, fillersSaved: true,
+                                                   delivery: ["agent_abc": "CREATIVE"]), state: changed)
+    check(sent.pushPace == .some(.some(1.4)) && sent.pushFillers == nil && sent.pushDelivery == nil, "her own change is sent, nothing else")
+    check(P.belongsToAnother(owner: "user-a", userId: "user-b"), "a different user id is another account")
+    check(!P.belongsToAnother(owner: "user-a", userId: "user-a"), "the same user id is not")
+    check(!P.belongsToAnother(owner: nil, userId: "user-a") && !P.belongsToAnother(owner: "", userId: "user-a"),
+          "no owner on record (an updated phone) counts as hers")
+}
+
 // Phase 4 pick 4: StreamResume
 do {
     check(StreamResume.cursor(fromIdLine: "id: 9f3a1c2e-128") == "9f3a1c2e-128", "cursor parsed")
@@ -134,6 +165,20 @@ do {
     check(StreamResume.delayNanos(attempt: 1) == 500_000_000 && StreamResume.delayNanos(attempt: 2) == 1_000_000_000
           && StreamResume.delayNanos(attempt: 3) == 2_000_000_000 && StreamResume.delayNanos(attempt: 9) == 4_000_000_000,
           "0.5, 1, 2, then 4 s")
+    // Nov 13 2026 sweep: no route at all is not one of the eight tries.
+    for code in [URLError.Code.notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive] {
+        check(!StreamResume.countsAsAttempt(URLError(code)), "no-route code \(code.rawValue) is not counted")
+    }
+    for code in [URLError.Code.networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+                 .secureConnectionFailed, .resourceUnavailable, .timedOut] {
+        check(StreamResume.countsAsAttempt(URLError(code)), "code \(code.rawValue) is still counted")
+    }
+    struct Other: Error {}
+    check(StreamResume.countsAsAttempt(Other()), "an error that is not a URL error is counted")
+    check(StreamResume.noRouteWaitNanos == 4_000_000_000, "a no-route wait is 4 s")
+    // 300 s of 4 s waits is far more than the eight counted tries allowed (23.5 s).
+    let countedSeconds = (1...StreamResume.maxAttempts).reduce(0.0) { $0 + Double(StreamResume.delayNanos(attempt: $1)) / 1e9 }
+    check(countedSeconds < 30 && 300 / (Double(StreamResume.noRouteWaitNanos) / 1e9) >= 70, "the no-route wait reaches the 300 s budget")
 }
 
 print("Voice sync and stream resume: \(count) checks passed; no network, no audio.")

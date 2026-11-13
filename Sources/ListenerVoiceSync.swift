@@ -27,6 +27,10 @@ final class ListenerVoiceSync {
     /// first run, and a default must never seed the account.
     static let paceChosenKey = "kade.voiceSync.paceChosen"
     private static let stateKey = "kade.voiceSync.state"
+    /// Nov 13 2026 (sweep): the user id the voice settings on this phone
+    /// belong to. Kept across sign-out, so the next account to sign in is
+    /// known to be a different one (see ListenerVoicePlan.stateForOtherAccount).
+    static let ownerKey = "kade.voiceSync.owner"
 
     private var client: KadeAPIClient?
     private var lastFetch: Date = .distantPast
@@ -120,8 +124,19 @@ final class ListenerVoiceSync {
         Task { await sync() }
     }
 
-    func sync() async {
-        guard KadeAppSwitches.voiceSync, let client, !fetching else { return }
+    /// `userId` is given at sign-in (and at launch with a saved session).
+    func sync(userId: String? = nil) async {
+        guard KadeAppSwitches.voiceSync else { return }
+        if let userId, !userId.isEmpty {
+            // Before any request, so it holds even if this read fails.
+            let defaults = UserDefaults.standard
+            if ListenerVoicePlan.belongsToAnother(owner: defaults.string(forKey: Self.ownerKey), userId: userId) {
+                state = ListenerVoicePlan.stateForOtherAccount()
+                KadeBreadcrumbs.drop("voice sync: another account signed in; this phone's settings are not sent to it")
+            }
+            defaults.set(userId, forKey: Self.ownerKey)
+        }
+        guard let client, !fetching else { return }
         fetching = true
         defer { fetching = false }
         lastFetch = Date()

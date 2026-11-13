@@ -18,6 +18,22 @@ enum StreamResume {
         return UInt64(seconds * 1_000_000_000)
     }
 
+    /// Nov 13 2026 (sweep): "no route at all" failures (airplane mode, a
+    /// lift, data switched off, a phone call on a 2G line). Each try fails at
+    /// once, so counting them used up all eight tries in about 24 s. They are
+    /// not counted: the phone waits `noRouteWaitNanos` at a time until the
+    /// 300 s budget in MessageSendingService runs out, or the signal is back.
+    static let noRouteCodes: Set<URLError.Code> = [
+        .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive,
+    ]
+    static let noRouteWaitNanos: UInt64 = 4_000_000_000
+
+    /// False for a failure that must not use up one of the `maxAttempts`.
+    static func countsAsAttempt(_ error: Error) -> Bool {
+        guard let code = (error as? URLError)?.code else { return true }
+        return !noRouteCodes.contains(code)
+    }
+
     /// "id: 9f3a1c2e-128" -> "9f3a1c2e-128". Anything else is nil.
     static func cursor(fromIdLine line: String) -> String? {
         guard line.hasPrefix("id:") else { return nil }
