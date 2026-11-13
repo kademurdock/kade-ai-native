@@ -377,6 +377,9 @@ struct DescribedVideoView: View {
                     Task { await refreshJob(current.id) }
                 }
                 if phase == .active, onScreen { fillCopiedYouTubeLink() }
+                // Sweep, Nov 13 2026: back from a locked phone, a caught-up
+                // listener looks for the next section at once.
+                if phase == .active { listenAhead.foregrounded() }
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }
@@ -638,6 +641,18 @@ struct DescribedVideoView: View {
             }
             jobButtons(current)
         }
+        // Sweep, Nov 13 2026: the two-finger double tap pauses and carries on
+        // listening-while-made. Always attached (a modifier that came and went
+        // would rebuild this section and drop VoiceOver's place); with nothing
+        // being listened to it does what the system would have done, play or
+        // pause the Library book.
+        .accessibilityAction(.magicTap) {
+            if listenAhead.jobId != nil {
+                listenAhead.togglePause()
+            } else {
+                LibraryNowPlaying.shared.togglePlay()
+            }
+        }
     }
 
     /// Phase 4 pick 2: offered only when the server says so, at least one
@@ -652,11 +667,24 @@ struct DescribedVideoView: View {
     @ViewBuilder
     private func listenAheadControls(_ current: DVJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if listenAhead.jobId == current.id {
-                Button(listenAhead.isPaused ? "Carry on listening" : "Pause listening") {
+            // Nov 13 2026 (sweep): ONE button that is always here and only
+            // changes its words, so the control under the VoiceOver cursor is
+            // never taken away when listening starts or stops.
+            let listening = listenAhead.jobId == current.id
+            let listenLabel: String = !listening ? "Listen now, sound only, while the rest is made"
+                : (listenAhead.isPaused ? "Carry on listening" : "Pause listening")
+            let listenHint: String = listening ? ""
+                : "Plays the finished sections in order, film sound with descriptions. It waits for the next section if you catch up."
+            Button(listenLabel) {
+                if listenAhead.jobId == current.id {
                     listenAhead.togglePause()
+                } else {
+                    startListenAhead(current)
                 }
-                .buttonStyle(.bordered)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .accessibilityHint(listenHint)
+            if listening {
                 Button("Stop listening") { listenAhead.stop() }
                     .buttonStyle(.bordered)
                 if !listenAhead.status.isEmpty {
@@ -664,12 +692,6 @@ struct DescribedVideoView: View {
                         .font(.footnote)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            } else {
-                Button("Listen now, sound only, while the rest is made") {
-                    startListenAhead(current)
-                }
-                .buttonStyle(KadeCardButtonStyle())
-                .accessibilityHint("Plays the finished sections in order, film sound with descriptions. It waits for the next section if you catch up.")
             }
         }
     }
@@ -680,7 +702,7 @@ struct DescribedVideoView: View {
         let service = self.service
         let rate = rememberedPlaybackRate
         Task {
-            await listenAhead.start(jobId: current.id, rate: rate) { jobId, from in
+            await listenAhead.start(jobId: current.id, title: current.title, rate: rate) { jobId, from in
                 try? await service.readySections(jobId: jobId, from: from)
             }
         }

@@ -1,4 +1,5 @@
 import AVFoundation
+import MediaPlayer
 import UIKit
 
 /// Phase 4 pick 2 (Nov 12 2026): listen to a described video while it is still
@@ -12,6 +13,13 @@ import UIKit
 /// the next section arrives. Before a section whose look failed she hears a
 /// warning, then 2.5 s of quiet, then the film. A section that will not play
 /// is skipped with one sentence. Focus is never moved.
+///
+/// Nov 13 2026 (post-release sweep): while she has caught up nothing plays, so
+/// with the phone locked iOS suspends the app and the next section cannot
+/// start until she is back. The caught-up sentence now says so, and
+/// `foregrounded()` looks for the next section the moment she returns. It
+/// also has the lock-screen and headphone play/pause buttons while it is on,
+/// and hands the app's usual mixing audio session back when it stops.
 ///
 /// Server switch: KADE_DESCRIPTION_LISTEN_AHEAD=0 (the config says false and
 /// the offer is not shown). Phone switch: UserDefaults kade.switch.listenAhead.
@@ -42,6 +50,9 @@ final class ListenAheadPlayer: ObservableObject {
     private var playNumber = 0
     /// The last section skipped as unplayable (one skip per section).
     private var skippedIndex: Int?
+    private var title = "Described video"
+    /// This player's own lock-screen and headphone button targets.
+    private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
     init() {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -59,15 +70,17 @@ final class ListenAheadPlayer: ObservableObject {
 
     /// Starts listening to `jobId` from its first section. The caller has
     /// already paused the main player.
-    func start(jobId: String, rate: Double, fetch: @escaping Fetch) async {
+    func start(jobId: String, title: String = "Described video", rate: Double, fetch: @escaping Fetch) async {
         stop()
         self.fetch = fetch
+        self.title = title
         self.rate = Float(min(3, max(0.5, rate)))
         self.jobId = jobId
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [])
         try? session.setActive(true)
         LibraryNowPlaying.shared.pauseForOtherAudio("a described video")
+        wireRemote()
         guard let first = await fetch(jobId, 0), self.jobId == jobId, !first.sections.isEmpty else {
             if self.jobId == jobId {
                 stop()
@@ -104,6 +117,13 @@ final class ListenAheadPlayer: ObservableObject {
         unwatch()
         player.pause()
         player.replaceCurrentItem(with: nil)
+        if jobId != nil {
+            // Only when it really was listening: the idle stop() calls on
+            // other paths must not disturb a film or a book that is playing.
+            unwireRemote()
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        }
         jobId = nil
         fetch = nil
         sections = []
@@ -125,6 +145,54 @@ final class ListenAheadPlayer: ObservableObject {
             isPaused = true
             player.pause()
         }
+        updateNowPlaying()
+    }
+
+    /// The app is in front again. If she had caught up, look for the next
+    /// section now instead of at the next 30-second turn (which never came
+    /// while the phone was locked and the app suspended).
+    func foregrounded() {
+        guard jobId != nil, waiting else { return }
+        Task { await poll() }
+    }
+
+    // MARK: Lock screen and headphone buttons
+
+    private func wireRemote() {
+        unwireRemote()
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.isEnabled = true
+        remoteTargets.append((center.playCommand, center.playCommand.addTarget { [weak self] _ in
+            Task { @MainActor in if let self, self.isPaused { self.togglePause() } }
+            return .success
+        }))
+        center.pauseCommand.isEnabled = true
+        remoteTargets.append((center.pauseCommand, center.pauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in if let self, !self.isPaused { self.togglePause() } }
+            return .success
+        }))
+        center.togglePlayPauseCommand.isEnabled = true
+        remoteTargets.append((center.togglePlayPauseCommand, center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.togglePause() }
+            return .success
+        }))
+        updateNowPlaying()
+    }
+
+    /// Removes only this player's targets, never another player's.
+    private func unwireRemote() {
+        for (command, target) in remoteTargets { command.removeTarget(target) }
+        remoteTargets = []
+    }
+
+    private func updateNowPlaying() {
+        guard jobId != nil else { return }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: "\(title), sound only",
+            MPMediaItemPropertyArtist: "Described by Kade-AI, still being made",
+            MPNowPlayingInfoPropertyPlaybackRate: isPaused || waiting ? 0.0 : Double(rate),
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+        ]
     }
 
     /// Her playback speed, kept for every section.
@@ -165,8 +233,9 @@ final class ListenAheadPlayer: ObservableObject {
             if !waiting {
                 waiting = true
                 player.replaceCurrentItem(with: nil)
+                updateNowPlaying()
                 if making {
-                    say("You have caught up. Section \(at + 1) of \(max(count, at + 1)) is still being made. It will start by itself.")
+                    say("You have caught up. Section \(at + 1) of \(max(count, at + 1)) is still being made. It will start by itself while this app is open. If your phone locks, come back to this app to carry on.")
                 } else {
                     Task { await poll() }
                 }
@@ -216,6 +285,7 @@ final class ListenAheadPlayer: ObservableObject {
         player.replaceCurrentItem(with: item)
         player.defaultRate = rate
         if !isPaused { player.playImmediately(atRate: rate) }
+        updateNowPlaying()
     }
 
     /// Once per section: both failure signals for one section can arrive, and
