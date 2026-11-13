@@ -166,14 +166,30 @@ final class CameraCaptureController: ObservableObject {
         }
     }
 
-    func start(facing: AVCaptureDevice.Position = .front) async {
+    /// Nov 13 2026 (sweep): true from `begin` until `stop`. A start runs on
+    /// its own Task and, the first time, waits on the permission question; if
+    /// the call ended or the Spotter handed back meanwhile, that late start
+    /// used to turn the camera on and keep the screen awake with nobody left
+    /// to undo it.
+    private var wanted = false
+
+    /// The camera is wanted from now. Says so at once (so a `stop()` that
+    /// follows wins), then starts.
+    func begin(facing: AVCaptureDevice.Position = .front) {
+        wanted = true
+        Task { await start(facing: facing) }
+    }
+
+    private func start(facing: AVCaptureDevice.Position) async {
+        guard wanted else { return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             configureAndStart(facing: facing)
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .video)
             if granted {
-                configureAndStart(facing: facing)
+                // Stopped while the question was up: leave the camera off.
+                if wanted { configureAndStart(facing: facing) }
             } else {
                 permissionDenied = true
             }
@@ -251,6 +267,7 @@ final class CameraCaptureController: ObservableObject {
     }
 
     func stop() {
+        wanted = false
         rotationObservation = nil
         rotationCoordinator = nil
         torchNoticeTask?.cancel()

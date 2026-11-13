@@ -233,7 +233,7 @@ struct CallView: View {
             // (~1.4/s); handing back drops to the plain lane's 2s pace.
             camera.setLiveCadence(on)
             if on {
-                Task { await camera.start(facing: .back) }
+                camera.begin(facing: .back)   // sweep Nov 13: a later stop() wins
                 UIAccessibility.post(
                     notification: .announcement,
                     argument: "\(callService.spotterName ?? "Your Spotter") is on the line."
@@ -251,7 +251,7 @@ struct CallView: View {
             if CharacterDellaHostAudit.isEnabled { return }
             #endif
             if on {
-                Task { await camera.start(facing: .back) }
+                camera.begin(facing: .back)   // sweep Nov 13: a later stop() wins
                 UIAccessibility.post(
                     notification: .announcement,
                     argument: "\(agentName) can see your camera now."
