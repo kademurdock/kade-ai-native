@@ -43,5 +43,17 @@ enum KadeUITestMode {
 
     /// Sep 25 2026: either CI run keeps its check-ins and crash reports on the
     /// simulator. Ten of the bridge's forty crash-ring slots were tour noise.
-    static var skipsDiagnosticsUpload: Bool { isAuditing || isTouring }
+    ///
+    /// Nov 13 2026 (sweep): the free GitHub runner proofs set neither flag,
+    /// and their relaunches posted about 200 "abnormal" reports a day to the
+    /// production bridge, most of its daily cap. No simulator build uploads
+    /// now, whatever started it. A phone is never a simulator, so nothing
+    /// changes for a real person.
+    static var skipsDiagnosticsUpload: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return isAuditing || isTouring
+        #endif
+    }
 }
