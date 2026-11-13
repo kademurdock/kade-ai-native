@@ -52,6 +52,7 @@ final class ListenerVoiceSync {
         UserDefaults.standard.removeObject(forKey: Self.stateKey)
         serverOff = false
         lastFetch = .distantPast
+        localGeneration += 1   // a read still out for this account is dropped when it answers
     }
 
     // MARK: State
@@ -132,6 +133,7 @@ final class ListenerVoiceSync {
             let defaults = UserDefaults.standard
             if ListenerVoicePlan.belongsToAnother(owner: defaults.string(forKey: Self.ownerKey), userId: userId) {
                 state = ListenerVoicePlan.stateForOtherAccount()
+                localGeneration += 1   // a read still out for the last account is dropped
                 KadeBreadcrumbs.drop("voice sync: another account signed in; this phone's settings are not sent to it")
             }
             defaults.set(userId, forKey: Self.ownerKey)
