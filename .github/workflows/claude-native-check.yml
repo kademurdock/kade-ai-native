@@ -48,6 +48,7 @@ jobs:
           if [ -f run-library-player-tests.sh ]; then bash run-library-player-tests.sh 2>&1 | tail -n 40; fi
           if [ -f run-voice-sync-tests.sh ]; then bash run-voice-sync-tests.sh 2>&1 | tail -n 20; fi
           if [ -f run-push-tests.sh ]; then bash run-push-tests.sh 2>&1 | tail -n 20; fi
+          if [ -f run-waiting-chime-tests.sh ]; then bash run-waiting-chime-tests.sh 2>&1 | tail -n 20; fi
 
       - name: Generate the simulator project
         timeout-minutes: 10

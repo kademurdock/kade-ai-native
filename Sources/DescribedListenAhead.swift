@@ -21,6 +21,14 @@ import UIKit
 /// also has the lock-screen and headphone play/pause buttons while it is on,
 /// and hands the app's usual mixing audio session back when it stops.
 ///
+/// Nov 13 2026 (her ask): while she has caught up and the job is still
+/// running, a soft chime sounds about every 20 seconds so a locked phone
+/// tells her it is still waiting and has not died. It is one looping sound,
+/// silent but for the chime, played through this same playback session, so
+/// the app also keeps running while locked and the next section can start by
+/// itself. Rules and the loop: WaitingChime.swift. It follows the Sound
+/// effects setting; phone switch kade.switch.waitingChime.
+///
 /// Server switch: KADE_DESCRIPTION_LISTEN_AHEAD=0 (the config says false and
 /// the offer is not shown). Phone switch: UserDefaults kade.switch.listenAhead.
 @MainActor
@@ -53,12 +61,31 @@ final class ListenAheadPlayer: ObservableObject {
     private var title = "Described video"
     /// This player's own lock-screen and headphone button targets.
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
+    /// The "still waiting" chime: whether its loop is on, and the loop.
+    private var chimeKeeper = WaitingChimeKeeper()
+    private var chimePlayer: AVAudioPlayer?
+    /// The 20-second loop as a sound file, made once.
+    private static var chimeLoop: Data?
+    private var interruptWatch: NSObjectProtocol?
 
     init() {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        // A phone call or an alarm pauses the chime loop. When the system says
+        // this app may carry on, the loop comes back if she is still waiting.
+        interruptWatch = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            let options = AVAudioSession.InterruptionOptions(
+                rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+            guard type == .ended, options.contains(.shouldResume) else { return }
+            Task { @MainActor in self?.reviveChime() }
+        }
     }
 
     deinit {
+        if let interruptWatch { NotificationCenter.default.removeObserver(interruptWatch) }
         if let endWatch { NotificationCenter.default.removeObserver(endWatch) }
         if let failWatch { NotificationCenter.default.removeObserver(failWatch) }
     }
@@ -91,7 +118,10 @@ final class ListenAheadPlayer: ObservableObject {
         take(first)
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                // Caught up: look every 10 seconds, so the next section starts
+                // sooner and a failed job quiets the chime before its next turn.
+                let caughtUp = self?.waiting ?? false
+                try? await Task.sleep(nanoseconds: caughtUp ? 10_000_000_000 : 30_000_000_000)
                 guard let self, !Task.isCancelled, self.jobId == jobId else { return }
                 if !self.making && !self.waiting { continue }
                 await self.poll()
@@ -115,6 +145,9 @@ final class ListenAheadPlayer: ObservableObject {
         pollTask?.cancel(); pollTask = nil
         startTask?.cancel(); startTask = nil
         unwatch()
+        // The chime first, before anything else: it never outlives listening.
+        stopChime()
+        chimeKeeper = WaitingChimeKeeper()
         player.pause()
         player.replaceCurrentItem(with: nil)
         if jobId != nil {
@@ -145,6 +178,8 @@ final class ListenAheadPlayer: ObservableObject {
             isPaused = true
             player.pause()
         }
+        // Paused while caught up: the chime stops too, and comes back with her.
+        syncChime()
         updateNowPlaying()
     }
 
@@ -153,6 +188,7 @@ final class ListenAheadPlayer: ObservableObject {
     /// while the phone was locked and the app suspended).
     func foregrounded() {
         guard jobId != nil, waiting else { return }
+        reviveChime()
         Task { await poll() }
     }
 
@@ -221,10 +257,15 @@ final class ListenAheadPlayer: ObservableObject {
         } else if waiting && !making {
             waiting = false
             pollTask?.cancel(); pollTask = nil
+            // The job finished, failed or was cancelled: quiet before the words.
+            syncChime()
             say(result.state == "done"
                 ? "That was the last section. The whole described copy is ready in the main player."
                 : "The run stopped here. Nothing more is ready.")
         }
+        // Whatever this look found (the job may have stopped or started
+        // running again), the chime matches it.
+        syncChime()
     }
 
     private func playNext() {
@@ -235,14 +276,19 @@ final class ListenAheadPlayer: ObservableObject {
                 player.replaceCurrentItem(with: nil)
                 updateNowPlaying()
                 if making {
-                    say("You have caught up. Section \(at + 1) of \(max(count, at + 1)) is still being made. It will start by itself while this app is open. If your phone locks, come back to this app to carry on.")
+                    say(WaitingChime.caughtUpSentence(section: at + 1, of: count, chime: chimeAllowed))
                 } else {
                     Task { await poll() }
                 }
+                // The loop opens with 20 seconds of silence, so the first
+                // chime comes well after that sentence.
+                syncChime()
             }
             return
         }
         waiting = false
+        // Before the section (or its warning) starts: never a chime over it.
+        syncChime()
         let item = sections[at]
         playNumber += 1
         let number = playNumber
@@ -297,6 +343,56 @@ final class ListenAheadPlayer: ObservableObject {
         say("That section could not be played. Moving to the next one.")
         at += 1
         playNext()
+    }
+
+    // MARK: The "still waiting" chime
+
+    private var chimeAllowed: Bool {
+        KadeAppSwitches.waitingChime && FeedbackPrefs.shared.soundEffects
+    }
+
+    /// Starts or stops the chime loop to match what the player is doing now.
+    /// Called after every change to listening, waiting, making or paused.
+    private func syncChime() {
+        let state = WaitingChime.State(
+            listening: jobId != nil, waiting: waiting, making: making, paused: isPaused, enabled: chimeAllowed)
+        switch chimeKeeper.next(state) {
+        case .start:
+            if !startChime() { chimeKeeper.lost() }
+        case .stop:
+            stopChime()
+        case .nothing:
+            break
+        }
+    }
+
+    /// One looping player on the playback session this player already holds
+    /// (never the earcons' ambient session, which is silent on a locked phone).
+    private func startChime() -> Bool {
+        stopChime()
+        if Self.chimeLoop == nil { Self.chimeLoop = WaitingChime.wav(WaitingChime.loopSamples()) }
+        guard let data = Self.chimeLoop, let loop = try? AVAudioPlayer(data: data) else { return false }
+        loop.numberOfLoops = -1
+        loop.volume = 1
+        loop.prepareToPlay()
+        guard loop.play() else { return false }
+        chimePlayer = loop
+        return true
+    }
+
+    private func stopChime() {
+        chimePlayer?.stop()
+        chimePlayer = nil
+    }
+
+    /// The loop was stopped from outside (a phone call) or never started:
+    /// start it again if she is still waiting.
+    private func reviveChime() {
+        if chimeKeeper.sounding, chimePlayer?.isPlaying != true {
+            stopChime()
+            chimeKeeper.lost()
+        }
+        syncChime()
     }
 
     private func unwatch() {

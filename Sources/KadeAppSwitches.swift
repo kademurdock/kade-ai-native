@@ -23,4 +23,7 @@ enum KadeAppSwitches {
     static var streamResume: Bool { on("kade.switch.streamResume") }
     /// Phase 4 pick 2: listen to a described video while it is being made.
     static var listenAhead: Bool { on("kade.switch.listenAhead") }
+    /// Nov 13 2026: the soft "still waiting" chime while a caught-up listener
+    /// waits for the next section (also follows the Sound effects setting).
+    static var waitingChime: Bool { on("kade.switch.waitingChime") }
 }
