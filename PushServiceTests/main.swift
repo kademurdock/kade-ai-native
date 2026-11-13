@@ -71,6 +71,50 @@ import Foundation
         precondition(signOutBody["userId"] is NSNull, "Sign-out must explicitly clear the server link")
         precondition(proofRequests[1].value(forHTTPHeaderField: "Authorization") == nil,
                      "Sign-out must not send a bearer")
-        print("Push registration tests passed: sign-out, account switch, ordering, deduplication, and link proof")
+
+        // Nov 13 2026 sweep: a link acknowledged on an EXPIRED proof (the
+        // bridge in log mode answers 200) is sent once more when the access
+        // token is a different, unexpired one, and not again after that.
+        func token(exp: TimeInterval) -> String {
+            func part(_ object: [String: Any]) -> String {
+                try! JSONSerialization.data(withJSONObject: object).base64EncodedString()
+                    .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "=", with: "")
+            }
+            return part(["alg": "HS256"]) + "." + part(["id": "u", "exp": exp]) + ".sig"
+        }
+        let now = Date().timeIntervalSince1970
+        let stale = token(exp: now - 600)
+        let fresh = token(exp: now + 600)
+        let fresher = token(exp: now + 900)
+        precondition(PushService.isExpired(stale) && !PushService.isExpired(fresh), "expiry is read from the token")
+        precondition(!PushService.isExpired("tok") && !PushService.isExpired("a.b.c"), "an unreadable token is not called expired")
+        var current = stale
+        var staleRequests: [URLRequest] = []
+        let relinking = PushService(send: { request in
+            staleRequests.append(request)
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, bearer: { current })
+        func settle() async { for _ in 0..<300 { await Task.yield() } }
+        relinking.setUserId("linked-account")
+        relinking.setDeviceToken(Data([7,8,9]))
+        await settle()
+        precondition(staleRequests.count == 1
+                     && staleRequests[0].value(forHTTPHeaderField: "Authorization") == "Bearer \(stale)",
+                     "The launch register carries the stale token")
+        relinking.refreshRegistration()
+        await settle()
+        precondition(staleRequests.count == 1, "The same stale token is not sent twice")
+        current = fresh
+        relinking.refreshRegistration()
+        await settle()
+        precondition(staleRequests.count == 2
+                     && staleRequests[1].value(forHTTPHeaderField: "Authorization") == "Bearer \(fresh)",
+                     "A fresh token replaces a stale proof once")
+        current = fresher
+        relinking.refreshRegistration()
+        await settle()
+        precondition(staleRequests.count == 2, "A link proven with a fresh token is not sent again on every token refresh")
+        print("Push registration tests passed: sign-out, account switch, ordering, deduplication, link proof, and a stale proof replaced once")
     }
 }

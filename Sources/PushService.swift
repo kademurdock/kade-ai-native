@@ -32,6 +32,14 @@ final class PushService: ObservableObject {
     private var lastSentToken: String?
     private var lastSentUserId: String?
     private var lastSentRingtone: String?
+    /// Nov 13 2026 (sweep): the bearer the last acknowledged link carried,
+    /// and whether it was already past its expiry when sent. While the bridge
+    /// only logs (answers 200 to an expired proof) the launch register is
+    /// acknowledged with a stale token, and the fresh one was then never
+    /// sent. A link acknowledged on a stale proof is sent once more as soon
+    /// as the access token differs.
+    private var lastSentBearer: String?
+    private var lastProofWasStale = false
     private var isSyncing = false
     /// IOS-19 (Nov 12 2026 audit): a sync was asked for while a request was
     /// in flight. A failed request (a 401 on an access token that was
@@ -83,15 +91,21 @@ final class PushService: ObservableObject {
             resyncRequested = false
             let sendingUserId = userId
             let ringtone = UserDefaults.standard.string(forKey: Self.ringtoneDefaultsKey)
-            if token == lastSentToken && sendingUserId == lastSentUserId && ringtone == lastSentRingtone { return }
+            let jwt: String? = sendingUserId != nil ? bearer().flatMap { $0.isEmpty ? nil : $0 } : nil
+            if token == lastSentToken && sendingUserId == lastSentUserId && ringtone == lastSentRingtone {
+                // Nothing changed. Send again only to replace a stale proof
+                // with a different, unexpired one.
+                guard lastProofWasStale, let jwt, jwt != lastSentBearer, !Self.isExpired(jwt) else { return }
+            }
             var req = URLRequest(url: bridgeURL)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             // IOS-19: only a LINK needs proof. Sign-out sends none (the
             // token is already gone).
-            if sendingUserId != nil, let jwt = bearer(), !jwt.isEmpty {
+            if let jwt {
                 req.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
             }
+            let proofStale = jwt.map { Self.isExpired($0) } ?? false
             var body: [String: Any] = ["token": token, "platform": "ios"]
             if let sendingUserId { body["userId"] = sendingUserId }
             else { body["userId"] = NSNull() }
@@ -104,6 +118,8 @@ final class PushService: ObservableObject {
                     lastSentToken = token
                     lastSentUserId = sendingUserId
                     lastSentRingtone = ringtone
+                    lastSentBearer = jwt
+                    lastProofWasStale = proofStale
                     acknowledged = true
                 }
                 // Any other status: fail-soft, next foreground/state-change retries.
@@ -120,5 +136,18 @@ final class PushService: ObservableObject {
 
     func refreshRegistration() {
         Task { await syncIfNeeded() }
+    }
+
+    /// True only for a readable access token whose `exp` has passed. A token
+    /// that cannot be read is not called expired (nothing is resent for it).
+    static func isExpired(_ jwt: String, now: Date = Date()) -> Bool {
+        let parts = jwt.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return false }
+        var text = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while text.count % 4 != 0 { text.append("=") }
+        guard let data = Data(base64Encoded: text),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let exp = (json["exp"] as? NSNumber)?.doubleValue else { return false }
+        return exp <= now.timeIntervalSince1970
     }
 }
