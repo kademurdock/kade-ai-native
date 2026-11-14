@@ -164,14 +164,13 @@ struct FollowTrack: Equatable {
         covers.endSec >= filmSeconds - 1
     }
 
-    /// Where second 0 of the fingerprint sits in the film. A fingerprint of
-    /// the whole film starts at 0. A part's fingerprint, made from that
-    /// part's own sound, starts where the part does: a print that starts at
-    /// 0 could not reach the part's end, so it must start at the part.
+    /// Where second 0 of the fingerprint sits in the film. The server's
+    /// contract (track.ts): the fingerprint's second 0 is covers.startSec,
+    /// 0 for a whole film, the part's start for a part (made from that
+    /// part's own sound). print.startSec, if the server ever sends it, wins.
     func printOffset(printSeconds: Double) -> Double {
         if let start = print.startSec, start.isFinite, start >= 0 { return start }
-        if covers.startSec > 1, printSeconds > 0, printSeconds + 1 < covers.endSec { return covers.startSec }
-        return 0
+        return max(0, covers.startSec)
     }
 
     /// Where the track ends, in fingerprint seconds.

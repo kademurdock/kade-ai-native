@@ -1220,30 +1220,55 @@ final class DescribedVideoService: ObservableObject {
     // MARK: Follow along (Tellavision, Nov 14 2026)
 
     /// The follow-along track of one finished copy, if the server has one.
+    /// 200 ready, 202 making, 409 possible (ask for one) or gone (its reason).
     func track(jobId: String, version: Int) async throws -> DVTrackAnswer {
-        let data = try await exchange(
+        try await trackAnswer(
             "jobs/\(jobId)/track",
+            method: "GET",
+            body: nil,
             query: [URLQueryItem(name: "version", value: String(version))],
             fallback: "Couldn't get the follow-along track. Try again."
         )
-        guard let answer = DVTrackAnswer.read(data) else {
-            throw DescribedVideoError(message: "The describer sent an answer this app could not read. Try again, or use the website.")
-        }
-        return answer
     }
 
-    /// Asks the server to make the follow-along track. Free.
+    /// Asks the server to make the follow-along track. Free. Ready at once
+    /// when its fingerprint is already saved; otherwise 202, making.
     func makeTrack(jobId: String, version: Int) async throws -> DVTrackAnswer {
-        let data = try await exchange(
+        try await trackAnswer(
             "jobs/\(jobId)/track",
             method: "POST",
             body: ["version": version],
+            query: nil,
             fallback: "Couldn't ask for a follow-along track. Try again."
         )
-        guard let answer = DVTrackAnswer.read(data) else {
-            throw DescribedVideoError(message: "The describer sent an answer this app could not read. Try again, or use the website.")
+    }
+
+    /// The track routes answer 409 for "possible" and "gone", with a body
+    /// that says which: that body is read, never thrown away as an error.
+    private func trackAnswer(
+        _ path: String,
+        method: String,
+        body: [String: Any]?,
+        query: [URLQueryItem]?,
+        fallback: String
+    ) async throws -> DVTrackAnswer {
+        let first = try makeRequest(path, method: method, body: body, query: query, timeout: 60)
+        var (data, http) = try await client.send(first)
+        if http.statusCode == 401, await refreshToken() {
+            let again = try makeRequest(path, method: method, body: body, query: query, timeout: 60)
+            (data, http) = try await client.send(again)
         }
-        return answer
+        if http.statusCode == 401 {
+            throw DescribedVideoError(message: "Please sign in to Kade-AI again. Anything already running keeps going on the server.", status: 401)
+        }
+        let readable = (200..<300).contains(http.statusCode) || http.statusCode == 409
+        if readable, let answer = DVTrackAnswer.read(data) {
+            return answer
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw decodeError(data, status: http.statusCode, fallback: fallback)
+        }
+        throw DescribedVideoError(message: "The describer sent an answer this app could not read. Try again, or use the website.")
     }
 
     /// A small signed file (the fingerprint, about a megabyte an hour) into

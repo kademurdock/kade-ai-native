@@ -277,8 +277,7 @@ switch readTrack(#"{"format": "kade-follow-track", "filmSeconds": 7300, "covers"
 case .success(let part):
     check(part.version == 1, "a track with no version is version 1")
     check(part.isPart && part.reachesFilmEnd, "a track for the last part")
-    check(part.printOffset(printSeconds: 1900) == 5400, "a part's own fingerprint starts where the part does")
-    check(part.printOffset(printSeconds: 7300) == 0, "a whole film's fingerprint for a part starts at 0")
+    check(part.printOffset(printSeconds: 1900) == 5400, "a part's own fingerprint starts where the part does (the server's contract: covers.startSec)")
     check(part.endInPrint(printSeconds: 1900) == 1900, "the part ends at its fingerprint's end")
     check(part.title == "Your film" && part.language == "en", "a missing title and language")
 case .failure: check(false, "a part track reads")
