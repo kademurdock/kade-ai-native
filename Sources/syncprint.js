@@ -31,6 +31,12 @@
   var MAX_WINDOW_SEC = 60; // the search near an expected position never looks further than this
   var GAIN_KEEP = 8; // the tracker keeps this many room-level readings
   var HIST_STEPS = 4096; // steps in the vote histogram that picks the offsets worth checking
+  var RATE_MAX_DIFF = 0.08; // a TV airing may run up to 8 percent fast or slow
+  var SKIP_SEC = 0.5; // a jump bigger than this, plus what that rate could drift since the last fix, is a skip
+  var RATE_GAP_SEC = 120; // after this long without a fix, the rate's evidence starts afresh
+  var RATE_KEEP = 12; // the tracker learns the playing rate from up to this many fixes ...
+  var RATE_SPAN_SEC = 300; // ... from the last five minutes ...
+  var RATE_MIN_SPAN_SEC = 20; // ... once they span this long
 
   // ------------------------------------------------------------------
   // Parameters. Every value here was chosen by measurement on the tuning
@@ -1321,6 +1327,8 @@
     this.lastBackJumpFilmSec = null;
     this.hurried = false;
     this.gains = []; // how loud the film sounds in this room, from the last few accepted matches
+    this.rate = 1; // film seconds per clock second (a TV airing may run a little fast or slow)
+    this.fixLog = []; // recent fixes since the last skip, for learning the rate
   };
 
   // The room level: the middle of the last few readings, or null before the first.
@@ -1335,35 +1343,108 @@
     return n & 1 ? s[(n - 1) >> 1] : (s[n / 2 - 1] + s[n / 2]) / 2;
   };
 
-  Tracker.prototype.est = function (t) {
+  // How much of the smoothing correction has been applied by clock time t.
+  Tracker.prototype.applied = function (t) {
     var applied = 0, c = this.corr;
     if (c !== 0 && t > this.corrMono) {
       applied = (t - this.corrMono) * this.o.slewPerSec;
       if (c > 0) { if (applied > c) applied = c; }
       else { if (applied > -c) applied = -c; applied = -applied; }
     }
-    return this.aFilm + (t - this.aMono) + applied;
+    return applied;
   };
 
-  Tracker.prototype.setAnchor = function (film, mono, now, smooth) {
+  // Where the film is at clock time t.
+  Tracker.prototype.est = function (t) {
+    return this.aFilm + this.rate * (t - this.aMono) + this.applied(t);
+  };
+
+  // Moves the anchor to clock time now without changing any estimate.
+  Tracker.prototype.rebase = function (now) {
+    var a = this.applied(now);
+    this.aFilm = this.aFilm + this.rate * (now - this.aMono) + a;
+    this.aMono = now;
+    this.corr -= a;
+    this.corrMono = now;
+  };
+
+  // A TV airing may run a little fast or slow (broadcasters compress time by a
+  // few percent). The tracker learns the rate from its own fixes since the last
+  // skip: a straight line through them. It uses that line only when it clearly
+  // differs from real time (by 1 percent with two fixes, 0.3 percent with more,
+  // and always by three times its own uncertainty), and never beyond 8 percent
+  // either way. It may change this.rate, keeping the estimate at clock time now.
+  Tracker.prototype.learnRate = function (film, mono, now, fresh) {
+    var log = this.fixLog, n, i, mx = 0, my = 0, sxx = 0, sxy = 0, dx, s, rss = 0, e, r, se, rate, d, least;
+    if (fresh) log.length = 0;
+    log.push({ m: mono, f: film });
+    while (log.length > RATE_KEEP || mono - log[0].m > RATE_SPAN_SEC) log.shift();
+    n = log.length;
+    if (n < 2 || log[n - 1].m - log[0].m < RATE_MIN_SPAN_SEC) return;
+    for (i = 0; i < n; i++) { mx += log[i].m; my += log[i].f; }
+    mx /= n; my /= n;
+    for (i = 0; i < n; i++) {
+      dx = log[i].m - mx;
+      sxx += dx * dx;
+      sxy += dx * (log[i].f - my);
+    }
+    if (!(sxx > 0)) return;
+    s = sxy / sxx;
+    for (i = 0; i < n; i++) {
+      e = log[i].f - (my + s * (log[i].m - mx));
+      rss += e * e;
+    }
+    r = Math.sqrt(rss / (n > 2 ? n - 2 : 1));
+    if (r > 0.15) return; // the fixes do not lie on a line: leave the rate as it is
+    // a match is never surer than about 20 ms; with only two fixes there is no
+    // spread to measure, so assume twice that
+    if (n === 2) r = 0.04;
+    else if (r < 0.02) r = 0.02;
+    se = r / Math.sqrt(sxx);
+    d = s - 1;
+    // two fixes alone must show at least 1 percent (real fixes disagree by tens of
+    // milliseconds, never by the quarter second that would take); more need 0.3 percent
+    least = n === 2 ? 0.01 : 0.003;
+    rate = (d >= least || d <= -least) && (d > 3 * se || -d > 3 * se) && d >= -RATE_MAX_DIFF && d <= RATE_MAX_DIFF ? s : 1;
+    if (rate === this.rate) return;
+    if (this.hasEst) this.rebase(now);
+    this.rate = rate;
+  };
+
+  // A match of a clip from a film running at another rate lands, on average, half
+  // the clip's length times (rate - 1) late: it lines up the whole clip at once.
+  Tracker.prototype.unbias = function (rawFilm, clipSec) {
+    return rawFilm - (this.rate - 1) * clipSec / 2;
+  };
+
+  // rawFilm: the match's film second for the clip that started at clock time mono.
+  Tracker.prototype.setAnchor = function (rawFilm, mono, now, smooth, clipSec) {
     var prev = this.hasEst ? this.est(now) : null;
+    // The rate's evidence starts afresh after a skip or a pause: a jump bigger than
+    // any drift could explain since the last fix, or a fix after a long gap.
+    var drift = prev === null ? 0 : this.unbias(rawFilm, clipSec) + this.rate * (now - mono) - prev;
+    var since = this.lastFixMono === null ? 0 : now - this.lastFixMono;
+    var fresh = prev === null || since > RATE_GAP_SEC || (drift > 0 ? drift : -drift) > SKIP_SEC + RATE_MAX_DIFF * since;
+    // learn first (from the raw fixes, whose constant lag does not change the slope),
+    // so that this fix is carried forward to now at the rate it teaches
+    this.learnRate(rawFilm, mono, now, fresh);
+    var film = this.unbias(rawFilm, clipSec);
+    var target = film + this.rate * (now - mono); // this fix, carried forward to now
+    var delta = prev === null ? 0 : target - prev;
     if (smooth && prev !== null) {
       // keep the present estimate and let the difference slew in
       this.aFilm = prev; this.aMono = now;
-      this.corr = (film + (now - mono)) - prev;
+      this.corr = delta;
       this.corrMono = now;
     } else {
       this.aFilm = film; this.aMono = mono; this.corr = 0; this.corrMono = now;
-      if (prev !== null) {
-        var delta = (film + (now - mono)) - prev;
-        if (delta > this.o.smallSec || delta < -this.o.smallSec) {
-          this.jumpCount++;
-          this.justJumped = true;
-          this.lastJumpSec = delta;
-          if (delta < 0) {
-            this.lastBackJumpMono = now;
-            this.lastBackJumpFilmSec = film + (now - mono);
-          }
+      if (prev !== null && (delta > this.o.smallSec || delta < -this.o.smallSec)) {
+        this.jumpCount++;
+        this.justJumped = true;
+        this.lastJumpSec = delta;
+        if (delta < 0) {
+          this.lastBackJumpMono = now;
+          this.lastBackJumpFilmSec = target;
         }
       }
     }
@@ -1387,24 +1468,25 @@
     if (now < clipStartMono) now = clipStartMono;
     this.lastListenEnd = clipStartMono + clipSec;
     this.hurried = false;
-    var film = result.filmSec, conf = isNum(result.confidence) ? result.confidence : 0;
+    var raw = result.filmSec, conf = isNum(result.confidence) ? result.confidence : 0;
+    var film = this.unbias(raw, clipSec);
     var pend = this.pending;
     if (pend && clipStartMono - pend.mono > o.pendingMaxAgeSec) { pend = null; this.pending = null; }
-    var agreesPending = pend !== null && Math.abs(film - (pend.film + (clipStartMono - pend.mono))) <= o.agreeSec;
+    var agreesPending = pend !== null && Math.abs(film - (pend.film + this.rate * (clipStartMono - pend.mono))) <= o.agreeSec;
     var e = this.hasEst ? film - this.est(clipStartMono) : null;
     var small = e !== null && e <= o.smallSec && e >= -o.smallSec;
     var took = false;
     if (this.status === 'locked') {
-      if (small) { this.setAnchor(film, clipStartMono, now, true); took = true; }
-      else if (conf >= o.jumpConfidence || agreesPending) { this.setAnchor(film, clipStartMono, now, false); took = true; }
+      if (small) { this.setAnchor(raw, clipStartMono, now, true, clipSec); took = true; }
+      else if (conf >= o.jumpConfidence || agreesPending) { this.setAnchor(raw, clipStartMono, now, false, clipSec); took = true; }
       else {
         // one weaker match says the film is elsewhere: stop describing until a second opinion
         this.pending = { film: film, mono: clipStartMono };
         this.status = 'holding';
       }
     } else {
-      if (small && this.status === 'holding') { this.setAnchor(film, clipStartMono, now, true); took = true; }
-      else if (conf >= o.lockConfidence || agreesPending) { this.setAnchor(film, clipStartMono, now, false); took = true; }
+      if (small && this.status === 'holding') { this.setAnchor(raw, clipStartMono, now, true, clipSec); took = true; }
+      else if (conf >= o.lockConfidence || agreesPending) { this.setAnchor(raw, clipStartMono, now, false, clipSec); took = true; }
       else this.pending = { film: film, mono: clipStartMono };
     }
     if (took && isNum(result.gainDb)) {
@@ -1457,7 +1539,8 @@
       lastBackJumpMono: this.lastBackJumpMono,
       lastBackJumpFilmSec: this.lastBackJumpFilmSec,
       misses: this.misses,
-      doubt: this.pending !== null
+      doubt: this.pending !== null,
+      rate: this.rate
     };
   };
 
