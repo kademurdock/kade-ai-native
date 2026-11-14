@@ -22,13 +22,14 @@
 (function (root) {
   'use strict';
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.1.1';
   var FORMAT_VERSION = 1;
   var MAGIC = [0x53, 0x59, 0x50, 0x52]; // "SYPR"
   var HEADER_BYTES = 48;
   var EPS_POWER = 1e-9; // added before the logarithm; digital silence stays flat
   var MAX_CLIP_SEC = 600;
   var MAX_WINDOW_SEC = 60; // the search near an expected position never looks further than this
+  var MAX_HASHES = 2097152; // the largest hash space a print may have (it sets the size of the matcher's table)
   var GAIN_KEEP = 8; // the tracker keeps this many room-level readings
   var HIST_STEPS = 4096; // steps in the vote histogram that picks the offsets worth checking
   var RATE_MAX_DIFF = 0.08; // a TV airing may run up to 8 percent fast or slow
@@ -36,7 +37,10 @@
   var RATE_GAP_SEC = 120; // after this long without a fix, the rate's evidence starts afresh
   var RATE_KEEP = 12; // the tracker learns the playing rate from up to this many fixes ...
   var RATE_SPAN_SEC = 300; // ... from the last five minutes ...
-  var RATE_MIN_SPAN_SEC = 20; // ... once they span this long
+  var RATE_MIN_SPAN_SEC = 20; // ... once there are three or more and they span this long
+  var RATE_MIN_GAP_SEC = 4; // a fix this soon after the last tells next to nothing about the rate: it takes the last one's place
+  var RATE_MIN_DIFF = 0.003; // a rate is used only when it differs from 1 by this much
+  var FIX_SEC = 0.02; // a fix is never surer than about 20 ms
 
   // ------------------------------------------------------------------
   // Parameters. Every value here was chosen by measurement on the tuning
@@ -165,8 +169,10 @@
     if (!(p.spread >= 1 && p.spread <= 255)) return 'spread';
     if (!(p.decay > 0.5 && p.decay < 1)) return 'decay';
     if (!(p.floor >= 0 && p.floor < 50)) return 'floor';
+    // the matcher's table has one entry per possible hash: 2,097,152 entries take
+    // 8 MB (16 MB while it is built); the defaults use 403,200
     var hashes = (p.binHi - p.binLo + 1) * (2 * p.dfMax + 1) * (p.dtMax - p.dtMin + 1);
-    if (hashes > 16777216) return 'hash space too large';
+    if (hashes > MAX_HASHES) return 'hash space too large';
     return '';
   }
 
@@ -1297,12 +1303,15 @@
     for (j = 0; j < list.length; j++) list[j].z = (list[j].z - mu) / sd;
   };
 
-  // A clip that was not found: was it silence? It is when it is far quieter than
-  // this film sounds in this room (gainDb, the tracker's reading) at the expected
-  // place, or than the film's usual loud level when no place is expected.
+  // A clip that was not found: was it silence? It is when it is far quieter
+  // (silenceDb) than this film would sound here, in this room (gainDb, the
+  // tracker's reading): than the film's own loudness at the expected place, or,
+  // when no place is expected, than the quietest the film ever is outside its own
+  // quiet stretches (quietDropDb under its usual loud level). So a passage that is
+  // merely quiet, and still playing, is not called silence.
   Matcher.prototype.quiet = function (out, expectSec, clipSec, gainDb) {
     if (gainDb === null || out.level === null) return out;
-    var ref = expectSec !== null ? this.levelAt(expectSec, clipSec) : this.loudDb;
+    var ref = expectSec !== null ? this.levelAt(expectSec, clipSec) : this.loudDb - this.cfg.quietDropDb;
     if (ref !== null && out.level < ref + gainDb - this.cfg.silenceDb) out.reason = 'silence';
     return out;
   };
@@ -1398,19 +1407,11 @@
     this.corrMono = now;
   };
 
-  // A TV airing may run a little fast or slow (broadcasters compress time by a
-  // few percent). The tracker learns the rate from its own fixes since the last
-  // skip: a straight line through them. It uses that line only when it clearly
-  // differs from real time (by 1 percent with two fixes, 0.3 percent with more,
-  // and always by three times its own uncertainty), and never beyond 8 percent
-  // either way. It may change this.rate, keeping the estimate at clock time now.
-  Tracker.prototype.learnRate = function (film, mono, now, fresh) {
-    var log = this.fixLog, n, i, mx = 0, my = 0, sxx = 0, sxy = 0, dx, s, rss = 0, e, r, se, rate, d, least;
-    if (fresh) log.length = 0;
-    log.push({ m: mono, f: film });
-    while (log.length > RATE_KEEP || mono - log[0].m > RATE_SPAN_SEC) log.shift();
-    n = log.length;
-    if (n < 2 || log[n - 1].m - log[0].m < RATE_MIN_SPAN_SEC) return;
+  // A straight line through the fixes log[0 .. n - 1] (n is 3 or more): its slope
+  // s, what it leaves unexplained (rss, a sum of squares) and its spread r. Null
+  // when the fixes all share one clock time.
+  function fitLine(log, n) {
+    var i, mx = 0, my = 0, sxx = 0, sxy = 0, dx, s, rss = 0, e;
     for (i = 0; i < n; i++) { mx += log[i].m; my += log[i].f; }
     mx /= n; my /= n;
     for (i = 0; i < n; i++) {
@@ -1418,24 +1419,80 @@
       sxx += dx * dx;
       sxy += dx * (log[i].f - my);
     }
-    if (!(sxx > 0)) return;
+    if (!(sxx > 0)) return null;
     s = sxy / sxx;
     for (i = 0; i < n; i++) {
       e = log[i].f - (my + s * (log[i].m - mx));
       rss += e * e;
     }
-    r = Math.sqrt(rss / (n > 2 ? n - 2 : 1));
-    if (r > 0.15) return; // the fixes do not lie on a line: leave the rate as it is
-    // a match is never surer than about 20 ms; with only two fixes there is no
-    // spread to measure, so assume twice that
-    if (n === 2) r = 0.04;
-    else if (r < 0.02) r = 0.02;
-    se = r / Math.sqrt(sxx);
-    d = s - 1;
-    // two fixes alone must show at least 1 percent (real fixes disagree by tens of
-    // milliseconds, never by the quarter second that would take); more need 0.3 percent
-    least = n === 2 ? 0.01 : 0.003;
-    rate = (d >= least || d <= -least) && (d > 3 * se || -d > 3 * se) && d >= -RATE_MAX_DIFF && d <= RATE_MAX_DIFF ? s : 1;
+    return { s: s, sxx: sxx, rss: rss, r: Math.sqrt(rss / (n - 2)) };
+  }
+
+  // How well the fixes fit the film running at rate rho with one step somewhere
+  // between two of them (a pause, a stall or a small skip): the least sum of
+  // squares over every place the step could fall, each side with its own offset.
+  // Measured from the first fix, so that large clock values lose no precision.
+  function stepFit(log, n, rho) {
+    var i, y, sa = 0, qa = 0, sb, qb, tot = 0, totQ = 0, rss, best = Infinity;
+    var m0 = log[0].m, f0 = log[0].f;
+    for (i = 0; i < n; i++) {
+      y = (log[i].f - f0) - rho * (log[i].m - m0);
+      tot += y; totQ += y * y;
+    }
+    for (i = 1; i < n; i++) {
+      y = (log[i - 1].f - f0) - rho * (log[i - 1].m - m0);
+      sa += y; qa += y * y;
+      sb = tot - sa; qb = totQ - qa;
+      rss = (qa - sa * sa / i) + (qb - sb * sb / (n - i));
+      if (rss < best) best = rss;
+    }
+    return best;
+  }
+
+  // Adds a reading to the rate's evidence: up to RATE_KEEP of them, from the last
+  // RATE_SPAN_SEC. A reading less than RATE_MIN_GAP_SEC after the last takes its place.
+  Tracker.prototype.logFix = function (film, mono) {
+    var log = this.fixLog;
+    if (log.length && mono - log[log.length - 1].m < RATE_MIN_GAP_SEC) log.pop();
+    log.push({ m: mono, f: film });
+    while (log.length > RATE_KEEP || mono - log[0].m > RATE_SPAN_SEC) log.shift();
+  };
+
+  // A TV airing may run a little fast or slow (broadcasters compress time by a
+  // few percent). The tracker learns the rate from its own fixes since the last
+  // skip: a straight line through them. But a pause, a stream that stalls, or a
+  // small skip between two fixes bends that line too, and with few fixes a step
+  // looks just like a rate. So a line through three or more fixes is used (or
+  // refines the rate in use) only when it clearly shows a rate (0.3 percent or
+  // more, three times its own uncertainty, never beyond 8 percent either way),
+  // no single step at real speed explains the fixes about as well, and no step
+  // at the rate in use explains them better. Otherwise the rate in use is kept
+  // while it explains the fixes, allowing for one step anywhere; when it does
+  // not, the rate goes back to 1. Fixes that lie on no line at all start the
+  // evidence afresh. It adds this fix to the evidence, and may change this.rate,
+  // keeping the estimate at clock time now.
+  Tracker.prototype.learnRate = function (film, mono, now) {
+    var log = this.fixLog, n, line, margin, se, d, clear, cur, rate;
+    this.logFix(film, mono);
+    n = log.length;
+    if (n < 3 || log[n - 1].m - log[0].m < RATE_MIN_SPAN_SEC) return;
+    line = fitLine(log, n);
+    if (line === null) return;
+    // the fixes do not lie on a line (more than one step, or a fix far off):
+    // keep the rate, and start the evidence afresh from the newest fix
+    if (line.r > 0.15) { log.splice(0, n - 1); return; }
+    // a step must fit clearly worse than the line: by nine times the square of
+    // a fix's error (at least 20 ms), so that chance alone does not decide
+    margin = 9 * Math.max(FIX_SEC * FIX_SEC, line.rss / (n - 2));
+    se = (line.r > FIX_SEC ? line.r : FIX_SEC) / Math.sqrt(line.sxx);
+    d = line.s - 1;
+    // the fixes clearly show a rate, and no single step at real speed explains them
+    clear = (d >= RATE_MIN_DIFF || d <= -RATE_MIN_DIFF) && (d > 3 * se || -d > 3 * se) &&
+      d >= -RATE_MAX_DIFF && d <= RATE_MAX_DIFF && stepFit(log, n, 1) > line.rss + margin;
+    cur = stepFit(log, n, this.rate); // the rate in use, with one step somewhere
+    if (clear && line.rss <= cur) rate = line.s; // a line fits at least as well: take it (this also refines a learned rate)
+    else if (cur <= line.rss + margin) return; // the rate in use, perhaps with one pause or skip, still explains the fixes
+    else rate = 1;
     if (rate === this.rate) return;
     if (this.hasEst) this.rebase(now);
     this.rate = rate;
@@ -1448,7 +1505,9 @@
   };
 
   // rawFilm: the match's film second for the clip that started at clock time mono.
-  Tracker.prototype.setAnchor = function (rawFilm, mono, now, smooth, clipSec) {
+  // confirmed: the doubtful match this one agrees with, if any ({ raw, mono }): two
+  // readings from separate sound, both evidence for the rate.
+  Tracker.prototype.setAnchor = function (rawFilm, mono, now, smooth, clipSec, confirmed) {
     var prev = this.hasEst ? this.est(now) : null;
     // The rate's evidence starts afresh after a skip or a pause: a jump bigger than
     // any drift could explain since the last fix, or a fix after a long gap.
@@ -1457,7 +1516,9 @@
     var fresh = prev === null || since > RATE_GAP_SEC || (drift > 0 ? drift : -drift) > SKIP_SEC + RATE_MAX_DIFF * since;
     // learn first (from the raw fixes, whose constant lag does not change the slope),
     // so that this fix is carried forward to now at the rate it teaches
-    this.learnRate(rawFilm, mono, now, fresh);
+    if (fresh) this.fixLog.length = 0;
+    if (confirmed) this.logFix(confirmed.raw, confirmed.mono);
+    this.learnRate(rawFilm, mono, now);
     var film = this.unbias(rawFilm, clipSec);
     var target = film + this.rate * (now - mono); // this fix, carried forward to now
     var delta = prev === null ? 0 : target - prev;
@@ -1502,22 +1563,31 @@
     var film = this.unbias(raw, clipSec);
     var pend = this.pending;
     if (pend && clipStartMono - pend.mono > o.pendingMaxAgeSec) { pend = null; this.pending = null; }
-    var agreesPending = pend !== null && Math.abs(film - (pend.film + this.rate * (clipStartMono - pend.mono))) <= o.agreeSec;
+    // A second opinion counts only when it comes from new sound. A clip that shares
+    // sound with the doubtful one may simply find the same thing in it again, so it
+    // can neither confirm that match nor, unless it is sure, move the lock. Two
+    // matches agree when they are within agreeSec, plus what the largest rate the
+    // tracker allows could drift between them (the rate may not be learned yet).
+    var newSound = pend === null || clipStartMono >= pend.end - 1e-6;
+    var gap = pend === null ? 0 : clipStartMono - pend.mono;
+    var samePlace = pend !== null && Math.abs(film - (pend.film + this.rate * gap)) <= o.agreeSec + RATE_MAX_DIFF * (gap > 0 ? gap : -gap);
+    var agreesPending = samePlace && newSound;
     var e = this.hasEst ? film - this.est(clipStartMono) : null;
     var small = e !== null && e <= o.smallSec && e >= -o.smallSec;
     var took = false;
     if (this.status === 'locked') {
       if (small) { this.setAnchor(raw, clipStartMono, now, true, clipSec); took = true; }
-      else if (conf >= o.jumpConfidence || agreesPending) { this.setAnchor(raw, clipStartMono, now, false, clipSec); took = true; }
+      else if (conf >= o.jumpConfidence || agreesPending) { this.setAnchor(raw, clipStartMono, now, false, clipSec, agreesPending ? pend : null); took = true; }
       else {
         // one weaker match says the film is elsewhere: stop describing until a second opinion
-        this.pending = { film: film, mono: clipStartMono };
+        this.pending = { film: film, raw: raw, mono: clipStartMono, end: clipStartMono + clipSec };
         this.status = 'holding';
       }
     } else {
       if (small && this.status === 'holding') { this.setAnchor(raw, clipStartMono, now, true, clipSec); took = true; }
-      else if (conf >= o.lockConfidence || agreesPending) { this.setAnchor(raw, clipStartMono, now, false, clipSec); took = true; }
-      else this.pending = { film: film, mono: clipStartMono };
+      else if (agreesPending || conf >= (newSound ? o.lockConfidence : o.jumpConfidence)) { this.setAnchor(raw, clipStartMono, now, false, clipSec, agreesPending ? pend : null); took = true; }
+      else if (!samePlace) this.pending = { film: film, raw: raw, mono: clipStartMono, end: clipStartMono + clipSec };
+      // (a clip that only repeats the doubtful match leaves it waiting, as it was)
     }
     if (took && isNum(result.gainDb)) {
       this.gains.push(result.gainDb);
@@ -1598,6 +1668,9 @@
     } else {
       wait = o.lostWaitSec; clip = o.lostClipSec;
     }
+    // a doubtful match waits for a second opinion, which must come from new sound:
+    // the next clip starts where the last one ended
+    if (this.pending !== null && (st === 'holding' || st === 'lost') && wait < clip) wait = clip;
     wait = this.hurried ? 0 : wait - since;
     return { waitSec: wait > 0 ? wait : 0, clipSec: clip };
   };
