@@ -2,3 +2,6 @@
 # library the server also ships; its checksum is tested, so git must never
 # change its line endings.
 Sources/syncprint.js -text
+# The checksum file next to it is compared byte for byte with the server's
+# (dev/follow-along/compare-syncprint.py), so it keeps its line ending too.
+FollowAlongTests/syncprint.js.sha256 -text

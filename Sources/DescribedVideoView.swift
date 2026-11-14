@@ -431,6 +431,11 @@ struct DescribedVideoView: View {
                 // The share sheet has closed: its downloaded copy goes.
                 if let old, old.hasPrefix("share-"), old != id { removeSharedFile() }
             }
+            // Follow along's last sentence is done: a line the screen held
+            // while it spoke is said now.
+            .onChange(of: followAlong.phase) { _, phase in
+                if phase != .stopping { releaseHeldAnnouncement() }
+            }
     }
 
     /// The upload's bar and ending, whichever screen started it.
@@ -2224,6 +2229,11 @@ struct DescribedVideoView: View {
     /// line, after VoiceOver has landed back on the screen.
     private func releaseHeldAnnouncement() {
         guard onScreen, activeSheet == nil, let held = heldAnnouncement else { return }
+        // Nov 14 2026 review: Done while Follow along listens closes the sheet
+        // while its last sentence is still to come. The screen's line waits
+        // for that sentence instead of talking over it (the phase change
+        // below releases it).
+        guard followAlong.phase != .stopping else { return }
         heldAnnouncement = nil
         Task {
             try? await Task.sleep(nanoseconds: 700_000_000)

@@ -11,9 +11,9 @@ import JavaScriptCore
 // JavaScriptCore inside an app has no JIT, so:
 // - sound goes in one typed array per clip, copied in bulk, never one
 //   number at a time;
-// - every call runs on one background queue (FollowAlongAudio's engine
-//   queue), never on the main thread. This class is not thread-safe: make
-//   it, and use it, on that one queue only;
+// - every call runs on one background queue (the loop's queue, in
+//   FollowAlongLoop.swift), never on the main thread. This class is not
+//   thread-safe: make it, and use it, on that one queue only;
 // - the lines and the spoken record live inside JavaScript and are handed
 //   back by reference, so a two-hour film's lines are converted once.
 //
@@ -35,7 +35,10 @@ protocol FollowMatching: AnyObject {
     func nextListen(now: Double) -> FollowListen
     /// Check at the next chance instead of waiting for the next turn.
     func hurry()
-    /// Forget where the film was: look for it afresh (Start, Listen again).
+    /// Forget where the film was, and which lines were said: look for it
+    /// afresh (Start, Listen again). The two go together: with the tracker's
+    /// past gone, the planner could never tell a line said before from one
+    /// she has gone back to, so every line of the last run would stay silent.
     func reset()
     /// The line to say now, if any. `shift` moves the film time on (the
     /// output delay and her timing nudge), so a line starts that much early.
@@ -198,6 +201,10 @@ final class FollowAlongEngine: FollowMatching {
 
     func reset() {
         invoke(tracker, "reset", [])
+        guard tracker != nil else { return }
+        // A fresh spoken record (Nov 14 review: the old one outlived Stop).
+        let record: JSValue? = JSValue(newObjectIn: context)
+        spoken = record
     }
 
     func plan(_ state: FollowTrackerState, shift: Double, options: FollowPlanOptions) -> FollowPlan {

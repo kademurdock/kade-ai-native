@@ -11,16 +11,17 @@ import UserNotifications
 // voice (design TELLAVISION_SYNC_DESIGN_2026-11-13.md, Part 5.3).
 //
 // How it hangs together:
-// - FollowAlongPlayer (main thread) owns the audio session, the microphone
-//   engine, the speech engine, the lock screen and earbud buttons, calls and
-//   route changes. The sheet (FollowAlongView.swift) shows it.
-// - FollowAlongCapture turns the microphone's sound into 8 kHz mono on the
-//   tap's own thread and hands it to the loop.
-// - FollowAlongLoop runs on ONE background queue: the 16-second memory, the
-//   matcher (FollowAlongEngine, the one doorway to syncprint.js), the rules
-//   (FollowJudge) and the planner. The schedule runs from the arrival of
-//   microphone sound, not from a timer: sound keeps arriving with the phone
-//   locked, timers may not fire.
+// - FollowAlongPlayer (here, main thread) owns the audio session, the
+//   microphone engine, the speech engine, the lock screen and earbud
+//   buttons, calls and route changes. The sheet (FollowAlongView.swift)
+//   shows it.
+// - FollowAlongCapture (FollowAlongCapture.swift) turns the microphone's
+//   sound into 8 kHz mono on the tap's own thread and hands it to the loop.
+// - FollowAlongLoop (FollowAlongLoop.swift) runs on ONE background queue:
+//   the 16-second memory, the matcher (FollowAlongEngine, the one doorway to
+//   syncprint.js), the rules (FollowJudge) and the planner. The schedule runs
+//   from the arrival of microphone sound, not from a timer: sound keeps
+//   arriving with the phone locked, timers may not fire.
 //
 // Privacy: the microphone's sound lives only in the 16-second memory. It is
 // never written to a file, never sent and never logged; the trail and the
@@ -34,470 +35,6 @@ import UserNotifications
 // moment later so VoiceOver is back at its own level.
 //
 // Phone switch: kade.switch.followAlong. Server switch: KADE_DESCRIPTION_FOLLOW.
-
-/// The phone's audio clock in seconds (the same clock as the microphone's
-/// timestamps), for "now" everywhere in Follow along.
-enum FollowClock {
-    static func now() -> Double {
-        AVAudioTime.seconds(forHostTime: mach_absolute_time())
-    }
-}
-
-/// Shared by the main thread and the loop's queue: whether the phone is
-/// speaking, and when VoiceOver is likely quiet again. Nothing talks over
-/// VoiceOver: after she moves VoiceOver or presses a button, the phone waits
-/// as the voice auditions do (KadeAudioSessionPolicy.voiceOverSettle).
-final class FollowSpeechGate {
-    private let lock = NSLock()
-    private var busy = false
-    private var quietAt = 0.0
-
-    var speaking: Bool {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return busy
-        }
-        set {
-            lock.lock()
-            busy = newValue
-            lock.unlock()
-        }
-    }
-
-    var voiceOverQuietAt: Double {
-        lock.lock()
-        defer { lock.unlock() }
-        return quietAt
-    }
-
-    func voiceOverBusy(until time: Double) {
-        lock.lock()
-        quietAt = max(quietAt, time)
-        lock.unlock()
-    }
-
-    func canSpeak(now: Double) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return !busy && now >= quietAt
-    }
-}
-
-/// What the loop tells the main thread.
-enum FollowLoopOutput {
-    case prepared(millis: Double, printSeconds: Double, language: String, warning: String?)
-    case failed(String)
-    /// A status sentence; `stops` when Follow along ends after it.
-    case sentence(String, sound: FollowSoundKind?, stops: Bool)
-    /// A description line to say now.
-    case speak(id: String, text: String)
-    /// The soft chime: a line did not fit; pause the TV to hear it.
-    case chime
-    case report(FollowReport)
-    /// Where am I: film seconds, or nil when not in step.
-    case place(Double?)
-}
-
-// MARK: - The loop (one background queue)
-
-final class FollowAlongLoop {
-    private let queue: DispatchQueue
-    private let gate: FollowSpeechGate
-    private let deliver: (FollowLoopOutput) -> Void
-
-    // Everything below is touched on `queue` only.
-    private var engine: FollowAlongEngine?
-    private var track: FollowTrack?
-    private var offset = 0.0
-    private var cuesById: [String: FollowCue] = [:]
-    private var ring = FollowRing(seconds: 16)
-    private var judge = FollowJudge(now: 0, endSec: 0, part: false)
-    private var holder = FollowHolder(cues: [], offset: 0)
-    private var watch = FollowLevelWatch()
-    private var pace = FollowPace()
-    private var settings = FollowAlongSettings()
-    private var report = FollowReport()
-    private var running = false
-    private var descriptionsOn = true
-    /// Seconds a line starts early: the output delay plus her nudge.
-    private var lead = 0.0
-    /// The phone's own speaker is in use, so the microphone hears the phone.
-    private var echoRisk = true
-    private var ownSounds: [(start: Double, end: Double)] = []
-    private var spokenIds: Set<String> = []
-    private var nextPlanAt = 0.0
-    private var lastReportAt = 0.0
-    private var startedAt = 0.0
-    private var listenedBefore = 0.0
-    private var creditSaid = false
-    private var levelSum = 0.0
-    private var levelCount = 0
-
-    init(queue: DispatchQueue, gate: FollowSpeechGate, deliver: @escaping (FollowLoopOutput) -> Void) {
-        self.queue = queue
-        self.gate = gate
-        self.deliver = deliver
-    }
-
-    /// Reads the track, loads syncprint.js and the fingerprint, and builds
-    /// the matcher (a second or so for a long film, so it is done when the
-    /// sheet opens, before she presses Start).
-    func prepare(trackData: Data, print: Data, settings: FollowAlongSettings) {
-        queue.async { [self] in
-            let began = FollowClock.now()
-            self.settings = settings
-            let parsed: FollowTrack
-            do {
-                parsed = try FollowTrack.read(trackData)
-            } catch let problem as FollowTrack.Problem {
-                deliver(.failed(problem.words))
-                return
-            } catch {
-                deliver(.failed(FollowWords.damagedOnPhone))
-                return
-            }
-            guard let script = FollowAlongEngine.bundledScript() else {
-                KadeBreadcrumbs.drop("follow along: syncprint.js is not in the app")
-                deliver(.failed(FollowWords.couldNotStart))
-                return
-            }
-            do {
-                let made = try FollowAlongEngine(script: script)
-                try made.load(print: print)
-                let shift = parsed.printOffset(printSeconds: made.printSeconds)
-                made.setCues(parsed.cues, offset: shift)
-                engine = made
-                track = parsed
-                offset = shift
-                var byId: [String: FollowCue] = [:]
-                for cue in parsed.cues where byId[cue.id] == nil { byId[cue.id] = cue }
-                cuesById = byId
-                creditSaid = false
-                listenedBefore = 0
-                report = FollowReport()
-                report.printSeconds = made.printSeconds
-                report.cues = parsed.cues.count
-                let millis = (FollowClock.now() - began) * 1000
-                report.loadMillis = millis
-                KadeBreadcrumbs.drop("follow along: ready, syncprint \(made.version), \(Int(made.printSeconds)) s, \(parsed.cues.count) lines, \(Int(millis)) ms")
-                deliver(.prepared(millis: millis, printSeconds: made.printSeconds, language: parsed.language, warning: parsed.warning))
-            } catch FollowAlongEngine.Failure.print {
-                deliver(.failed(FollowWords.damagedOnPhone))
-            } catch {
-                KadeBreadcrumbs.drop("follow along: could not start: \(error)")
-                deliver(.failed(FollowWords.couldNotStart))
-            }
-        }
-    }
-
-    /// She pressed Start (or Listen again).
-    func start(now: Double) {
-        queue.async { [self] in
-            guard let engine, let track else { return }
-            engine.reset()
-            ring.clear()
-            judge = FollowJudge(now: now, endSec: track.endInPrint(printSeconds: engine.printSeconds), part: !track.reachesFilmEnd)
-            holder = FollowHolder(cues: track.cues, offset: offset)
-            watch = FollowLevelWatch()
-            ownSounds = []
-            levelSum = 0
-            levelCount = 0
-            descriptionsOn = true
-            nextPlanAt = 0
-            startedAt = now
-            lastReportAt = now
-            running = true
-        }
-    }
-
-    func stop() {
-        queue.async { [self] in
-            if running { listenedBefore += max(0, FollowClock.now() - startedAt) }
-            running = false
-            ring.clear()
-            snapshot(now: FollowClock.now())
-        }
-    }
-
-    /// The sheet closed: the matcher's memory goes.
-    func release() {
-        queue.async { [self] in
-            running = false
-            engine = nil
-            track = nil
-            ring.clear()
-        }
-    }
-
-    func update(settings fresh: FollowAlongSettings) {
-        queue.async { [self] in settings = fresh }
-    }
-
-    func update(lead seconds: Double, outputDelay: Double, echoRisk risk: Bool) {
-        queue.async { [self] in
-            lead = seconds
-            echoRisk = risk
-            report.outputDelayMillis = outputDelay * 1000
-        }
-    }
-
-    func setDescriptions(on: Bool) {
-        queue.async { [self] in descriptionsOn = on }
-    }
-
-    /// The phone made a sound (speech or a chime) from `time`, to `end` when known.
-    func soundStarted(at time: Double, until end: Double?) {
-        queue.async { [self] in ownSounds.append((start: time, end: end ?? .infinity)) }
-    }
-
-    func soundEnded(at time: Double) {
-        queue.async { [self] in
-            if let index = ownSounds.lastIndex(where: { $0.end == .infinity }) { ownSounds[index].end = time }
-        }
-    }
-
-    /// A description ended. `started` false: it never made a sound, so it is
-    /// not counted as said.
-    func finished(cue id: String, started: Bool, seconds: Double?, characters: Int, now: Double) {
-        queue.async { [self] in
-            guard let engine else { return }
-            if !started {
-                engine.forget(id)
-                spokenIds.remove(id)
-                report.linesSpoken = max(0, report.linesSpoken - 1)
-                return
-            }
-            if let seconds { pace.measured(characters: characters, seconds: seconds) }
-            guard running, let cue = cuesById[id] else { return }
-            let state = engine.state(now: now)
-            guard state.status == .locked, let film = state.filmSec else { return }
-            if film + lead > cue.endSec - offset + FollowHolder.toleranceSec {
-                pace.overran()
-            } else {
-                pace.inTime()
-            }
-        }
-    }
-
-    /// A status sentence was said: its timing teaches the voice speed.
-    func sentenceSpoken(characters: Int, seconds: Double) {
-        queue.async { [self] in pace.measured(characters: characters, seconds: seconds) }
-    }
-
-    func whereAmI(now: Double) {
-        queue.async { [self] in
-            guard running, let engine else {
-                deliver(.place(nil))
-                return
-            }
-            let state = engine.state(now: now)
-            if judge.phase == .inStep, state.status == .locked, let film = state.filmSec {
-                deliver(.place(film + offset))
-            } else {
-                deliver(.place(nil))
-            }
-        }
-    }
-
-    /// Sound from the microphone, ending at `end` on the audio clock.
-    func receive(_ samples: [Int16], endingAt end: Double) {
-        queue.async { [self] in
-            guard running else { return }
-            ring.append(samples, endingAt: end)
-            measureLevel(samples)
-            tick(now: FollowClock.now())
-        }
-    }
-
-    // MARK: The schedule
-
-    private func tick(now: Double) {
-        guard running, let engine else { return }
-        let listen = engine.nextListen(now: now)
-        if listen.wait <= 0, let clip = cleanClip(listen.clip, now: now) {
-            runCheck(clip, now: now)
-        }
-        guard running else { return }
-        let state = engine.state(now: now)
-        handle(judge.tick(state: state, now: now), now: now)
-        guard running else { return }
-        describe(state, now: now)
-        if now - lastReportAt >= 2 {
-            lastReportAt = now
-            snapshot(now: now)
-        }
-    }
-
-    /// One check: the clip against the fingerprint, then what the rules make of it.
-    private func runCheck(_ clip: (samples: [Int16], start: Double), now: Double) {
-        guard let engine else { return }
-        let result = engine.check(clip.samples, clipStart: clip.start, now: now)
-        report.checked(result)
-        // Read at once, so a jump is never missed (reading clears it).
-        let state = engine.state(now: now)
-        handle(judge.checked(result, state: state, now: now), now: now)
-    }
-
-    /// Every half second of sound, measured as it arrives: a room gone quiet
-    /// gets a check now instead of at the next turn, so a pause is caught fast.
-    private func measureLevel(_ samples: [Int16]) {
-        for sample in samples {
-            let value = Double(sample) / 32768
-            levelSum += value * value
-            levelCount += 1
-            if levelCount >= 4000 {
-                let rms = (levelSum / Double(levelCount)).squareRoot()
-                let db = rms > 1e-6 ? 20 * log10(rms) : -120
-                levelSum = 0
-                levelCount = 0
-                if judge.phase == .inStep, watch.block(db: db, heard: judge.heard.level) { engine?.hurry() }
-            }
-        }
-    }
-
-    /// The last `seconds` of sound, unless the phone's own speaker was
-    /// sounding in it (with earbuds the microphone never hears the phone).
-    private func cleanClip(_ seconds: Double, now: Double) -> (samples: [Int16], start: Double)? {
-        guard let clip = ring.last(seconds) else { return nil }
-        guard echoRisk else { return clip }
-        if gate.speaking { return nil }
-        let end = clip.start + seconds
-        ownSounds.removeAll { $0.end < now - 30 }
-        for sound in ownSounds where sound.start < end + 0.3 && sound.end > clip.start - 0.3 {
-            return nil
-        }
-        return clip
-    }
-
-    private func handle(_ events: [FollowEvent], now: Double) {
-        guard let track, !events.isEmpty else { return }
-        for event in events {
-            report.note(event)
-            var held: [String] = []
-            var stops = false
-            switch event {
-            case .found(let film):
-                if report.secondsToLock == nil { report.secondsToLock = now - startedAt }
-                holder.moved(to: film)
-            case .backInStep(let film), .skipped(let film, _):
-                holder.moved(to: film)
-            case .paused:
-                // Her choice: the lines that did not fit are read while the film is paused.
-                let lines = holder.takeAll()
-                if descriptionsOn {
-                    held = lines.map { $0.text }
-                    report.heldLinesRead += lines.count
-                    for line in lines {
-                        spokenIds.insert(line.id)
-                        engine?.spoke(line.id, now: now, filmSec: line.startSec)
-                    }
-                }
-            case .ended, .noFilm:
-                stops = true
-                running = false
-            default:
-                break
-            }
-            let words = FollowJudge.words(for: event, track: track, offset: offset, held: held, firstCredit: !creditSaid)
-            if case .found = event { creditSaid = true }
-            deliver(.sentence(words.text, sound: words.sound, stops: stops))
-            if stops { break }
-        }
-    }
-
-    /// Descriptions: hold the lines whose window closed unspoken, then ask
-    /// the planner for the line to say now.
-    private func describe(_ state: FollowTrackerState, now: Double) {
-        guard let engine, judge.phase == .inStep, state.status == .locked, let film = state.filmSec else { return }
-        let heardAt = film + lead
-        guard descriptionsOn else {
-            holder.pass(filmSec: heardAt)
-            return
-        }
-        let important = settings.amount == .important
-        let fresh = holder.sweep(filmSec: heardAt, spoken: spokenIds, importantOnly: important)
-        if !fresh.isEmpty {
-            report.linesHeld += fresh.count
-            if settings.heldChime, !gate.speaking, holder.mayChime(now: now) { deliver(.chime) }
-        }
-        guard now >= nextPlanAt else { return }
-        nextPlanAt = now + 0.25
-        guard gate.canSpeak(now: now) else { return }
-        let options = FollowPlanOptions(secPerChar: pace.secPerChar, leadSec: 0.15, toleranceSec: FollowHolder.toleranceSec,
-                                        importantOnly: important)
-        var plan = engine.plan(state, shift: lead, options: options)
-        guard plan.action == .speak else { return }
-        var at = film
-        // Design 5.3: before a line, when the last good check is more than
-        // 15 seconds old, check the last 6 seconds first (no waiting: the
-        // sound is already in memory). This is how a pause is caught.
-        if let since = state.sinceLastFixSec, since > 15, let clip = cleanClip(6, now: now) {
-            runCheck(clip, now: now)
-            let again = engine.state(now: now)
-            guard running, descriptionsOn, judge.phase == .inStep, again.status == .locked, let now2 = again.filmSec else { return }
-            at = now2
-            plan = engine.plan(again, shift: lead, options: options)
-            guard plan.action == .speak, gate.canSpeak(now: FollowClock.now()) else { return }
-        }
-        gate.speaking = true
-        engine.spoke(plan.id, now: now, filmSec: at)
-        spokenIds.insert(plan.id)
-        report.linesSpoken += 1
-        if plan.short { report.shortLines += 1 }
-        deliver(.speak(id: plan.id, text: plan.text))
-    }
-
-    private func snapshot(now: Double) {
-        let listening = running ? max(0, now - startedAt) : 0
-        report.minutesListened = (listenedBefore + listening) / 60
-        report.secondsPerLetter = pace.median
-        deliver(.report(report))
-    }
-}
-
-// MARK: - The microphone, to 8 kHz mono
-
-/// Lives on the microphone tap's own thread. One converter, one bulk copy
-/// per piece of sound, then on to the loop's queue.
-final class FollowAlongCapture {
-    private let converter: AVAudioConverter
-    private let target: AVAudioFormat
-    private let loop: FollowAlongLoop
-
-    init?(from source: AVAudioFormat, loop: FollowAlongLoop) {
-        guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 8000, channels: 1, interleaved: true),
-              let converter = AVAudioConverter(from: source, to: target) else { return nil }
-        converter.downmix = true
-        self.target = target
-        self.converter = converter
-        self.loop = loop
-    }
-
-    func take(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime) {
-        let frames = Double(buffer.frameLength)
-        let rate = buffer.format.sampleRate
-        guard frames > 0, rate > 0 else { return }
-        let start = when.isHostTimeValid ? AVAudioTime.seconds(forHostTime: when.hostTime) : FollowClock.now() - frames / rate
-        let end = start + frames / rate
-        let capacity = AVAudioFrameCount(frames * target.sampleRate / rate + 64)
-        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
-        var given = false
-        var problem: NSError?
-        let status = converter.convert(to: out, error: &problem) { _, inputStatus in
-            if given {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            given = true
-            inputStatus.pointee = .haveData
-            return buffer
-        }
-        guard status != .error, problem == nil, out.frameLength > 0, let channels = out.int16ChannelData else { return }
-        let samples = Array(UnsafeBufferPointer(start: channels[0], count: Int(out.frameLength)))
-        loop.receive(samples, endingAt: end)
-    }
-}
 
 // MARK: - The player (main thread)
 
@@ -522,6 +59,11 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     static let sessionName = "Follow along"
     /// The name it holds the microphone lane under (KadeAudioLanes).
     static let laneName = "Follow along"
+    /// The call notification's one identifier: a newer one replaces it.
+    static let callNotice = "kade.followAlong.call"
+    /// The microphone engine rebuilt this many times within 10 seconds means
+    /// something keeps changing under it: Follow along stops instead.
+    static let mostRebuilds = 5
 
     @Published private(set) var phase: Phase = .closed
     /// The last thing said (the sheet shows it; it is not a live region).
@@ -544,12 +86,20 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
 
     private(set) var report = FollowReport()
     private var stored: FollowStoredTrack?
+    /// A track opened again while the last sentence was being said: it gets
+    /// ready once that sentence is done.
+    private var reopen: FollowStoredTrack?
     private var loop: FollowAlongLoop?
+    /// Which loop's answers count. A loop that was let go (another track, a
+    /// closed sheet) may still answer from its queue; those answers are dropped.
+    private var generation = 0
     private let queue = DispatchQueue(label: "com.kademurdock.kadeai.followAlong", qos: .userInitiated)
     private let gate = FollowSpeechGate()
     private var engine: AVAudioEngine?
     private var chimeNode: AVAudioPlayerNode?
     private var capture: FollowAlongCapture?
+    /// When the microphone engine was rebuilt lately (earbuds in or out).
+    private var rebuilds: [Double] = []
     private var speaker: AVSpeechSynthesizer?
     private var current: AVSpeechUtterance?
     private var saying: Saying?
@@ -561,10 +111,20 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     private var holdsSession = false
     private var holdsLane = false
     private var closeWhenStopped = false
+    /// Route changes and media resets: only while listening.
     private var observers: [NSObjectProtocol] = []
+    /// The microphone engine's own configuration changes.
+    private var engineObserver: NSObjectProtocol?
+    /// Calls: for as long as the sheet is open, so the end of a call is heard
+    /// too (Nov 14 review: this went with the microphone, so a call's end
+    /// never reached the app).
+    private var callObserver: NSObjectProtocol?
     private var focusObserver: NSObjectProtocol?
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
+    /// The battery when this track first started listening.
     private var batteryStart: Double?
+    /// The battery when listening stopped: the phone stops measuring it then.
+    private var batteryAtStop: Double?
     private var language = "en"
     /// Stops the other sounds of the screen that opened it (listen-while-made, a voice sample).
     private var stopOthers: (() -> Void)?
@@ -591,8 +151,28 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     /// Start listening is instant.
     func open(_ item: FollowStoredTrack, stopOthers: @escaping () -> Void) {
         self.stopOthers = stopOthers
+        watchVoiceOver()
+        watchCalls()
+        switch phase {
+        case .stopping:
+            // Opened again while the last sentence is said (Done, then the
+            // button again): the sheet stays open, and this track gets ready
+            // when the sentence is done (Nov 14 review: the sheet was left on
+            // "Getting ready" for good).
+            closeWhenStopped = false
+            reopen = item
+            return
+        case .listening:
+            return
+        default:
+            break
+        }
         if stored?.id == item.id, phase != .closed, phase != .failed { return }
-        if phase == .listening || phase == .stopping { return }
+        prepare(item)
+    }
+
+    /// Reads the track and builds a fresh loop for it.
+    private func prepare(_ item: FollowStoredTrack) {
         stored = item
         trackTitle = item.title
         trackWarning = nil
@@ -601,10 +181,13 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         nowSaying = ""
         descriptionsOn = true
         report = FollowReport()
+        batteryStart = nil
+        batteryAtStop = nil
         loop?.release()
-        let made = FollowAlongLoop(queue: queue, gate: gate, deliver: Self.deliverer(to: self))
+        generation &+= 1
+        let made = FollowAlongLoop(queue: queue, gate: gate, clock: FollowClock.now, trail: KadeBreadcrumbs.drop,
+                                   deliver: Self.deliverer(to: self, generation: generation))
         loop = made
-        watchVoiceOver()
         let settingsNow = settings
         Task {
             let loaded = await Task.detached(priority: .userInitiated) { () -> (track: Data, print: Data)? in
@@ -622,6 +205,7 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     /// The sheet is closing. Listening stops first (with its sentence), so
     /// the microphone is never left on behind a closed screen.
     func close() {
+        reopen = nil
         switch phase {
         case .listening:
             closeWhenStopped = true
@@ -636,21 +220,27 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     private func finishClose() {
         loop?.release()
         loop = nil
+        // Anything the old loop still says is not for the next sheet.
+        generation &+= 1
         stored = nil
+        reopen = nil
         phase = .closed
         status = FollowWords.ready
         nowSaying = ""
         stopOthers = nil
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
         focusObserver = nil
+        unwatchCalls()
+        forgetCallNotice()
     }
 
     /// Made where no actor is assumed: the loop calls it on its own queue,
-    /// and the main queue keeps the order.
-    nonisolated private static func deliverer(to player: FollowAlongPlayer) -> (FollowLoopOutput) -> Void {
+    /// and the main queue keeps the order. Each answer carries the loop it
+    /// came from.
+    nonisolated private static func deliverer(to player: FollowAlongPlayer, generation: Int) -> (FollowLoopOutput) -> Void {
         { [weak player] output in
             DispatchQueue.main.async { [weak player] in
-                MainActor.assumeIsolated { player?.handle(output) }
+                MainActor.assumeIsolated { player?.handle(output, from: generation) }
             }
         }
     }
@@ -724,16 +314,22 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
             fail(FollowWords.notPhoneMic, phase: .ready)
             return
         }
+        rebuilds = []
         guard startEngine(loop: loop) else {
             tearDown()
             fail(FollowWords.couldNotStart, phase: .ready)
             return
         }
         watchSession()
+        watchEngine()
         wireRemote()
+        forgetCallNotice()
         UIDevice.current.isBatteryMonitoringEnabled = true
         let battery = Double(UIDevice.current.batteryLevel)
-        batteryStart = battery >= 0 ? battery : nil
+        // The minutes in the report add up every run on this track, so the
+        // battery is counted from the first run too.
+        if batteryStart == nil, battery >= 0 { batteryStart = battery }
+        batteryAtStop = nil
         descriptionsOn = true
         phase = .listening
         // The big button's words just changed and VoiceOver reads them.
@@ -779,23 +375,51 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         status = FollowWords.ready
     }
 
-    /// Copy test report: numbers only.
+    /// Copy test report: numbers only. After Stop the phone no longer
+    /// measures the battery, so the level from when listening stopped is
+    /// used (Nov 14 review: it went missing from every report after Stop).
     func copyReport() {
-        var copy = report
-        copy.nudgeSeconds = settings.nudge
-        copy.batteryStart = batteryStart
         let battery = Double(UIDevice.current.batteryLevel)
-        if UIDevice.current.isBatteryMonitoringEnabled, battery >= 0 { copy.batteryNow = battery }
+        let live: Double? = UIDevice.current.isBatteryMonitoringEnabled && battery >= 0 ? battery : nil
+        let copy = report.copied(nudge: settings.nudge, batteryStart: batteryStart, batteryNow: live, batteryAtStop: batteryAtStop)
         UIPasteboard.general.string = copy.text()
-        UIAccessibility.post(notification: .announcement, argument: "Test report copied. It holds numbers only.")
+        announce("Test report copied. It holds numbers only.")
     }
 
-    /// VoiceOver moved, or she pressed a button (VoiceOver may read its new
-    /// words): nothing is spoken until VoiceOver has had time to finish.
+    /// She pressed a button (VoiceOver may read its new words): nothing is
+    /// spoken for a moment.
     func noteVoiceOver() {
+        holdForVoiceOver(KadeAudioSessionPolicy.voiceOverSettle)
+    }
+
+    /// VoiceOver landed on something: nothing is spoken until it has read it
+    /// out, its label and then its hint, at her own voice's speed (Nov 14
+    /// review: a flat 1.5 seconds was shorter than a hint).
+    private func voiceOverLanded(on element: Any?) {
+        let item = element as? NSObject
+        let seconds = FollowVoiceOverTime.reading(label: item?.accessibilityLabel, value: item?.accessibilityValue,
+                                                  hint: item?.accessibilityHint, secPerChar: voiceOverPace)
+        holdForVoiceOver(seconds)
+    }
+
+    /// One of the app's own VoiceOver announcements: nothing else is spoken
+    /// while VoiceOver says it.
+    private func announce(_ text: String) {
+        UIAccessibility.post(notification: .announcement, argument: text)
+        holdForVoiceOver(FollowVoiceOverTime.announcement(text, secPerChar: voiceOverPace))
+    }
+
+    private func holdForVoiceOver(_ seconds: Double) {
         guard UIAccessibility.isVoiceOverRunning else { return }
-        gate.voiceOverBusy(until: FollowClock.now() + KadeAudioSessionPolicy.voiceOverSettle)
+        gate.voiceOverBusy(until: FollowClock.now() + seconds)
         if pendingSentence != nil { flushSentence() }
+    }
+
+    /// Her VoiceOver voice's seconds per letter, as Follow along measured it:
+    /// its own lines use her VoiceOver voice and speed, unless she chose a
+    /// speed of her own (then the usual guess).
+    private var voiceOverPace: Double {
+        settings.speed == nil ? (report.secondsPerLetter ?? FollowPace.fallback) : FollowPace.fallback
     }
 
     func setDescriptions(on: Bool, sentence: String? = nil) {
@@ -809,7 +433,11 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
 
     // MARK: What the loop says
 
-    private func handle(_ output: FollowLoopOutput) {
+    private func handle(_ output: FollowLoopOutput, from sender: Int) {
+        // A loop already let go answers nothing here (Nov 14 review: a late
+        // "ready" from the last track could make this sheet ready on the
+        // wrong track, with the microphone on and nothing listening).
+        guard sender == generation else { return }
         switch output {
         case .prepared(_, _, let spoken, let warning):
             guard phase == .preparing else { return }
@@ -1016,13 +644,15 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         return session.currentRoute.inputs.contains { $0.portType == .builtInMic }
     }
 
+    /// A fresh engine: its tap on the microphone, and the node for the little
+    /// sounds. Used at Start and again whenever the hardware changes.
     private func startEngine(loop: FollowAlongLoop) -> Bool {
         let made = AVAudioEngine()
         let input = made.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0,
-              let fresh = FollowAlongCapture(from: format, loop: loop) else { return false }
-        Self.installTap(on: input, format: format, capture: fresh)
+              let fresh = FollowAlongCapture(from: format, sink: loop) else { return false }
+        Self.installTap(on: input, capture: fresh)
         let node = AVAudioPlayerNode()
         made.attach(node)
         if let soundFormat = Self.soundFormat {
@@ -1042,33 +672,44 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         return true
     }
 
-    /// Made where no actor is assumed: the tap runs on its own thread.
-    nonisolated private static func installTap(on input: AVAudioInputNode, format: AVAudioFormat, capture: FollowAlongCapture) {
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
+    /// Made where no actor is assumed: the tap runs on its own thread. The
+    /// tap takes the microphone's own format (format nil): a format read a
+    /// moment before the hardware changed would stop the app, and the
+    /// capture adapts to whatever format arrives (Nov 14 review).
+    nonisolated private static func installTap(on input: AVAudioInputNode, capture: FollowAlongCapture) {
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, when in
             capture.take(buffer, at: when)
         }
     }
 
+    /// The engine, its tap and its node go.
+    private func dropEngine() {
+        unwatchEngine()
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            chimeNode?.stop()
+            engine.stop()
+        }
+        engine = nil
+        chimeNode = nil
+        capture = nil
+    }
+
     /// The route changed (earbuds in or out) or the hardware rate moved: the
-    /// engine stopped itself, so the tap is made again for the new sound.
+    /// engine stopped itself, and its formats may no longer agree, so a bare
+    /// restart can fail (StreamingCallService found it throws). A fresh
+    /// engine is built instead, from the hardware as it is now (Nov 14
+    /// review).
     private func engineChanged() {
-        guard phase == .listening, let engine, let loop else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        let format = engine.inputNode.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0,
-              let fresh = FollowAlongCapture(from: format, loop: loop) else {
-            stopForProblem("the microphone changed and could not be read")
+        guard phase == .listening, let loop else { return }
+        let now = FollowClock.now()
+        rebuilds = rebuilds.filter { now - $0 < 10 } + [now]
+        dropEngine()
+        guard rebuilds.count < Self.mostRebuilds, startEngine(loop: loop) else {
+            stopForProblem("the microphone could not start again after the hardware changed")
             return
         }
-        capture = fresh
-        Self.installTap(on: engine.inputNode, format: format, capture: fresh)
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            stopForProblem("the microphone would not start again: \(error.localizedDescription)")
-            return
-        }
+        watchEngine()
         updateRoute()
     }
 
@@ -1121,6 +762,8 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
             KadeBreadcrumbs.drop("follow along: stopped by an interruption")
             if UIApplication.shared.applicationState != .active { notifyCall(active: false) }
         case .ended:
+            // Heard because calls are watched for as long as the sheet is
+            // open, not only while the microphone is on.
             guard phase == .stoppedByCall else { return }
             if UIApplication.shared.applicationState != .active { notifyCall(active: true) }
         @unknown default:
@@ -1130,15 +773,21 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
 
     /// "Follow along stopped for a call. Open Kade-AI to carry on." Quietly
     /// while the call is on (it waits in Notification Centre), then once more,
-    /// with a sound, when the call ends and the app is still away.
+    /// with a sound, when the call ends and the app is still away. Only when
+    /// notifications are already allowed; this never asks.
     private func notifyCall(active: Bool) {
         let content = UNMutableNotificationContent()
         content.title = "Follow along"
         content.body = FollowWords.callNotification
         content.interruptionLevel = active ? .active : .passive
         if active { content.sound = .default }
-        let request = UNNotificationRequest(identifier: "kade.followAlong.call", content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: Self.callNotice, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { _ in }
+    }
+
+    /// Listening again, or the sheet closed: the call notification is old news.
+    private func forgetCallNotice() {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.callNotice])
     }
 
     private func stopForProblem(_ why: String) {
@@ -1147,16 +796,12 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         stop(sentence: FollowWords.stoppedForProblem)
     }
 
-    // MARK: Watching the session, VoiceOver and the buttons
+    // MARK: Watching the session, calls, VoiceOver and the buttons
 
+    /// Route changes and media resets, while listening.
     private func watchSession() {
         unwatchSession()
         let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt ?? 0
-            let type = AVAudioSession.InterruptionType(rawValue: raw)
-            MainActor.assumeIsolated { self?.interrupted(type) }
-        })
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
             let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
@@ -1166,11 +811,6 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopForProblem("the phone's media services were reset") }
         })
-        if let engine {
-            observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.engineChanged() }
-            })
-        }
     }
 
     private func unwatchSession() {
@@ -1178,12 +818,43 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         observers = []
     }
 
+    /// The engine's configuration changes, for the engine running now.
+    private func watchEngine() {
+        unwatchEngine()
+        guard let engine else { return }
+        engineObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.engineChanged() }
+        }
+    }
+
+    private func unwatchEngine() {
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+        engineObserver = nil
+    }
+
+    /// Calls, for as long as the sheet is open: the start of a call stops
+    /// listening, and the end of the call must still be heard, for the
+    /// notification with a sound (design 5.3 item 16).
+    private func watchCalls() {
+        guard callObserver == nil else { return }
+        callObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt ?? 0
+            let type = AVAudioSession.InterruptionType(rawValue: raw)
+            MainActor.assumeIsolated { self?.interrupted(type) }
+        }
+    }
+
+    private func unwatchCalls() {
+        if let callObserver { NotificationCenter.default.removeObserver(callObserver) }
+        callObserver = nil
+    }
+
     private func watchVoiceOver() {
         guard focusObserver == nil else { return }
         focusObserver = NotificationCenter.default.addObserver(
             forName: UIAccessibility.elementFocusedNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.noteVoiceOver() }
+        ) { [weak self] note in
+            MainActor.assumeIsolated { self?.voiceOverLanded(on: note.userInfo?[UIAccessibility.focusedElementUserInfoKey]) }
         }
     }
 
@@ -1230,17 +901,11 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     // MARK: Stopping
 
     /// The microphone, the engine, the lane and the buttons go now. The
-    /// session stays held until the last sentence has been said.
+    /// session stays held until the last sentence has been said. Calls stay
+    /// watched (the sheet is still open).
     private func stopListening() {
         loop?.stop()
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            chimeNode?.stop()
-            engine.stop()
-        }
-        engine = nil
-        chimeNode = nil
-        capture = nil
+        dropEngine()
         releaseLane()
         unwatchSession()
         unwireRemote()
@@ -1257,7 +922,7 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
             gate.speaking = false
         }
         let battery = Double(UIDevice.current.batteryLevel)
-        if UIDevice.current.isBatteryMonitoringEnabled, battery >= 0 { report.batteryNow = battery }
+        if UIDevice.current.isBatteryMonitoringEnabled, battery >= 0 { batteryAtStop = battery }
         UIDevice.current.isBatteryMonitoringEnabled = false
         descriptionsOn = true
     }
@@ -1289,17 +954,17 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         } else if phase == .stopping {
             phase = .ready
         }
+        // The sheet was opened again while the sentence was said: the same
+        // track is ready as it is; another one gets ready now.
+        if let item = reopen {
+            reopen = nil
+            if stored?.id != item.id || loop == nil || phase != .ready { prepare(item) }
+        }
     }
 
     /// A start that failed after it took the session.
     private func tearDown() {
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-        engine = nil
-        chimeNode = nil
-        capture = nil
+        dropEngine()
         releaseLane()
         handBackSession()
     }
@@ -1319,13 +984,13 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     private func showMicDenied() {
         phase = .micDenied
         status = FollowWords.micDenied
-        UIAccessibility.post(notification: .announcement, argument: FollowWords.micDenied)
+        announce(FollowWords.micDenied)
     }
 
     private func fail(_ words: String, phase next: Phase) {
         phase = next
         status = words
-        UIAccessibility.post(notification: .announcement, argument: words)
+        announce(words)
     }
 }
 

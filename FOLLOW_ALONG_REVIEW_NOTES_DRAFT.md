@@ -45,5 +45,5 @@ Follow along with my TV is in this build but switched off on our server for ever
 
 - The test film and its track exist on the demo seat, and the follow word for that job is "ready".
 - The demo seat's described-video config answers followAlong true.
-- The build carries the same Sources/syncprint.js as the server (the checksum test in FollowAlongTests passes).
+- The build carries the same Sources/syncprint.js as the server. Each project's own test checks only its own copy, so run python -I dev/follow-along/compare-syncprint.py PATH/TO/LibreChat-fork. It must say the two copies are the same. On November 14 they differed: copy one syncprint commit into both first (dev/follow-along/vendor-syncprint.py does both at once).
 - The microphone purpose string in the built Info.plist is the new one.

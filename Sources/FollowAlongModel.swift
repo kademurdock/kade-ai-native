@@ -14,9 +14,11 @@ import Foundation
 // lines held for a pause, the little sounds, and the numbers-only test report.
 //
 // FollowAlongEngine.swift is the one doorway to syncprint.js (JavaScriptCore);
-// FollowAlongAudio.swift is the microphone, the speech and the audio session;
-// FollowAlongStore.swift keeps tracks on the phone; FollowAlongView.swift is
-// the sheet.
+// FollowAlongLoop.swift is the loop on its background queue (the memory, the
+// checks, the rules, the planner); FollowAlongCapture.swift turns the
+// microphone's sound into 8 kHz mono; FollowAlongAudio.swift is the player:
+// the microphone, the speech and the audio session; FollowAlongStore.swift
+// keeps tracks on the phone; FollowAlongView.swift is the sheet.
 
 // MARK: - The track (design 5.1)
 
@@ -1240,5 +1242,56 @@ struct FollowReport: Equatable {
         number("fingerprint minutes", printSeconds / 60)
         count("lines in track", cues)
         return lines.joined(separator: "\n")
+    }
+
+    /// What Copy test report copies: the loop's numbers, her timing nudge,
+    /// and the battery at the start and now. After Stop the phone no longer
+    /// measures the battery, so "now" is the level when listening stopped
+    /// (Nov 14 review: it went missing from every report copied after Stop).
+    func copied(nudge: Double, batteryStart start: Double?, batteryNow live: Double?, batteryAtStop stopped: Double?) -> FollowReport {
+        var copy = self
+        copy.nudgeSeconds = nudge
+        copy.batteryStart = start
+        copy.batteryNow = live ?? stopped ?? batteryNow
+        return copy
+    }
+}
+
+// MARK: - How long VoiceOver takes to read (nothing talks over VoiceOver)
+
+/// After VoiceOver lands on something, or says one of the app's own
+/// announcements, Follow along's own voice waits this long before it speaks
+/// (Nov 14 review: a flat 1.5 seconds was shorter than a button's hint). The
+/// pace is her VoiceOver voice's seconds per letter, as Follow along measured
+/// it from its own sentences, which use her VoiceOver voice and speed.
+enum FollowVoiceOverTime {
+    /// Never less than the voice auditions' settle time.
+    static let shortest = KadeAudioSessionPolicy.voiceOverSettle
+    /// Never more than this: a line that misses its window while VoiceOver
+    /// reads is held for the next pause, not lost.
+    static let longest = 8.0
+    /// VoiceOver's pause before it reads a hint.
+    static let hintPause = 0.75
+    /// Letters for the kind of thing it is, which VoiceOver says after the
+    /// label ("button").
+    static let traitLetters = 8
+
+    /// Seconds VoiceOver takes to read an element it landed on: its label and
+    /// value, its kind, then its hint.
+    static func reading(label: String?, value: String?, hint: String?, secPerChar: Double) -> Double {
+        let pace = usable(secPerChar)
+        var seconds = Double((label ?? "").count + (value ?? "").count + traitLetters) * pace
+        let hintLetters = (hint ?? "").count
+        if hintLetters > 0 { seconds += hintPause + Double(hintLetters) * pace }
+        return min(longest, max(shortest, seconds))
+    }
+
+    /// Seconds VoiceOver takes to say one of the app's announcements.
+    static func announcement(_ text: String, secPerChar: Double) -> Double {
+        min(longest, max(shortest, Double(text.count) * usable(secPerChar) + 0.3))
+    }
+
+    private static func usable(_ secPerChar: Double) -> Double {
+        secPerChar.isFinite && secPerChar > 0.01 && secPerChar < 0.3 ? secPerChar : FollowPace.fallback
     }
 }

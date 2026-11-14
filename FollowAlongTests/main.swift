@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 
@@ -18,8 +19,21 @@ import Foundation
 // run-follow-along-tests.sh passes the repository folder. With
 // FOLLOW_ALONG_TIMING_ONLY=1 it only times the matcher (the script runs that
 // a second time with JavaScriptCore's JIT switched off, as inside the app).
+//
+// Nov 14 2026 review: the loop (FollowAlongLoop.swift) runs here too, on the
+// made-up film with a clock the test moves (Start again says lines again,
+// queued sound is not each checked again, an ended film's minutes count), and
+// the microphone capture (FollowAlongCapture.swift) turns test tones into
+// 8 kHz through a change of format.
+
+// Line by line even into a file, so a crash still shows where it stopped.
+setvbuf(stdout, nil, _IOLBF, 0)
 
 var count = 0
+
+func section(_ name: String) {
+    print("Follow along tests: \(name)")
+}
 
 /// Text for a GitHub annotation line (the check's results can then be read
 /// without a token: a public repository's annotations are open to anyone).
@@ -132,6 +146,133 @@ func heardClip(_ film: [Int16]?, from startSec: Double, seconds: Double, gain: D
 
 func sha256Hex(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+// MARK: - Helpers for the loop and the capture
+
+/// A clock the test moves by hand; the loop reads it on its own queue.
+final class TestClock {
+    private let lock = NSLock()
+    private var value: Double
+
+    init(_ start: Double) {
+        value = start
+    }
+
+    var now: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ time: Double) {
+        lock.lock()
+        value = time
+        lock.unlock()
+    }
+}
+
+/// What a loop said, collected from its queue.
+final class Said {
+    private let lock = NSLock()
+    private var items: [FollowLoopOutput] = []
+
+    func add(_ item: FollowLoopOutput) {
+        lock.lock()
+        items.append(item)
+        lock.unlock()
+    }
+
+    /// Everything said since the last take.
+    func take() -> [FollowLoopOutput] {
+        lock.lock()
+        let taken = items
+        items = []
+        lock.unlock()
+        return taken
+    }
+}
+
+/// A matcher that answers as the test says, and notes each check.
+final class ScriptedMatcher: FollowMatching {
+    var printSeconds = 600.0
+    var listen = FollowListen(wait: 0, clip: 2)
+    var tracker = FollowTrackerState()
+    /// Where each checked clip began, on the clock.
+    private(set) var checks: [Double] = []
+    private(set) var resets = 0
+
+    func setCues(_ cues: [FollowCue], offset: Double) {}
+
+    func check(_ clip: [Int16], clipStart: Double, now: Double) -> FollowCheck {
+        checks.append(clipStart)
+        var result = FollowCheck()
+        result.reason = "no match"
+        result.clipSec = Double(clip.count) / 8000
+        result.startMono = clipStart
+        return result
+    }
+
+    func state(now: Double) -> FollowTrackerState { tracker }
+    func nextListen(now: Double) -> FollowListen { listen }
+    func hurry() {}
+    func reset() { resets += 1 }
+    func plan(_ state: FollowTrackerState, shift: Double, options: FollowPlanOptions) -> FollowPlan { .waiting(1, "scripted") }
+    func spoke(_ id: String, now: Double, filmSec: Double) {}
+    func forget(_ id: String) {}
+}
+
+/// Collects what the microphone capture hands on.
+final class SoundCollector: FollowSoundSink {
+    var samples: [Int16] = []
+    var ends: [Double] = []
+
+    func receive(_ samples: [Int16], endingAt end: Double) {
+        self.samples.append(contentsOf: samples)
+        ends.append(end)
+    }
+}
+
+/// The text of one function in a source file, from its signature to its
+/// closing brace.
+func body(_ signature: String, in text: String) -> String {
+    guard let start = text.range(of: signature) else { fatal("\(signature) is missing") }
+    var depth = 0
+    var opened = false
+    var index = start.lowerBound
+    while index < text.endIndex {
+        let char = text[index]
+        if char == "{" {
+            depth += 1
+            opened = true
+        } else if char == "}" {
+            depth -= 1
+            if opened && depth == 0 { return String(text[start.lowerBound...index]) }
+        }
+        index = text.index(after: index)
+    }
+    fatal("\(signature) never ends")
+}
+
+func isPrepared(_ output: FollowLoopOutput) -> Bool {
+    if case .prepared = output { return true }
+    return false
+}
+
+func spokenId(_ output: FollowLoopOutput) -> String? {
+    if case .speak(let id, _) = output { return id }
+    return nil
+}
+
+/// A status sentence's words, and whether Follow along stops after it.
+func sentence(_ output: FollowLoopOutput) -> (text: String, stops: Bool)? {
+    if case .sentence(let text, _, let stops) = output { return (text, stops) }
+    return nil
+}
+
+func reported(_ output: FollowLoopOutput) -> FollowReport? {
+    if case .report(let report) = output { return report }
+    return nil
 }
 
 // MARK: - Timing only (the second run, JIT switched off)
@@ -624,6 +765,39 @@ do {
     check(text.contains("seconds to lock on: 9.3") && text.contains("failed checks: 1") && text.contains("skips: 1")
           && text.contains("battery percent at start: 82") && text.contains("voice seconds per letter: 0.061"), "the report's numbers")
     check(!text.contains("battery percent now"), "a number not known is left out")
+
+    // Nov 14 2026 review: after Stop the phone stops measuring the battery,
+    // so the copy carries the level from when listening stopped.
+    let afterStop = report.copied(nudge: 0.2, batteryStart: 0.9, batteryNow: nil, batteryAtStop: 0.85).text()
+    check(afterStop.contains("battery percent now: 85") && afterStop.contains("battery percent at start: 90")
+          && afterStop.contains("timing nudge seconds: 0.2"), "after Stop: the battery as it was when listening stopped, and her nudge")
+    let whileListening = report.copied(nudge: 0, batteryStart: 0.9, batteryNow: 0.88, batteryAtStop: 0.85).text()
+    check(whileListening.contains("battery percent now: 88"), "while listening: the battery now")
+    check(!report.copied(nudge: 0, batteryStart: nil, batteryNow: nil, batteryAtStop: nil).text().contains("battery"), "no battery known: none reported")
+}
+
+// MARK: - How long VoiceOver reads before Follow along may speak
+
+section("VoiceOver's reading time")
+do {
+    let settle = KadeAudioSessionPolicy.voiceOverSettle
+    check(FollowVoiceOverTime.reading(label: "Stop", value: nil, hint: nil, secPerChar: 0.04) == settle,
+          "a short label: the usual 1.5 seconds, never less")
+    let hint = "Stops the descriptions. The phone keeps listening, so it stays in step. Magic Tap does the same."
+    let withHint = FollowVoiceOverTime.reading(label: "Pause descriptions", value: nil, hint: hint, secPerChar: 0.05)
+    let expected = Double("Pause descriptions".count + FollowVoiceOverTime.traitLetters) * 0.05 + FollowVoiceOverTime.hintPause + Double(hint.count) * 0.05
+    check(near(withHint, expected, 1e-9) && withHint > 5 && withHint < 8,
+          "a button with a hint: its label, its kind, a pause, then its hint, at her voice's speed (\(withHint) seconds), longer than the old 1.5")
+    check(FollowVoiceOverTime.reading(label: "Timing", value: "0.3 seconds earlier", hint: nil, secPerChar: 0.1)
+          == Double("Timing".count + "0.3 seconds earlier".count + FollowVoiceOverTime.traitLetters) * 0.1, "a value is read with the label")
+    check(FollowVoiceOverTime.reading(label: String(repeating: "a", count: 300), value: nil, hint: hint, secPerChar: 0.065) == FollowVoiceOverTime.longest,
+          "never more than 8 seconds: a line that misses its window is held for the next pause, not lost")
+    check(FollowVoiceOverTime.reading(label: "Where am I?", value: nil, hint: hint, secPerChar: .nan)
+          == FollowVoiceOverTime.reading(label: "Where am I?", value: nil, hint: hint, secPerChar: FollowPace.fallback),
+          "no measured speed yet: the usual guess")
+    let words = "Test report copied. It holds numbers only."
+    check(near(FollowVoiceOverTime.announcement(words, secPerChar: 0.065), Double(words.count) * 0.065 + 0.3, 1e-9),
+          "an announcement of the app's own holds the voice back while VoiceOver says it")
 }
 
 // MARK: - The audio session: Follow along owns it like a film (KadeAudioSessionPolicy)
@@ -651,9 +825,18 @@ do {
 do {
     let script = readData("Sources/syncprint.js")
     let digest = sha256Hex(script)
-    let recorded = readText("FollowAlongTests/syncprint.js.sha256").trimmingCharacters(in: .whitespacesAndNewlines)
+    let recordedFile = readText("FollowAlongTests/syncprint.js.sha256")
+    let recorded = String(recordedFile.prefix(64))
     check(digest == FollowAlongEngine.scriptSHA256, "Sources/syncprint.js matches FollowAlongEngine.scriptSHA256 (re-copy it with dev/follow-along/vendor-syncprint.py)")
-    check(digest == recorded, "Sources/syncprint.js matches FollowAlongTests/syncprint.js.sha256, the checksum the server copy is tested against")
+    check(digest == recorded, "Sources/syncprint.js matches FollowAlongTests/syncprint.js.sha256")
+    // Nov 14 2026 review: nothing compared the app's copy with the server's.
+    // Both checksum files now share the server's format, so a copy of one can
+    // be compared with the other byte for byte, and the release step
+    // (dev/follow-along/compare-syncprint.py) compares the two copies.
+    check(recordedFile == "\(digest)  syncprint.js\n",
+          "the checksum file is in the server's own format (the sha256, two spaces, syncprint.js), so the two projects' files compare byte for byte")
+    check(FileManager.default.fileExists(atPath: rootURL.appendingPathComponent("dev/follow-along/compare-syncprint.py").path),
+          "the release step that compares the app's copy with the server's is there")
     check(!script.contains(13), "LF line endings, byte for byte")
     let attributes = readText(".gitattributes")
     check(attributes.contains("Sources/syncprint.js -text"), "git never changes the copy's line endings")
@@ -661,6 +844,7 @@ do {
 
 // MARK: - syncprint.js in real JavaScriptCore
 
+section("syncprint.js in JavaScriptCore")
 do {
     let script = readText("Sources/syncprint.js")
     let maker: FollowAlongEngine
@@ -737,6 +921,14 @@ do {
     check(plan.action == .speak && plan.id == "1:1", "a line that never started can be said")
     plan = engine.plan(status(.holding, 51), shift: 0, options: options)
     check(plan.action == .wait, "holding: nothing is said")
+    // Nov 14 2026 review: Start again (after Stop, or Listen again after a
+    // call) forgets the lines said along with the place.
+    engine.spoke("1:1", now: 1020, filmSec: 51)
+    check(engine.plan(locked(51), shift: 0, options: options).action == .wait, "said in this run: not said again")
+    engine.reset()
+    plan = engine.plan(locked(51), shift: 0, options: options)
+    check(plan.action == .speak && plan.id == "1:1", "after a reset (Start again), a line said in the last run can be said again")
+    check(engine.state(now: 1030).status == .searching, "and the tracker looks for the film afresh")
     check(engine.lastError == nil, "no JavaScript errors: \(engine.lastError ?? "")")
 
     // Not this film: room noise is not found, and the tracker is not fooled.
@@ -773,6 +965,197 @@ do {
     print("::notice title=Follow along match::one 8 s match took \(Int(first.millis)) ms in JavaScriptCore")
 }
 
+// MARK: - The loop on the made-up film (real JavaScriptCore, a clock the test moves)
+
+section("the loop on a made-up film")
+do {
+    let script = readText("Sources/syncprint.js")
+    let film = madeUpFilm(seconds: 90, seed: 0x1234_5678)
+    guard let maker = try? FollowAlongEngine(script: script), let bytes = maker.fingerprint(film) else {
+        fatal("the loop test's fingerprint")
+    }
+    let engine: FollowAlongEngine
+    do {
+        engine = try FollowAlongEngine(script: script)
+        try engine.load(print: bytes)
+    } catch {
+        fatal("the loop test's matcher: \(error)")
+    }
+    let clock = TestClock(1000)
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.loop")
+    let gate = FollowSpeechGate()
+    let loop = FollowAlongLoop(queue: queue, gate: gate, clock: { clock.now }, trail: { _ in }, deliver: { said.add($0) })
+    loop.prepare(track: track, matcher: engine, settings: FollowAlongSettings())
+    // As with earbuds: the microphone never hears the phone, and no output delay.
+    loop.update(lead: 0, outputDelay: 0, echoRisk: false)
+    queue.sync {}
+    check(said.take().contains { isPrepared($0) }, "the loop gets ready on the sample track")
+
+    /// Plays film seconds `from` to `to` to the loop in half-second blocks,
+    /// heard from clock time `at`, as the microphone hands them over. It plays
+    /// the player's part too: a line handed out is said at once.
+    func play(from: Double, to: Double, at start: Double) -> [(output: FollowLoopOutput, at: Double)] {
+        var heard: [(output: FollowLoopOutput, at: Double)] = []
+        var second = from
+        var seed: UInt32 = 500
+        while second + 0.5 <= to + 1e-9 {
+            let samples = heardClip(film, from: second, seconds: 0.5, gain: 0.5, noise: 0.02, seed: seed)
+            let end = start + (second + 0.5 - from)
+            clock.set(end + 0.02)
+            loop.receive(samples, endingAt: end)
+            queue.sync {}
+            for output in said.take() {
+                heard.append((output: output, at: clock.now))
+                if case .speak(let id, let text) = output {
+                    gate.speaking = false
+                    loop.finished(cue: id, started: true, seconds: Double(text.count) * 0.06, characters: text.count, now: clock.now)
+                }
+            }
+            second += 0.5
+            seed += 1
+        }
+        queue.sync {}
+        return heard
+    }
+
+    // The first run: found, then the kite line in its gap (50 to 54 s).
+    loop.start(now: 1000)
+    let firstRun = play(from: 30, to: 60, at: 1000)
+    let firstLines = firstRun.compactMap { spokenId($0.output) }
+    check(firstRun.contains { sentence($0.output)?.text == "Found your place: the beginning. Audio description by Kade-AI." },
+          "the loop finds its place in the made-up film and says so, with the credit")
+    check(firstLines.contains("1:1"), "and hands out the kite line in its gap (\(firstLines))")
+    clock.set(clock.now + 0.5)
+    let firstStop = clock.now
+    loop.stop()
+    queue.sync {}
+    _ = said.take()
+
+    // Stop, then Start listening again, and the film played from the same
+    // place again (Nov 14 review: the last run's record kept every line it
+    // had said silent for good).
+    let secondStart = 1100.0
+    clock.set(secondStart)
+    loop.start(now: secondStart)
+    let secondRun = play(from: 30, to: 90, at: secondStart)
+    let secondLines = secondRun.compactMap { spokenId($0.output) }
+    check(secondRun.contains { sentence($0.output)?.text == "Found your place: the beginning." },
+          "Start again: found again, the credit not said twice")
+    check(secondLines.contains("1:1"), "Start again on the same part of the film: the kite line is said again (\(secondLines))")
+
+    // The film ends: the closing credit, then off. Its minutes count too.
+    guard let ending = secondRun.first(where: { sentence($0.output)?.stops == true }) else {
+        fatal("the film's end is said, and Follow along stops")
+    }
+    check(sentence(ending.output)?.text == "Described by Kade-AI. More at kademurdock dot com. The film has ended. Follow along is off.",
+          "the end of the film: the closing credit, then off")
+    loop.stop()  // what the player does after that sentence
+    queue.sync {}
+    guard let last = said.take().compactMap({ reported($0) }).last else { fatal("a report after the end") }
+    let both = ((firstStop - 1000) + (ending.at - secondStart)) / 60
+    check(near(last.minutesListened, both, 1e-9),
+          "minutes listened count both runs, the one the film ended too (\(last.minutesListened) of \(both))")
+    check(last.linesSpoken >= 2 && last.checks >= 4, "the report counts the lines and the checks (\(last.linesSpoken) lines, \(last.checks) checks)")
+}
+
+// MARK: - The loop under a slow check (a scripted matcher)
+
+section("the loop under a slow check")
+do {
+    let clock = TestClock(2000)
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.backlog")
+    let matcher = ScriptedMatcher()
+    let loop = FollowAlongLoop(queue: queue, gate: FollowSpeechGate(), clock: { clock.now }, trail: { _ in }, deliver: { said.add($0) })
+    loop.prepare(track: track, matcher: matcher, settings: FollowAlongSettings())
+    loop.update(lead: 0, outputDelay: 0, echoRisk: false)
+    loop.start(now: 2000)
+    queue.sync {}
+    check(matcher.resets == 1, "Start resets the matcher")
+    let block = [Int16](repeating: 0, count: 4000)
+    var end = 2000.0
+    for _ in 0..<4 {
+        end += 0.5
+        clock.set(end + 0.01)
+        loop.receive(block, endingAt: end)
+        queue.sync {}
+    }
+    check(matcher.checks.count == 1, "the schedule runs as the sound arrives: one check once 2 seconds are in memory")
+    // A slow check held the queue: 20 blocks queued up behind it.
+    queue.suspend()
+    for _ in 0..<20 {
+        end += 0.5
+        loop.receive(block, endingAt: end)
+    }
+    clock.set(end + 0.01)
+    queue.resume()
+    queue.sync {}
+    check(matcher.checks.count == 2,
+          "20 blocks that queued up behind a slow check go into memory, and only the newest runs a check (\(matcher.checks.count - 1) ran): the loop never falls behind")
+    check(near(matcher.checks.last, end - 2, 1e-9), "and that check studies the newest sound")
+    loop.stop()
+    queue.sync {}
+    _ = said.take()
+}
+
+// MARK: - A loop that never got its track
+
+do {
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.unready")
+    let loop = FollowAlongLoop(queue: queue, gate: FollowSpeechGate(), clock: { 5 }, trail: { _ in }, deliver: { said.add($0) })
+    loop.start(now: 5)
+    queue.sync {}
+    check(said.take() == [.sentence(FollowWords.couldNotStart, sound: nil, stops: true)],
+          "Start on a loop with no track says it could not start, and stops: the microphone is never left on doing nothing")
+}
+
+// MARK: - The microphone's sound to 8 kHz, through a change of format
+
+section("the microphone capture")
+do {
+    let sink = SoundCollector()
+    guard let mono48 = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1),
+          let stereo44 = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
+          let capture = FollowAlongCapture(from: mono48, sink: sink) else {
+        fatal("a capture for a 48 kHz microphone")
+    }
+    var clockSeconds = 500.0
+    var lastStart = clockSeconds
+    /// A 440 Hz tone, `buffers` of 4096 frames, as a microphone tap hands them over.
+    func feed(_ format: AVAudioFormat, buffers: Int) {
+        var frame = 0
+        for _ in 0..<buffers {
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096),
+                  let channels = buffer.floatChannelData else { fatal("a test buffer") }
+            buffer.frameLength = 4096
+            for channel in 0..<Int(format.channelCount) {
+                for index in 0..<4096 {
+                    channels[channel][index] = Float(0.5 * sin(2 * Double.pi * 440 * Double(frame + index) / format.sampleRate))
+                }
+            }
+            lastStart = clockSeconds
+            capture.take(buffer, at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: clockSeconds)))
+            frame += 4096
+            clockSeconds += 4096.0 / format.sampleRate
+        }
+    }
+    feed(mono48, buffers: 12)
+    let first = sink.samples.count
+    check(first > 8000 && first <= 8300, "48 kHz from the phone's microphone becomes 8 kHz: about 8192 samples for 1.02 seconds (\(first))")
+    check(near(sink.ends.last, lastStart + 4096.0 / 48_000.0, 0.001), "each piece carries the clock time it ended at")
+    feed(stereo44, buffers: 11)
+    let added = sink.samples.count - first
+    check(added > 7950 && added < 8300,
+          "earbuds change the microphone to 44.1 kHz, two channels: the capture makes a new converter and carries on (\(added) samples)")
+    check(near(sink.ends.last, lastStart + 4096.0 / 44_100.0, 0.001), "with the new rate's timing")
+    let tail = Array(sink.samples.suffix(4000))
+    var crossings = 0
+    for index in 1..<tail.count where (tail[index - 1] < 0) != (tail[index] < 0) { crossings += 1 }
+    check(crossings > 420 && crossings < 460, "after the change it is still the 440 Hz tone (\(crossings) zero crossings in half a second)")
+}
+
 
 // MARK: - The sources keep the rules
 
@@ -799,13 +1182,52 @@ do {
         check(audio.contains(mark), "Follow along registers with the keeper and the microphone lane: \(mark)")
     }
     check(!audio.contains("setActive(false"), "it never switches the session off itself: the keeper does")
-    for forbidden in ["AVAudioFile", "AVAudioRecorder", "write(to:", "URLSession", "uploadTask", "FileHandle"] {
-        check(!audio.contains(forbidden), "the microphone's sound is never written or sent (\(forbidden))")
+    for file in ["FollowAlongAudio.swift", "FollowAlongLoop.swift", "FollowAlongCapture.swift", "FollowAlongEngine.swift"] {
+        let source = readText("Sources/\(file)")
+        for forbidden in ["AVAudioFile", "AVAudioRecorder", "write(to:", "URLSession", "uploadTask", "FileHandle"] {
+            check(!source.contains(forbidden), "the microphone's sound is never written or sent (\(file): \(forbidden))")
+        }
     }
     check(audio.contains("setPreferredInput") && audio.contains(".builtInMic"), "the phone's own microphone")
     check(audio.contains("MPRemoteCommandCenter") && audio.contains("MPNowPlayingInfoCenter"), "lock screen and earbud buttons")
     check(audio.contains("interruptionNotification") && audio.contains("routeChangeNotification"), "calls and earbuds are watched")
     check(audio.contains("elementFocusedNotification"), "it waits for VoiceOver before it speaks")
+
+    // Nov 14 2026 review fixes in the player (it needs a phone, so its source is checked).
+    let opening = body("func open(_ item: FollowStoredTrack", in: audio)
+    let closing = body("func close()", in: audio)
+    let closed = body("private func finishClose()", in: audio)
+    let stopped = body("private func finishStop()", in: audio)
+    let micOff = body("private func stopListening()", in: audio)
+    check(body("private func watchCalls()", in: audio).contains("AVAudioSession.interruptionNotification") && opening.contains("watchCalls()"),
+          "calls are watched from the moment the sheet opens")
+    check(!body("private func watchSession()", in: audio).contains("interruptionNotification") && !micOff.contains("unwatchCalls()"),
+          "turning the microphone off keeps calls watched, so the end of a call is heard")
+    check(closed.contains("unwatchCalls()"), "the sheet closing stops watching calls")
+    check(body("private func interrupted(", in: audio).contains("notifyCall(active: true)"),
+          "a call's end with the app away posts the notification again, with a sound")
+    let rebuild = body("private func engineChanged()", in: audio)
+    check(rebuild.contains("dropEngine()") && rebuild.contains("startEngine(loop: loop)") && !rebuild.contains("engine.start()"),
+          "earbuds in or out: a fresh engine is built, not the stopped one started bare")
+    check(body("nonisolated private static func installTap(", in: audio).contains("format: nil"),
+          "the tap takes the microphone's own format, so a format read too early cannot stop the app")
+    check(opening.contains("case .stopping:") && opening.contains("closeWhenStopped = false") && opening.contains("reopen = item"),
+          "opened again during the last sentence: the sheet stays open and its track waits")
+    check(closing.contains("reopen = nil") && stopped.contains("if let item = reopen") && stopped.contains("prepare(item)"),
+          "the waiting track gets ready when the sentence is done; closing again forgets it")
+    check(audio.contains("Self.deliverer(to: self, generation: generation)")
+          && body("private func handle(_ output: FollowLoopOutput, from sender: Int)", in: audio).contains("guard sender == generation else { return }")
+          && closed.contains("generation &+= 1"),
+          "answers from a loop already let go are dropped")
+    check(body("func copyReport()", in: audio).contains("report.copied(") && micOff.contains("batteryAtStop = battery"),
+          "the battery when listening stopped goes into the copied report")
+    check(body("private func watchVoiceOver()", in: audio).contains("focusedElementUserInfoKey") && audio.contains("FollowVoiceOverTime.reading(")
+          && audio.contains("FollowVoiceOverTime.announcement("),
+          "the voice waits for what VoiceOver landed on, label and hint, and for the app's own announcements")
+    let screenSource = readText("Sources/DescribedVideoView.swift")
+    check(body("private func releaseHeldAnnouncement()", in: screenSource).contains("guard followAlong.phase != .stopping else { return }")
+          && screenSource.contains(".onChange(of: followAlong.phase)"),
+          "the described video screen keeps its own line until Follow along's last sentence is done")
 
     let engine = readText("Sources/FollowAlongEngine.swift")
     check(engine.contains("JSObjectMakeTypedArray") && engine.contains("copyMemory"), "sound goes into JavaScript in bulk, one typed array per clip")
