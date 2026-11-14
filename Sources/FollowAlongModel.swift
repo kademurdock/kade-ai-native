@@ -458,6 +458,26 @@ enum FollowTrackStamp {
     }
 }
 
+/// A kept track opened from "Follow-along tracks on this phone" (Nov 14
+/// 2026 integration review). The list keeps the video's own button's rule:
+/// while the copy is on the server's list, its kept track is used only when
+/// the stamps match, and otherwise it is fetched again. The kept track is
+/// used as it is when the video, or that copy, is no longer on the server's
+/// list (it expired, or the list could not load), or when the phone cannot
+/// reach the server: a kept track works without the internet.
+enum FollowKeptTrack {
+    /// `listed`: the copy is on the server's list now, with this finishedAt.
+    static func openAsIs(stamp: String?, listed: Bool, finishedAt: String?) -> Bool {
+        !listed || FollowTrackStamp.matches(stamp, finishedAt)
+    }
+
+    /// The server could not be reached: no internet, or no answer in time.
+    static func offline(_ error: Error) -> Bool {
+        guard let code = (error as? URLError)?.code else { return false }
+        return code != .cancelled
+    }
+}
+
 /// meta.json of a track kept on the phone (FollowAlongStore), for the list.
 /// `finishedAt` is the stamp the server's answer carried (FollowTrackStamp);
 /// a track kept before Nov 14's contract has none, so it reads as nil.

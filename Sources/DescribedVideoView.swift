@@ -2090,8 +2090,7 @@ struct DescribedVideoView: View {
     private func followTrackRow(_ item: FollowStoredTrack) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                samplePlayer?.stop()
-                activeSheet = .followAlong(item)
+                Task { await openKeptTrack(item) }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
@@ -2118,6 +2117,46 @@ struct DescribedVideoView: View {
             .buttonStyle(.bordered)
             .accessibilityLabel("Delete \(item.title) from this phone")
             .accessibilityHint("Asks first.")
+        }
+    }
+
+    /// A kept track from the list above (Nov 14 2026 integration review).
+    /// While its video is in the loaded list, the track is used only when
+    /// its stamp is that copy's finishedAt now, as Follow along with my TV
+    /// does; otherwise it is fetched again, and the fresh track and
+    /// fingerprint replace it. The kept track is used as it is when the video
+    /// is no longer on the server's list, or the phone cannot reach the
+    /// server.
+    private func openKeptTrack(_ item: FollowStoredTrack) async {
+        guard fetching.isEmpty else { return }
+        let video = job?.id == item.job ? job : jobs.first(where: { $0.id == item.job })
+        let listedCopy = video?.finishedCopies.first(where: { $0.number == item.copyVersion })
+        if FollowKeptTrack.openAsIs(stamp: item.finishedAt, listed: listedCopy != nil, finishedAt: listedCopy?.finishedAt) {
+            samplePlayer?.stop()
+            activeSheet = .followAlong(item)
+            return
+        }
+        fetching = "follow"
+        defer { fetching = "" }
+        do {
+            let result = try await followStore.fetch(jobId: item.job, version: item.copyVersion, service: service)
+            guard onScreen else { return }
+            switch result {
+            case .ready(let fresh):
+                samplePlayer?.stop()
+                activeSheet = .followAlong(fresh)
+            case .notYet(let words):
+                announce(words)
+            }
+        } catch {
+            guard onScreen else { return }
+            if FollowKeptTrack.offline(error) {
+                // No internet: the kept track works without it.
+                samplePlayer?.stop()
+                activeSheet = .followAlong(item)
+            } else {
+                fail(error, "Couldn't get the follow-along track. Try again.")
+            }
         }
     }
 

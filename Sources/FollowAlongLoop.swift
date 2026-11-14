@@ -104,6 +104,15 @@ final class FollowBlockCount {
 }
 
 final class FollowAlongLoop: FollowSoundSink {
+    /// The check before a line studies the last 6 seconds (syncprint's README).
+    static let checkSeconds = 6.0
+    /// On the phone's own speaker a shorter clip will do, when the phone spoke
+    /// in those 6 seconds: the sound heard since it stopped, once that is 4
+    /// seconds or more. syncprint's RESULTS.md finds a 4 second clip about as
+    /// often as a 6 second one (in a room 92.7 against 91.7 percent, in the
+    /// loud room 84.7 against 84.3), and never at a wrong place.
+    static let shortestCheckSeconds = 4.0
+
     private let queue: DispatchQueue
     private let gate: FollowSpeechGate
     /// The audio clock: FollowClock.now in the app, the tests' own clock in the tests.
@@ -137,6 +146,9 @@ final class FollowAlongLoop: FollowSoundSink {
     /// README loop allows one such check per line (its `checkedFor`), so a
     /// quiet stretch of the film does not start a match on every tick.
     private var checkedFor: String?
+    /// The room went quiet (FollowLevelWatch) and no check has run since: the
+    /// film may be paused. Before a line, the film is checked first.
+    private var roomWentQuiet = false
     private var nextPlanAt = 0.0
     private var lastReportAt = 0.0
     private var startedAt = 0.0
@@ -246,6 +258,7 @@ final class FollowAlongLoop: FollowSoundSink {
             levelCount = 0
             descriptionsOn = true
             checkedFor = nil
+            roomWentQuiet = false
             nextPlanAt = 0
             startedAt = now
             lastReportAt = now
@@ -371,10 +384,18 @@ final class FollowAlongLoop: FollowSoundSink {
     private func tick(now start: Double) {
         guard running, let engine else { return }
         var now = start
+        var checked = false
         let listen = engine.nextListen(now: now)
-        if listen.wait <= 0, let clip = cleanClip(listen.clip, now: now) {
+        // On the phone's own speaker the tracker's routine check (6 seconds
+        // while in step) may take the shorter clean stretch too, so a room
+        // gone quiet is checked soon after the phone stops speaking. Its
+        // longer checks (the second look after a miss, a search) keep their
+        // length.
+        let shortest: Double? = listen.clip <= Self.checkSeconds ? min(listen.clip, Self.shortestCheckSeconds) : nil
+        if listen.wait <= 0, let clip = cleanClip(listen.clip, atLeast: shortest, now: now) {
             // A check takes time: what follows is decided as of its end.
             now = runCheck(clip, now: now)
+            checked = true
         }
         guard running else { return }
         let state = engine.state(now: now)
@@ -382,7 +403,7 @@ final class FollowAlongLoop: FollowSoundSink {
         if state.status == .locked { report.playingRate = state.rate }
         handle(judge.tick(state: state, now: now), now: now)
         guard running else { return }
-        describe(state, now: now)
+        describe(state, now: now, checked: checked)
         if now - lastReportAt >= 2 {
             lastReportAt = now
             snapshot(now: now)
@@ -396,6 +417,7 @@ final class FollowAlongLoop: FollowSoundSink {
     private func runCheck(_ clip: (samples: [Int16], start: Double), now: Double) -> Double {
         guard let engine else { return now }
         let result = engine.check(clip.samples, clipStart: clip.start, now: now)
+        roomWentQuiet = false
         report.checked(result)
         let after = max(clock(), now + max(0, result.millis) / 1000)
         // Read at once, so a jump is never missed (reading clears it).
@@ -416,23 +438,34 @@ final class FollowAlongLoop: FollowSoundSink {
                 let db = rms > 1e-6 ? 20 * log10(rms) : -120
                 levelSum = 0
                 levelCount = 0
-                if judge.phase == .inStep, watch.block(db: db, heard: judge.heard.level) { engine?.hurry() }
+                if judge.phase == .inStep, watch.block(db: db, heard: judge.heard.level) {
+                    engine?.hurry()
+                    roomWentQuiet = true
+                }
             }
         }
     }
 
     /// The last `seconds` of sound, unless the phone's own speaker was
     /// sounding in it (with earbuds the microphone never hears the phone).
-    private func cleanClip(_ seconds: Double, now: Double) -> (samples: [Int16], start: Double)? {
-        guard let clip = ring.last(seconds) else { return nil }
-        guard echoRisk else { return clip }
-        if gate.speaking { return nil }
-        let end = clip.start + seconds
+    /// With `shortest`, a shorter clip will do: the sound heard since the
+    /// phone's own sound ended, once that is `shortest` seconds or more.
+    private func cleanClip(_ seconds: Double, atLeast shortest: Double? = nil,
+                           now: Double) -> (samples: [Int16], start: Double)? {
+        guard echoRisk else { return ring.last(seconds) }
+        guard !gate.speaking, let end = ring.endTime else { return nil }
         ownSounds.removeAll { $0.end < now - 30 }
-        for sound in ownSounds where sound.start < end + 0.3 && sound.end > clip.start - 0.3 {
-            return nil
+        // Clean sound starts 0.3 seconds after the last of the phone's own
+        // sounds (one still sounding has no end yet).
+        var cleanFrom = -Double.infinity
+        for sound in ownSounds where sound.start < end + 0.3 {
+            cleanFrom = max(cleanFrom, sound.end + 0.3)
         }
-        return clip
+        let clean = end - cleanFrom
+        if clean >= seconds { return ring.last(seconds) }
+        guard let shortest, clean >= shortest else { return nil }
+        // Whole tenths of a second, so the clip never starts inside the margin.
+        return ring.last((clean * 10).rounded(.down) / 10)
     }
 
     private func handle(_ events: [FollowEvent], now: Double) {
@@ -478,8 +511,9 @@ final class FollowAlongLoop: FollowSoundSink {
     /// a line only while the tracker's misses are 0, that is when the check
     /// found the film or the film is in a quiet stretch of its own. One
     /// silent check over a paused TV holds the line (the tracker checks again
-    /// at once, and after two misses it holds too).
-    private func describe(_ state: FollowTrackerState, now: Double) {
+    /// at once, and after two misses it holds too). `checked`: a check ran a
+    /// moment ago, in this tick.
+    private func describe(_ state: FollowTrackerState, now: Double, checked: Bool) {
         guard let engine, judge.phase == .inStep, state.status == .locked, let film = state.filmSec else { return }
         let heardAt = film + lead
         guard descriptionsOn else {
@@ -490,7 +524,12 @@ final class FollowAlongLoop: FollowSoundSink {
         let fresh = holder.sweep(filmSec: heardAt, spoken: spokenIds, importantOnly: important)
         if !fresh.isEmpty {
             report.linesHeld += fresh.count
-            if settings.heldChime, !gate.speaking, holder.mayChime(now: now) { deliver(.chime) }
+            // No chime while the film may be paused (a check missed, or the
+            // room went quiet with no check since): the held line is read
+            // when the pause is said, and on the phone's own speaker a chime
+            // would put off the check that finds the pause.
+            let mayBePaused = state.misses > 0 || roomWentQuiet
+            if settings.heldChime, !mayBePaused, !gate.speaking, holder.mayChime(now: now) { deliver(.chime) }
         }
         guard now >= nextPlanAt else { return }
         nextPlanAt = now + 0.25
@@ -505,16 +544,23 @@ final class FollowAlongLoop: FollowSoundSink {
         // good check is more than 15 seconds old, check the film first, once
         // for this line. The README hurries the tracker and matches on the
         // next tick; the last 6 seconds are already in memory, so the check
-        // runs now instead. This is how a pause is caught.
-        if let since = state.sinceLastFixSec, since > 15, checkedFor != plan.id {
-            checkedFor = plan.id
-            guard let clip = cleanClip(6, now: now) else {
-                // The phone's own speaker sounded in those seconds: the
-                // tracker checks at its first clean chance (the README's
-                // hurry), and the line waits for a later tick.
+        // runs now instead. This is how a pause is caught. The phone also
+        // checks first when the room went quiet with no check since. Not
+        // when a check ran a moment ago, nor while a check has missed: then
+        // the tracker's own longer second look decides, as in the README.
+        let stale = (state.sinceLastFixSec ?? 0) > 15
+        if !checked, state.misses == 0, stale || roomWentQuiet, checkedFor != plan.id {
+            guard let clip = cleanClip(Self.checkSeconds, atLeast: Self.shortestCheckSeconds, now: now) else {
+                // The phone's own speaker sounded too lately: fewer than 4
+                // clean seconds to study. The line waits, and it is not
+                // counted as checked (Nov 14 integration review: it was, so
+                // the next tick said it with no check at all). The tracker
+                // checks at its first clean chance (the README's hurry); a
+                // line whose window closes first is held for the pause.
                 engine.hurry()
                 return
             }
+            checkedFor = plan.id
             saidAt = runCheck(clip, now: now)
             current = engine.state(now: saidAt)
             guard running, descriptionsOn, judge.phase == .inStep, current.status == .locked else { return }

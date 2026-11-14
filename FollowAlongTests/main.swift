@@ -246,8 +246,9 @@ final class PreLineMatcher: FollowMatching {
     /// opinion: the tracker holds.
     var doubtFrom = 0.0
     var doubtUntil = 0.0
-    /// Where each checked clip began, on the clock.
+    /// Where each checked clip began, on the clock, and how long it was.
     private(set) var checks: [Double] = []
+    private(set) var lengths: [Double] = []
     /// How often the loop asked for a check at the next chance.
     private(set) var hurries = 0
     private var said: Set<String> = []
@@ -262,6 +263,7 @@ final class PreLineMatcher: FollowMatching {
 
     func check(_ clip: [Int16], clipStart: Double, now: Double) -> FollowCheck {
         checks.append(clipStart)
+        lengths.append(Double(clip.count) / 8000)
         var result = FollowCheck()
         result.clipSec = Double(clip.count) / 8000
         result.startMono = clipStart
@@ -1388,15 +1390,286 @@ do {
           "while a doubtful match waits, nothing else is said: no lost, no pause (\(sentences))")
 
     // The phone's own speaker sounded in the last 6 seconds, so they cannot
-    // be studied: as the README says, the loop hurries the tracker (it checks
-    // at its first clean chance) and holds the line for a later tick, where,
-    // with misses still 0, it is said.
-    let echo = PreLineMatcher([])
-    let echoLines = spokenLines(runPreLine(echo, seconds: 24, ownSound: (start: 2018, end: 2019.5)))
+    // be studied. The line waits, not counted as checked, until 4 clean
+    // seconds have come in since the phone stopped (from 0.3 seconds after
+    // its sound ended). That stretch is checked, and the line is said only
+    // when the check finds the film (Nov 14 integration review: the line was
+    // said on the next tick with no check at all).
+    let echo = PreLineMatcher([.found])
+    let echoLines = spokenLines(runPreLine(echo, seconds: 26, ownSound: (start: 2018, end: 2019.5)))
     let echoIds: [String] = echoLines.map { $0.id }
     let echoAt: Double = echoLines.first?.at ?? -1
-    check(echo.hurries == 1 && echo.checks.isEmpty && echoIds == ["k1"] && echoAt > 2020.4,
-          "the clip before a line overlaps the phone's own sound: the tracker is hurried, and the line is said on a later tick (\(echo.hurries) hurries, \(echoIds) at \(echoAt))")
+    let echoChecks: Int = echoLines.first?.checks ?? -1
+    check(echoIds == ["k1"] && echoChecks == 1 && echo.hurries >= 1,
+          "the phone's own sound in the 6 seconds before a line: the line waits for a check, and is said after it (\(echoIds) after \(echoChecks) checks, \(echo.hurries) hurries)")
+    let echoStart: Double = echo.checks.first ?? -1
+    let echoLength: Double = echo.lengths.first ?? -1
+    check(echoStart > 2019.79 && echoLength > 3.99 && echoLength < 6.01 && echoAt >= 2023.8,
+          "that check studies clean sound only: 4 to 6 seconds, from 0.3 seconds after the phone stopped (\(echoStart) for \(echoLength) s, the line at \(echoAt))")
+    // The same with the TV paused: the check hears silence, so the line
+    // waits; the tracker's own longer second look hears silence too, and the
+    // pause is said. The line is never said over the paused TV.
+    let echoPaused = PreLineMatcher([.silence, .silence])
+    let echoPausedRun = runPreLine(echoPaused, seconds: 30, ownSound: (start: 2018, end: 2019.5))
+    let echoPausedIds: [String] = spokenLines(echoPausedRun).map { $0.id }
+    check(echoPausedIds.isEmpty && echoPaused.checks.count == 2,
+          "the phone's own sound, then a paused TV: no line, one check, then the tracker's second look (\(echoPausedIds), \(echoPaused.checks.count) checks)")
+    check(echoPausedRun.contains { sentence($0.output)?.text == FollowWords.paused }, "and the pause is said")
+}
+
+// MARK: - The phone's own speaker, lines close together (the real tracker)
+//
+// Nov 14 2026 integration review: on the phone's own speaker the check before
+// a line never ran. When the phone had made any sound in the last 6 seconds,
+// the line was counted as checked and the tracker was hurried, but its own
+// check needs the same 6 clean seconds; on the next tick the line was said
+// with no check at all. With lines close together no check ran again, and the
+// lines went on over a paused TV. Here the real syncprint (matcher, tracker
+// and planner) follows the made-up film through the loop on the phone's own
+// speaker. The test plays the player's part: the phone says each line and
+// sentence for 0.06 seconds a letter, and the microphone hears that as loud
+// noise. A line comes every 5 seconds. The TV is paused at film second 45 and
+// plays on 20 seconds later.
+
+typealias NotedCheck = (at: Double, start: Double, seconds: Double, found: Bool, reason: String)
+
+/// A matcher that hands every call to the real one, and notes each check.
+final class NotingMatcher: FollowMatching {
+    let inner: FollowMatching
+    private(set) var checks: [NotedCheck] = []
+
+    init(_ inner: FollowMatching) {
+        self.inner = inner
+    }
+
+    var printSeconds: Double { inner.printSeconds }
+
+    func setCues(_ cues: [FollowCue], offset: Double) {
+        inner.setCues(cues, offset: offset)
+    }
+
+    func check(_ clip: [Int16], clipStart: Double, now: Double) -> FollowCheck {
+        let result = inner.check(clip, clipStart: clipStart, now: now)
+        checks.append((at: now, start: clipStart, seconds: Double(clip.count) / 8000, found: result.found, reason: result.reason))
+        return result
+    }
+
+    func state(now: Double) -> FollowTrackerState { inner.state(now: now) }
+    func nextListen(now: Double) -> FollowListen { inner.nextListen(now: now) }
+    func hurry() { inner.hurry() }
+    func reset() { inner.reset() }
+
+    func plan(_ state: FollowTrackerState, shift: Double, options: FollowPlanOptions) -> FollowPlan {
+        inner.plan(state, shift: shift, options: options)
+    }
+
+    func spoke(_ id: String, now: Double, filmSec: Double) { inner.spoke(id, now: now, filmSec: filmSec) }
+    func forget(_ id: String) { inner.forget(id) }
+}
+
+/// What a run on the phone's speaker handed out, with the clock time, and
+/// every check it made.
+struct SpeakerRun {
+    var said: [(output: FollowLoopOutput, at: Double)] = []
+    var checks: [NotedCheck] = []
+
+    var lines: [(id: String, at: Double)] {
+        said.compactMap { item in spokenId(item.output).map { (id: $0, at: item.at) } }
+    }
+
+    /// When a sentence starting with these words was first handed out.
+    func firstSentence(_ start: String) -> Double? {
+        said.first { (sentence($0.output)?.text ?? "").hasPrefix(start) }?.at
+    }
+
+    /// syncprint's README rule, over the whole run: a line is said only when
+    /// a check found the film in the 15 seconds before it, and no check has
+    /// missed since. The lines that break it.
+    var unchecked: [String] {
+        lines.compactMap { line -> String? in
+            let before = checks.filter { $0.at <= line.at + 1e-6 }
+            guard let lastFound = before.last(where: { $0.found }) else { return line.id }
+            let missedSince = before.contains { $0.at > lastFound.at && !$0.found }
+            let age: Double = line.at - lastFound.start
+            return age > 15.000001 || missedSince ? line.id : nil
+        }
+    }
+}
+
+/// One run on the phone's own speaker. The made-up film plays on the TV from
+/// clock 1000 at film second 0, stops at clock `pauseAt`, and plays on from
+/// clock `resumeAt`. The sound comes in quarter seconds, as from a phone.
+func runOnSpeaker(engine: FollowAlongEngine, film: [Int16], track speakerTrack: FollowTrack,
+                  pauseAt: Double, resumeAt: Double, until: Double) -> SpeakerRun {
+    let matcher = NotingMatcher(engine)
+    let clock = TestClock(1000)
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.speaker")
+    let gate = FollowSpeechGate()
+    let loop = FollowAlongLoop(queue: queue, gate: gate, clock: { clock.now }, trail: { _ in }, deliver: { said.add($0) })
+    loop.prepare(track: speakerTrack, matcher: matcher, settings: FollowAlongSettings())
+    // The phone's own speaker: the microphone hears the phone.
+    loop.update(lead: 0, outputDelay: 0, echoRisk: true)
+    loop.start(now: 1000)
+    queue.sync {}
+    _ = said.take()
+    let block = 0.25
+    let letter = 0.06
+    var run = SpeakerRun()
+    // What the phone is saying (a line has its id), and the sentence waiting its turn.
+    var saying: (id: String?, text: String, start: Double, end: Double, stops: Bool)?
+    var waiting: (text: String, stops: Bool)?
+    // When the phone's own speaker sounded, for the microphone.
+    var sounds: [(start: Double, end: Double)] = []
+    func begin(_ id: String?, _ text: String, at time: Double, stops: Bool) {
+        let end = time + Double(text.count) * letter
+        saying = (id: id, text: text, start: time, end: end, stops: stops)
+        gate.speaking = true
+        loop.soundStarted(at: time, until: nil)
+        sounds.append((start: time, end: end))
+    }
+    var step = 1
+    var seed: UInt32 = 900
+    playing: while true {
+        let end = 1000 + Double(step) * block
+        if end > until + 1e-9 { break }
+        step += 1
+        let now = end + 0.02
+        // The player: speech that has ended by now.
+        if let done = saying, done.end <= now {
+            saying = nil
+            gate.speaking = waiting != nil
+            loop.soundEnded(at: done.end)
+            if let id = done.id {
+                loop.finished(cue: id, started: true, seconds: done.end - done.start, characters: done.text.count, now: done.end)
+            } else {
+                loop.sentenceSpoken(characters: done.text.count, seconds: done.end - done.start)
+            }
+            if done.stops { break playing }
+            if let next = waiting {
+                waiting = nil
+                begin(nil, next.text, at: done.end, stops: next.stops)
+            }
+        }
+        // What the microphone hears in this quarter second: the TV (the film,
+        // or the quiet room while it is paused), and the phone's own voice.
+        let from = end - block
+        var heard: [Int16]
+        if from < pauseAt {
+            heard = heardClip(film, from: from - 1000, seconds: block, gain: 0.5, noise: 0.02, seed: seed)
+        } else if from >= resumeAt {
+            heard = heardClip(film, from: pauseAt - 1000 + (from - resumeAt), seconds: block, gain: 0.5, noise: 0.02, seed: seed)
+        } else {
+            heard = heardClip(nil, from: 0, seconds: block, gain: 0, noise: 0.02, seed: seed)
+        }
+        let voice = heardClip(nil, from: 0, seconds: block, gain: 0, noise: 0.3, seed: seed &+ 7000)
+        seed &+= 1
+        let sounding = sounds.filter { $0.end > from && $0.start < end }
+        if !sounding.isEmpty {
+            for index in heard.indices {
+                let time = from + Double(index) / 8000
+                if sounding.contains(where: { time >= $0.start && time < $0.end }) {
+                    heard[index] = Int16(max(-32767, min(32767, Int(heard[index]) + Int(voice[index]))))
+                }
+            }
+        }
+        clock.set(now)
+        loop.receive(heard, endingAt: end)
+        queue.sync {}
+        for output in said.take() {
+            run.said.append((output: output, at: now))
+            switch output {
+            case .speak(let id, let text):
+                if saying == nil, waiting == nil {
+                    begin(id, text, at: now, stops: false)
+                } else {
+                    loop.finished(cue: id, started: false, seconds: nil, characters: text.count, now: now)
+                }
+            case .sentence(let text, _, let stops):
+                // A sentence takes over from a line being said.
+                if let cut = saying, let id = cut.id {
+                    saying = nil
+                    if let index = sounds.lastIndex(where: { $0.start == cut.start }) { sounds[index].end = now }
+                    loop.soundEnded(at: now)
+                    loop.finished(cue: id, started: true, seconds: nil, characters: cut.text.count, now: now)
+                }
+                gate.speaking = true
+                if saying == nil {
+                    begin(nil, text, at: now, stops: stops)
+                } else {
+                    waiting = (text: text, stops: stops)
+                }
+            case .chime:
+                let length = FollowSounds.seconds(.held) + 0.1
+                loop.soundStarted(at: now, until: now + length)
+                sounds.append((start: now, end: now + length))
+            default:
+                break
+            }
+        }
+    }
+    loop.stop()
+    queue.sync {}
+    run.checks = matcher.checks
+    return run
+}
+
+section("the phone's own speaker")
+do {
+    let script = readText("Sources/syncprint.js")
+    let film = madeUpFilm(seconds: 90, seed: 0x1234_5678)
+    guard let maker = try? FollowAlongEngine(script: script), let bytes = maker.fingerprint(film) else {
+        fatal("the speaker test's fingerprint")
+    }
+    let engine: FollowAlongEngine
+    do {
+        engine = try FollowAlongEngine(script: script)
+        try engine.load(print: bytes)
+    } catch {
+        fatal("the speaker test's matcher: \(error)")
+    }
+    // Fourteen lines, one every 5 seconds from film second 14, each about two seconds long.
+    let texts = [
+        "A red kite climbs over the hill.", "The boy runs after the string.", "A dog barks at the kite.",
+        "Clouds roll in from the sea.", "The kite dips toward the trees.", "The boy pulls the line hard.",
+        "Rain begins to fall.", "They run for the barn.", "The barn door slams shut.",
+        "Lightning lights the field.", "The kite lies in the mud.", "The boy smiles anyway.",
+        "The sun comes out again.", "A rainbow spans the hill.",
+    ]
+    let cues = texts.enumerated().map { index, text in
+        #"{"id": "c\#(index + 1)", "startSec": \#(14 + 5 * index), "endSec": \#(18.5 + 5 * Double(index)), "text": "\#(text)", "importance": 2}"#
+    }
+    let credit = #""credit": {"start": "Audio description by Kade-AI.", "end": "Described by Kade-AI. More at kademurdock dot com."}"#
+    let speakerTrack: FollowTrack
+    switch readTrack(#"{"format": "kade-follow-track", "version": 1, "filmSeconds": 90, \#(goodPrint), \#(credit), "cues": [\#(cues.joined(separator: ", "))]}"#) {
+    case .success(let made):
+        speakerTrack = made
+    case .failure(let problem):
+        fatal("the speaker test's track: \(problem)")
+    }
+    check(speakerTrack.cues.count == 14 && speakerTrack.cues[1].startSec == 19 && speakerTrack.cues[1].endSec == 23.5,
+          "fourteen lines, 5 seconds apart")
+
+    let run = runOnSpeaker(engine: engine, film: film, track: speakerTrack, pauseAt: 1045, resumeAt: 1065, until: 1090)
+    let lines = run.lines
+    let playing = lines.filter { $0.at < 1045 }
+    let overPause = lines.filter { $0.at >= 1045.5 && $0.at < 1065 }
+    let playingOn = lines.filter { $0.at >= 1065 }
+    check(run.unchecked.isEmpty,
+          "the phone's own speaker, a line every 5 seconds: each line is said only after a check found the film in the 15 seconds before it, none missed since (unchecked \(run.unchecked); \(lines.count) lines, \(run.checks.count) checks)")
+    check(playing.count >= 6, "while the film plays the lines are said, a moment late when a check comes first (\(playing.map { $0.id }))")
+    let shortChecks = run.checks.filter { $0.at > 1010 && $0.at < 1045 && $0.found }.filter { $0.seconds > 3.99 && $0.seconds < 5.99 }
+    check(!shortChecks.isEmpty, "a check between lines studies the 4 seconds or more heard since the phone last spoke, and finds the film")
+    check(overPause.isEmpty, "the TV paused: no line is said over it (\(overPause.map { $0.id }))")
+    if let pausedAt = run.firstSentence("The film seems to be paused.") {
+        check(pausedAt - 1045 <= 12, "the pause is said within 12 seconds on the phone's speaker (\(pausedAt - 1045) s)")
+    } else {
+        check(false, "the pause is said: \(run.said.compactMap { sentence($0.output)?.text })")
+    }
+    let backAt: Double = run.firstSentence("Back in step") ?? -1
+    check(backAt >= 1065 && backAt - 1065 <= 12, "the TV plays on: back in step (\(backAt - 1065) s)")
+    check(playingOn.count >= 2, "and the lines go on (\(playingOn.map { $0.id }))")
+    check(engine.lastError == nil, "no JavaScript errors on the speaker run: \(engine.lastError ?? "")")
 }
 
 // MARK: - A loop that never got its track
@@ -1524,6 +1797,35 @@ do {
     let fetcher = body("func fetch(jobId: String, version: Int, service: DescribedVideoService)", in: storeSource)
     check(fetcher.components(separatedBy: "finishedAt: answer.finishedAt").count - 1 == 2,
           "a fetched track is kept with the answer's finishedAt, and replaces the kept track and fingerprint")
+
+    // A kept track opened from "Follow-along tracks on this phone" (Nov 14
+    // integration review: the list opened it with no stamp check, so after
+    // Describe the rest it kept the preview's short track). While its copy is
+    // on the server's list, the same rule as the button; as it is when the
+    // video is off the list or the phone is offline.
+    check(FollowKeptTrack.openAsIs(stamp: stamp, listed: true, finishedAt: "2026-11-14T10:00:00Z"),
+          "the list: the same finished copy, so the kept track opens")
+    check(!FollowKeptTrack.openAsIs(stamp: stamp, listed: true, finishedAt: "2026-11-14T11:30:00.000Z"),
+          "the list: the copy was finished again (Describe the rest), so the track is fetched again first")
+    check(!FollowKeptTrack.openAsIs(stamp: nil, listed: true, finishedAt: stamp) && !FollowKeptTrack.openAsIs(stamp: stamp, listed: true, finishedAt: nil),
+          "the list: a track kept before the stamp, or a copy with no finishedAt, is fetched again")
+    check(FollowKeptTrack.openAsIs(stamp: stamp, listed: false, finishedAt: nil) && FollowKeptTrack.openAsIs(stamp: nil, listed: false, finishedAt: nil),
+          "the list: a video no longer on the server's list opens its kept track as it is")
+    check(FollowKeptTrack.offline(URLError(.notConnectedToInternet)) && FollowKeptTrack.offline(URLError(.timedOut)),
+          "the list: no internet, so the kept track opens as it is")
+    check(!FollowKeptTrack.offline(URLError(.cancelled)) && !FollowKeptTrack.offline(CancellationError())
+          && !FollowKeptTrack.offline(FollowAlongEngine.Failure.print),
+          "the list: any other failure is said, not hidden behind the kept track")
+    let row = body("private func followTrackRow(_ item: FollowStoredTrack)", in: screenSource)
+    check(row.contains("await openKeptTrack(item)") && !row.contains("activeSheet = .followAlong(item)"),
+          "Follow-along tracks on this phone opens a kept track through the stamp check, never straight")
+    let keptOpener = body("private func openKeptTrack(_ item: FollowStoredTrack) async", in: screenSource)
+    check(keptOpener.contains("jobs.first(where: { $0.id == item.job })")
+          && keptOpener.contains("finishedCopies.first(where: { $0.number == item.copyVersion })")
+          && keptOpener.contains("FollowKeptTrack.openAsIs(stamp: item.finishedAt, listed: listedCopy != nil, finishedAt: listedCopy?.finishedAt)")
+          && keptOpener.contains("followStore.fetch(jobId: item.job, version: item.copyVersion, service: service)")
+          && keptOpener.contains("FollowKeptTrack.offline(error)"),
+          "the list compares the kept stamp with its copy's finishedAt in the loaded list, fetches again when they differ, and opens the kept track as it is only off the list or offline")
 }
 
 // MARK: - The server's real answers (the contract check, Nov 14 2026)
