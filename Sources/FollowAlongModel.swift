@@ -939,9 +939,11 @@ struct FollowJudge: Equatable {
     /// loud. syncprint (1.1.0 on) says "silence" itself, from how loud the
     /// film sounds in this room; the phone's own measure is a second opinion.
     func seemsQuiet(_ check: FollowCheck) -> Bool {
-        guard !check.found, check.expectQuiet == false else { return false }
+        // syncprint's README: silence, with expectQuiet not true, counts.
+        guard !check.found, check.expectQuiet != true else { return false }
         if check.reason == "silence" { return true }
-        guard let level = heard.level else { return false }
+        // The phone's own measure needs a place where the film should be loud.
+        guard check.expectQuiet == false, let level = heard.level else { return false }
         return check.clipDb < level - Self.quietDrop
     }
 

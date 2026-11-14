@@ -382,6 +382,16 @@ do {
     _ = mixed.checked(missed("no match", db: -30), state: locked(131), now: 31)
     _ = mixed.checked(missed("silence"), state: status(.holding, 132), now: 32)
     check(mixed.phase == .inStep, "quiet checks must come in a row")
+    var unplaced = FollowJudge(now: 0, endSec: 7200, part: false)
+    _ = unplaced.checked(found(100, db: -30), state: locked(108), now: 10)
+    _ = unplaced.checked(missed("silence", expectQuiet: nil), state: locked(130), now: 30)
+    check(unplaced.checked(missed("silence", expectQuiet: nil), state: status(.holding, 131), now: 31) == [.paused],
+          "syncprint's silence counts when no place was expected (its README: expectQuiet not true)")
+    var unplacedQuiet = FollowJudge(now: 0, endSec: 7200, part: false)
+    _ = unplacedQuiet.checked(found(100, db: -30), state: locked(108), now: 10)
+    _ = unplacedQuiet.checked(missed("no match", db: -60, expectQuiet: nil), state: locked(130), now: 30)
+    _ = unplacedQuiet.checked(missed("no match", db: -60, expectQuiet: nil), state: status(.holding, 131), now: 31)
+    check(unplacedQuiet.phase == .inStep, "the phone's own loudness needs a place where the film should be loud")
 }
 
 do {

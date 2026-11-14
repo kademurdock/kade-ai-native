@@ -58,7 +58,7 @@ final class FollowAlongEngine: FollowMatching {
 
     /// sha256 of Sources/syncprint.js. The server keeps the same file and the
     /// same checksum; FollowAlongTests fails when the copy changes alone.
-    static let scriptSHA256 = "52628452b1ff648592bee8df9dabd5e5764a4d2be5c79ab5a6c2a6a000ef759e"
+    static let scriptSHA256 = "026f3874fc96ed4cc64b788b3a741aa08558d2f6de1bb449b5a76a6c0275597c"
     static let sampleRate = 8000.0
 
     private let context: JSContext

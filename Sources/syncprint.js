@@ -81,6 +81,7 @@
     wideFloor: 2.0, // the clip's spectrum points that vote in the wide pass stand this far above average
     wideSigma: 3.0, // an offset is checked when its votes stand this many deviations above chance
     wideCandidates: 100,
+    wideMax: 8192, // at most this many points vote in the wide pass: the strongest
     seedVotes: 2, // a time offset needs this many votes in one bin to be checked
     minVotes: 2, // votes needed (three neighbouring bins summed)
     minScore: 7.0, // score needed when nothing is known about the position
@@ -183,6 +184,8 @@
     if (!isInt(p.candidates, 1, 100000) || !isInt(p.wideCandidates, 1, 100000)) return 'candidates';
     if (!isInt(p.seedVotes, 1, 1000000) || !(p.minVotes >= 0)) return 'votes';
     if (!(p.wideFloor >= 0 && p.wideSigma >= 0)) return 'wide';
+    if (!isInt(p.wideMax, 1, 8192)) return 'wideMax';
+    if (!(p.clampHi > p.wideFloor)) return 'wideFloor';
     if (!(p.minClipSec > 0 && p.minClipSec <= MAX_CLIP_SEC)) return 'minClipSec';
     if (!isInt(p.minPeaks, 1, 1000000)) return 'minPeaks';
     if (!(p.ambiguousRatio > 0)) return 'ambiguousRatio';
@@ -897,6 +900,8 @@
     this.binTimes = bt;
     this.wt = new Uint16Array(8192);
     this.wf = new Uint16Array(8192);
+    this.wv = new Float32Array(8192);
+    this.wideHist = new Int32Array(64);
     // the film's usual loud level (the 80th percentile of its loudness values), for
     // telling quiet passages apart; the values are whole numbers 0..255, so count them
     var lv = pr.levels, n = lv.length, hist = new Uint32Array(256), want, acc = 0;
@@ -1138,7 +1143,7 @@
     if (cfg.wide > 0 && topZ < cfg.wideBelow) {
       var map = res.map, nb = this.nb, bs = this.binStart, bt = this.binTimes;
       var wfl = cfg.wideFloor, base, f, t, v, nw = 0, sumVotes = 0, e4;
-      var wt = this.wt, wf = this.wf, capW = wt.length;
+      var wt = this.wt, wf = this.wf, wv = this.wv, capW = wt.length;
       for (t = 0; t < qFrames && nw < capW; t++) {
         base = t * nb;
         for (f = 0; f < nb; f++) {
@@ -1149,10 +1154,11 @@
           if (t > 0 && map[base - nb + f] > v) continue;
           if (t < qFrames - 1 && map[base + nb + f] >= v) continue;
           if (nw >= capW) break;
-          wt[nw] = t; wf[nw] = f; nw++;
-          sumVotes += bs[f + 1] - bs[f];
+          wt[nw] = t; wf[nw] = f; wv[nw] = v; nw++;
         }
       }
+      if (nw > cfg.wideMax) nw = this.strongest(nw, cfg.wideMax, wfl, cfg.clampHi);
+      for (i = 0; i < nw; i++) sumVotes += bs[wf[i] + 1] - bs[wf[i]];
       out.widePeaks = nw;
       // a bin is worth checking when it stands well above the level chance alone gives
       var lam = sumVotes / size;
@@ -1225,6 +1231,30 @@
     var fl = this.levelAt(out.filmSec, clipSec);
     if (fl !== null && fl >= this.loudDb - cfg.quietDropDb) out.gainDb = out.level - fl;
     return out;
+  };
+
+  // Keeps the strongest `keep` of the wide search's nw points (values lo..hi), in
+  // their time order, and returns how many were kept. The cost of the wide search
+  // grows with the number of points, so a noisy clip stays quick.
+  Matcher.prototype.strongest = function (nw, keep, lo, hi) {
+    var wt = this.wt, wf = this.wf, wv = this.wv, h = this.wideHist, B = h.length;
+    var span = hi - lo, i, b, cnt = 0, kept = 0, cut;
+    zeroFill(h, B);
+    for (i = 0; i < nw; i++) {
+      b = Math.floor((wv[i] - lo) / span * B);
+      h[b < 0 ? 0 : (b >= B ? B - 1 : b)]++;
+    }
+    for (b = B - 1; b > 0; b--) {
+      cnt += h[b];
+      if (cnt >= keep) break;
+    }
+    cut = lo + b * span / B;
+    for (i = 0; i < nw && kept < keep; i++) {
+      if (wv[i] < cut) continue;
+      wt[kept] = wt[i]; wf[kept] = wf[i]; wv[kept] = wv[i];
+      kept++;
+    }
+    return kept;
   };
 
   // A clip with a strong rhythm or long steady tones scores high against almost
