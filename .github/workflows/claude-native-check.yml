@@ -73,6 +73,9 @@ jobs:
             -derivedDataPath build/check CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= build > build.log 2>&1 || status=$?
           grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -n 200 || true
+          # Nov 14 2026: the first compile errors as annotations, which a
+          # public repository shows without a token (its logs need one).
+          grep -E "error:" build.log | sort -u | head -n 20 | sed -e 's/%/%25/g' -e 's/^/::error title=Compile::/' || true
           if [ "$status" -ne 0 ]; then
             grep -n -E "error|failed|Failed|Stack dump" build.log | tail -n 60 || true
             tail -n 40 build.log || true
@@ -115,10 +118,12 @@ jobs:
             echo "No jsc command on this Mac; the Follow along tests timed the match in JavaScriptCore instead."
             exit 0
           fi
-          echo "JIT on:"
-          "$jsc" Sources/syncprint.js dev/follow-along/time-match.js || true
-          echo "JIT off:"
-          "$jsc" --useJIT=false Sources/syncprint.js dev/follow-along/time-match.js || true
+          on="$("$jsc" Sources/syncprint.js dev/follow-along/time-match.js 2>&1 | tail -n 1 || true)"
+          off="$("$jsc" --useJIT=false Sources/syncprint.js dev/follow-along/time-match.js 2>&1 | tail -n 1 || true)"
+          echo "JIT on: $on"
+          echo "JIT off: $off"
+          echo "::notice title=jsc, JIT on::$on"
+          echo "::notice title=jsc, JIT off::$off"
 
       - name: Puppet gallery screenshots
         id: gallery

@@ -20,8 +20,23 @@ import Foundation
 // a second time with JavaScriptCore's JIT switched off, as inside the app).
 
 var count = 0
+
+/// Text for a GitHub annotation line (the check's results can then be read
+/// without a token: a public repository's annotations are open to anyone).
+func annotation(_ text: String) -> String {
+    text.replacingOccurrences(of: "%", with: "%25")
+        .replacingOccurrences(of: "\r", with: "%0D")
+        .replacingOccurrences(of: "\n", with: "%0A")
+}
+
+func fatal(_ message: String) -> Never {
+    print("FAILED: \(message)")
+    print("::error title=Follow along tests::FAILED: \(annotation(message))")
+    exit(1)
+}
+
 func check(_ ok: Bool, _ label: String) {
-    if !ok { print("FAILED: \(label)"); exit(1) }
+    if !ok { fatal(label) }
     count += 1
 }
 
@@ -38,8 +53,7 @@ let jitOff = (ProcessInfo.processInfo.environment["JSC_useJIT"] ?? "").lowercase
 func readText(_ relative: String) -> String {
     let url = rootURL.appendingPathComponent(relative)
     guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-        print("FAILED: could not read \(relative) under \(root)")
-        exit(1)
+        fatal("could not read \(relative) under \(root)")
     }
     return text
 }
@@ -47,8 +61,7 @@ func readText(_ relative: String) -> String {
 func readData(_ relative: String) -> Data {
     let url = rootURL.appendingPathComponent(relative)
     guard let data = try? Data(contentsOf: url) else {
-        print("FAILED: could not read \(relative) under \(root)")
-        exit(1)
+        fatal("could not read \(relative) under \(root)")
     }
     return data
 }
@@ -151,7 +164,9 @@ if timingOnly {
         if !result.found { print("Follow along timing: a clip at \(second) s was not found") }
     }
     let label = jitOff ? "JIT off" : "JIT on"
-    print("Follow along timing (\(label)): 10 minute film, fingerprint \(Int(printMillis)) ms, load \(Int(loadMillis)) ms, 8 s matches \(times.map { String(Int($0)) }.joined(separator: ", ")) ms")
+    let line = "10 minute film, fingerprint \(Int(printMillis)) ms, load \(Int(loadMillis)) ms, 8 s matches \(times.map { String(Int($0)) }.joined(separator: ", ")) ms"
+    print("Follow along timing (\(label)): \(line)")
+    print("::notice title=Follow along timing, \(label)::\(annotation(line))")
     exit(0)
 }
 
@@ -212,8 +227,7 @@ let track: FollowTrack = {
     do {
         return try FollowTrack.read(sample)
     } catch {
-        print("FAILED: the sample track did not read: \(error)")
-        exit(1)
+        fatal("the sample track did not read: \(error)")
     }
 }()
 check(track.format == "kade-follow-track" && track.version == 1, "the format and version")
@@ -644,14 +658,12 @@ do {
     do {
         maker = try FollowAlongEngine(script: script)
     } catch {
-        print("FAILED: syncprint.js did not load in JavaScriptCore: \(error)")
-        exit(1)
+        fatal("syncprint.js did not load in JavaScriptCore: \(error)")
     }
     check(maker.version.hasPrefix("1."), "syncprint \(maker.version) loaded")
     let film = madeUpFilm(seconds: 90, seed: 0x1234_5678)
     guard let bytes = maker.fingerprint(film) else {
-        print("FAILED: no fingerprint (\(maker.lastError ?? "no JavaScript error"))")
-        exit(1)
+        fatal("no fingerprint (\(maker.lastError ?? "no JavaScript error"))")
     }
     check(bytes.count > 1000 && Array(bytes.prefix(4)) == Array("SYPR".utf8), "a fingerprint, starting SYPR (\(bytes.count) bytes)")
 
@@ -660,8 +672,7 @@ do {
         engine = try FollowAlongEngine(script: script)
         try engine.load(print: bytes)
     } catch {
-        print("FAILED: the fingerprint did not load: \(error)")
-        exit(1)
+        fatal("the fingerprint did not load: \(error)")
     }
     check(near(engine.printSeconds, 90, 0.1), "the fingerprint is 90 seconds long")
     var broken = bytes
@@ -750,6 +761,7 @@ do {
         }
     }
     print("Follow along: one 8 s match took \(Int(first.millis)) ms in JavaScriptCore (JIT \(jitOff ? "off" : "on"))")
+    print("::notice title=Follow along match::one 8 s match took \(Int(first.millis)) ms in JavaScriptCore")
 }
 
 
@@ -807,3 +819,4 @@ do {
 }
 
 print("Follow along: \(count) checks passed")
+print("::notice title=Follow along tests::\(count) checks passed")

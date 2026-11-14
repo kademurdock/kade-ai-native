@@ -9,7 +9,12 @@ import Foundation
 
 var count = 0
 func check(_ ok: Bool, _ label: String) {
-    if !ok { print("FAILED: \(label)"); exit(1) }
+    if !ok {
+        print("FAILED: \(label)")
+        // Nov 14 2026: also a GitHub annotation, readable without a token.
+        print("::error title=Audio session tests::FAILED: \(label.replacingOccurrences(of: "%", with: "%25").replacingOccurrences(of: "\n", with: "%0A"))")
+        exit(1)
+    }
     count += 1
 }
 
