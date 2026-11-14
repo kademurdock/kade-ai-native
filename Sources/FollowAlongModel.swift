@@ -84,7 +84,7 @@ struct FollowTrack: Equatable {
     let print: Print
     let plannedAt: Pace?
     let credit: Credit?
-    /// Sorted by start.
+    /// Sorted by start, in the server's order (see read).
     let cues: [FollowCue]
     let quiet: [Span]
     let warning: String?
@@ -117,9 +117,21 @@ struct FollowTrack: Equatable {
         guard version >= 1 else { throw Problem.notATrack }
         guard version <= newestVersion else { throw Problem.newerVersion }
         guard let print = raw.print, print.bytes > 0, isSHA256(print.sha256) else { throw Problem.noPrint }
-        let cues = (raw.cues ?? []).compactMap { $0.value }.sorted {
-            $0.startSec == $1.startSec ? $0.id < $1.id : $0.startSec < $1.startSec
-        }
+        // In film order, the server's way: track.ts sorts by start, then by
+        // the moment each thing happens, then as it built them. syncprint's
+        // planner says the first of two lines with one start and one
+        // importance, so the phone keeps that order (Nov 14 2026 contract
+        // check: it used to break such a tie by id text, where "0:10" comes
+        // before "0:9").
+        let cues = (raw.cues ?? []).compactMap { $0.value }.enumerated().sorted { first, second in
+            let a = first.element
+            let b = second.element
+            if a.startSec != b.startSec { return a.startSec < b.startSec }
+            let aAt = a.at ?? a.startSec
+            let bAt = b.at ?? b.startSec
+            if aAt != bAt { return aAt < bAt }
+            return first.offset < second.offset
+        }.map { $0.element }
         let lastEnd = cues.map { $0.endSec }.max() ?? 0
         var film = raw.filmSeconds ?? 0
         if !(film > 0) { film = max(raw.covers?.endSec ?? 0, lastEnd) }

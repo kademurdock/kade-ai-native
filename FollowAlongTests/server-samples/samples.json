@@ -1,0 +1,164 @@
+{
+  "madeAt": "2026-11-14T20:01:49.915Z",
+  "routesUnder": "/api/kade/described-video",
+  "owner": "65a1f00dcafe4b1d2e3f4a5b",
+  "jobs": {
+    "ready": "dce6029e937e9b4f0d712ab49635b630",
+    "other": "63973116c9f28b7261ae865e8accc54c"
+  },
+  "track": {
+    "file": "track.json",
+    "storedAs": "described-video/65a1f00dcafe4b1d2e3f4a5b/dce6029e937e9b4f0d712ab49635b630/copies/1/track-1794686501862.json",
+    "bytes": 4200,
+    "sha256": "ecceb8aa34d6d90203aa1e3567b1d094a4106edbc24b1aa7f57407eb61b340c9"
+  },
+  "print": {
+    "file": "plan.sypr",
+    "bytes": 5206,
+    "sha256": "438b32974d6e1af035e97e6fe031fb44c15f1bc5e7a838d13519c1edd61e9bd4",
+    "syncprint": "1.1.1"
+  },
+  "excerptsFound": [
+    {
+      "at": 2,
+      "filmSec": 2,
+      "score": 12.6,
+      "reason": "ok"
+    },
+    {
+      "at": 10,
+      "filmSec": 9.999,
+      "score": 25.7,
+      "reason": "ok"
+    },
+    {
+      "at": 20,
+      "filmSec": 20,
+      "score": 14,
+      "reason": "ok"
+    },
+    {
+      "at": 30,
+      "filmSec": 29.999,
+      "score": 17.6,
+      "reason": "ok"
+    },
+    {
+      "at": 40,
+      "filmSec": 39.999,
+      "score": 34.3,
+      "reason": "ok"
+    },
+    {
+      "at": 50,
+      "filmSec": 49.999,
+      "score": 18.8,
+      "reason": "ok"
+    }
+  ],
+  "samples": [
+    {
+      "file": "config.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/config",
+      "follow": "on"
+    },
+    {
+      "file": "job-ready.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/jobs/dce6029e937e9b4f0d712ab49635b630",
+      "follow": "on"
+    },
+    {
+      "file": "track-200-ready-get.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/jobs/dce6029e937e9b4f0d712ab49635b630/track",
+      "follow": "on",
+      "note": "printUrl replaced by a placeholder"
+    },
+    {
+      "file": "track-200-ready-post.json",
+      "status": 200,
+      "method": "POST",
+      "path": "/jobs/dce6029e937e9b4f0d712ab49635b630/track",
+      "body": {},
+      "follow": "on",
+      "note": "printUrl replaced by a placeholder"
+    },
+    {
+      "file": "track-404-not-available-get.json",
+      "status": 404,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "follow": "unset"
+    },
+    {
+      "file": "config-off.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/config",
+      "follow": "unset"
+    },
+    {
+      "file": "job-possible.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c",
+      "follow": "on"
+    },
+    {
+      "file": "track-409-possible-get.json",
+      "status": 409,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "follow": "on"
+    },
+    {
+      "file": "track-202-making-post.json",
+      "status": 202,
+      "method": "POST",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "body": {},
+      "follow": "on"
+    },
+    {
+      "file": "track-202-making-get.json",
+      "status": 202,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "follow": "on"
+    },
+    {
+      "file": "job-making.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c",
+      "follow": "on"
+    },
+    {
+      "file": "track-409-gone-get.json",
+      "status": 409,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "follow": "on"
+    },
+    {
+      "file": "track-409-gone-post.json",
+      "status": 409,
+      "method": "POST",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c/track",
+      "body": {},
+      "follow": "on"
+    },
+    {
+      "file": "job-gone.json",
+      "status": 200,
+      "method": "GET",
+      "path": "/jobs/63973116c9f28b7261ae865e8accc54c",
+      "follow": "on"
+    }
+  ]
+}

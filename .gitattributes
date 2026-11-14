@@ -5,3 +5,6 @@ Sources/syncprint.js -text
 # The checksum file next to it is compared byte for byte with the server's
 # (dev/follow-along/compare-syncprint.py), so it keeps its line ending too.
 FollowAlongTests/syncprint.js.sha256 -text
+# The contract check (Nov 14 2026): the server's real answers, its track and
+# fingerprint, and a piece of the film's sound, kept byte for byte.
+FollowAlongTests/server-samples/** -text

@@ -26,6 +26,10 @@ import JavaScriptCore
 // queued sound is not each checked again, an ended film's minutes count), and
 // the microphone capture (FollowAlongCapture.swift) turns test tones into
 // 8 kHz through a change of format.
+//
+// The contract check (Nov 14 2026, evening): the website's real answers
+// (FollowAlongTests/server-samples) are read by the app's own code, and the
+// server's real fingerprint finds 8 seconds of the film's own sound.
 
 // Line by line even into a file, so a crash still shows where it stopped.
 setvbuf(stdout, nil, _IOLBF, 0)
@@ -1520,6 +1524,305 @@ do {
     let fetcher = body("func fetch(jobId: String, version: Int, service: DescribedVideoService)", in: storeSource)
     check(fetcher.components(separatedBy: "finishedAt: answer.finishedAt").count - 1 == 2,
           "a fetched track is kept with the answer's finishedAt, and replaces the kept track and fingerprint")
+}
+
+// MARK: - The server's real answers (the contract check, Nov 14 2026)
+//
+// FollowAlongTests/server-samples holds real answers from the website's own
+// Follow along code (the LibreChat fork, branch claude/tellavision-sync-20261114,
+// commit 2b42b45f6), byte for byte, with the track and the fingerprint it made
+// for 60 seconds of Big Buck Bunny. The app's own readers read them here:
+// DVTrackAnswer and FollowTrack (FollowAlongModel.swift), and DVConfig, DVJob
+// and DVCopy (DescribedVideoService.swift's wire shapes, which
+// run-follow-along-tests.sh takes from the app's source). Then the server's
+// fingerprint finds 8 seconds of the film's own sound in JavaScriptCore, and
+// the loop says the right things on the real track.
+
+section("the server's real answers")
+do {
+    let folder = "FollowAlongTests/server-samples/"
+    func serverFile(_ name: String) -> Data { readData(folder + name) }
+    func serverObject(_ name: String) -> [String: Any] {
+        guard let found = (try? JSONSerialization.jsonObject(with: serverFile(name))) as? [String: Any] else {
+            fatal("\(name) is not a JSON object")
+        }
+        return found
+    }
+    func serverAnswer(_ name: String) -> DVTrackAnswer {
+        guard let read = DVTrackAnswer.read(serverFile(name)) else { fatal("\(name) does not read as a track answer") }
+        return read
+    }
+    func serverDecoded<T: Decodable>(_ type: T.Type, _ name: String) -> T {
+        do {
+            return try JSONDecoder().decode(type, from: serverFile(name))
+        } catch {
+            fatal("\(name) does not decode as \(type): \(error)")
+        }
+    }
+    func trackIn(_ data: Data?, _ label: String) -> FollowTrack {
+        guard let data else { fatal("\(label): no track") }
+        do {
+            return try FollowTrack.read(data)
+        } catch {
+            fatal("\(label): the track does not read: \(error)")
+        }
+    }
+    let placeholderLink = "https://storage.example.invalid/described-video/65a1f00dcafe4b1d2e3f4a5b/dce6029e937e9b4f0d712ab49635b630/sync/plan.sypr?X-Amz-Expires=21600&X-Amz-Signature=PLACEHOLDER"
+    let finishedStamp = "2026-11-14T20:01:41.862Z"
+    let printSum = "438b32974d6e1af035e97e6fe031fb44c15f1bc5e7a838d13519c1edd61e9bd4"
+
+    // The files are the server's own bytes (samples.json gives the checksums).
+    let trackBytes = serverFile("track.json")
+    let printBytes = serverFile("plan.sypr")
+    check(trackBytes.count == 4200 && sha256Hex(trackBytes) == "ecceb8aa34d6d90203aa1e3567b1d094a4106edbc24b1aa7f57407eb61b340c9",
+          "track.json is the track the server saved, byte for byte")
+    check(printBytes.count == 5206 && sha256Hex(printBytes) == printSum, "plan.sypr is the fingerprint the server made, byte for byte")
+    check(readText(".gitattributes").contains("FollowAlongTests/server-samples/** -text"), "git never changes the samples' bytes")
+
+    // track.json, field by field, as FollowTrack reads it.
+    let saved = trackIn(trackBytes, "track.json")
+    check(saved.format == "kade-follow-track" && saved.version == 1, "the server's track: its format and version")
+    check(saved.job == "dce6029e937e9b4f0d712ab49635b630" && saved.copyVersion == 1, "its job and copy")
+    check(saved.title == "Big Buck Bunny" && saved.language == "en", "its title (the video's name without .mp4) and language")
+    check(saved.filmSeconds == 60 && saved.covers == FollowTrack.Span(startSec: 0, endSec: 60),
+          "covers.endSec 60.01 is a hair past filmSeconds 60 (the plan's length against the check's): the phone keeps it inside the film")
+    check(!saved.isPart && saved.reachesFilmEnd, "so it is a whole film, and the closing credit belongs at its end")
+    check(saved.print == FollowTrack.Print(format: 1, bytes: 5206, sha256: printSum, startSec: nil), "the fingerprint it names: its format, size and sha256")
+    check(saved.plannedAt == FollowTrack.Pace(secPerChar: 0.0417, rate: 1.5, maxRate: 2.25), "the pace the server planned at")
+    check(saved.credit == FollowTrack.Credit(start: "Audio description by Kade-AI.", end: "Described by Kade-AI. More at kademurdock dot com."),
+          "both credit lines")
+    check(saved.warning == "AI descriptions can miss or misread visual details. Check anything important for yourself.", "the warning")
+    check(saved.quiet.count == 6, "six quiet stretches")
+    check(saved.quiet.first == FollowTrack.Span(startSec: 0, endSec: 4.42), "the first, as a [start, end] pair in seconds")
+    check(saved.quiet.last == FollowTrack.Span(startSec: 51.9, endSec: 60.01), "the last, to the end the track covers")
+    check(saved.cues.map { $0.id } == (0..<12).map { "0:\($0)" }, "all 12 lines, in the server's order")
+    check(saved.cues.filter { $0.fit == "full" }.count == 5 && saved.cues.filter { $0.fit == "short" }.count == 5
+          && saved.cues.filter { $0.fit == "none" }.count == 2, "five lines fit in full, five only short, two not at all")
+    check(saved.cues.allSatisfy { cue in cue.importance == 2 || cue.importance == 3 }, "every line's importance, 2 or 3 here")
+    check(saved.cues.allSatisfy { cue in !cue.reading && cue.shortText != nil }, "every line has a short text, and none reads the screen")
+    check(saved.cues.allSatisfy { cue in cue.at != nil && cue.until != nil }, "every line has its moment and its last moment")
+    let opening = saved.cues[0]
+    check(opening.startSec == 0.08 && opening.endSec == 4.42, "the first line's window, in seconds")
+    check(opening.at == 0.08 && opening.until == 4.43, "its moment and its last moment")
+    check(opening.importance == 3 && opening.fit == "short", "its importance, and what the server expected to fit")
+    check(opening.shortText == "Beside a tree, a chinchilla, a red squirrel and a brown squirrel gather.", "its short text")
+    let unplaced = saved.cues[4]
+    check(unplaced.id == "0:4" && unplaced.fit == "none", "a line that does not fit is kept")
+    check(unplaced.startSec == 26.25 && unplaced.endSec == 26.25, "with an empty window at its own moment, where dialogue covers it")
+    check(unplaced.at == 26.25 && unplaced.until == 27.75, "and its moment and last moment")
+    check(saved.printOffset(printSeconds: 60.01) == 0, "a whole film: the fingerprint's second 0 is the film's (covers.startSec)")
+
+    // GET and POST /jobs/:id/track, ready (200).
+    let readyGet = serverObject("track-200-ready-get.json")
+    let readyPost = serverObject("track-200-ready-post.json")
+    let agreed: Set<String> = ["follow", "version", "finishedAt", "track", "printUrl", "expiresAt"]
+    check(Set(readyGet.keys) == agreed && Set(readyPost.keys) == agreed, "the ready answer has exactly the agreed fields, from GET and from POST")
+    check((readyGet["version"] as? NSNumber)?.intValue == 1 && readyGet["expiresAt"] is String && readyGet["track"] is [String: Any],
+          "version is a number, expiresAt a date in text, the track an object")
+    for name in ["track-200-ready-get.json", "track-200-ready-post.json"] {
+        let ready = serverAnswer(name)
+        check(ready.state == "ready" && ready.isReady && ready.reason == nil, "\(name): ready, with no reason")
+        check(ready.printLink == placeholderLink, "\(name): the fingerprint's link is printUrl")
+        check(ready.finishedAt == finishedStamp, "\(name): finishedAt is the copy's finishing time")
+        check(trackIn(ready.trackData, name) == saved, "\(name): the track inside is the saved track, field for field")
+    }
+    check(sha256Hex(printBytes) == saved.print.sha256 && printBytes.count == saved.print.bytes,
+          "the fingerprint is whole by the store's own test: its size and sha256 are the track's")
+
+    // Being made (202), not asked for yet (409), cannot be made (409), switched off (404).
+    for name in ["track-202-making-get.json", "track-202-making-post.json"] {
+        let making = serverAnswer(name)
+        check(making.state == "making" && !making.isReady && making.finishedAt == nil, "\(name): making, not ready")
+        check(making.reason == "Your follow-along track is being made. It is free. Check again in a minute.", "\(name): the server's own sentence is said")
+    }
+    let possible = serverAnswer("track-409-possible-get.json")
+    check(possible.state == "possible" && !possible.isReady && possible.reason == "This copy has no follow-along track yet. Ask for one; it is free.",
+          "409 possible is read, not thrown away: the phone then asks with POST")
+    for name in ["track-409-gone-get.json", "track-409-gone-post.json"] {
+        let gone = serverAnswer(name)
+        check(gone.state == "gone" && !gone.isReady && gone.reason == FollowWords.gone, "\(name): gone, with the server's reason, which is the phone's own words too")
+    }
+    let refused = serverObject("track-404-not-available-get.json")
+    check(refused.count == 1 && (refused["error"] as? String) == "Follow along is not available.", "404: only the plain refusal every route uses")
+    let service = readText("Sources/DescribedVideoService.swift")
+    let reader = body("private func trackAnswer(", in: service)
+    check(reader.contains("(200..<300).contains(http.statusCode) || http.statusCode == 409")
+          && reader.contains("throw decodeError(data, status: http.statusCode, fallback: fallback)")
+          && service.contains("struct E: Decodable { let error: String? }"),
+          "only 2xx and 409 answers are read as track answers; a 404's error text is thrown, and said")
+    check(body("func track(jobId: String, version: Int)", in: service).contains("method: \"GET\"")
+          && body("func track(jobId: String, version: Int)", in: service).contains("query: [URLQueryItem(name: \"version\", value: String(version))]"),
+          "GET asks for the version as ?version=N, the way the server reads it")
+    check(body("func makeTrack(jobId: String, version: Int)", in: service).contains("method: \"POST\"")
+          && body("func makeTrack(jobId: String, version: Int)", in: service).contains("body: [\"version\": version]"),
+          "POST sends {\"version\": N}, which the server reads too")
+    let download = body("func downloadData(from link: String, limit: Int)", in: service)
+    check(download.contains("URLRequest(url: url)") && !download.contains("authorized") && !download.contains("Authorization"),
+          "the signed fingerprint link is fetched as it is, with no sign-in header (a signed storage link refuses a second sign-in)")
+
+    // GET /config and the jobs, read by the app's own wire shapes.
+    let configOn = serverDecoded(DVConfig.self, "config.json")
+    let configOff = serverDecoded(DVConfig.self, "config-off.json")
+    check(configOn.followAlong == true && configOff.followAlong == false, "GET /config: followAlong true with the switch on, false with it off")
+    check(configOn.voices != nil && configOff.voices != nil, "both count as the describer's config (the access check needs voices, prices or a size)")
+    check(configOn.listenAhead == true && configOn.features?.describerLinks == true, "and the rest of the config reads as before")
+    let readyJob = serverDecoded(DVJob.self, "job-ready.json")
+    check(readyJob.id == "dce6029e937e9b4f0d712ab49635b630" && readyJob.state == "done" && readyJob.follow == "ready",
+          "GET /jobs/:id: the follow word, ready")
+    for (name, word) in [("job-possible.json", "possible"), ("job-making.json", "making"), ("job-gone.json", "gone")] {
+        check(serverDecoded(DVJob.self, name).follow == word, "\(name): the follow word, \(word)")
+    }
+    let copies = readyJob.finishedCopies
+    check(copies.count == 1 && copies[0].number == 1, "the job's one finished copy, version 1")
+    check(copies[0].rehearsal == false && copies[0].preview == false, "not a rehearsal and not a preview")
+    check(copies[0].finishedAt == finishedStamp, "with its finishedAt")
+    // The stamp rule through the app's own readers, as openFollowAlong looks it up.
+    let viewVersion = copies.last?.number ?? 0
+    let copyStamp = readyJob.finishedCopies.first(where: { $0.number == viewVersion })?.finishedAt
+    check(FollowTrackStamp.matches(serverAnswer("track-200-ready-get.json").finishedAt, copyStamp),
+          "the answer's finishedAt is exactly the job's copies[].finishedAt for that version, so a track kept from it is used")
+    let jobText = String(decoding: serverFile("job-ready.json"), as: UTF8.self)
+    let finishedAgain = jobText.replacingOccurrences(of: "\"finishedAt\":\"\(finishedStamp)\",\"rehearsal\"",
+                                                     with: "\"finishedAt\":\"2026-11-14T20:09:12.345Z\",\"rehearsal\"")
+    check(finishedAgain != jobText, "a copy finished again is made from the real job")
+    if let rest = try? JSONDecoder().decode(DVJob.self, from: Data(finishedAgain.utf8)) {
+        let restStamp = rest.finishedCopies.first(where: { $0.number == viewVersion })?.finishedAt
+        check(restStamp == "2026-11-14T20:09:12.345Z" && !FollowTrackStamp.matches(finishedStamp, restStamp),
+              "after Describe the rest (the same version, finished again) the kept track is stale, so it is fetched again")
+    } else {
+        check(false, "the job finished again still reads")
+    }
+
+    // The server's fingerprint in real JavaScriptCore, and the film's own sound.
+    let script = readText("Sources/syncprint.js")
+    let matcher: FollowAlongEngine
+    do {
+        matcher = try FollowAlongEngine(script: script)
+        try matcher.load(print: printBytes)
+    } catch {
+        fatal("the server's fingerprint did not load in JavaScriptCore: \(error)")
+    }
+    check(matcher.version == "1.1.1", "syncprint \(matcher.version) reads the server's fingerprint")
+    check(near(matcher.printSeconds, 60.01, 0.01), "it holds the film's 60 seconds (\(matcher.printSeconds))")
+    check(near(saved.endInPrint(printSeconds: matcher.printSeconds), 60, 1e-9), "and the track ends inside it")
+    let soundData = serverFile("film-sound-29s-to-37s.s16le")
+    check(soundData.count == 128_000, "8 seconds of the film's own sound, 8 kHz mono, 16-bit")
+    let sound: [Int16] = stride(from: 0, to: soundData.count - 1, by: 2).map {
+        Int16(bitPattern: UInt16(soundData[$0]) | UInt16(soundData[$0 + 1]) << 8)
+    }
+    let clean = matcher.check(sound, clipStart: 4000, now: 4008)
+    check(clean.found && clean.reason == "ok" && near(clean.filmSec, 29, 0.1),
+          "the film's sound from second 29 is found there in the server's fingerprint (\(clean.filmSec ?? -1), \(clean.reason))")
+    let lockedOn = matcher.state(now: 4008)
+    check(lockedOn.status == .locked && near(lockedOn.filmSec, 37, 0.2), "the tracker locks: the film is at 37 seconds as the clip ends (\(lockedOn.filmSec ?? -1))")
+    matcher.reset()
+    let noisy = matcher.check(heardClip(sound, from: 0, seconds: 8, gain: 0.5, noise: 0.02, seed: 41), clipStart: 4100, now: 4108)
+    check(noisy.found && near(noisy.filmSec, 29, 0.1), "and as a phone hears it, quieter with room noise (\(noisy.filmSec ?? -1), \(noisy.reason))")
+
+    // The planner on the real lines, at a phone voice's pace.
+    matcher.setCues(saved.cues, offset: saved.printOffset(printSeconds: matcher.printSeconds))
+    let pace = FollowPlanOptions(secPerChar: 0.06)
+    var plan = matcher.plan(locked(0.1), shift: 0, options: pace)
+    check(plan.action == .speak && plan.id == "0:0" && plan.short && plan.text == opening.shortText, "at 0.1 s: the first line, short, as the server expected")
+    plan = matcher.plan(locked(18.5), shift: 0, options: pace)
+    check(plan.action == .speak && plan.id == "0:3" && plan.short,
+          "at 18.5 s: the fruit line; the phone decides by its own voice, so only the short text fits (the server, at 1.5x, fitted it whole)")
+    plan = matcher.plan(locked(26.25), shift: 0, options: pace)
+    check(plan.action == .wait, "at 26.25 s: the line with an empty window is never said over the dialogue")
+    plan = matcher.plan(locked(36.2), shift: 0, options: pace)
+    check(plan.action == .wait, "at 36.2 s: the butterfly line's gap of a second is too short, so it waits to be held")
+    var holder = FollowHolder(cues: saved.cues, offset: 0)
+    holder.moved(to: 20)
+    check(holder.sweep(filmSec: 27, spoken: ["0:3"], importantOnly: true).map { $0.id } == ["0:4"],
+          "in step before it: the line with an empty window is held for the next pause, important lines only too")
+
+    // Lines with one start keep the server's order: by the moment each
+    // happens, then as sent (track.ts). The planner says the first of a tie.
+    switch readTrack(#"{"format": "kade-follow-track", "version": 1, "filmSeconds": 60, \#(goodPrint), "cues": [{"id": "0:10", "startSec": 36, "endSec": 40, "at": 36, "text": "B happens.", "importance": 3}, {"id": "0:9", "startSec": 36, "endSec": 40, "at": 35.5, "text": "A happens.", "importance": 3}, {"id": "1:2", "startSec": 50, "endSec": 52, "at": 50, "text": "D happens.", "importance": 2}, {"id": "1:1", "startSec": 50, "endSec": 52, "at": 50, "text": "C happens.", "importance": 2}]}"#) {
+    case .success(let tied):
+        check(tied.cues.map { $0.id } == ["0:9", "0:10", "1:2", "1:1"],
+              "lines with one start: the earlier moment first, then the server's own order, not the id's text (\(tied.cues.map { $0.id }))")
+        matcher.setCues(tied.cues, offset: 0)
+        let first = matcher.plan(locked(36.1), shift: 0, options: pace)
+        check(first.action == .speak && first.id == "0:9", "so the planner says the line whose moment came first (\(first.id))")
+    case .failure(let problem):
+        check(false, "a track with lines that share a start reads (\(problem))")
+    }
+
+    // The loop, end to end, on the real ready answer: its track, the
+    // server's fingerprint, and the film's own sound as the microphone
+    // hears it. The film's sound past these 8 seconds is not kept here, so
+    // room noise as loud as the film follows; no check falls due before the
+    // next line.
+    let real = trackIn(serverAnswer("track-200-ready-get.json").trackData, "the ready answer")
+    let follower: FollowAlongEngine
+    do {
+        follower = try FollowAlongEngine(script: script)
+        try follower.load(print: printBytes)
+    } catch {
+        fatal("the loop's matcher on the server's fingerprint: \(error)")
+    }
+    let clock = TestClock(5000)
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.server-samples")
+    let gate = FollowSpeechGate()
+    let loop = FollowAlongLoop(queue: queue, gate: gate, clock: { clock.now }, trail: { _ in }, deliver: { said.add($0) })
+    loop.prepare(track: real, matcher: follower, settings: FollowAlongSettings())
+    loop.update(lead: 0, outputDelay: 0, echoRisk: false)
+    // Her voice as the phone measures it from its own sentences: 0.05 seconds a letter.
+    loop.sentenceSpoken(characters: 100, seconds: 5)
+    queue.sync {}
+    check(said.take().contains { output in
+        if case .prepared(_, let seconds, let language, let warning) = output {
+            return near(seconds, 60.01, 0.01) && language == "en" && warning == real.warning
+        }
+        return false
+    }, "the loop gets ready on the real track and the server's fingerprint")
+    loop.start(now: 5000)
+    var heard: [(output: FollowLoopOutput, film: Double)] = []
+    for block in 0..<31 {
+        let samples = block < 16
+            ? heardClip(sound, from: Double(block) * 0.5, seconds: 0.5, gain: 0.5, noise: 0.02, seed: UInt32(700 + block))
+            : heardClip(nil, from: 0, seconds: 0.5, gain: 0, noise: 0.05, seed: UInt32(900 + block))
+        let end = 5000 + Double(block + 1) * 0.5
+        clock.set(end + 0.02)
+        loop.receive(samples, endingAt: end)
+        queue.sync {}
+        for output in said.take() {
+            heard.append((output: output, film: 29 + (clock.now - 5000)))
+            if case .speak(let id, let text) = output {
+                gate.speaking = false
+                loop.finished(cue: id, started: true, seconds: Double(text.count) * 0.05, characters: text.count, now: clock.now)
+            }
+        }
+    }
+    loop.stop()
+    queue.sync {}
+    let report = said.take().compactMap { reported($0) }.last
+    let events = heard.filter { item in
+        if case .report = item.output { return false }
+        return true
+    }
+    guard let foundAt = events.firstIndex(where: { sentence($0.output)?.text == "Found your place: the beginning. Audio description by Kade-AI." }) else {
+        fatal("the loop finds its place in the real film and says so, with the credit: \(events.map { $0.output })")
+    }
+    check(near(events[foundAt].film, 37, 0.3), "found as the 8 seconds of film end (\(events[foundAt].film))")
+    check(!events.contains { (sentence($0.output)?.text ?? "").contains("This track covers") },
+          "a whole film: nothing about parts, though covers.endSec is past filmSeconds")
+    let lines = events.compactMap { item -> (id: String, text: String, film: Double)? in
+        if case .speak(let id, let text) = item.output { return (id: id, text: text, film: item.film) }
+        return nil
+    }
+    check(lines.count == 1 && lines[0].id == "0:8" && lines[0].text == real.cues[8].shortText && near(lines[0].film, 41, 0.3),
+          "then the line due next, at 41 seconds, short to fit its gap (\(lines))")
+    if let chimeAt = events.firstIndex(where: { $0.output == .chime }) {
+        check(chimeAt > foundAt, "the butterfly line, too long for its gap once she is in step, is held with a soft chime")
+    } else {
+        check(false, "the butterfly line, too long for its gap once she is in step, is held with a soft chime")
+    }
+    guard let lastReport = report else { fatal("a report after Stop") }
+    check(lastReport.checks == 1 && lastReport.linesSpoken == 1, "the report: one check, one line said (\(lastReport.text()))")
+    check(lastReport.linesHeld == 1 && lastReport.playingRate == 1, "one line held, and the film at real speed")
 }
 
 // MARK: - The sources keep the rules

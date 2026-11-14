@@ -7,14 +7,35 @@
 # at the right second, the tracker locks, the planner picks the right line.
 # Since the review the same day, the loop runs on the made-up film too, and
 # the microphone capture converts test tones through a change of format.
+# Since the contract check (Nov 14, evening), the server's real answers are
+# read by the app's own code, and the server's real fingerprint finds 8
+# seconds of the film's own sound (FollowAlongTests/server-samples).
 # No sound is played or recorded.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# The contract check (Nov 14 2026): the describer's wire shapes, taken from the
+# app's own source each time (DescribedVideoService.swift, from "Wire shapes"
+# to "The service"), with the Family feature pack map they read
+# (SoundBoothService.swift). Those two files need the whole app to compile;
+# these parts are plain Foundation. So the server's real answers in
+# FollowAlongTests/server-samples are read by the very code the app ships.
+WIRE="$TMP/DescribedVideoWire.swift"
+{
+  echo "import Foundation"
+  awk '/^\/\/ MARK: - Wire shapes/{on=1} /^\/\/ MARK: - The service/{on=0} on' "$ROOT/Sources/DescribedVideoService.swift"
+  awk '/^struct KadeFamilyFeatures:/{on=1} on{print} on&&/^}/{exit}' "$ROOT/Sources/SoundBoothService.swift"
+} > "$WIRE"
+for shape in "struct DVConfig:" "struct DVCopy:" "struct DVJob:" "struct KadeFamilyFeatures:"; do
+  if ! grep -q "^$shape" "$WIRE"; then
+    echo "::error title=Follow along tests::the describer's wire shapes could not be taken from the app's source ($shape)"
+    exit 1
+  fi
+done
 if ! "${SWIFTC:-swiftc}" "$ROOT/Sources/FollowAlongModel.swift" "$ROOT/Sources/FollowAlongEngine.swift" \
   "$ROOT/Sources/FollowAlongLoop.swift" "$ROOT/Sources/FollowAlongCapture.swift" \
-  "$ROOT/Sources/KadeAudioSessionPolicy.swift" "$ROOT/FollowAlongTests/main.swift" \
+  "$ROOT/Sources/KadeAudioSessionPolicy.swift" "$WIRE" "$ROOT/FollowAlongTests/main.swift" \
   -o "$TMP/follow-along-tests" > "$TMP/compile.log" 2>&1; then
   cat "$TMP/compile.log"
   # The first errors as annotations, which a public repository shows without
