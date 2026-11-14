@@ -325,6 +325,8 @@ final class FamilyStoryPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate
         sessionTaken = false
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // Nov 14 2026: and switched off a moment later (KadeAudioSession).
+        KadeAudioSession.shared.releaseSoon("a family story stopped")
     }
 }
 

@@ -346,8 +346,14 @@ final class StreamingClipPlayer {
         // IOS-11 (Nov 12 2026 audit): never take the session from a call, a
         // room or a recording.
         if !KadeAudioLanes.micHeld {
-            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try? session.setActive(true)
+            // Nov 14 2026: the same category through KadeAudioSession, which
+            // lets the session go again a moment after the speech stops.
+            if KadeAppSwitches.audioSessionRelease {
+                KadeAudioSession.shared.preparePlayback()
+            } else {
+                try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try? session.setActive(true)
+            }
         }
 
         do {
@@ -498,6 +504,18 @@ final class StreamingClipPlayer {
             playbackDone = nil
             c.resume()
         }
+    }
+
+    /// Nov 14 2026: stop() and the end of a clip stop only the node, so after
+    /// the first streamed clip the engine ran on, playing silence, for as
+    /// long as the app lived. That kept the app's audio session busy: it could
+    /// never be switched off, and VoiceOver stayed quieter inside the app.
+    /// VoiceService calls this just before the session is let go; it does
+    /// nothing while a clip is playing, paused or still being fed. play()
+    /// starts the engine again for the next clip (it always checks).
+    func stopEngineIfIdle() {
+        guard engine.isRunning, activeFetch == nil, !node.isPlaying else { return }
+        engine.stop()
     }
 
     // MARK: - Buffer completion bookkeeping (main actor)

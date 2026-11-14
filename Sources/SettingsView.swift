@@ -1480,6 +1480,9 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Play the \(name) sound")
+        // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the
+        // sound does not start under VoiceOver's words (ducked).
+        .accessibilityAddTraits(.startsMediaSession)
     }
 
     private func auditionTapRow(_ name: String, _ fire: @escaping () -> Void) -> some View {
@@ -1615,6 +1618,9 @@ struct RingtoneSettingsView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel(callRingtone == tone.id ? "\(tone.label), your current ringtone" : tone.label)
                         .accessibilityHint("Sets this as the ringtone for character calls and plays it so you can hear it. Tap another to compare, or Stop preview to hush it.")
+                        // Nov 14 2026: VoiceOver stays quiet once it is
+                        // pressed, so the tone does not start ducked.
+                        .accessibilityAddTraits(.startsMediaSession)
                     }
                 } header: {
                     Text(group).accessibilityAddTraits(.isHeader)

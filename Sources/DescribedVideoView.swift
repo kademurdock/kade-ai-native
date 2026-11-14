@@ -1000,6 +1000,9 @@ struct DescribedVideoView: View {
             .buttonStyle(.bordered)
             .disabled(sampling || voice.isEmpty)
             .accessibilityHint("Plays a few seconds of this narrator at your usual speed. Narration samples are included.")
+            // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the
+            // sample does not start under VoiceOver's words (ducked).
+            .accessibilityAddTraits(.startsMediaSession)
             if config?.voicesAvailable == false {
                 Text("The voice list could not be loaded just now. Playback and downloads still work; open this screen again later to change the voice.")
                     .font(.footnote)
@@ -3256,6 +3259,8 @@ struct DescribedVideoView: View {
             samplePlayer = player
             if player.play() {
                 statusLine = "Playing a sample of \(Self.voiceName(voice))."
+                // Nov 14 2026: the session is let go a moment after it ends.
+                KadeAudioSession.shared.shortSound(seconds: player.duration)
             } else {
                 announce("The sample could not play. Try again.")
             }

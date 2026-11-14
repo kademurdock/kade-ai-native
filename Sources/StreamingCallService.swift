@@ -1305,6 +1305,9 @@ final class StreamingCallService: NSObject, ObservableObject {
         player.prepareToPlay()
         disconnectPlayer = player
         player.play()
+        // Nov 14 2026: this tone switched the session back on after the
+        // call had let it go; it is let go again a moment after the tone.
+        KadeAudioSession.shared.shortSound(seconds: player.duration)
     }
 
     /// Retained like disconnectPlayer so the chime survives the setup window.

@@ -53,6 +53,10 @@ final class VoiceService: NSObject, ObservableObject {
         guard busy != reportedFloorBusy else { return }
         reportedFloorBusy = busy
         KadeSpeechFloor.shared.appVoice(busy: busy, source: ObjectIdentifier(self))
+        // Nov 14 2026: the same flag tells KadeAudioSession when this voice
+        // sounds and when it stops, so the session is let go a moment after
+        // (VoiceOver back to its own level inside the app).
+        KadeAudioSession.shared.speech(busy: busy, source: ObjectIdentifier(self))
     }
     /// The caller-supplied tag (chat uses the message id) of the item
     /// currently playing, so a message row's own "Play as voice message"
@@ -431,6 +435,8 @@ final class VoiceService: NSObject, ObservableObject {
     private var holdsRecordingLane = false
     /// Decision 24: values from her account were written to UserDefaults.
     private var listenerPrefsObserver: NSObjectProtocol?
+    /// Nov 14 2026: KadeAudioSession is about to let the session go.
+    private var sessionReleaseObserver: NSObjectProtocol?
 
     struct VoiceError: Error {
         let message: String
@@ -501,6 +507,14 @@ final class VoiceService: NSObject, ObservableObject {
                 if self.fillersOn != fillers { self.fillersOn = fillers }
             }
         }
+        // Nov 14 2026: just before the app's session is let go, a streamed
+        // voice's engine left running stops (posted on the main thread and
+        // delivered at once, so it has stopped before the switch-off).
+        sessionReleaseObserver = NotificationCenter.default.addObserver(
+            forName: KadeAudioSession.willRelease, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.quietIdleEngine() }
+        }
         // Warm the voice catalog at launch so the first reply's speed choice
         // can use the provider map without waiting for it.
         Task { await VoiceCatalog.shared.prefetch() }
@@ -513,11 +527,26 @@ final class VoiceService: NSObject, ObservableObject {
         if let mediaResetObserver { NotificationCenter.default.removeObserver(mediaResetObserver) }
         if let micObserver { NotificationCenter.default.removeObserver(micObserver) }
         if let listenerPrefsObserver { NotificationCenter.default.removeObserver(listenerPrefsObserver) }
+        if let sessionReleaseObserver { NotificationCenter.default.removeObserver(sessionReleaseObserver) }
         // Never strand the lane: a leaked claim would silence every reply.
         if holdsRecordingLane { Task { @MainActor in KadeAudioLanes.endRecording("a recording (released at deinit)") } }
-        // A service freed mid-clip must not hold the speech floor forever.
+        // A service freed mid-clip must not hold the speech floor, or the
+        // audio session (Nov 14 2026), forever.
         let source = ObjectIdentifier(self)
-        Task { @MainActor in KadeSpeechFloor.shared.appVoice(busy: false, source: source) }
+        Task { @MainActor in
+            KadeSpeechFloor.shared.appVoice(busy: false, source: source)
+            KadeAudioSession.shared.speech(busy: false, source: source)
+        }
+    }
+
+    /// Nov 14 2026: the session is about to be let go. The streamed voice's
+    /// engine ran on (playing silence) after its last clip for as long as the
+    /// app lived, which kept the session busy so it could never be switched
+    /// off. It stops here when nothing is on deck; the next streamed clip
+    /// starts it again. A clip playing or paused keeps it.
+    private func quietIdleEngine() {
+        guard !hasPendingSpeech, !streamedClipActive else { return }
+        streamingPlayer.stopEngineIfIdle()
     }
 
     /// IOS-11: something else took the microphone (a call, a room, a
@@ -635,7 +664,16 @@ final class VoiceService: NSObject, ObservableObject {
             // belongs on the loud speaker, not the earpiece — unchanged
             // behavior for the no-AirPods case (the option only applies when
             // no external route exists, so it never fights a headset).
-            try session.setCategory(.playAndRecord, options: [.allowBluetooth, .defaultToSpeaker])
+            //
+            // Nov 14 2026: the same three choices now come from
+            // KadeAudioSessionPolicy's `listening` plan, which also names
+            // the default mode outright, so a mode a call or a room left
+            // behind can never carry voice processing into a recording.
+            if KadeAppSwitches.audioSessionRelease {
+                try KadeAudioSession.setCategory(for: .listening)
+            } else {
+                try session.setCategory(.playAndRecord, options: [.allowBluetooth, .defaultToSpeaker])
+            }
             try session.setActive(true)
         } catch {
             releaseRecordingLane()
@@ -760,6 +798,10 @@ final class VoiceService: NSObject, ObservableObject {
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         // IOS-11: runs on both failed-start paths and in stopRecording.
         releaseRecordingLane()
+        // Nov 14 2026: the switch-off above fails while anything still runs
+        // (the streamed voice's engine did, for good); try again once it is
+        // quiet, so the session never stays on after a recording.
+        KadeAudioSession.shared.releaseSoon("a recording ended")
     }
 
     /// Uploads a recorded file to `/api/files/speech/stt` and returns the
@@ -952,6 +994,9 @@ final class VoiceService: NSObject, ObservableObject {
         pausedCharacterElapsed = 0
         isPumping = false
         streamedTurnKey = nil
+        // Nov 14 2026: nothing of this voice is starting any more, so the
+        // session may be let go once everything else is quiet.
+        KadeAudioSession.shared.clipStopped()
     }
 
     /// IOS-6 (Nov 12 2026 audit): a call, Siri or an alarm pauses the player
@@ -1099,6 +1144,12 @@ final class VoiceService: NSObject, ObservableObject {
     /// `speed` is kept inside the API's 0.5-1.5 range, as a reply's is.
     func previewVoice(_ voiceId: String, sample: String, delivery: String?, speed: Double, fillers: Bool) async {
         stopSpeaking()
+        // Nov 14 2026 (her report: an audition's first seconds came up
+        // ducked under VoiceOver, which was not even talking): the session
+        // the last clip left switched on is let go now, while the sample is
+        // fetched, so the audition starts on a fresh one. Nothing happens
+        // while anything else of the app's is sounding.
+        KadeAudioSession.shared.releaseNow("a voice audition is starting")
         var fields: [(String, String)] = [("input", sample), ("voice", voiceId)]
         fields.append(("speed", String(VoicePacePolicy.rate(base: nil, preference: speed))))
         if let delivery { fields.append(("delivery", delivery)) }
@@ -1565,6 +1616,12 @@ final class VoiceService: NSObject, ObservableObject {
         // microphone away. (Anything that still reaches this point, such as
         // a voice audition, plays in their session instead.)
         if isRecording || KadeAudioLanes.micHeld { return }
+        // Nov 14 2026: the same category through KadeAudioSession, which
+        // also lets the session go again a moment after the speech stops.
+        if KadeAppSwitches.audioSessionRelease {
+            KadeAudioSession.shared.preparePlayback()
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try? session.setActive(true)

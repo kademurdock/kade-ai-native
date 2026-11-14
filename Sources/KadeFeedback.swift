@@ -498,6 +498,8 @@ final class Earcons {
                 players.removeAll { !$0.isPlaying }
                 players.append(player)
                 player.play()
+                // Nov 14 2026: the session is let go a moment after it ends.
+                KadeAudioSession.shared.shortSound(seconds: player.duration)
                 return
             }
         }
@@ -515,6 +517,7 @@ final class Earcons {
         player.prepareToPlay()
         players.append(player)
         player.play()
+        KadeAudioSession.shared.shortSound(seconds: player.duration)
     }
 
     /// Only choose a mixing UI-sound profile when no other app audio lane has
@@ -591,6 +594,8 @@ final class Earcons {
             if fadeIn > 0 { player.setVolume(target, fadeDuration: fadeIn) }
             waitingPlayer = player
             waitingVolume = target
+            // Nov 14 2026: the loop holds the app's session until it stops.
+            KadeAudioSession.shared.hold(Self.waitingLoopHolder)
             crumbWaitingLoop(fadeIn: fadeIn, sound: "bubbles")
             return
         }
@@ -626,8 +631,12 @@ final class Earcons {
         if fadeIn > 0 { player.setVolume(synthTarget, fadeDuration: fadeIn) }
         waitingPlayer = player
         waitingVolume = synthTarget
+        KadeAudioSession.shared.hold(Self.waitingLoopHolder)
         crumbWaitingLoop(fadeIn: fadeIn, sound: "fallback ticks (bubbles file missing)")
     }
+
+    /// Nov 14 2026: the name the thinking loop holds the session under.
+    private static let waitingLoopHolder = "the thinking bubbles"
 
     /// Oct 16 2026 (her report: no bubbles in 337, ring switch off): one trail
     /// line per start, saying which sound played and on which audio profile.
@@ -649,6 +658,7 @@ final class Earcons {
         waitingPlayer?.stop()
         waitingPlayer = nil
         waitingStartedAt = nil
+        KadeAudioSession.shared.letGo(Self.waitingLoopHolder)
     }
 
     /// Clubhouse room chimes (Aug 4 2026, Kade: "make it play the connect and
@@ -672,6 +682,7 @@ final class Earcons {
         players.removeAll { !$0.isPlaying }
         players.append(player)
         player.play()
+        KadeAudioSession.shared.shortSound(seconds: player.duration)
     }
 
     /// July 24 2026 (Kade: the thinking loop "continues playing to the

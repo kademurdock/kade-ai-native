@@ -1839,8 +1839,11 @@ struct ConversationDetailView: View {
                             onReadAloud: { readAloud(message) },
                             onPauseResume: {
                                 if voiceService.isPaused {
+                                    // Nov 14 2026: no "Playing." here. Said at
+                                    // the instant the voice came back, it ducked
+                                    // the voice's first words; the voice itself
+                                    // says it, and the action now reads Pause.
                                     voiceService.resumeSpeaking()
-                                    UIAccessibility.post(notification: .announcement, argument: "Playing.")
                                 } else {
                                     voiceService.pauseSpeaking()
                                     UIAccessibility.post(notification: .announcement, argument: "Paused.")

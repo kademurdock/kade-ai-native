@@ -413,6 +413,10 @@ final class WorldTones {
 
     func activate() {
         active = true
+        // Nov 14 2026: the World's own loops and earcons hold the app's
+        // session while it is up; KadeAudioSession never lets go under them.
+        // (This class is not main-actor bound; the keeper is.)
+        Task { @MainActor in KadeAudioSession.shared.hold("the World") }
         // Clear only the stale AV suspension flag. Active phone calls have
         // their own guard and resume callback, so they never latch this flag.
         interrupted = false
@@ -563,6 +567,8 @@ final class WorldTones {
         }
         engine.stop()
         started = false
+        // Nov 14 2026: everything above has stopped; the session goes.
+        Task { @MainActor in KadeAudioSession.shared.letGo("the World") }
     }
 }
 

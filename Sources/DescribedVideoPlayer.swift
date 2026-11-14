@@ -260,6 +260,9 @@ final class DescribedVideoPlayback: ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.replaceCurrentItem(with: nil)
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // Nov 14 2026: and switched off a moment later, unless another film
+        // or anything else has taken it by then (KadeAudioSession).
+        KadeAudioSession.shared.releaseSoon("the described video player closed")
     }
 
     // MARK: Where she stopped (Nov 12 2026 audit, DESC-9)

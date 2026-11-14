@@ -406,6 +406,9 @@ struct NowPlayingBar: View {
         .buttonStyle(.plain)
         .foregroundStyle(highContrast ? Color.primary : Color.accentColor)
         .accessibilityLabel(word)
+        // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the book
+        // does not start under VoiceOver's words (ducked).
+        .accessibilityAddTraits(.startsMediaSession)
     }
 
     private var closeButton: some View {

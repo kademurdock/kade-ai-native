@@ -314,6 +314,9 @@ struct FamilyListenBar: View {
             }
             .accessibilityLabel(player.playing ? "Pause" : "Play")
             .accessibilityHint(player.playing ? "" : "Reads the story aloud.")
+            // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the
+            // story does not start under VoiceOver's words (ducked).
+            .accessibilityAddTraits(.startsMediaSession)
         }
     }
 

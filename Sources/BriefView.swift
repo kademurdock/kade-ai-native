@@ -102,6 +102,9 @@ struct BriefView: View {
                             Label(speaking ? "Stop" : "Listen", systemImage: speaking ? "stop.circle" : "play.circle")
                         }
                         .accessibilityHint("Reads today's brief aloud in your character's voice.")
+                        // Nov 14 2026: VoiceOver stays quiet once it is
+                        // pressed, so the voice does not start ducked.
+                        .accessibilityAddTraits(.startsMediaSession)
                     } header: {
                         Text("Today's brief")
                     }

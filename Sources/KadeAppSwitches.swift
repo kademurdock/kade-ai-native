@@ -26,4 +26,10 @@ enum KadeAppSwitches {
     /// Nov 13 2026: the soft "still waiting" chime while a caught-up listener
     /// waits for the next section (also follows the Sound effects setting).
     static var waitingChime: Bool { on("kade.switch.waitingChime") }
+    /// Nov 14 2026: the app lets go of its audio session a moment after its
+    /// last sound (VoiceOver back to its own level inside the app), stops the
+    /// streamed voice's idle engine first, and starts each voice audition on
+    /// a fresh session (KadeAudioSession). False puts back the old session
+    /// that stays switched on once anything has played.
+    static var audioSessionRelease: Bool { on("kade.switch.audioSessionRelease") }
 }

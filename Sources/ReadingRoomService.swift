@@ -803,6 +803,9 @@ final class ReadingRoomPlayer: ObservableObject {
         // Back to the app's usual session shape (VoiceService.prepareOutputSession).
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // Nov 14 2026: and switched off a moment later, unless another book
+        // or anything else has taken it by then (KadeAudioSession).
+        KadeAudioSession.shared.releaseSoon("the Library player closed")
         book = nil
         audioCache.removeAll(); cacheOrder.removeAll()
         textOffset = 0

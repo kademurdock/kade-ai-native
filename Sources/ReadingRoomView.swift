@@ -682,6 +682,9 @@ struct ReadingRoomView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel(playWord)
+                // Nov 14 2026: VoiceOver stays quiet once it is pressed, so
+                // the book does not start under VoiceOver's words (ducked).
+                .accessibilityAddTraits(.startsMediaSession)
                 .accessibilityFocused($focus, equals: .play)
                 .accessibilityActions { if let book = openBook { bookActions(book) } }
                 seekButton(backward: false)

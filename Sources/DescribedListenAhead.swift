@@ -104,7 +104,10 @@ final class ListenAheadPlayer: ObservableObject {
         self.rate = Float(min(3, max(0.5, rate)))
         self.jobId = jobId
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [])
+        // Nov 14 2026: KadeAudioSessionPolicy's background-listen plan, the
+        // same three values as before: spoken audio, not mixed, so the lock
+        // screen buttons work and it carries on with the screen locked.
+        try? KadeAudioSession.setCategory(for: .backgroundListen)
         try? session.setActive(true)
         LibraryNowPlaying.shared.pauseForOtherAudio("a described video")
         wireRemote()
@@ -156,6 +159,9 @@ final class ListenAheadPlayer: ObservableObject {
             unwireRemote()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            // Nov 14 2026: and switched off a moment later, unless the film
+            // or anything else has taken it by then (KadeAudioSession).
+            KadeAudioSession.shared.releaseSoon("listening while it is made stopped")
         }
         jobId = nil
         fetch = nil

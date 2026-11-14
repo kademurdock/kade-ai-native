@@ -623,6 +623,10 @@ struct VoicePickerView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityHint("Plays the long audition in \(displayName(wheelVoice)).")
+                // Nov 14 2026 (her report: an audition's first seconds came
+                // up ducked): VoiceOver stays quiet once it is pressed, instead
+                // of reading the new "Stop" just as the clip starts.
+                .accessibilityAddTraits(.startsMediaSession)
                 if wheelVoice == current {
                     Label("Your current voice", systemImage: "checkmark.circle.fill")
                         .font(.footnote)
@@ -655,9 +659,13 @@ struct VoicePickerView: View {
                 VoiceService.setDelivery(v.isEmpty ? nil : v, forAgent: id)
                 touched = true
                 let spoken = VoiceService.deliveryOptions.first { $0.value == v }?.spoken ?? "Default delivery."
-                UIAccessibility.post(notification: .announcement, argument: spoken)
                 previewTask?.cancel()
                 previewTask = Task {
+                    // Nov 14 2026: the audition used to start 600 ms after
+                    // this sentence began, under VoiceOver's words, so its
+                    // first seconds were ducked. It now waits for VoiceOver
+                    // to finish the sentence (at most 6 s), then the pause.
+                    await KadeAnnounce.sayThenWait(spoken)
                     try? await Task.sleep(nanoseconds: 600_000_000)
                     guard !Task.isCancelled, !wheelVoice.isEmpty else { return }
                     await preview(wheelVoice, long: true, force: true)

@@ -130,6 +130,9 @@ final class ArcadeAudioSession {
 
     func start() {
         activate()
+        // Nov 14 2026: a game holds the app's session while it runs;
+        // KadeAudioSession never lets go under it.
+        KadeAudioSession.shared.hold("the Arcade")
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -154,6 +157,7 @@ final class ArcadeAudioSession {
     func stop() {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
+        KadeAudioSession.shared.letGo("the Arcade")
     }
 
     private func interruption(raw: UInt?, reason: UInt?, wasSuspended: Bool) {
