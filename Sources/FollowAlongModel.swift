@@ -799,8 +799,14 @@ struct FollowTrackerState: Equatable {
     var lastJumpSec = 0.0
     var lastBackJumpMono: Double?
     var lastBackJumpFilmSec: Double?
+    /// Misses in a row. syncprint's README: a line is said only while this is 0.
     var misses = 0
+    /// A doubtful match waits for a second opinion from new sound (up to 8
+    /// seconds in syncprint 1.1.1); the tracker holds meanwhile.
     var doubt = false
+    /// Film seconds per clock second, usually exactly 1 (a TV airing may run
+    /// a few percent fast). It belongs in the test report.
+    var rate = 1.0
 }
 
 /// When to listen next, and for how long.
@@ -1171,6 +1177,9 @@ struct FollowReport: Equatable {
     var losses = 0
     var pauses = 0
     var backInStep = 0
+    /// The tracker's playing rate while in step (syncprint's README: it
+    /// belongs in the test report); nil until the film was found.
+    var playingRate: Double?
     var linesSpoken = 0
     var shortLines = 0
     var linesHeld = 0
@@ -1229,6 +1238,7 @@ struct FollowReport: Equatable {
         count("lost", losses)
         count("pauses", pauses)
         count("back in step", backInStep)
+        number("film playing rate", playingRate, places: 3)
         count("lines spoken", linesSpoken)
         count("short lines", shortLines)
         count("lines held", linesHeld)

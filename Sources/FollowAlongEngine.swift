@@ -27,7 +27,10 @@ protocol FollowMatching: AnyObject {
     var printSeconds: Double { get }
     /// The lines to plan from, with their times moved into fingerprint seconds.
     func setCues(_ cues: [FollowCue], offset: Double)
-    /// Compares a clip with the fingerprint and tells the tracker what it found.
+    /// Compares a clip with the fingerprint and tells the tracker what it
+    /// found. `now` is when the check began; the tracker is told the clock
+    /// time after the match finished (`now` plus the match's own time), as
+    /// syncprint's README loop says.
     func check(_ clip: [Int16], clipStart: Double, now: Double) -> FollowCheck
     /// The tracker's state now. Reading it clears its "just jumped" flag.
     func state(now: Double) -> FollowTrackerState
@@ -169,7 +172,10 @@ final class FollowAlongEngine: FollowMatching {
         outcome.reason = text(result, "reason") ?? "error"
         outcome.expectQuiet = flag(result, "expectQuiet")
         outcome.confidence = number(result, "confidence") ?? 0
-        invoke(tracker, "onMatch", [result, clipStart, now])
+        // syncprint's README loop: onMatch(result, clipStart, clockNow()),
+        // the clock after the match finished. A match takes a third of a
+        // second or more on a phone without a JIT.
+        invoke(tracker, "onMatch", [result, clipStart, now + outcome.millis / 1000])
         return outcome
     }
 
@@ -185,6 +191,7 @@ final class FollowAlongEngine: FollowMatching {
         state.lastBackJumpFilmSec = number(value, "lastBackJumpFilmSec")
         state.misses = Int(number(value, "misses") ?? 0)
         state.doubt = flag(value, "doubt") ?? false
+        if let rate = number(value, "rate"), rate > 0 { state.rate = rate }
         return state
     }
 

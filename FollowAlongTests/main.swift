@@ -1,6 +1,7 @@
 import AVFoundation
 import CryptoKit
 import Foundation
+import JavaScriptCore
 
 // Nov 14 2026: Tellavision "Follow along" (TELLAVISION_SYNC_DESIGN_2026-11-13.md,
 // Parts 5.3 to 5.5). The phone listens to a film on her TV, finds its place
@@ -220,6 +221,103 @@ final class ScriptedMatcher: FollowMatching {
     func plan(_ state: FollowTrackerState, shift: Double, options: FollowPlanOptions) -> FollowPlan { .waiting(1, "scripted") }
     func spoke(_ id: String, now: Double, filmSec: Double) {}
     func forget(_ id: String) {}
+}
+
+/// A tracker and planner scripted for the check before a line (syncprint's
+/// README loop). The film plays at real speed from film second 10 at clock
+/// 2000; one line, "k1", may be said from film second 30 to 40 (clock 2020
+/// to 2030). Each check answers with the next scripted result and keeps
+/// the misses as syncprint's tracker does: two in a row, and it holds.
+final class PreLineMatcher: FollowMatching {
+    enum Answer { case silence, quietFilm, noMatch, found }
+
+    var printSeconds = 600.0
+    var answers: [Answer]
+    /// Misses in a row, and the clip start of the last good fix.
+    var misses = 0
+    var lastFix = 2000.0
+    /// After one miss, the tracker's own 8 second check at once (its schedule).
+    var recheckAtOnce = true
+    /// From `doubtFrom` to `doubtUntil` a doubtful match waits for its second
+    /// opinion: the tracker holds.
+    var doubtFrom = 0.0
+    var doubtUntil = 0.0
+    /// Where each checked clip began, on the clock.
+    private(set) var checks: [Double] = []
+    /// How often the loop asked for a check at the next chance.
+    private(set) var hurries = 0
+    private var said: Set<String> = []
+
+    init(_ answers: [Answer]) {
+        self.answers = answers
+    }
+
+    func film(_ now: Double) -> Double { 10 + (now - 2000) }
+
+    func setCues(_ cues: [FollowCue], offset: Double) {}
+
+    func check(_ clip: [Int16], clipStart: Double, now: Double) -> FollowCheck {
+        checks.append(clipStart)
+        var result = FollowCheck()
+        result.clipSec = Double(clip.count) / 8000
+        result.startMono = clipStart
+        result.expectQuiet = false
+        result.clipDb = -30
+        let answer: Answer = answers.isEmpty ? .noMatch : answers.removeFirst()
+        switch answer {
+        case .silence:
+            result.reason = "silence"
+            result.clipDb = -70
+            misses += 1
+        case .quietFilm:
+            // The film itself is nearly silent here: syncprint excuses the miss.
+            result.reason = "silence"
+            result.expectQuiet = true
+            result.clipDb = -70
+        case .noMatch:
+            result.reason = "no match"
+            misses += 1
+        case .found:
+            result.found = true
+            result.reason = "ok"
+            result.filmSec = film(clipStart)
+            misses = 0
+            lastFix = clipStart
+        }
+        return result
+    }
+
+    func state(now: Double) -> FollowTrackerState {
+        var state = FollowTrackerState()
+        let doubtful = now >= doubtFrom && now < doubtUntil
+        state.status = misses >= 2 || doubtful ? .holding : .locked
+        state.filmSec = film(now)
+        state.sinceLastFixSec = now - lastFix
+        state.misses = misses
+        state.doubt = doubtful
+        return state
+    }
+
+    func nextListen(now: Double) -> FollowListen {
+        FollowListen(wait: misses == 1 && recheckAtOnce ? 0 : 999, clip: 8)
+    }
+
+    func hurry() { hurries += 1 }
+    func reset() { said = [] }
+
+    func plan(_ state: FollowTrackerState, shift: Double, options: FollowPlanOptions) -> FollowPlan {
+        guard state.status == .locked, let at = state.filmSec, at >= 30, at <= 40, !said.contains("k1") else {
+            return .waiting(1, "scripted")
+        }
+        var plan = FollowPlan(action: .speak)
+        plan.id = "k1"
+        plan.text = "A kite climbs."
+        plan.estSec = 1
+        return plan
+    }
+
+    func spoke(_ id: String, now: Double, filmSec: Double) { said.insert(id) }
+    func forget(_ id: String) { said.remove(id) }
 }
 
 /// Collects what the microphone capture hands on.
@@ -765,6 +863,14 @@ do {
     check(text.contains("seconds to lock on: 9.3") && text.contains("failed checks: 1") && text.contains("skips: 1")
           && text.contains("battery percent at start: 82") && text.contains("voice seconds per letter: 0.061"), "the report's numbers")
     check(!text.contains("battery percent now"), "a number not known is left out")
+    // syncprint's README: the tracker's playing rate belongs in the test report.
+    check(!text.contains("playing rate"), "no playing rate before the film was found")
+    var timed = report
+    timed.playingRate = 1.04
+    let rated = timed.text()
+    check(rated.contains("film playing rate: 1.040"), "the film's playing rate is in the report, to three places")
+    check(rated.split(separator: "\n").map(String.init).allSatisfy { shape.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil },
+          "with the rate, still labels and numbers only")
 
     // Nov 14 2026 review: after Stop the phone stops measuring the battery,
     // so the copy carries the level from when listening stopped.
@@ -890,6 +996,7 @@ do {
     var state = engine.state(now: 1008)
     check(state.status == .locked, "the tracker locks")
     check(near(state.filmSec, 55, 0.2), "and knows the film is at 55 now: \(state.filmSec ?? -1)")
+    check(state.rate == 1, "the tracker's playing rate is read: exactly 1 at real speed (\(state.rate))")
     let later = engine.state(now: 1010.5)
     check(near(later.filmSec, 57.5, 0.2), "its clock runs on: \(later.filmSec ?? -1)")
     let listen = engine.nextListen(now: 1008)
@@ -960,6 +1067,55 @@ do {
         } else {
             check(false, "found, paused, back in step: \(events)")
         }
+    }
+
+    // syncprint's README loop tells the tracker about a match as of the clock
+    // after the match finished (a match takes a third of a second or more on
+    // a phone), so a jump is dated then, not when the check began.
+    if let timed = try? FollowAlongEngine(script: script) {
+        try? timed.load(print: bytes)
+        let lock = timed.check(heardClip(film, from: 40, seconds: 8, gain: 0.5, noise: 0.02, seed: 21), clipStart: 3000, now: 3008)
+        // The film is sent back to second 20 while the clock expects 70: two
+        // clips of new sound, back to back (the second is a second opinion).
+        var told = 0.0
+        var moved = FollowTrackerState()
+        for (index, start) in [3030.0, 3038.0].enumerated() where moved.status != .locked || moved.lastBackJumpMono == nil {
+            let back = timed.check(heardClip(film, from: 20 + 8 * Double(index), seconds: 8, gain: 0.5, noise: 0.02, seed: UInt32(22 + index)),
+                                   clipStart: start, now: start + 8)
+            told = start + 8 + back.millis / 1000
+            moved = timed.state(now: told)
+        }
+        check(lock.found && moved.status == .locked && near(moved.lastBackJumpMono, told, 1e-6) && told > 3038,
+              "the tracker hears of a match as of the clock after it: the jump back is dated \(moved.lastBackJumpMono ?? -1), the match ended at \(told)")
+    }
+
+    // syncprint 1.1.1: a doubtful far match waits for a second opinion from
+    // NEW sound, up to 8 seconds (1.1.0 checked again every second), and a
+    // clip that holds the doubtful sound again cannot confirm it. The loop
+    // holds and says nothing meanwhile (see "the check before a line");
+    // nothing in the app counts on the old one-second wait.
+    let probeContext: JSContext? = JSContext()
+    if let probe = probeContext {
+        _ = probe.evaluateScript(script)
+        let answer: JSValue? = probe.evaluateScript("""
+            (function () {
+              var t = SyncPrint.createTracker();
+              t.onMatch({ found: true, filmSec: 100, confidence: 1, clipSec: 8, reason: 'ok' }, 1000, 1008);
+              t.onMatch({ found: true, filmSec: 400, confidence: 0.5, clipSec: 6, reason: 'ok' }, 1030, 1036);
+              var held = t.state(1036.5);
+              var wait = t.nextListen(1037).waitSec;
+              t.onMatch({ found: true, filmSec: 402, confidence: 0.5, clipSec: 8, reason: 'ok' }, 1032, 1040);
+              var again = t.state(1040);
+              t.onMatch({ found: true, filmSec: 406, confidence: 0.5, clipSec: 8, reason: 'ok' }, 1036, 1044);
+              var fresh = t.state(1044);
+              return [held.status, held.doubt, wait, again.status, fresh.status, fresh.justJumped].join(',');
+            })()
+            """)
+        let words: String = answer?.toString() ?? "nothing"
+        check(words == "holding,true,7,holding,locked,true",
+              "syncprint 1.1.1's doubt: it holds, waits for new sound (7 more seconds, not 1), an old-sound clip does not confirm, new sound does (\(words))")
+    } else {
+        check(false, "a JavaScriptCore context for the tracker")
     }
     print("Follow along: one 8 s match took \(Int(first.millis)) ms in JavaScriptCore (JIT \(jitOff ? "off" : "on"))")
     print("::notice title=Follow along match::one 8 s match took \(Int(first.millis)) ms in JavaScriptCore")
@@ -1057,6 +1213,8 @@ do {
     check(near(last.minutesListened, both, 1e-9),
           "minutes listened count both runs, the one the film ended too (\(last.minutesListened) of \(both))")
     check(last.linesSpoken >= 2 && last.checks >= 4, "the report counts the lines and the checks (\(last.linesSpoken) lines, \(last.checks) checks)")
+    check(near(last.playingRate, 1, 0.01) && last.text().contains("film playing rate: "),
+          "the report carries the tracker's playing rate: about 1 for a film at real speed (\(last.playingRate ?? -1))")
 }
 
 // MARK: - The loop under a slow check (a scripted matcher)
@@ -1097,6 +1255,144 @@ do {
     loop.stop()
     queue.sync {}
     _ = said.take()
+}
+
+// MARK: - The check before a line (syncprint 1.1.1's README loop, a scripted tracker)
+
+/// What a loop handed out, with the checks made by then and the clock time.
+typealias Heard = (output: FollowLoopOutput, checks: Int, at: Double)
+
+/// Runs a loop on a PreLineMatcher from clock 2000 for `seconds`, in half
+/// second blocks. As with earbuds the microphone never hears the phone;
+/// with `ownSound`, the phone's own speaker sounded then and the microphone
+/// heard it. It plays the player's part too: a line handed out is said at once.
+func runPreLine(_ matcher: PreLineMatcher, seconds: Double, ownSound: (start: Double, end: Double)? = nil) -> [Heard] {
+    let clock = TestClock(2000)
+    let said = Said()
+    let queue = DispatchQueue(label: "follow-along-tests.preline")
+    let gate = FollowSpeechGate()
+    let loop = FollowAlongLoop(queue: queue, gate: gate, clock: { clock.now }, trail: { _ in }, deliver: { said.add($0) })
+    loop.prepare(track: track, matcher: matcher, settings: FollowAlongSettings())
+    loop.update(lead: 0, outputDelay: 0, echoRisk: ownSound != nil)
+    loop.start(now: 2000)
+    if let sound = ownSound { loop.soundStarted(at: sound.start, until: sound.end) }
+    queue.sync {}
+    _ = said.take()
+    var heard: [Heard] = []
+    let block = [Int16](repeating: 0, count: 4000)
+    var end = 2000.0
+    while end + 0.5 <= 2000 + seconds + 1e-9 {
+        end += 0.5
+        clock.set(end + 0.01)
+        loop.receive(block, endingAt: end)
+        queue.sync {}
+        for output in said.take() {
+            heard.append((output: output, checks: matcher.checks.count, at: clock.now))
+            if case .speak(let id, let text) = output {
+                gate.speaking = false
+                loop.finished(cue: id, started: true, seconds: Double(text.count) * 0.06, characters: text.count, now: clock.now)
+            }
+        }
+    }
+    loop.stop()
+    queue.sync {}
+    return heard
+}
+
+/// The lines handed out, with the checks made by then and when.
+func spokenLines(_ heard: [Heard]) -> [(id: String, checks: Int, at: Double)] {
+    heard.compactMap { item in spokenId(item.output).map { (id: $0, checks: item.checks, at: item.at) } }
+}
+
+section("the check before a line")
+do {
+    // The clock is 20 seconds old when the line falls due, so the loop checks
+    // the film first; the check finds it, and the line is said.
+    let playing = PreLineMatcher([.found])
+    let control = spokenLines(runPreLine(playing, seconds: 24))
+    let controlIds: [String] = control.map { $0.id }
+    let controlChecks: Int = control.first?.checks ?? -1
+    check(controlIds == ["k1"] && controlChecks == 1 && playing.checks.count == 1,
+          "a stale clock: one check before the line finds the film, then the line is said (\(controlIds), \(playing.checks.count) checks)")
+
+    // A paused TV right before the line: the check hears silence. syncprint's
+    // README says a line is said only while misses is 0, so one silent check
+    // must not let it through. The tracker checks again at once and, after
+    // two misses, holds; the phone says the film seems to be paused.
+    let paused = PreLineMatcher([.silence, .silence])
+    let pausedRun = runPreLine(paused, seconds: 24)
+    let pausedIds: [String] = spokenLines(pausedRun).map { $0.id }
+    check(pausedIds.isEmpty, "a paused TV right before a line: one silent check, and the line is not said (\(pausedIds))")
+    check(paused.checks.count == 2, "the tracker checks once more at once, then holds (\(paused.checks.count) checks)")
+    check(pausedRun.contains { sentence($0.output)?.text == FollowWords.paused }, "two silent checks: the film seems to be paused")
+
+    // A check that missed for another reason (noise, talking), then the
+    // tracker's own check at once finds the film: the line waits for it.
+    let missedOnce = PreLineMatcher([.noMatch, .found])
+    let late = spokenLines(runPreLine(missedOnce, seconds: 24))
+    let lateIds: [String] = late.map { $0.id }
+    let lateChecks: Int = late.first?.checks ?? -1
+    check(lateIds == ["k1"] && lateChecks == 2,
+          "one missed check holds the line until a check finds the film again (\(lateIds), said after \(lateChecks) checks)")
+
+    // The film's own quiet stretch: syncprint excuses the miss and trusts
+    // its clock (misses stay 0), so the line is said after the one check.
+    let quiet = PreLineMatcher([.quietFilm])
+    let trusted: [String] = spokenLines(runPreLine(quiet, seconds: 24)).map { $0.id }
+    check(trusted == ["k1"] && quiet.checks.count == 1,
+          "a quiet stretch of the film: one check, then the line (\(trusted), \(quiet.checks.count) checks)")
+
+    // One check per line (the README's checkedFor): when the tracker does not
+    // check again by itself, the loop does not check on every tick either,
+    // and the line still waits while the miss stands.
+    let once = PreLineMatcher([.noMatch, .noMatch])
+    once.recheckAtOnce = false
+    let onceLines = spokenLines(runPreLine(once, seconds: 26))
+    check(onceLines.isEmpty && once.checks.count == 1,
+          "one check before a line, not one on every tick, and no line while it missed (\(once.checks.count) checks)")
+
+    // A fresh clock with one miss on the record (a quick check after the
+    // room went quiet missed): no check is due, and the line still waits.
+    let missOnRecord = PreLineMatcher([])
+    missOnRecord.misses = 1
+    missOnRecord.lastFix = 2015
+    missOnRecord.recheckAtOnce = false
+    let onRecordIds: [String] = spokenLines(runPreLine(missOnRecord, seconds: 24)).map { $0.id }
+    check(onRecordIds.isEmpty && missOnRecord.checks.isEmpty,
+          "a fresh clock with one miss on the record: the line is not said (only while misses is 0) (\(onRecordIds))")
+    let freshClock = PreLineMatcher([])
+    freshClock.lastFix = 2015
+    let freshIds: [String] = spokenLines(runPreLine(freshClock, seconds: 24)).map { $0.id }
+    check(freshIds == ["k1"] && freshClock.checks.isEmpty,
+          "the same with no miss: the line is said with no check, the clock being fresh (\(freshIds))")
+
+    // A doubtful match: the tracker holds while its second opinion waits for
+    // new sound (up to 8 seconds in syncprint 1.1.1). Nothing is said
+    // meanwhile, not even that the film was lost; the line comes after.
+    let doubtful = PreLineMatcher([])
+    doubtful.lastFix = 2016
+    doubtful.doubtFrom = 2019
+    doubtful.doubtUntil = 2026
+    let doubtRun = runPreLine(doubtful, seconds: 30)
+    let afterDoubt = spokenLines(doubtRun)
+    let doubtIds: [String] = afterDoubt.map { $0.id }
+    let doubtAt: Double = afterDoubt.first?.at ?? -1
+    check(doubtIds == ["k1"] && doubtAt >= 2026,
+          "a doubtful match: no line while the tracker holds for its second opinion, the line after (\(doubtIds) at \(doubtAt))")
+    let sentences = doubtRun.compactMap { sentence($0.output)?.text }
+    check(sentences == ["Found your place: the beginning. Audio description by Kade-AI."],
+          "while a doubtful match waits, nothing else is said: no lost, no pause (\(sentences))")
+
+    // The phone's own speaker sounded in the last 6 seconds, so they cannot
+    // be studied: as the README says, the loop hurries the tracker (it checks
+    // at its first clean chance) and holds the line for a later tick, where,
+    // with misses still 0, it is said.
+    let echo = PreLineMatcher([])
+    let echoLines = spokenLines(runPreLine(echo, seconds: 24, ownSound: (start: 2018, end: 2019.5)))
+    let echoIds: [String] = echoLines.map { $0.id }
+    let echoAt: Double = echoLines.first?.at ?? -1
+    check(echo.hurries == 1 && echo.checks.isEmpty && echoIds == ["k1"] && echoAt > 2020.4,
+          "the clip before a line overlaps the phone's own sound: the tracker is hurried, and the line is said on a later tick (\(echo.hurries) hurries, \(echoIds) at \(echoAt))")
 }
 
 // MARK: - A loop that never got its track

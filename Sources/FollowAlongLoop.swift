@@ -133,6 +133,10 @@ final class FollowAlongLoop: FollowSoundSink {
     private var echoRisk = true
     private var ownSounds: [(start: Double, end: Double)] = []
     private var spokenIds: Set<String> = []
+    /// The line the film was last checked for before speaking it: syncprint's
+    /// README loop allows one such check per line (its `checkedFor`), so a
+    /// quiet stretch of the film does not start a match on every tick.
+    private var checkedFor: String?
     private var nextPlanAt = 0.0
     private var lastReportAt = 0.0
     private var startedAt = 0.0
@@ -241,6 +245,7 @@ final class FollowAlongLoop: FollowSoundSink {
             levelSum = 0
             levelCount = 0
             descriptionsOn = true
+            checkedFor = nil
             nextPlanAt = 0
             startedAt = now
             lastReportAt = now
@@ -368,12 +373,13 @@ final class FollowAlongLoop: FollowSoundSink {
         var now = start
         let listen = engine.nextListen(now: now)
         if listen.wait <= 0, let clip = cleanClip(listen.clip, now: now) {
-            runCheck(clip, now: now)
             // A check takes time: what follows is decided as of its end.
-            now = clock()
+            now = runCheck(clip, now: now)
         }
         guard running else { return }
         let state = engine.state(now: now)
+        // syncprint's README: the playing rate belongs in the test report.
+        if state.status == .locked { report.playingRate = state.rate }
         handle(judge.tick(state: state, now: now), now: now)
         guard running else { return }
         describe(state, now: now)
@@ -383,14 +389,19 @@ final class FollowAlongLoop: FollowSoundSink {
         }
     }
 
-    /// One check: the clip against the fingerprint, then what the rules make of it.
-    private func runCheck(_ clip: (samples: [Int16], start: Double), now: Double) {
-        guard let engine else { return }
+    /// One check: the clip against the fingerprint, then what the rules make
+    /// of it. Returns the clock time after the match: syncprint's README loop
+    /// tells the tracker about a match, and reads it, as of then (the doorway
+    /// passes the same time to onMatch), not as of when the check began.
+    private func runCheck(_ clip: (samples: [Int16], start: Double), now: Double) -> Double {
+        guard let engine else { return now }
         let result = engine.check(clip.samples, clipStart: clip.start, now: now)
         report.checked(result)
+        let after = max(clock(), now + max(0, result.millis) / 1000)
         // Read at once, so a jump is never missed (reading clears it).
-        let state = engine.state(now: now)
-        handle(judge.checked(result, state: state, now: now), now: now)
+        let state = engine.state(now: after)
+        handle(judge.checked(result, state: state, now: after), now: after)
+        return after
     }
 
     /// Every half second of sound, measured as it arrives: a room gone quiet
@@ -461,7 +472,13 @@ final class FollowAlongLoop: FollowSoundSink {
     }
 
     /// Descriptions: hold the lines whose window closed unspoken, then ask
-    /// the planner for the line to say now.
+    /// the planner for the line to say now. The rules are syncprint's README
+    /// loop, line by line: before a line, when the last good check is more
+    /// than 15 seconds old, check the film first, once for that line; and say
+    /// a line only while the tracker's misses are 0, that is when the check
+    /// found the film or the film is in a quiet stretch of its own. One
+    /// silent check over a paused TV holds the line (the tracker checks again
+    /// at once, and after two misses it holds too).
     private func describe(_ state: FollowTrackerState, now: Double) {
         guard let engine, judge.phase == .inStep, state.status == .locked, let film = state.filmSec else { return }
         let heardAt = film + lead
@@ -482,20 +499,32 @@ final class FollowAlongLoop: FollowSoundSink {
                                         importantOnly: important)
         var plan = engine.plan(state, shift: lead, options: options)
         guard plan.action == .speak else { return }
-        var at = film
+        var current = state
         var saidAt = now
-        // Design 5.3: before a line, when the last good check is more than
-        // 15 seconds old, check the last 6 seconds first (no waiting: the
-        // sound is already in memory). This is how a pause is caught.
-        if let since = state.sinceLastFixSec, since > 15, let clip = cleanClip(6, now: now) {
-            runCheck(clip, now: now)
-            saidAt = clock()
-            let again = engine.state(now: saidAt)
-            guard running, descriptionsOn, judge.phase == .inStep, again.status == .locked, let checked = again.filmSec else { return }
-            at = checked
-            plan = engine.plan(again, shift: lead, options: options)
+        // Design 5.3 and syncprint's README: before a line, when the last
+        // good check is more than 15 seconds old, check the film first, once
+        // for this line. The README hurries the tracker and matches on the
+        // next tick; the last 6 seconds are already in memory, so the check
+        // runs now instead. This is how a pause is caught.
+        if let since = state.sinceLastFixSec, since > 15, checkedFor != plan.id {
+            checkedFor = plan.id
+            guard let clip = cleanClip(6, now: now) else {
+                // The phone's own speaker sounded in those seconds: the
+                // tracker checks at its first clean chance (the README's
+                // hurry), and the line waits for a later tick.
+                engine.hurry()
+                return
+            }
+            saidAt = runCheck(clip, now: now)
+            current = engine.state(now: saidAt)
+            guard running, descriptionsOn, judge.phase == .inStep, current.status == .locked else { return }
+            plan = engine.plan(current, shift: lead, options: options)
             guard plan.action == .speak, gate.canSpeak(now: saidAt) else { return }
         }
+        // syncprint's README: speak only when misses is 0. A single missed
+        // check over a paused TV must not let the line through; while the
+        // tracker checks again, the line waits.
+        guard current.misses == 0, let at = current.filmSec else { return }
         gate.speaking = true
         engine.spoke(plan.id, now: saidAt, filmSec: at)
         spokenIds.insert(plan.id)
