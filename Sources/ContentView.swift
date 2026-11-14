@@ -1304,6 +1304,9 @@ struct ContentView: View {
             // at once (the family's row is live from the first moment), then
             // asked again once the launch chat has settled.
             FamilyHistoryAccess.shared.signedIn(userId: user.id)
+            // Nov 14 2026 (Tellavision): the follow-along tracks kept on this
+            // phone are this account's own; another account sees its own list.
+            FollowAlongStore.shared.bind(userId: user.id)
             Task {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 await FamilyHistoryAccess.shared.check(client: apiClient)
@@ -1331,6 +1334,7 @@ struct ContentView: View {
             LibraryNowPlaying.shared.stop()
             KadeUnread.shared.reset()
             DescribedVideoAccess.shared.reset()
+            FollowAlongStore.shared.bind(userId: nil)
             // Sep 29 2026: nothing of the family stays on a shared phone:
             // the row's state, every cached answer, and every family picture
             // in memory and on disk. The made-up demo family ends too, and a

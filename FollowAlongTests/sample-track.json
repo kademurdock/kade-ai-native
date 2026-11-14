@@ -1,0 +1,22 @@
+{
+  "format": "kade-follow-track",
+  "version": 1,
+  "job": "sample-job-1",
+  "copyVersion": 3,
+  "title": "The Kite",
+  "language": "en",
+  "filmSeconds": 90,
+  "covers": { "startSec": 0, "endSec": 90 },
+  "print": { "format": 1, "bytes": 6296, "sha256": "ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789" },
+  "plannedAt": { "secPerChar": 0.042, "rate": 1.5, "maxRate": 2.25 },
+  "credit": { "start": "Audio description by Kade-AI.", "end": "Described by Kade-AI. More at kademurdock dot com." },
+  "cues": [
+    { "id": "2:1", "startSec": 55.5, "endSec": 57.0, "at": 55.4, "until": 57.5, "text": "She turns and runs back to the gate while the dog barks.", "shortText": "She runs back.", "importance": 2, "reading": false, "fit": "short" },
+    { "id": "1:1", "startSec": 50, "endSec": 54, "at": 49.8, "until": 54.2, "text": "A red kite climbs over the hill.", "shortText": "A kite climbs.", "importance": 3, "reading": false, "fit": "full" },
+    { "id": "1:2", "startSec": "62", "endSec": 65.0, "text": "A sign reads: Closed for the winter.", "importance": "1", "reading": "true", "fit": "none" },
+    { "id": "broken", "startSec": 70, "text": "This line has no end and is left out." },
+    { "id": 7, "startSec": 75, "endSec": 80, "text": "Snow falls on the empty field", "importance": 2 }
+  ],
+  "quiet": [[50.0, 54.1], [55.4, 57.2], [62, 65], [5]],
+  "warning": "AI descriptions can miss or misread visual details. Check anything important for yourself."
+}

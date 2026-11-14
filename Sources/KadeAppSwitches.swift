@@ -34,4 +34,9 @@ enum KadeAppSwitches {
     /// server side (it is the phone's own audio): she flips it herself in
     /// Settings > Troubleshooting > "Let go of audio when quiet".
     static var audioSessionRelease: Bool { on("kade.switch.audioSessionRelease") }
+    /// Nov 14 2026: Tellavision Follow along, the phone listening to a film on
+    /// her TV and speaking its descriptions in step. Shown only when the
+    /// server's config also says followAlong (KADE_DESCRIPTION_FOLLOW: 0 is
+    /// off, admin is the administrator only, anything else is everyone).
+    static var followAlong: Bool { on("kade.switch.followAlong") }
 }

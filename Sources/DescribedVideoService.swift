@@ -33,6 +33,9 @@ final class DescribedVideoAccess: ObservableObject {
     static let shared = DescribedVideoAccess()
 
     @Published private(set) var allowed = false
+    /// Nov 14 2026 (Tellavision): the config's followAlong, for Help's
+    /// Follow along entries. The button itself reads the screen's own config.
+    @Published private(set) var followAlong = false
     private var decided = false
     private var checking = false
     /// Moves on at every sign-out, so an answer asked for by the account
@@ -60,6 +63,7 @@ final class DescribedVideoAccess: ObservableObject {
             guard let config = try? JSONDecoder().decode(DVConfig.self, from: data),
                   config.voices != nil || config.perMinuteUSD != nil || config.maxBytes != nil else { return }
             allowed = true
+            followAlong = config.followAlong == true
             decided = true
         } else if http.statusCode == 403 || http.statusCode == 404 {
             allowed = false
@@ -70,7 +74,13 @@ final class DescribedVideoAccess: ObservableObject {
     /// The screen's own config load settles it too.
     func record(allowed: Bool) {
         self.allowed = allowed
+        if !allowed { followAlong = false }
         decided = true
+    }
+
+    /// The screen's own config says whether Follow along is offered.
+    func recordFollowAlong(_ on: Bool) {
+        followAlong = on
     }
 
     /// Sign-out: the next account is asked afresh, and a check still out for
@@ -79,6 +89,7 @@ final class DescribedVideoAccess: ObservableObject {
         generation += 1
         checking = false
         allowed = false
+        followAlong = false
         decided = false
     }
 }
@@ -390,6 +401,11 @@ struct DVConfig: Decodable {
     /// of a video still being made (GET /jobs/:id/sections/ready).
     /// Absent on older servers and false with KADE_DESCRIPTION_LISTEN_AHEAD=0.
     let listenAhead: Bool?
+    /// Nov 14 2026 (Tellavision): the server offers follow-along tracks
+    /// (GET and POST /jobs/:id/track). Absent on older servers; false with
+    /// KADE_DESCRIPTION_FOLLOW=0, and for everyone but the administrator
+    /// with KADE_DESCRIPTION_FOLLOW=admin.
+    let followAlong: Bool?
 
     enum CodingKeys: String, CodingKey {
         case enabled, maxBytes, chunkBytes, maxMinutes, maxSourceMinutes, limitUSD, dailyUSD, billingMode
@@ -400,6 +416,7 @@ struct DVConfig: Decodable {
         case speeds
         case linkImport, features
         case listenAhead
+        case followAlong
     }
 
     /// Part 293: the reason the link import is greyed out, or nil when it can
@@ -493,6 +510,7 @@ extension DVConfig {
         linkImport = c.dvValue(.linkImport)
         features = c.dvValue(.features)
         listenAhead = c.dvBool(.listenAhead)
+        followAlong = c.dvBool(.followAlong)
     }
 }
 
@@ -513,6 +531,51 @@ struct DVReadySections: Decodable {
     let next: Int?
     let count: Int?
     let waitSeconds: Double?
+}
+
+/// Nov 14 2026 (Tellavision Follow along, design Part 5.2): the answer of
+/// GET and POST /jobs/:id/track. Ready: the track (track.json) and a signed
+/// link to the fingerprint, good for six hours. Making: it is being made.
+/// Anything else comes with the server's plain reason.
+///
+/// Read leniently, by hand, because track.json is kept on the phone exactly
+/// as it came: the state is `state` (or `status`, or the job's `follow`
+/// word); the track is `track` (or the answer itself, when it is a track);
+/// the link is `printUrl`, `printURL`, `printLink`, `fingerprintUrl`,
+/// `fingerprintURL`, `url`, `print` (as text, or an object with `url`), or
+/// `links.print`; the reason is `reason`, `message` or `error`.
+struct DVTrackAnswer {
+    /// ready, making, possible or gone; "" when the server did not say.
+    let state: String
+    /// The track's JSON, when there is one.
+    let trackData: Data?
+    let printLink: String?
+    let reason: String?
+
+    var isReady: Bool { trackData != nil && printLink != nil }
+
+    static func read(_ data: Data) -> DVTrackAnswer? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        func words(_ value: Any?) -> String? {
+            guard let text = value as? String else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        var track = object["track"] as? [String: Any]
+        if track == nil, words(object["format"]) == "kade-follow-track" { track = object }
+        var link: String?
+        for key in ["printUrl", "printURL", "printLink", "fingerprintUrl", "fingerprintURL", "url"] where link == nil {
+            link = words(object[key])
+        }
+        if link == nil { link = words(object["print"]) }
+        if link == nil, let print = object["print"] as? [String: Any] { link = words(print["url"]) ?? words(print["link"]) }
+        if link == nil, let links = object["links"] as? [String: Any] { link = words(links["print"]) ?? words(links["fingerprint"]) }
+        let state = (words(object["state"]) ?? words(object["status"]) ?? words(object["follow"])
+                     ?? (track != nil ? "ready" : "")).lowercased()
+        let trackData = track.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+        let reason = words(object["reason"]) ?? words(object["message"]) ?? words(object["error"])
+        return DVTrackAnswer(state: state, trackData: trackData, printLink: link, reason: reason)
+    }
 }
 
 /// Sep 25 2026, Kade: "people should be able to have it remember the speeds
@@ -695,6 +758,9 @@ struct DVJob: Decodable, Identifiable {
     /// What this run's settled requests cost, part by part, at her price;
     /// work the platform paid for comes last, marked included.
     let costParts: [DVCostPart]?
+    /// Nov 14 2026 (Tellavision): its follow-along track, in one word:
+    /// ready, possible, making or gone. Absent on older servers.
+    let follow: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, bytes, state, source, seconds, stage, progress, etaSeconds, error
@@ -706,6 +772,7 @@ struct DVJob: Decodable, Identifiable {
         case keepable, recheckable, overQuote, approvedUSD, libraryPath, existing
         case describableAgain
         case spentUSD, heldUSD, heldLooks, costParts
+        case follow
     }
 
     var title: String {
@@ -829,6 +896,7 @@ extension DVJob {
         heldUSD = c.dvNumber(.heldUSD).map { $0.isFinite ? max(0, $0) : 0 }
         heldLooks = c.dvInt(.heldLooks)
         costParts = c.dvValue(.costParts)
+        follow = c.dvString(.follow)
     }
 }
 
@@ -1147,6 +1215,52 @@ final class DescribedVideoService: ObservableObject {
     func readySections(jobId: String, from: Int) async throws -> DVReadySections {
         try await get("jobs/\(jobId)/sections/ready", query: [URLQueryItem(name: "from", value: String(max(0, from)))],
                       fallback: "The finished sections could not be loaded.")
+    }
+
+    // MARK: Follow along (Tellavision, Nov 14 2026)
+
+    /// The follow-along track of one finished copy, if the server has one.
+    func track(jobId: String, version: Int) async throws -> DVTrackAnswer {
+        let data = try await exchange(
+            "jobs/\(jobId)/track",
+            query: [URLQueryItem(name: "version", value: String(version))],
+            fallback: "Couldn't get the follow-along track. Try again."
+        )
+        guard let answer = DVTrackAnswer.read(data) else {
+            throw DescribedVideoError(message: "The describer sent an answer this app could not read. Try again, or use the website.")
+        }
+        return answer
+    }
+
+    /// Asks the server to make the follow-along track. Free.
+    func makeTrack(jobId: String, version: Int) async throws -> DVTrackAnswer {
+        let data = try await exchange(
+            "jobs/\(jobId)/track",
+            method: "POST",
+            body: ["version": version],
+            fallback: "Couldn't ask for a follow-along track. Try again."
+        )
+        guard let answer = DVTrackAnswer.read(data) else {
+            throw DescribedVideoError(message: "The describer sent an answer this app could not read. Try again, or use the website.")
+        }
+        return answer
+    }
+
+    /// A small signed file (the fingerprint, about a megabyte an hour) into
+    /// memory, refused when it is larger than `limit` bytes.
+    func downloadData(from link: String, limit: Int) async throws -> Data {
+        guard let url = URL(string: link) else { throw DescribedVideoError(message: "That download link is not valid. Try again.") }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 120
+        let session = client.makeAuxiliarySession(delegate: DescribedVideoSessionDelegate(), timeout: 120)
+        defer { session.finishTasksAndInvalidate() }
+        await client.awaitPacingGate()
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw DescribedVideoError(message: "The file could not be fetched. Try again.")
+        }
+        guard data.count <= limit else { throw DescribedVideoError(message: "That file is larger than expected. Try again.") }
+        return data
     }
 
     func files(jobId: String, version: Int) async throws -> DVFiles {

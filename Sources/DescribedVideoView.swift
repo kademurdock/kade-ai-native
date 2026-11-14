@@ -47,6 +47,13 @@ struct DescribedVideoView: View {
 
     /// Phase 4 pick 2: the finished sections of a video still being made.
     @StateObject private var listenAhead = ListenAheadPlayer()
+    /// Nov 14 2026 (Tellavision): Follow along with my TV, and the tracks
+    /// kept on this phone. Shown only when the server's config and the
+    /// phone switch kade.switch.followAlong both say so.
+    @StateObject private var followAlong = FollowAlongPlayer()
+    @ObservedObject private var followStore = FollowAlongStore.shared
+    /// The kept track the delete question is about.
+    @State private var trackToDelete: FollowStoredTrack?
 
     // Opening
     @State private var config: DVConfig?
@@ -189,6 +196,8 @@ struct DescribedVideoView: View {
         case player(DVPlayerItem)
         case transcript(String, String)
         case share(ShareItem)
+        /// Nov 14 2026 (Tellavision): Follow along with my TV.
+        case followAlong(FollowStoredTrack)
 
         var id: String {
             switch self {
@@ -196,6 +205,7 @@ struct DescribedVideoView: View {
             case .player(let item): return "player-\(item.url.absoluteString)"
             case .transcript(_, let title): return "transcript-\(title)"
             case .share(let item): return "share-\(item.id.uuidString)"
+            case .followAlong(let item): return "follow-\(item.id)"
             }
         }
     }
@@ -315,6 +325,9 @@ struct DescribedVideoView: View {
             chooseSection
         }
         yourVideosSection
+        if offersFollowAlong {
+            followTracksSection
+        }
     }
 
     private func presentations<Content: View>(_ base: Content) -> some View {
@@ -331,6 +344,19 @@ struct DescribedVideoView: View {
                 Button(item.keep, role: .cancel) {}
             } message: { item in
                 Text(item.message)
+            }
+            .background {
+                Color.clear
+                    .alert(
+                        "Delete this follow-along track?",
+                        isPresented: Binding(get: { trackToDelete != nil }, set: { if !$0 { trackToDelete = nil } }),
+                        presenting: trackToDelete
+                    ) { item in
+                        Button("Delete", role: .destructive) { deleteFollowTrack(item) }
+                        Button("Keep it", role: .cancel) {}
+                    } message: { item in
+                        Text("\(item.title) will be removed from this phone. If the video has expired on the server, its track cannot be downloaded again.")
+                    }
             }
             .background {
                 Color.clear
@@ -369,6 +395,7 @@ struct DescribedVideoView: View {
                 estimateTask?.cancel()
                 samplePlayer?.stop()
                 listenAhead.stop()   // pick 2: its polling belongs to this screen
+                followAlong.close()   // the microphone never outlives this screen
                 removeSharedFile()
             }
             .onChange(of: scenePhase) { _, phase in
@@ -455,6 +482,8 @@ struct DescribedVideoView: View {
             DescribedTranscriptSheet(text: text, title: title)
         case .share(let item):
             ShareSheet(item: item)
+        case .followAlong(let item):
+            FollowAlongSheet(player: followAlong, track: item, stopOthers: { stopSoundsForFollowAlong() })
         }
     }
 
@@ -1677,6 +1706,11 @@ struct DescribedVideoView: View {
             actionButton("Listen to the described audio", icon: "headphones", key: "play-audio", hint: "The soundtrack with the narration, without the picture.") {
                 Task { await play(video: false) }
             }
+            if offersFollowAlong {
+                actionButton(FollowWords.button, icon: "ear", key: "follow", hint: FollowWords.buttonHint) {
+                    Task { await openFollowAlong() }
+                }
+            }
             if voiceOverOn {
                 Toggle("Read captions with VoiceOver", isOn: $readCaptions)
                     .accessibilityHint("Off, the captions stay on screen for anyone watching with you, and VoiceOver does not read them over the film. On, VoiceOver reads them, the way Media Descriptions in VoiceOver's Verbosity settings says.")
@@ -1984,6 +2018,107 @@ struct DescribedVideoView: View {
         }
     }
 
+    // MARK: - Follow along with my TV (Tellavision, Nov 14 2026)
+
+    /// The server offers it (config followAlong, KADE_DESCRIPTION_FOLLOW) and
+    /// the phone switch is on. For every other account the button and the
+    /// list do not exist.
+    private var offersFollowAlong: Bool {
+        KadeAppSwitches.followAlong && config?.followAlong == true
+    }
+
+    /// Opens the sheet on the track kept for this copy, or gets it first.
+    private func openFollowAlong() async {
+        guard let current = job, fetching.isEmpty, viewVersion > 0 else { return }
+        if let kept = followStore.stored(job: current.id, version: viewVersion) {
+            samplePlayer?.stop()
+            activeSheet = .followAlong(kept)
+            return
+        }
+        fetching = "follow"
+        defer { fetching = "" }
+        do {
+            let result = try await followStore.fetch(jobId: current.id, version: viewVersion, service: service)
+            // She may have opened another video, or left, while it came.
+            guard job?.id == current.id, onScreen else { return }
+            switch result {
+            case .ready(let kept):
+                samplePlayer?.stop()
+                activeSheet = .followAlong(kept)
+            case .notYet(let words):
+                announce(words)
+            }
+        } catch {
+            fail(error, "Couldn't get the follow-along track. Try again.")
+        }
+    }
+
+    /// Before the microphone opens: never a second soundtrack.
+    private func stopSoundsForFollowAlong() {
+        listenAhead.stop()
+        samplePlayer?.stop()
+    }
+
+    private var followTracksSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Follow-along tracks on this phone")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            if followStore.tracks.isEmpty {
+                Text("None yet. On a finished video, Follow along with my TV keeps its track here. A kept track works without the internet, even after the video has expired.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ForEach(followStore.tracks) { item in
+                followTrackRow(item)
+            }
+        }
+    }
+
+    private func followTrackRow(_ item: FollowStoredTrack) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                samplePlayer?.stop()
+                activeSheet = .followAlong(item)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(item.summary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .disabled(!fetching.isEmpty)
+            .accessibilityLabel("\(item.title), \(item.summary)")
+            .accessibilityHint("Opens Follow along for this film. It works without the internet.")
+            .accessibilityActions {
+                Button("Delete from this phone") { trackToDelete = item }
+            }
+            Button(role: .destructive) {
+                trackToDelete = item
+            } label: {
+                Text("Delete")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Delete \(item.title) from this phone")
+            .accessibilityHint("Asks first.")
+        }
+    }
+
+    private func deleteFollowTrack(_ item: FollowStoredTrack) {
+        do {
+            try followStore.delete(item)
+            announce("Deleted the follow-along track for \(item.title).")
+        } catch {
+            fail(error, "Couldn't delete that track. Try again.")
+        }
+    }
+
     // MARK: - Your videos
 
     private var yourVideosSection: some View {
@@ -2167,6 +2302,8 @@ struct DescribedVideoView: View {
         config = fetched
         loaded = true
         DescribedVideoAccess.shared.record(allowed: true)
+        DescribedVideoAccess.shared.recordFollowAlong(fetched.followAlong == true)
+        followStore.refresh()
         seedDefaults(fetched)
         await reloadList()
         if fetched.library == true, let folders = try? await service.libraryFolders() {

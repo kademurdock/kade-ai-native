@@ -23,6 +23,11 @@ targets:
     # Sep 23 2026 redesign (C7): the Spotter control's intent is compiled into
     # the app as well as the widget extension; Apple requires both for a
     # control that opens the app.
+    # Nov 14 2026 (Tellavision Follow along): Sources/syncprint.js rides in
+    # the app as a resource. XcodeGen files .js under Copy Bundle Resources
+    # (its default for a type it does not compile), so it is copied, never
+    # compiled; claude-native-check.yml checks it is in the built app,
+    # byte for byte.
     sources: [Sources, WidgetExtension/OpenSpotterIntent.swift]
     dependencies:
       - package: LiveKit
@@ -139,7 +144,10 @@ targets:
         # no on-device speech recognition is used (no NSSpeechRecognitionUsageDescription
         # needed), audio is just captured and uploaded to the fork's existing
         # /api/files/speech/stt endpoint (Deepgram), same as the web app.
-        NSMicrophoneUsageDescription: "Kade-AI uses your microphone so you can talk to your characters with your voice instead of typing."
+        # Nov 14 2026 (Tellavision Follow along, App Review 5.1.1): the
+        # sentence names Follow along plainly, the phone's microphone hearing
+        # a film on her TV. Its sound is checked on the phone, never kept.
+        NSMicrophoneUsageDescription: "Kade-AI uses your microphone when you talk to your characters or record, and when you turn on Follow along, to hear the film playing near you and keep its descriptions in step. Film sound is checked on your phone and is never saved or sent."
         # Session 13 ("calling and spotters"): Spotter/Live mode shares your
         # camera during a call so your Spotter can see and describe what's
         # around you -- same crash-without-this-key rule as the mic string

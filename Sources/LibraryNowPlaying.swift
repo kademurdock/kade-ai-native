@@ -153,7 +153,8 @@ final class LibraryNowPlaying: ObservableObject {
         // and takes them back the next time it plays. Part 291: the described
         // video player wires the same buttons while it plays outside the app,
         // so the book lets go for it too (two targets would both fire).
-        if reason == "a call" || reason == "a described video" { player.yieldRemoteControls() }
+        // Nov 14 2026: Follow along wires them too, for pausing its descriptions.
+        if reason == "a call" || reason == "a described video" || reason == "Follow along" { player.yieldRemoteControls() }
     }
 
     // MARK: - The bar's buttons

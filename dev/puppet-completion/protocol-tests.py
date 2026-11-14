@@ -327,7 +327,8 @@ class ProtocolChecks(unittest.TestCase):
         project = (ROOT / "project.yml").read_text(encoding="utf-8")
         helper = (ROOT / "dev/della-host-layout-audit.py").read_text(encoding="utf-8")
         # Oct 16 2026: repinned for the Release-only exclusion of the DEBUG puppet gallery and Body editor samples.
-        original_project_sha = "55c5ed7208d53603b9f8334d7ee8ddfd2a8225afb0518e63ee269fe21862d750"
+        # Nov 14 2026: repinned for Tellavision Follow along (the wider microphone sentence and the syncprint.js note).
+        original_project_sha = "64459d147cbe5b0499066276feee709271bba31a3c50748d26dd1bcd4b9f4add"
         # Bind the exact original command expression bytes. ast.dump is a
         # Python-version-dependent representation, not the build arguments.
         original_command_sha = "bf5b25c7e5fd0070363cb4d18c44c755902d21c1a1dbccfa0dda2f8999293999"

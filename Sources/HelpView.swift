@@ -37,7 +37,13 @@ struct HelpView: View {
     }
 
     private func entries(_ section: HelpSection) -> [HelpEntry] {
-        section.entries.filter { !$0.ownerTrial || describedVideo.allowed }
+        section.entries.filter { (!$0.ownerTrial || describedVideo.allowed) && (!$0.followAlong || followAlongOffered) }
+    }
+
+    /// Nov 14 2026 (Tellavision): Follow along's help shows only where the
+    /// button does (the server's config and the phone switch).
+    private var followAlongOffered: Bool {
+        describedVideo.allowed && describedVideo.followAlong && KadeAppSwitches.followAlong
     }
 
     var body: some View {
@@ -220,6 +226,8 @@ struct HelpEntry: Identifiable {
     let body: String
     /// Shown when this account can open the describer, including adult review accounts.
     var ownerTrial = false
+    /// Shown only where Follow along with my TV is offered (Nov 14 2026).
+    var followAlong = false
     var id: String { title }
 }
 
@@ -238,6 +246,12 @@ struct HelpSection: Identifiable {
         // one-time card on the Talk tab (KadeWhatsNew.swift) says the same
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
+            HelpEntry(
+                title: "New for you: Follow along with my TV",
+                body: KadeWhatsNew.followAlongNews,
+                ownerTrial: true,
+                followAlong: true
+            ),
             HelpEntry(
                 title: "Newest build, 2.2.20: Speech that keeps going, quicker replies",
                 body: KadeWhatsNew.body
@@ -570,6 +584,11 @@ struct HelpSection: Identifiable {
             HelpEntry(
                 title: "Describing a video again",
                 body: "Open a video you already tried from Your videos, finished or stopped, and choose Describe again near the end of its screen. It writes fresh descriptions from the copy already on the server, so a YouTube link is never fetched again. It starts with that video's choices; turn on Change the narration or detail to pick others. A long video also offers Try the first 3 minutes again. The price is said first, and earlier versions stay. In Your videos, Describe again is also in a video's Actions rotor. Pasting a YouTube link you already brought in opens that video instead of downloading it again, and if YouTube would not hand a video over, Check again tries the link again. The server keeps a video until the date on its screen; after that, choose it again."
+            ),
+            HelpEntry(
+                title: "Follow along with your TV",
+                body: "On a finished video, Follow along with my TV lets your phone listen to the same film playing on your TV or another screen. It finds your place and speaks the descriptions in the gaps, in your VoiceOver voice. Press Start listening, then start the film. You hear Listening for your film, then Found your place. If you pause the TV, the phone notices and waits, and says Back in step when the film plays. If you skip, it finds the new place. You can lock the phone. Play and pause on your earbuds or the Lock Screen pause and resume the descriptions, and so does Magic Tap. Where am I says how far in you are. When a line does not fit its gap, a soft chime plays: pause the TV, and the phone reads the lines it held. Earbuds keep the descriptions private; one earbud, or transparency, lets you hear the TV too. A TV channel's sped-up showing, or a different cut of the film, may not be found. The film's sound is checked on your phone and is never saved or sent; the microphone stays on until you press Stop or the film ends. Tracks stay under Follow-along tracks on this phone, and work without the internet, even after the video expires.",
+                followAlong: true
             ),
             HelpEntry(
                 title: "Watching with the screen locked, and captions",

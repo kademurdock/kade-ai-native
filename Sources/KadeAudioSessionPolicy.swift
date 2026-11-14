@@ -56,6 +56,14 @@ import Foundation
 ///   playback for spoken audio, not mixed, so the lock screen and headphone
 ///   buttons work and it carries on with the screen locked.
 /// - film (a described video): the same for a film, in movie playback.
+/// - followAlong (Tellavision, Nov 14 2026): the phone's own microphone hears
+///   the film on her TV while the descriptions play in her earbuds or on the
+///   loudspeaker. Play-and-record, default mode (voice processing would treat
+///   the TV as noise), Bluetooth A2DP only (the hands-free profile would take
+///   the AirPods' microphone and phone-call sound), the loudspeaker without a
+///   headset, not mixed (the lock screen and earbud buttons). An owner like a
+///   film: it holds the session and the microphone lane for as long as it
+///   listens or speaks, and hands both back when it stops.
 /// A live video face (sighted accounts only) plays through its own web page;
 /// the session is never let go while its page is up.
 ///
@@ -71,6 +79,7 @@ enum KadeAudioActivity: String, CaseIterable {
     case call
     case backgroundListen
     case film
+    case followAlong
 }
 
 /// What the session should be in one state. The names follow AVAudioSession;
@@ -177,6 +186,12 @@ enum KadeAudioSessionPolicy {
                                         active: true, notifyOthersOnDeactivation: false)
         case .film:
             return KadeAudioSessionPlan(category: .playback, mode: .moviePlayback, options: [],
+                                        active: true, notifyOthersOnDeactivation: false)
+        case .followAlong:
+            // The Clubhouse's Headphones clarity recipe (A2DP and the phone's
+            // microphone), plus the loudspeaker when nothing is connected.
+            return KadeAudioSessionPlan(category: .playAndRecord, mode: .standard,
+                                        options: [.allowBluetoothA2DP, .defaultToSpeaker],
                                         active: true, notifyOthersOnDeactivation: false)
         }
     }

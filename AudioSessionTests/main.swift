@@ -18,8 +18,8 @@ typealias Plan = KadeAudioSessionPlan
 typealias Moment = KadeAudioSessionPolicy.Moment
 
 // --- what each state asks the session for ---
-check(KadeAudioActivity.allCases.count == 7,
-      "seven states: idle, playing, feedback, listening, call, background listen, film")
+check(KadeAudioActivity.allCases.count == 8,
+      "eight states: idle, playing, feedback, listening, call, background listen, film, follow along")
 
 do {
     let idle = Policy.plan(for: .idle)
@@ -91,14 +91,30 @@ do {
     check(!film.notifyOthersOnDeactivation, "film: letting go afterwards does not wake a podcast it stopped")
 }
 
+do {
+    // Nov 14 2026, Tellavision Follow along: the phone's microphone hears the
+    // TV while the descriptions play in her earbuds (A2DP) or on the speaker.
+    let follow = Policy.plan(for: .followAlong)
+    check(follow.category == .playAndRecord && follow.mode == .standard && follow.records,
+          "follow along: play-and-record in the default mode")
+    check(follow.options == [.allowBluetoothA2DP, .defaultToSpeaker],
+          "follow along: A2DP only (earbuds keep their music quality, the phone's own microphone) and the loudspeaker")
+    check(!follow.options.contains(.allowBluetoothHFP), "follow along: never the hands-free profile")
+    check(!follow.voiceProcessing && !follow.mixes && !follow.ducksOthers,
+          "follow along: no voice processing (the TV is not noise), not mixed (lock screen and earbud buttons), never ducks")
+    check(!follow.notifyOthersOnDeactivation, "follow along: an owner like a film, letting go does not wake a podcast it stopped")
+}
+
 for activity in KadeAudioActivity.allCases {
     let plan = Policy.plan(for: activity)
     check(!plan.ducksOthers, "\(activity.rawValue): never ducks VoiceOver")
     check(plan.voiceProcessing == (activity == .call), "\(activity.rawValue): voice processing only on a call")
-    check(plan.records == (activity == .listening || activity == .call), "\(activity.rawValue): a microphone only while listening or on a call")
+    check(plan.records == (activity == .listening || activity == .call || activity == .followAlong),
+          "\(activity.rawValue): a microphone only while listening, on a call or following along")
     check(plan.active == (activity != .idle), "\(activity.rawValue): switched on unless idle")
-    check(plan.notifyOthersOnDeactivation == (plan.mixes || plan.records),
-          "\(activity.rawValue): only a not-mixed book or film keeps quiet when it lets go")
+    let owner = activity == .backgroundListen || activity == .film || activity == .followAlong
+    check(plan.notifyOthersOnDeactivation == !owner,
+          "\(activity.rawValue): only a not-mixed owner (a book, a film, Follow along) keeps quiet when it lets go")
     check(!plan.options.contains(.allowBluetoothHFP) || plan.records,
           "\(activity.rawValue): the hands-free Bluetooth profile only with a microphone open")
 }
@@ -483,6 +499,10 @@ let owners: [String: Owner] = [
     "FamilyStoryPlayer.swift": Owner(
         reason: "a family story owns the session while taken and holds it while it plays",
         marks: owned("FamilyStoryPlayer.swift")),
+    "FollowAlongAudio.swift": Owner(
+        reason: "Follow along owns and holds the session, and holds the microphone lane, for as long as it listens or speaks; its speech and chimes play inside that",
+        marks: owned("FollowAlongAudio.swift") + [("FollowAlongAudio.swift", "KadeAudioLanes.beginRecording(Self.laneName)"),
+                                                  ("FollowAlongAudio.swift", "KadeAudioLanes.endRecording(Self.laneName)")]),
     "KadeFeedback.swift": Owner(
         reason: "earcons and room chimes are short sounds; the thinking bubbles hold by name",
         marks: [("KadeFeedback.swift", "KadeAudioSession.shared.shortSound(seconds:player.duration)"),
@@ -593,7 +613,8 @@ for file in ["ArcadeGameView.swift", "WorldService.swift", "DescribedVideoView.s
           "\(file) sets up only the playing plan (mixing playback)")
 }
 for (file, activity) in [("ReadingRoomService.swift", "backgroundListen"), ("FamilyStoryPlayer.swift", "backgroundListen"),
-                         ("DescribedListenAhead.swift", "backgroundListen"), ("DescribedVideoPlayer.swift", "film")] {
+                         ("DescribedListenAhead.swift", "backgroundListen"), ("DescribedVideoPlayer.swift", "film"),
+                         ("FollowAlongAudio.swift", "followAlong")] {
     check(compactCode(file).contains("KadeAudioSession.setCategory(for:.\(activity))"),
           "\(file) takes its not-mixed session from the \(activity) plan")
 }

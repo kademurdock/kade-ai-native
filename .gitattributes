@@ -1,0 +1,4 @@
+# Tellavision Follow along (Nov 14 2026): syncprint.js is an exact copy of the
+# library the server also ships; its checksum is tested, so git must never
+# change its line endings.
+Sources/syncprint.js -text

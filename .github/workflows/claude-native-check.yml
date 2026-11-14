@@ -50,6 +50,7 @@ jobs:
           if [ -f run-push-tests.sh ]; then bash run-push-tests.sh 2>&1 | tail -n 20; fi
           if [ -f run-waiting-chime-tests.sh ]; then bash run-waiting-chime-tests.sh 2>&1 | tail -n 20; fi
           if [ -f run-audio-session-tests.sh ]; then bash run-audio-session-tests.sh 2>&1 | tail -n 20; fi
+          if [ -f run-follow-along-tests.sh ]; then bash run-follow-along-tests.sh 2>&1 | tail -n 40; fi
 
       - name: Generate the simulator project
         timeout-minutes: 10
@@ -77,6 +78,47 @@ jobs:
             tail -n 40 build.log || true
           fi
           exit $status
+
+      # Nov 14 2026 (Tellavision Follow along): syncprint.js must ride in the
+      # app as a resource, byte for byte (its checksum is the server's too).
+      - name: Follow along's syncprint.js is inside the app
+        if: ${{ steps.compile.outcome == 'success' && hashFiles('Sources/syncprint.js') != '' }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          app="build/check/Build/Products/Debug-iphonesimulator/KadeAI.app"
+          if [ ! -f "$app/syncprint.js" ]; then
+            echo "syncprint.js is missing from $app"
+            exit 1
+          fi
+          want="$(shasum -a 256 Sources/syncprint.js | cut -d' ' -f1)"
+          got="$(shasum -a 256 "$app/syncprint.js" | cut -d' ' -f1)"
+          echo "syncprint.js in the app: $got"
+          test "$want" = "$got"
+
+      # Timing only: one match in Apple's jsc shell, with the JIT and without
+      # it (an app's JavaScriptCore has no JIT). Never fails the check.
+      - name: Follow along match timing in jsc
+        if: ${{ steps.compile.outcome == 'success' && hashFiles('dev/follow-along/time-match.js') != '' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          jsc=""
+          for candidate in \
+            /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc \
+            /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc \
+            /System/Library/Frameworks/JavaScriptCore.framework/Helpers/jsc \
+            /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Resources/jsc; do
+            if [ -x "$candidate" ]; then jsc="$candidate"; break; fi
+          done
+          if [ -z "$jsc" ]; then
+            echo "No jsc command on this Mac; the Follow along tests timed the match in JavaScriptCore instead."
+            exit 0
+          fi
+          echo "JIT on:"
+          "$jsc" Sources/syncprint.js dev/follow-along/time-match.js || true
+          echo "JIT off:"
+          "$jsc" --useJIT=false Sources/syncprint.js dev/follow-along/time-match.js || true
 
       - name: Puppet gallery screenshots
         id: gallery
