@@ -283,17 +283,33 @@ final class ParlorNarrator: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func stop() {
+        // Nov 14 2026 (review): a stop now ends the pump that was running
+        // (its clip's finish never comes after stop(), so it used to wait
+        // forever) and lets the app's audio session go.
+        generation += 1
         queue.removeAll()
         player?.stop()
         player = nil
         pumping = false
+        finishContinuation?.resume()
+        finishContinuation = nil
+        KadeAudioSession.shared.letGo(Self.sessionName)
     }
 
     private var finishContinuation: CheckedContinuation<Void, Never>?
+    /// Goes up at every stop, so a pump from before it ends quietly.
+    private var generation = 0
+    /// Nov 14 2026 (review): the house voice holds the app's audio session
+    /// while it talks (KadeAudioSession), so nothing else's ending lets the
+    /// session go under a line; it used to stop the line, and the narrator
+    /// then waited forever for a finish that never came.
+    static let sessionName = "the Parlor house voice"
 
     private func pump() async {
         pumping = true
-        while !queue.isEmpty {
+        let mine = generation
+        KadeAudioSession.shared.hold(Self.sessionName)
+        while !queue.isEmpty, mine == generation {
             let text = queue.removeFirst()
             // Oct 16 2026: the house voice talks to the table, so it follows the
             // "Filler words and little sounds" switch.
@@ -303,15 +319,21 @@ final class ParlorNarrator: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
             let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
             guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { continue }
+            // Stopped while the line was being made: never spoken after a stop.
+            guard mine == generation else { return }
             guard let p = try? AVAudioPlayer(data: data) else { continue }
             player = p
             p.delegate = self
-            p.play()
+            // A clip that will not start sends no finish either.
+            guard p.play() else { continue }
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 finishContinuation = c
             }
         }
+        // A stop already cleared the flag and let go; a newer pump may own both.
+        guard mine == generation else { return }
         pumping = false
+        KadeAudioSession.shared.letGo(Self.sessionName)
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -358,6 +380,9 @@ final class ParlorSounds {
         guard let data, let p = try? AVAudioPlayer(data: data) else { return }
         p.volume = 0.7
         p.play()
+        // Nov 14 2026 (review): the app's audio session is let go a moment
+        // after the cue ends, never under it.
+        KadeAudioSession.shared.shortSound(seconds: p.duration)
         players.append(p)
         if players.count > 8 { players.removeFirst(players.count - 8) }
     }

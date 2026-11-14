@@ -155,9 +155,14 @@ final class DescribedVideoPlayback: ObservableObject {
         // Not mixing: a mixing session is never the Now Playing app, so the
         // headphone and Lock Screen buttons would do nothing (the Library's
         // lesson). close() puts the app's usual mixing session back.
+        // Nov 14 2026: KadeAudioSessionPolicy's film plan (the same three
+        // values), owned and held while the player is open, so nothing
+        // else's ending lets the session go under the film.
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+        try? KadeAudioSession.setCategory(for: .film)
         try? session.setActive(true)
+        KadeAudioSession.shared.take(Self.sessionName)
+        KadeAudioSession.shared.hold(Self.sessionName)
         let item = AVPlayerItem(url: url)
         item.externalMetadata = [
             Self.metadata(.commonIdentifierTitle, title),
@@ -259,11 +264,14 @@ final class DescribedVideoPlayback: ObservableObject {
         unwireRemote()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         player.replaceCurrentItem(with: nil)
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        // Nov 14 2026: and switched off a moment later, unless another film
-        // or anything else has taken it by then (KadeAudioSession).
-        KadeAudioSession.shared.releaseSoon("the described video player closed")
+        // Back to the app's usual mixing session, switched off a moment
+        // later. Nov 14 2026 (review): only when no book, story or
+        // listen-while-made still owns the session (KadeAudioSession.handBack).
+        KadeAudioSession.shared.handBack(Self.sessionName)
     }
+
+    /// Nov 14 2026: the name the film owns and holds the audio session under.
+    static let sessionName = "the described video player"
 
     // MARK: Where she stopped (Nov 12 2026 audit, DESC-9)
 

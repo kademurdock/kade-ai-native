@@ -682,9 +682,10 @@ struct ReadingRoomView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel(playWord)
-                // Nov 14 2026: VoiceOver stays quiet once it is pressed, so
-                // the book does not start under VoiceOver's words (ducked).
-                .accessibilityAddTraits(.startsMediaSession)
+                // Nov 14 2026 (review): no media-session trait. A book is a
+                // long session with spoken chapter changes, "The end" and
+                // errors, which the trait could keep VoiceOver from saying;
+                // the reading voice starts after VoiceOver's "Pause" anyway.
                 .accessibilityFocused($focus, equals: .play)
                 .accessibilityActions { if let book = openBook { bookActions(book) } }
                 seekButton(backward: false)
@@ -1105,18 +1106,37 @@ final class SkippedClipPlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = SkippedClipPlayer()
     private var player: AVAudioPlayer?
     private var done: CheckedContinuation<Void, Never>?
+    /// Nov 14 2026 (review): it holds the app's audio session while a clip
+    /// plays (KadeAudioSession), so nothing else's ending lets it go under
+    /// the clip (a stopped clip sends no finish, and its reader would wait
+    /// forever).
+    private static let sessionName = "the Library's spoken extra"
     func play(_ data: Data) async {
         player?.stop()
+        // A clip cut short by this one never finishes by itself: its waiter
+        // goes on now instead of waiting forever.
+        let cut = done
+        done = nil
+        cut?.resume()
         guard let p = try? AVAudioPlayer(data: data) else { return }
         player = p
         p.delegate = self
+        KadeAudioSession.shared.hold(Self.sessionName)
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             done = cont
             if !p.play() { done = nil; cont.resume() }
         }
+        // Still the clip in hand (not cut by a newer one): it is over.
+        if player === p {
+            player = nil
+            KadeAudioSession.shared.letGo(Self.sessionName)
+        }
     }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let finished = ObjectIdentifier(player)
         Task { @MainActor in
+            // Only the clip in hand: a late finish never ends a newer one.
+            guard let current = self.player, ObjectIdentifier(current) == finished else { return }
             let c = self.done
             self.done = nil
             c?.resume()

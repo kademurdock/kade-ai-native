@@ -65,6 +65,12 @@ struct SettingsView: View {
     /// Build 218: see the `simpleComposer` declaration in
     /// ConversationDetailView for what its two answers mean.
     @AppStorage("kade.chat.simpleComposer") private var simpleComposer = false
+    /// Nov 14 2026: KadeAppSwitches.audioSessionRelease, in her hands. On
+    /// (the default) the app lets go of its audio session a moment after its
+    /// last sound, so VoiceOver keeps its own volume; off puts back the
+    /// session that stays on once anything has played. Undoing that change
+    /// then needs no new build.
+    @AppStorage("kade.switch.audioSessionRelease") private var audioSessionRelease = true
     // Aug 6 2026: whisper mode — night-quiet delivery, the native twin of the
     // web toggle that shipped in Part 32. Rides the send payload; the server
     // appends the whisper head line while it's on.
@@ -491,10 +497,11 @@ struct SettingsView: View {
         Section {
             simpleTranscriptRow(searchStyle: false)
             simpleComposerRow(searchStyle: false)
+            audioReleaseRow(searchStyle: false)
         } header: {
             sectionHeader("Troubleshooting")
         } footer: {
-            Text("Only change these if the app freezes and Kade asks you to try them.")
+            Text("Only change these if the app freezes or a sound cuts out, and Kade asks you to try them.")
         }
     }
 
@@ -581,7 +588,7 @@ struct SettingsView: View {
         case location
         case usage, accountSecurity, export
         case diagnostics
-        case simpleTranscript, simpleComposer
+        case simpleTranscript, simpleComposer, audioRelease
 
         var id: String { rawValue }
 
@@ -615,6 +622,7 @@ struct SettingsView: View {
             case .sensorySync: return "Pulse with the visuals"
             case .simpleTranscript: return "Simple transcript"
             case .simpleComposer: return "Simple composer"
+            case .audioRelease: return "Let go of audio when quiet"
             case .reduceMotion: return "Reduce motion"
             case .animatedCharacters: return "Animated characters"
             case .livingPaintings: return "Living painted faces"
@@ -642,7 +650,7 @@ struct SettingsView: View {
             case .location: return "Location"
             case .usage, .accountSecurity, .export: return "Account"
             case .diagnostics: return "Support"
-            case .simpleTranscript, .simpleComposer: return "Troubleshooting"
+            case .simpleTranscript, .simpleComposer, .audioRelease: return "Troubleshooting"
             }
         }
 
@@ -677,6 +685,7 @@ struct SettingsView: View {
             case .sensorySync: return "pulse visuals sync haptic thinking dot rhythm"
             case .simpleTranscript: return "simple transcript troubleshooting freeze plain rows debug"
             case .simpleComposer: return "simple composer troubleshooting freeze message box debug"
+            case .audioRelease: return "audio session release voiceover volume quieter louder ducking ducked sound cuts out troubleshooting"
             case .reduceMotion: return "motion animation reduce animations still"
             case .animatedCharacters: return "animated characters puppets moving face portrait avatar kiana harley lilly della librarian calls conversation voice messages"
             case .livingPaintings: return "living painted faces painting paintings realistic della eyelids eyes blink brows mouth moving face portrait animation"
@@ -760,6 +769,7 @@ struct SettingsView: View {
         case .sensorySync: sensorySyncRow(searchStyle: true)
         case .simpleTranscript: simpleTranscriptRow(searchStyle: true)
         case .simpleComposer: simpleComposerRow(searchStyle: true)
+        case .audioRelease: audioReleaseRow(searchStyle: true)
         case .reduceMotion: reduceMotionRow(searchStyle: true)
         case .animatedCharacters: animatedCharactersRow(searchStyle: true)
         case .livingPaintings: livingPaintingsRow(searchStyle: true)
@@ -1062,6 +1072,15 @@ struct SettingsView: View {
             tileLabel(searchStyle ? searchLabel(.simpleComposer, "Simple composer (troubleshooting)") : "Simple composer (troubleshooting)", systemImage: "square.and.pencil", tint: SectionTint.troubleshooting)
         }
         .accessibilityHint("Makes the message box a single line that scrolls instead of growing to five lines. Turn this on if sending still freezes the app -- it tells us whether the message box is the cause. You can still type and send messages of any length.")
+    }
+
+    private func audioReleaseRow(searchStyle: Bool) -> some View {
+        // Nov 14 2026: the kill switch for KadeAudioSession, so undoing it
+        // never waits on a build. On by default.
+        Toggle(isOn: $audioSessionRelease) {
+            tileLabel(searchStyle ? searchLabel(.audioRelease, "Let go of audio when quiet") : "Let go of audio when quiet", systemImage: "speaker.slash", tint: SectionTint.troubleshooting)
+        }
+        .accessibilityHint("On: a moment after the app's last sound, it lets go of the phone's audio, so VoiceOver keeps its own volume in conversations. Turn this off if a sound in the app stops by itself; the app then keeps the audio on, as it did before.")
     }
 
     @AppStorage("kadeVoicePortraits") private var voicePortraits = true
@@ -1646,7 +1665,12 @@ struct RingtoneSettingsView: View {
         guard let url else { return }
         ringtonePlayer?.stop()
         ringtonePlayer = try? AVAudioPlayer(contentsOf: url)
-        ringtonePlayer?.play()
+        if let player = ringtonePlayer, player.play() {
+            // Nov 14 2026 (review): a full-length preview runs up to about a
+            // minute; it holds the app's audio session that long (or until
+            // Stop preview), so nothing else ending lets it go under the tone.
+            KadeAudioSession.shared.hold(Self.previewHold, seconds: player.duration)
+        }
     }
 
     /// Part 84 — her gripe on the launch set: "there's no way to make it stop
@@ -1654,7 +1678,11 @@ struct RingtoneSettingsView: View {
     private func stopRingtonePreview() {
         ringtonePlayer?.stop()
         ringtonePlayer = nil
+        KadeAudioSession.shared.letGo(Self.previewHold)
     }
+
+    /// Nov 14 2026: the name a ringtone preview holds the audio session under.
+    private static let previewHold = "a ringtone preview"
 }
 
 // MARK: - Agent-call ringtones (Part 75, Aug 21 2026 — the catalog; ids match the bridge's CALL_RINGTONES map)

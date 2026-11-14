@@ -48,16 +48,28 @@ final class VoiceService: NSObject, ObservableObject {
     /// answers to something she just did wait for this voice
     /// (KadeSpeechFloor). A paused clip is silent, so it gives the floor back.
     private var reportedFloorBusy = false
+    /// Nov 14 2026: what this voice last told KadeAudioSession.
+    private var reportedSessionBusy = false
     private func reportSpeechFloor() {
-        let busy = (isSpeaking || isClipPlaying) && !isPaused
-        guard busy != reportedFloorBusy else { return }
-        reportedFloorBusy = busy
-        KadeSpeechFloor.shared.appVoice(busy: busy, source: ObjectIdentifier(self))
-        // Nov 14 2026: the same flag tells KadeAudioSession when this voice
-        // sounds and when it stops, so the session is let go a moment after
-        // (VoiceOver back to its own level inside the app).
-        KadeAudioSession.shared.speech(busy: busy, source: ObjectIdentifier(self))
+        let busy = KadeAudioSessionPolicy.voiceFloorBusy(speaking: isSpeaking, clipOnDeck: isClipPlaying, paused: isPaused)
+        if busy != reportedFloorBusy {
+            reportedFloorBusy = busy
+            KadeSpeechFloor.shared.appVoice(busy: busy, source: ObjectIdentifier(self))
+        }
+        // Nov 14 2026: KadeAudioSession lets the app's session go a moment
+        // after this voice has nothing at all (VoiceOver back to its own
+        // level inside the app). Its own flag, not the floor's: a PAUSED clip
+        // still holds the session. Letting go under a paused streamed clip
+        // stopped its engine, so the rest of the sentence was lost or the
+        // queue waited forever on a clip that never finished (review).
+        let holdsSession = KadeAudioSessionPolicy.voiceHolds(speaking: isSpeaking, clipOnDeck: isClipPlaying, paused: isPaused)
+        if holdsSession != reportedSessionBusy {
+            reportedSessionBusy = holdsSession
+            KadeAudioSession.shared.speech(busy: holdsSession, source: ObjectIdentifier(self))
+        }
     }
+    /// Nov 14 2026: the name this voice holds the app's audio session under.
+    private var sessionName: String { KadeAudioSession.voiceName(ObjectIdentifier(self)) }
     /// The caller-supplied tag (chat uses the message id) of the item
     /// currently playing, so a message row's own "Play as voice message"
     /// action can morph into Pause/Resume for exactly the message that is
@@ -446,6 +458,8 @@ final class VoiceService: NSObject, ObservableObject {
         self.client = client
         self.libraryPauseReason = libraryPauseReason
         super.init()
+        // Nov 14 2026: the streamed clip's start window is this voice's.
+        streamingPlayer.sessionName = sessionName
         voiceChangeObserver = NotificationCenter.default.addObserver(
             forName: AgentBuilderService.agentsChanged, object: nil, queue: .main
         ) { [weak self] _ in
@@ -543,7 +557,8 @@ final class VoiceService: NSObject, ObservableObject {
     /// engine ran on (playing silence) after its last clip for as long as the
     /// app lived, which kept the session busy so it could never be switched
     /// off. It stops here when nothing is on deck; the next streamed clip
-    /// starts it again. A clip playing or paused keeps it.
+    /// starts it again. A clip playing or paused keeps it (and a voice with a
+    /// clip, paused or not, holds the session, so no release comes then).
     private func quietIdleEngine() {
         guard !hasPendingSpeech, !streamedClipActive else { return }
         streamingPlayer.stopEngineIfIdle()
@@ -996,7 +1011,7 @@ final class VoiceService: NSObject, ObservableObject {
         streamedTurnKey = nil
         // Nov 14 2026: nothing of this voice is starting any more, so the
         // session may be let go once everything else is quiet.
-        KadeAudioSession.shared.clipStopped()
+        KadeAudioSession.shared.clipStopped(sessionName)
     }
 
     /// IOS-6 (Nov 12 2026 audit): a call, Siri or an alarm pauses the player
@@ -1137,12 +1152,18 @@ final class VoiceService: NSObject, ObservableObject {
     /// the same delivery and the same filler setting. VoicePickerView works
     /// those out per surface (the Library's reading voice and the describer's
     /// narrator use their own speed, Steady, and no fillers).
-    func previewVoice(_ voiceId: String, long: Bool, delivery: String?, speed: Double, fillers: Bool) async {
-        await previewVoice(voiceId, sample: VoiceAudition.sample(long: long), delivery: delivery, speed: speed, fillers: fillers)
+    func previewVoice(_ voiceId: String, long: Bool, delivery: String?, speed: Double, fillers: Bool,
+                      startNotBefore: TimeInterval? = nil) async {
+        await previewVoice(voiceId, sample: VoiceAudition.sample(long: long), delivery: delivery, speed: speed, fillers: fillers,
+                           startNotBefore: startNotBefore)
     }
 
     /// `speed` is kept inside the API's 0.5-1.5 range, as a reply's is.
-    func previewVoice(_ voiceId: String, sample: String, delivery: String?, speed: Double, fillers: Bool) async {
+    /// `startNotBefore` (the phone's uptime clock): a swipe VoiceOver reads
+    /// out (the voice wheel) plays no sooner than this
+    /// (KadeAudioSessionPolicy.auditionNotBefore).
+    func previewVoice(_ voiceId: String, sample: String, delivery: String?, speed: Double, fillers: Bool,
+                      startNotBefore: TimeInterval? = nil) async {
         stopSpeaking()
         // Nov 14 2026 (her report: an audition's first seconds came up
         // ducked under VoiceOver, which was not even talking): the session
@@ -1156,6 +1177,15 @@ final class VoiceService: NSObject, ObservableObject {
         fields.append(("fillers", fillers ? "true" : "false"))
         let req = client.multipartRequest(path: "api/files/speech/tts/manual", authorized: true, fields: fields)
         guard let (data, http) = try? await client.send(req), http.statusCode == 200, !data.isEmpty else { return }
+        // Nov 14 2026 (review): VoiceOver reads the wheel's new name as she
+        // lands on it. A sample that came back quickly waits until VoiceOver
+        // has had time to say it, so it does not start under its words.
+        let wait = KadeAudioSessionPolicy.auditionWait(now: ProcessInfo.processInfo.systemUptime, notBefore: startNotBefore)
+        if wait > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            // She moved on meanwhile: the next audition has the stage.
+            if Task.isCancelled { return }
+        }
         await playAudio(data)
     }
 
@@ -1366,6 +1396,9 @@ final class VoiceService: NSObject, ObservableObject {
                     streamedClipActive = true
                     streamedOK = await streamingPlayer.play(fetch: fetch, rate: 1.0, onPlaybackStarted: { [weak self] in
                         guard let self, generation == self.cancelGeneration else { return }
+                        // Nov 14 2026 (review): heard, so its start window is
+                        // over; the voice holds the session by name now.
+                        KadeAudioSession.shared.clipSettled(self.sessionName)
                         self.isClipPlaying = true
                         // Known bug #2: pause a running book the moment this
                         // clip is really audible (any VoiceService, not only
@@ -1385,6 +1418,9 @@ final class VoiceService: NSObject, ObservableObject {
                         bailCancelled(current)
                         return
                     }
+                    // Nov 14 2026: played or not, this clip is not starting
+                    // any more (a fallback below sets up its own window).
+                    KadeAudioSession.shared.clipSettled(sessionName)
                     streamedClipActive = false
                     isClipPlaying = false
                 } else {
@@ -1619,7 +1655,7 @@ final class VoiceService: NSObject, ObservableObject {
         // Nov 14 2026: the same category through KadeAudioSession, which
         // also lets the session go again a moment after the speech stops.
         if KadeAppSwitches.audioSessionRelease {
-            KadeAudioSession.shared.preparePlayback()
+            KadeAudioSession.shared.preparePlayback(sessionName)
             return
         }
         let session = AVAudioSession.sharedInstance()
@@ -1650,6 +1686,7 @@ final class VoiceService: NSObject, ObservableObject {
             let generation = cancelGeneration
             let outcome = await LiveFaceSession.shared.playClip(data, agentID: agentID, onStarted: { [weak self] in
                 guard let self, generation == self.cancelGeneration else { return }
+                KadeAudioSession.shared.clipSettled(self.sessionName)
                 self.isClipPlaying = true
                 LibraryNowPlaying.shared.pauseForOtherAudio(self.libraryPauseReason)
                 self.isPaused = false
@@ -1712,6 +1749,7 @@ final class VoiceService: NSObject, ObservableObject {
                 if !player.play() {
                     currentPlayer = nil
                     playbackContinuation = nil
+                    KadeAudioSession.shared.clipSettled(sessionName)
                     continuation.resume(returning: false)
                 } else {
                     let generation = cancelGeneration
@@ -1721,6 +1759,7 @@ final class VoiceService: NSObject, ObservableObject {
                     }
                 }
             } catch {
+                KadeAudioSession.shared.clipSettled(sessionName)
                 continuation.resume(returning: false)
             }
         }
@@ -1735,6 +1774,10 @@ final class VoiceService: NSObject, ObservableObject {
                 renderedSeconds: player.currentTime, completedBuffers: 0,
                 current: generation == cancelGeneration && currentPlayer === player) {
             case .started:
+                // Nov 14 2026 (review): heard, so its start window is over
+                // (it used to stay open through a whole reply, and the
+                // session went up to 4 s late after a short last sentence).
+                KadeAudioSession.shared.clipSettled(sessionName)
                 isClipPlaying = true
                 LibraryNowPlaying.shared.pauseForOtherAudio(libraryPauseReason)
                 isPaused = false
@@ -1756,6 +1799,7 @@ final class VoiceService: NSObject, ObservableObject {
                 KadeBreadcrumbs.drop("tts-buffered: no rendered frames after bounded start recovery")
                 player.stop()
                 currentPlayer = nil
+                KadeAudioSession.shared.clipSettled(sessionName)
                 isClipPlaying = false
                 playbackContinuation?.resume(returning: false)
                 playbackContinuation = nil

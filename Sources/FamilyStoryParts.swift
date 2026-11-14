@@ -314,9 +314,10 @@ struct FamilyListenBar: View {
             }
             .accessibilityLabel(player.playing ? "Pause" : "Play")
             .accessibilityHint(player.playing ? "" : "Reads the story aloud.")
-            // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the
-            // story does not start under VoiceOver's words (ducked).
-            .accessibilityAddTraits(.startsMediaSession)
+            // Nov 14 2026 (review): no media-session trait. A first Play
+            // fetches the voice for seconds ("Getting the voice ready"), and
+            // the trait could silence that, a problem, or "The end of the
+            // story" while VoiceOver stays quiet for the session.
         }
     }
 

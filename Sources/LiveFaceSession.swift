@@ -268,6 +268,9 @@ final class LiveFaceSession: NSObject, ObservableObject, WKNavigationDelegate {
         agentID = nil
         sessionID = nil
         if !keepWanted { wanted = nil }
+        // Nov 14 2026: KadeAudioSession never lets go while a face page is up;
+        // once it is down, it lets go a moment later if nothing else sounds.
+        KadeAudioSession.shared.releaseSoon("the live face closed")
     }
 
     func stop() { close(reason: "stop", keepWanted: false) }

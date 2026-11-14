@@ -34,7 +34,18 @@ final class FamilyStoryPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate
     @Published private(set) var slug: String?
     @Published private(set) var part = 0
     @Published private(set) var partCount = 0
-    @Published private(set) var playing = false
+    /// Nov 14 2026 (review): a story holds the app's audio session while it
+    /// plays (KadeAudioSession), so nothing else's ending lets it go under it.
+    @Published private(set) var playing = false {
+        didSet {
+            guard playing != oldValue else { return }
+            if playing {
+                KadeAudioSession.shared.hold(Self.sessionName)
+            } else {
+                KadeAudioSession.shared.letGo(Self.sessionName)
+            }
+        }
+    }
     /// A part is being voiced or downloaded.
     @Published private(set) var loading = false
     /// The sentence being read, for the caption strip.
@@ -314,20 +325,26 @@ final class FamilyStoryPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate
             LibraryNowPlaying.shared.pauseForOtherAudio("a family story")
         }
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [])
+        // Nov 14 2026: KadeAudioSessionPolicy's background-listen plan (the
+        // same three values), owned until giveSessionBack.
+        try? KadeAudioSession.setCategory(for: .backgroundListen)
         try? session.setActive(true)
+        KadeAudioSession.shared.take(Self.sessionName)
         sessionTaken = true
     }
 
-    /// Back to the app's usual session shape (as the Library reader does).
+    /// Back to the app's usual session shape (as the Library reader does),
+    /// switched off a moment later. Nov 14 2026 (review): only when no book,
+    /// film or listen-while-made still owns the session.
     private func giveSessionBack() {
         guard sessionTaken else { return }
         sessionTaken = false
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        // Nov 14 2026: and switched off a moment later (KadeAudioSession).
-        KadeAudioSession.shared.releaseSoon("a family story stopped")
+        KadeAudioSession.shared.handBack(Self.sessionName)
     }
+
+    /// Nov 14 2026: the name a story owns the audio session under, and holds
+    /// it under while it plays.
+    static let sessionName = "a family story"
 }
 
 /// One part, ready to play: its audio and its sentences.

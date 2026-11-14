@@ -195,6 +195,10 @@ final class ArcadeTouchPadView: UIView {
         guard chimesOn, let player = rising ? risingChime : fallingChime else { return }
         player.currentTime = 0
         player.play()
+        // Nov 14 2026 (review): the pad lives inside the Arcade, which holds
+        // the app's audio session while it runs; a short sound as well, so a
+        // chime is never cut if the pad ever shows anywhere else.
+        KadeAudioSession.shared.shortSound(seconds: player.duration)
     }
 
     // MARK: VoiceOver

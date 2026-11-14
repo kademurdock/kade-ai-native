@@ -587,7 +587,21 @@ final class ReadingRoomPlayer: ObservableObject {
     @Published private(set) var book: RRBook?
     @Published private(set) var s = 0
     @Published private(set) var c = 0
-    @Published private(set) var isPlaying = false
+    /// Nov 14 2026 (review): a book holds the app's audio session while it
+    /// plays (KadeAudioSession), so nothing else's ending lets it go under the
+    /// book. Paused, it lets go; Play takes the session again.
+    @Published private(set) var isPlaying = false {
+        didSet {
+            guard isPlaying != oldValue else { return }
+            if isPlaying {
+                KadeAudioSession.shared.hold(Self.sessionName)
+            } else {
+                KadeAudioSession.shared.letGo(Self.sessionName)
+            }
+        }
+    }
+    /// The name the Library player holds and owns the audio session under.
+    static let sessionName = "the Library player"
     @Published private(set) var nowText = ""
     @Published var voice = ""
     @Published var speed: Double = 1.0
@@ -752,7 +766,20 @@ final class ReadingRoomPlayer: ObservableObject {
     private var remoteWired = false
     private var saveTask: Task<Void, Never>?
 
-    init(service: ReadingRoomService) { self.service = service }
+    init(service: ReadingRoomService) {
+        self.service = service
+        // Nov 14 2026: posted on the main thread and delivered at once, just
+        // before KadeAudioSession switches the session off.
+        releaseObserver = NotificationCenter.default.addObserver(
+            forName: KadeAudioSession.willRelease, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.quietIdleEngine() }
+        }
+    }
+
+    deinit {
+        if let releaseObserver { NotificationCenter.default.removeObserver(releaseObserver) }
+    }
 
     var isAudio: Bool { book?.isAudio ?? false }
     var partCount: Int { book?.partCount ?? 0 }
@@ -800,12 +827,12 @@ final class ReadingRoomPlayer: ObservableObject {
         stopNode()
         if engine.isRunning { engine.stop() }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        // Back to the app's usual session shape (VoiceService.prepareOutputSession).
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        // Nov 14 2026: and switched off a moment later, unless another book
-        // or anything else has taken it by then (KadeAudioSession).
-        KadeAudioSession.shared.releaseSoon("the Library player closed")
+        // Back to the app's usual session shape (VoiceService.prepareOutputSession),
+        // switched off a moment later. Nov 14 2026 (review): only when no
+        // film, family story or listen-while-made still owns the session;
+        // closing the book used to change the mode under them, and the
+        // session was then let go under them (KadeAudioSession.handBack).
+        KadeAudioSession.shared.handBack(Self.sessionName)
         book = nil
         audioCache.removeAll(); cacheOrder.removeAll()
         textOffset = 0
@@ -813,9 +840,23 @@ final class ReadingRoomPlayer: ObservableObject {
 
     private func prepareSession() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [])
+        // Nov 14 2026: KadeAudioSessionPolicy's background-listen plan, the
+        // same three values as before (spoken audio, not mixed, the lock
+        // screen), owned by the Library until close() hands it back.
+        try? KadeAudioSession.setCategory(for: .backgroundListen)
         try? session.setActive(true)
+        KadeAudioSession.shared.take(Self.sessionName)
     }
+
+    /// Nov 14 2026: the app's audio session is about to be let go (nothing
+    /// sounds). A paused text book's engine is only paused, and switching
+    /// the session off under a paused engine stops it with an error; it is
+    /// stopped cleanly here instead. Play starts it again (streamChunk).
+    private func quietIdleEngine() {
+        guard !isPlaying else { return }
+        engine.stop()
+    }
+    private var releaseObserver: NSObjectProtocol?
 
     // MARK: transport
 

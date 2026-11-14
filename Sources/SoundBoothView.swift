@@ -3133,6 +3133,10 @@ private struct BoothPlayerSheet: View {
     let url: URL
     let title: String
     @State private var player = AVPlayer()
+    /// Nov 14 2026 (review): the sheet holds the app's audio session while
+    /// it is up, so a done earcon from the booth (or anything else ending)
+    /// never lets the session go under the take she is hearing.
+    @State private var sessionHold = "the Sound Booth player \(UUID().uuidString)"
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -3141,12 +3145,16 @@ private struct BoothPlayerSheet: View {
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .onAppear {
+                    KadeAudioSession.shared.hold(sessionHold)
                     player.replaceCurrentItem(with: AVPlayerItem(url: url))
                     // Sep 29 2026 (known bug #2): never play over a running book.
                     LibraryNowPlaying.shared.pauseForOtherAudio("the Sound Booth")
                     player.play()
                 }
-                .onDisappear { player.pause() }
+                .onDisappear {
+                    player.pause()
+                    KadeAudioSession.shared.letGo(sessionHold)
+                }
                 // The sheet had no way out: a swipe-down is not a VoiceOver
                 // gesture and a label on the player hid AVKit's own controls.
                 .toolbar {

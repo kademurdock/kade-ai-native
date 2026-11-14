@@ -30,6 +30,8 @@ enum KadeAppSwitches {
     /// last sound (VoiceOver back to its own level inside the app), stops the
     /// streamed voice's idle engine first, and starts each voice audition on
     /// a fresh session (KadeAudioSession). False puts back the old session
-    /// that stays switched on once anything has played.
+    /// that stays switched on once anything has played. This one has no
+    /// server side (it is the phone's own audio): she flips it herself in
+    /// Settings > Troubleshooting > "Let go of audio when quiet".
     static var audioSessionRelease: Bool { on("kade.switch.audioSessionRelease") }
 }

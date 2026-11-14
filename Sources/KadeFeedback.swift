@@ -341,10 +341,38 @@ final class KadeHapticEngine {
     private static func makeEngine(onDead: @escaping @MainActor () -> Void) -> CHHapticEngine? {
         guard let fresh = try? CHHapticEngine() else { return nil }
         fresh.playsHapticsOnly = true
-        fresh.resetHandler = { Task { @MainActor in onDead() } }
-        fresh.stoppedHandler = { _ in Task { @MainActor in onDead() } }
+        // Nov 14 2026 (review): the app now lets its audio session go a
+        // moment after every sound. If that stops this engine, the next
+        // haptic (often the send's) rebuilds it synchronously, the build
+        // 214-216 hang pattern. The trail says when and why it stops.
+        fresh.resetHandler = {
+            Task { @MainActor in
+                KadeBreadcrumbs.drop("haptics: engine reset by the system")
+                onDead()
+            }
+        }
+        fresh.stoppedHandler = { reason in
+            let why = KadeHapticEngine.stopReason(reason)
+            Task { @MainActor in
+                KadeBreadcrumbs.drop("haptics: engine stopped (\(why))")
+                onDead()
+            }
+        }
         guard (try? fresh.start()) != nil else { return nil }
         return fresh
+    }
+
+    nonisolated private static func stopReason(_ reason: CHHapticEngine.StoppedReason) -> String {
+        switch reason {
+        case .audioSessionInterrupt: return "audio session interrupted"
+        case .applicationSuspended: return "app suspended"
+        case .idleTimeout: return "idle timeout"
+        case .notifyWhenFinished: return "finished"
+        case .engineDestroyed: return "engine destroyed"
+        case .gameControllerDisconnect: return "game controller disconnected"
+        case .systemError: return "system error"
+        @unknown default: return "reason \(reason.rawValue)"
+        }
     }
 
     func play(events specs: [(TimeInterval, TimeInterval, Float, Float)]) -> Bool {
@@ -497,9 +525,12 @@ final class Earcons {
                 player.prepareToPlay()
                 players.removeAll { !$0.isPlaying }
                 players.append(player)
+                let afterRelease = KadeAudioSession.shared.isLetGo
+                let asked = ProcessInfo.processInfo.systemUptime
                 player.play()
                 // Nov 14 2026: the session is let go a moment after it ends.
                 KadeAudioSession.shared.shortSound(seconds: player.duration)
+                crumbFirstSound(afterRelease: afterRelease, asked: asked)
                 return
             }
         }
@@ -516,8 +547,20 @@ final class Earcons {
         player.volume = 1.0
         player.prepareToPlay()
         players.append(player)
+        let afterRelease = KadeAudioSession.shared.isLetGo
+        let asked = ProcessInfo.processInfo.systemUptime
         player.play()
         KadeAudioSession.shared.shortSound(seconds: player.duration)
+        crumbFirstSound(afterRelease: afterRelease, asked: asked)
+    }
+
+    /// Nov 14 2026 (review): the first earcon after the app let its audio
+    /// session go switches it back on inside `play()`, a blocking call on the
+    /// main thread (often the send's bloop). The trail says how long it took.
+    private func crumbFirstSound(afterRelease: Bool, asked: TimeInterval) {
+        guard afterRelease else { return }
+        let ms = Int(((ProcessInfo.processInfo.systemUptime - asked) * 1000).rounded())
+        KadeBreadcrumbs.drop("audio session: switched back on for an earcon in \(ms) ms")
     }
 
     /// Only choose a mixing UI-sound profile when no other app audio lane has

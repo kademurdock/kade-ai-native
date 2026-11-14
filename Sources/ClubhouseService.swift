@@ -1256,7 +1256,13 @@ final class ClubhouseService: NSObject, ObservableObject {
         try? AudioManager.shared.setPlatformVoiceProcessingAllowed(true)
         try? AVAudioSession.sharedInstance().setPreferredInput(nil)
         // IOS-11: called by leave() and by the connect-failure path.
-        if holdsDuplexLane { holdsDuplexLane = false; KadeAudioLanes.endDuplex("room") }
+        if holdsDuplexLane {
+            holdsDuplexLane = false
+            KadeAudioLanes.endDuplex("room")
+            // Nov 14 2026: the session the room had is let go a moment later
+            // too, if nothing else sounds (KadeAudioSession), as after a call.
+            KadeAudioSession.shared.releaseSoon("a room ended")
+        }
     }
 
     /// If the current route landed on the tiny ear speaker with no

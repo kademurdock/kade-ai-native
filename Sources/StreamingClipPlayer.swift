@@ -227,6 +227,9 @@ final class StreamingClipPlayer {
     private var stopped = false
     private var playbackGeneration: UInt64 = 0
     private var completedBuffers = 0
+    /// Nov 14 2026: the name its VoiceService holds the app's audio session
+    /// under (KadeAudioSession), so this clip's start window is that voice's.
+    var sessionName = "a streamed voice"
 
     /// How much audio must be banked before playback starts. Starting on the
     /// very first chunk risks an immediate underrun stutter on a bursty
@@ -349,7 +352,7 @@ final class StreamingClipPlayer {
             // Nov 14 2026: the same category through KadeAudioSession, which
             // lets the session go again a moment after the speech stops.
             if KadeAppSwitches.audioSessionRelease {
-                KadeAudioSession.shared.preparePlayback()
+                KadeAudioSession.shared.preparePlayback(sessionName)
             } else {
                 try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
                 try? session.setActive(true)

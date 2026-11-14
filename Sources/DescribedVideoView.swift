@@ -1000,9 +1000,10 @@ struct DescribedVideoView: View {
             .buttonStyle(.bordered)
             .disabled(sampling || voice.isEmpty)
             .accessibilityHint("Plays a few seconds of this narrator at your usual speed. Narration samples are included.")
-            // Nov 14 2026: VoiceOver stays quiet once it is pressed, so the
-            // sample does not start under VoiceOver's words (ducked).
-            .accessibilityAddTraits(.startsMediaSession)
+            // Nov 14 2026 (review): no media-session trait here. The sample
+            // is made on the server for a few seconds first, so VoiceOver's
+            // "Making a sample" is long finished before it plays, and the
+            // trait could silence an error said meanwhile.
             if config?.voicesAvailable == false {
                 Text("The voice list could not be loaded just now. Playback and downloads still work; open this screen again later to change the voice.")
                     .font(.footnote)

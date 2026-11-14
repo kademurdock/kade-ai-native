@@ -584,13 +584,19 @@ struct VoicePickerView: View {
             .onChange(of: wheelVoice) { _, v in
                 guard !seeding, !v.isEmpty else { return }
                 touched = true
+                // Nov 14 2026 (review of her ducked-audition report):
+                // VoiceOver reads the new name as she lands. A sample that
+                // comes back quickly waits until VoiceOver has had time to
+                // say it, so the audition never starts under its words.
+                let notBefore = KadeAudioSessionPolicy.auditionNotBefore(
+                    landedAt: ProcessInfo.processInfo.systemUptime, voiceOver: voiceOverOn)
                 // Debounced: a fast spin lands once, then speaks once.
                 previewTask?.cancel()
                 previewTask = Task {
                     try? await Task.sleep(nanoseconds: 350_000_000)
                     guard !Task.isCancelled else { return }
                     // Part 119.3, her word: the long one. Moving on cuts it.
-                    await preview(v, long: true, force: true)
+                    await preview(v, long: true, force: true, startNotBefore: notBefore)
                 }
             }
         }
@@ -889,7 +895,8 @@ struct VoicePickerView: View {
         }
     }
 
-    private func preview(_ v: String, long: Bool = true, force: Bool = false) async {
+    private func preview(_ v: String, long: Bool = true, force: Bool = false,
+                         startNotBefore: TimeInterval? = nil) async {
         if previewing == v, long, !force {
             voice.stopSpeaking()
             previewing = nil
@@ -916,9 +923,11 @@ struct VoicePickerView: View {
         }
         let fillers = previewFillers ?? VoiceService.fillersSwitchOn
         if let sample = nextAgentSample(long: long) {
-            await voice.previewVoice(v, sample: sample, delivery: d, speed: speed, fillers: fillers)
+            await voice.previewVoice(v, sample: sample, delivery: d, speed: speed, fillers: fillers,
+                                     startNotBefore: startNotBefore)
         } else {
-            await voice.previewVoice(v, long: long, delivery: d, speed: speed, fillers: fillers)
+            await voice.previewVoice(v, long: long, delivery: d, speed: speed, fillers: fillers,
+                                     startNotBefore: startNotBefore)
         }
         // playback finished (or failed) by the time previewVoice returns.
         if previewing == v { previewing = nil }

@@ -34,8 +34,13 @@ import UIKit
 @MainActor
 final class ListenAheadPlayer: ObservableObject {
     /// The job being listened to, or nil.
-    @Published private(set) var jobId: String?
-    @Published private(set) var isPaused = false
+    @Published private(set) var jobId: String? = nil { didSet { syncSessionHold() } }
+    @Published private(set) var isPaused = false { didSet { syncSessionHold() } }
+    /// Nov 14 2026 (review): the name it owns the app's audio session under
+    /// while listening, and holds it under while not paused (the sections,
+    /// the waits and the waiting chime), so nothing else's ending lets the
+    /// session go under it (KadeAudioSession).
+    static let sessionName = "listening while it is made"
     /// The last thing said, for the screen (not a live region).
     @Published private(set) var status = ""
 
@@ -95,6 +100,23 @@ final class ListenAheadPlayer: ObservableObject {
         UIAccessibility.post(notification: .announcement, argument: text)
     }
 
+    /// KadeAudioSessionPolicy's background-listen plan (spoken audio, not
+    /// mixed, so the lock screen buttons work and it carries on with the
+    /// screen locked), switched on and owned until stop() hands it back.
+    private func takeSession() {
+        try? KadeAudioSession.setCategory(for: .backgroundListen)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        KadeAudioSession.shared.take(Self.sessionName)
+    }
+
+    private func syncSessionHold() {
+        if jobId != nil && !isPaused {
+            KadeAudioSession.shared.hold(Self.sessionName)
+        } else {
+            KadeAudioSession.shared.letGo(Self.sessionName)
+        }
+    }
+
     /// Starts listening to `jobId` from its first section. The caller has
     /// already paused the main player.
     func start(jobId: String, title: String = "Described video", rate: Double, fetch: @escaping Fetch) async {
@@ -103,12 +125,7 @@ final class ListenAheadPlayer: ObservableObject {
         self.title = title
         self.rate = Float(min(3, max(0.5, rate)))
         self.jobId = jobId
-        let session = AVAudioSession.sharedInstance()
-        // Nov 14 2026: KadeAudioSessionPolicy's background-listen plan, the
-        // same three values as before: spoken audio, not mixed, so the lock
-        // screen buttons work and it carries on with the screen locked.
-        try? KadeAudioSession.setCategory(for: .backgroundListen)
-        try? session.setActive(true)
+        takeSession()
         LibraryNowPlaying.shared.pauseForOtherAudio("a described video")
         wireRemote()
         guard let first = await fetch(jobId, 0), self.jobId == jobId, !first.sections.isEmpty else {
@@ -158,10 +175,10 @@ final class ListenAheadPlayer: ObservableObject {
             // other paths must not disturb a film or a book that is playing.
             unwireRemote()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            // Nov 14 2026: and switched off a moment later, unless the film
-            // or anything else has taken it by then (KadeAudioSession).
-            KadeAudioSession.shared.releaseSoon("listening while it is made stopped")
+            // Back to the app's usual mixing session, switched off a moment
+            // later. Nov 14 2026 (review): only when no book, film or story
+            // still owns the session (KadeAudioSession.handBack).
+            KadeAudioSession.shared.handBack(Self.sessionName)
         }
         jobId = nil
         fetch = nil
@@ -178,6 +195,10 @@ final class ListenAheadPlayer: ObservableObject {
     func togglePause() {
         guard jobId != nil else { return }
         if isPaused {
+            // Nov 14 2026: a voice message played meanwhile may have put the
+            // app's mixing session back; take this one's again (the lock
+            // screen buttons only work with it).
+            takeSession()
             isPaused = false
             if player.currentItem != nil { player.playImmediately(atRate: rate) }
         } else {
