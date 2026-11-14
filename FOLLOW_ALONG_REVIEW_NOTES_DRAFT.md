@@ -2,18 +2,14 @@
 
 Written November 14, 2026, by the iPhone builder. This is item 14 of the design (TELLAVISION_SYNC_DESIGN_2026-11-13.md, Part 5.4). It is a draft. The lead decides what goes to App Store Connect, and when.
 
-## A decision to make first: the demo seat
+Kade decided on November 14 that Follow along is on for everyone at launch: KADE_DESCRIPTION_FOLLOW=on. So Apple's review account sees the button, and the notes below say how to try it.
 
-Kade decided the button exists only where the server says followAlong is true and the phone switch is on. The server switch starts admin-only. So in the first build, Apple's demo seat does not see the button.
+Two places in the notes are left for the lead. Fill them in after the demo film is on the review account. Each is in square brackets, in capital letters:
 
-Guideline 2.5.19 says apps must not hide features from review. A server-gated feature that Apple cannot see is the risk our notes already warn about (removal, and account termination in the worst case).
+- The test film's name, as it shows under Your videos.
+- A public link to the test film, so the reviewer can play it on a second device.
 
-Two honest ways through:
-
-1. Recommended, when the server side is live: set KADE_DESCRIPTION_FOLLOW so the demo seat is included (or "on" for everyone), put a short test film and its track on the demo seat, and use notes A below.
-2. If the feature stays admin-only for that build: say so in the notes, plainly (notes B below). Do not leave it unmentioned.
-
-## Notes A: the feature is on for the review account
+## The notes
 
 Follow along with my TV (new in this version)
 
@@ -21,10 +17,10 @@ Kade-AI makes described videos for blind and low-vision people: a narrator descr
 
 How to try it with the review account:
 1. Open the Create tab, then Described video.
-2. Open the video named "[test film name]" under Your videos.
-3. Play the test film on a second device, a Mac or another phone, with its sound on. The file is at [link to the test film] (its sound matches the track on the account).
+2. Open the video named "[TEST FILM NAME: the lead fills this in]" under Your videos.
+3. Play the test film on a second device, a Mac or another phone, with its sound on. The film is at [PUBLIC LINK TO THE TEST FILM: the lead fills this in]. Its sound matches the track on the account.
 4. On the iPhone, press "Follow along with my TV", read the sentence about the microphone, and press "Start listening". Allow the microphone if asked.
-5. Within about 15 seconds the phone says "Found your place", then speaks descriptions in the gaps. Pause the film and it says the film seems to be paused. Press "Stop" to end. The phone says "Follow along is off. The microphone is off."
+5. Within about 15 seconds the phone says "Found your place", then speaks descriptions in the gaps. Pause the film, and within about 10 seconds it says the film seems to be paused. Press "Stop" to end. The phone says "Follow along is off. The microphone is off."
 
 Microphone (5.1.1 and 2.5.14):
 - The purpose string names Follow along: "Kade-AI uses your microphone when you talk to your characters or record, and when you turn on Follow along, to hear the film playing near you and keep its descriptions in step. Film sound is checked on your phone and is never saved or sent."
@@ -37,13 +33,10 @@ Background audio (2.5.4):
 No downloaded code (2.5.2):
 - The matching runs in JavaScriptCore from a script that ships inside the app bundle (syncprint.js). The app downloads only data: the description lines (JSON) and the fingerprint (a binary file of numbers).
 
-## Notes B: the feature is off for the review account
-
-Follow along with my TV is in this build but switched off on our server for every account except the developer's own, while it is tested with real TVs. The review account does not see it. When we switch it on for users, we will say so in that version's review notes and put a test film on the review account. It uses the microphone only after the person presses Start listening; the purpose string already describes it.
-
 ## Things to check before sending
 
-- The test film and its track exist on the demo seat, and the follow word for that job is "ready".
-- The demo seat's described-video config answers followAlong true.
-- The build carries the same Sources/syncprint.js as the server. Each project's own test checks only its own copy, so run python -I dev/follow-along/compare-syncprint.py PATH/TO/LibreChat-fork. It must say the two copies are the same. On November 14 they differed: copy one syncprint commit into both first (dev/follow-along/vendor-syncprint.py does both at once).
+- The server has KADE_DESCRIPTION_FOLLOW=on, and the review account's described-video config answers followAlong true.
+- The test film and its track are on the review account, and the follow word for that job is "ready".
+- Both placeholders are filled in: the film's name, and its public link. Nothing in square brackets is left in what goes to Apple.
+- The build carries the same Sources/syncprint.js as the server: syncprint 1.1.1, sha256 7a1191ea3ce1eb39d4cdfe14bf7853b62ef8540c942cba4dbfa52a7bf0c384a6. Run python -I dev/follow-along/compare-syncprint.py PATH/TO/LibreChat-fork. It must say "The same".
 - The microphone purpose string in the built Info.plist is the new one.

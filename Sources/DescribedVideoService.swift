@@ -404,7 +404,8 @@ struct DVConfig: Decodable {
     /// Nov 14 2026 (Tellavision): the server offers follow-along tracks
     /// (GET and POST /jobs/:id/track). Absent on older servers; false with
     /// KADE_DESCRIPTION_FOLLOW=0, and for everyone but the administrator
-    /// with KADE_DESCRIPTION_FOLLOW=admin.
+    /// with KADE_DESCRIPTION_FOLLOW=admin. Kade's choice for launch (Nov 14):
+    /// KADE_DESCRIPTION_FOLLOW=on, so true for everyone, the review account too.
     let followAlong: Bool?
 
     enum CodingKeys: String, CodingKey {
