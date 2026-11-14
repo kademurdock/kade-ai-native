@@ -16,6 +16,10 @@ struct FollowStoredTrack: Identifiable, Hashable {
     let lines: Int
     let bytes: Int
     let savedAt: Date
+    /// The finishedAt of the finished copy this track was built from, as the
+    /// server's answer said it (FollowTrackStamp); nil for a track kept
+    /// before Nov 14's contract, or when the server sent none.
+    let finishedAt: String?
 
     /// "1 hour 42 minutes, 380 lines, kept 14 November 2026".
     var summary: String {
@@ -96,14 +100,21 @@ final class FollowAlongStore: ObservableObject {
         tracks = Self.list(in: Self.folder(account: account))
     }
 
-    func stored(job: String, version: Int) -> FollowStoredTrack? {
-        tracks.first { $0.job == job && $0.copyVersion == version }
+    /// The track kept for this copy, only when it was built from the copy as
+    /// it is finished now: its stamp is the copy's finishedAt (Nov 14 2026).
+    /// "Describe the rest" finishes a copy again under the same version
+    /// number; the kept track is then the preview's, so nil: fetch again.
+    func stored(job: String, version: Int, finishedAt: String?) -> FollowStoredTrack? {
+        guard let kept = tracks.first(where: { $0.job == job && $0.copyVersion == version }),
+              FollowTrackStamp.matches(kept.finishedAt, finishedAt) else { return nil }
+        return kept
     }
 
     /// Gets the track of one finished copy from the server: asks for it,
     /// asks the server to make it when it can, downloads the fingerprint,
     /// checks it whole against the track's checksum (once more if it is
-    /// not), and keeps both.
+    /// not), and keeps both, with the answer's finishedAt. They replace a
+    /// track kept for the same copy before.
     func fetch(jobId: String, version: Int, service: DescribedVideoService) async throws -> Fetched {
         var answer = try await service.track(jobId: jobId, version: version)
         if !answer.isReady && answer.state == "possible" {
@@ -122,10 +133,18 @@ final class FollowAlongStore: ObservableObject {
         } catch let problem as FollowTrack.Problem {
             return .notYet(problem.words)
         }
+        // The fingerprint kept for this copy is used again when it is the very
+        // one the fresh track names (its size and sha256): a copy with no
+        // finishedAt, or an older server, asks again on every open.
+        if let kept = keptPrint(job: jobId, version: version), Self.matches(kept, track.print) {
+            return .ready(try save(trackData: trackData, print: kept, track: track, job: jobId, version: version,
+                                   finishedAt: answer.finishedAt))
+        }
         for _ in 0..<2 {
             let print = try await service.downloadData(from: link, limit: Self.largestPrint)
             if Self.matches(print, track.print) {
-                return .ready(try save(trackData: trackData, print: print, track: track, job: jobId, version: version))
+                return .ready(try save(trackData: trackData, print: print, track: track, job: jobId, version: version,
+                                       finishedAt: answer.finishedAt))
             }
             KadeBreadcrumbs.drop("follow along: a fingerprint download did not match its checksum (\(print.count) bytes)")
         }
@@ -159,7 +178,8 @@ final class FollowAlongStore: ObservableObject {
 
     // MARK: Folders
 
-    private func save(trackData: Data, print: Data, track: FollowTrack, job: String, version: Int) throws -> FollowStoredTrack {
+    private func save(trackData: Data, print: Data, track: FollowTrack, job: String, version: Int,
+                      finishedAt: String?) throws -> FollowStoredTrack {
         guard let account else { throw StoreError.noAccount }
         let name = Self.folderName(job: job, version: version)
         let folder = Self.folder(account: account).appendingPathComponent(name, isDirectory: true)
@@ -167,25 +187,21 @@ final class FollowAlongStore: ObservableObject {
         try manager.createDirectory(at: folder, withIntermediateDirectories: true)
         try trackData.write(to: folder.appendingPathComponent("track.json"), options: .atomic)
         try print.write(to: folder.appendingPathComponent("print.sypr"), options: .atomic)
-        let meta = Meta(title: track.title, job: job, copyVersion: version, filmSeconds: track.filmSeconds,
-                        coversStart: track.covers.startSec, coversEnd: track.covers.endSec, lines: track.cues.count,
-                        bytes: trackData.count + print.count, savedAt: Date().timeIntervalSince1970)
+        let meta = FollowTrackMeta(title: track.title, job: job, copyVersion: version, filmSeconds: track.filmSeconds,
+                                   coversStart: track.covers.startSec, coversEnd: track.covers.endSec, lines: track.cues.count,
+                                   bytes: trackData.count + print.count, savedAt: Date().timeIntervalSince1970,
+                                   finishedAt: finishedAt)
         try JSONEncoder().encode(meta).write(to: folder.appendingPathComponent("meta.json"), options: .atomic)
         refresh()
         guard let kept = tracks.first(where: { $0.id == name }) else { throw StoreError.unreadable }
         return kept
     }
 
-    private struct Meta: Codable {
-        let title: String
-        let job: String
-        let copyVersion: Int
-        let filmSeconds: Double
-        let coversStart: Double
-        let coversEnd: Double
-        let lines: Int
-        let bytes: Int
-        let savedAt: Double
+    /// The fingerprint already kept for this copy, if any.
+    private func keptPrint(job: String, version: Int) -> Data? {
+        guard let account else { return nil }
+        let folder = Self.folder(account: account).appendingPathComponent(Self.folderName(job: job, version: version), isDirectory: true)
+        return try? Data(contentsOf: folder.appendingPathComponent("print.sypr"))
     }
 
     private static func list(in folder: URL) -> [FollowStoredTrack] {
@@ -195,11 +211,12 @@ final class FollowAlongStore: ObservableObject {
         for name in names {
             let place = folder.appendingPathComponent(name, isDirectory: true)
             guard let data = try? Data(contentsOf: place.appendingPathComponent("meta.json")),
-                  let meta = try? JSONDecoder().decode(Meta.self, from: data) else { continue }
+                  let meta = try? JSONDecoder().decode(FollowTrackMeta.self, from: data) else { continue }
             found.append(FollowStoredTrack(
                 id: name, folder: place, job: meta.job, copyVersion: meta.copyVersion, title: meta.title,
                 filmSeconds: meta.filmSeconds, coversStart: meta.coversStart, coversEnd: meta.coversEnd,
-                lines: meta.lines, bytes: meta.bytes, savedAt: Date(timeIntervalSince1970: meta.savedAt)))
+                lines: meta.lines, bytes: meta.bytes, savedAt: Date(timeIntervalSince1970: meta.savedAt),
+                finishedAt: meta.finishedAt))
         }
         return found.sorted { $0.savedAt > $1.savedAt }
     }

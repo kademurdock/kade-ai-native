@@ -346,6 +346,122 @@ private extension KeyedDecodingContainer {
     }
 }
 
+// MARK: - The server's track answer, and which finished copy a track is of
+
+/// Nov 14 2026 (Tellavision Follow along, design Part 5.2): the answer of
+/// GET and POST /jobs/:id/track. Ready: the track (track.json) and a signed
+/// link to the fingerprint, good for six hours. Making: it is being made.
+/// Anything else comes with the server's plain reason. (It lived in
+/// DescribedVideoService.swift; it moved here so the tests read it.)
+///
+/// Read leniently, by hand, because track.json is kept on the phone exactly
+/// as it came: the state is `state` (or `status`, or the job's `follow`
+/// word); the track is `track` (or the answer itself, when it is a track);
+/// the link is `printUrl`, `printURL`, `printLink`, `fingerprintUrl`,
+/// `fingerprintURL`, `url`, `print` (as text, or an object with `url`), or
+/// `links.print`; the reason is `reason`, `message` or `error`.
+///
+/// `finishedAt` (the contract agreed on Nov 14): the finishedAt of the
+/// finished copy the track was built from, exactly as the job's
+/// copies[].finishedAt shows it for that version; null when the copy has
+/// none. Missing (an older server) or null is fine: it is then nil.
+struct DVTrackAnswer {
+    /// ready, making, possible or gone; "" when the server did not say.
+    let state: String
+    /// The track's JSON, when there is one.
+    let trackData: Data?
+    let printLink: String?
+    let reason: String?
+    let finishedAt: String?
+
+    var isReady: Bool { trackData != nil && printLink != nil }
+
+    static func read(_ data: Data) -> DVTrackAnswer? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        func words(_ value: Any?) -> String? {
+            guard let text = value as? String else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        var track = object["track"] as? [String: Any]
+        if track == nil, words(object["format"]) == "kade-follow-track" { track = object }
+        var link: String?
+        for key in ["printUrl", "printURL", "printLink", "fingerprintUrl", "fingerprintURL", "url"] where link == nil {
+            link = words(object[key])
+        }
+        if link == nil { link = words(object["print"]) }
+        if link == nil, let print = object["print"] as? [String: Any] { link = words(print["url"]) ?? words(print["link"]) }
+        if link == nil, let links = object["links"] as? [String: Any] { link = words(links["print"]) ?? words(links["fingerprint"]) }
+        let state = (words(object["state"]) ?? words(object["status"]) ?? words(object["follow"])
+                     ?? (track != nil ? "ready" : "")).lowercased()
+        let trackData = track.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+        let reason = words(object["reason"]) ?? words(object["message"]) ?? words(object["error"])
+        return DVTrackAnswer(state: state, trackData: trackData, printLink: link, reason: reason,
+                             finishedAt: FollowTrackStamp.read(object["finishedAt"]))
+    }
+}
+
+/// Which finished copy a track was built from: that copy's finishedAt (Nov
+/// 14 2026). "Describe the rest" finishes a copy again under the SAME
+/// version number, and the server builds a fresh track for it. So a track
+/// kept on the phone is used only when its stamp is the copy's own
+/// finishedAt now. When either is missing, or they differ, the phone asks
+/// the server again and the fresh track replaces the kept one. Tracks kept
+/// before the stamp existed have none: one extra request, harmless.
+enum FollowTrackStamp {
+    /// The stamp as the server sent it: text (as the job's copies show it),
+    /// or a number written the way the job's lenient reader writes one.
+    /// nil when missing, null, empty, or anything else.
+    static func read(_ value: Any?) -> String? {
+        if let text = value as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let seconds = number.doubleValue
+        guard seconds.isFinite else { return nil }
+        return seconds == seconds.rounded() && abs(seconds) < 1e15 ? String(Int(seconds)) : String(seconds)
+    }
+
+    /// True only when both stamps are known and name the same moment: the
+    /// same text, or the same instant written another way (with or without
+    /// milliseconds).
+    static func matches(_ kept: String?, _ copy: String?) -> Bool {
+        guard let kept = clean(kept), let copy = clean(copy) else { return false }
+        if kept == copy { return true }
+        guard let first = moment(kept), let second = moment(copy) else { return false }
+        return abs(first.timeIntervalSince(second)) < 0.0005
+    }
+
+    private static func clean(_ text: String?) -> String? {
+        let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func moment(_ text: String) -> Date? {
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = precise.date(from: text) { return date }
+        return ISO8601DateFormatter().date(from: text)
+    }
+}
+
+/// meta.json of a track kept on the phone (FollowAlongStore), for the list.
+/// `finishedAt` is the stamp the server's answer carried (FollowTrackStamp);
+/// a track kept before Nov 14's contract has none, so it reads as nil.
+struct FollowTrackMeta: Codable, Equatable {
+    let title: String
+    let job: String
+    let copyVersion: Int
+    let filmSeconds: Double
+    let coversStart: Double
+    let coversEnd: Double
+    let lines: Int
+    let bytes: Int
+    let savedAt: Double
+    let finishedAt: String?
+}
+
 // MARK: - Every sentence the phone says (design 5.3, "The exact words")
 
 /// The phone says these with its own speech engine, so they work with the

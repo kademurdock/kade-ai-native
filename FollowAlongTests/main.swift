@@ -1453,6 +1453,75 @@ do {
 }
 
 
+// MARK: - Which finished copy a kept track is of (the Nov 14 contract)
+
+section("the kept track's stamp")
+do {
+    func answer(_ json: String) -> DVTrackAnswer? { DVTrackAnswer.read(Data(json.utf8)) }
+    let trackJSON = #"{"format": "kade-follow-track", "version": 1, "filmSeconds": 90, "print": {"format": 1, "bytes": 10, "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}, "cues": []}"#
+    let stamp = "2026-11-14T10:00:00.000Z"
+
+    // GET (and POST) /jobs/:id/track, ready: the answer carries the
+    // finishedAt of the copy its track was built from.
+    if let ready = answer(#"{"follow": "ready", "version": 3, "track": \#(trackJSON), "printUrl": "https://example.invalid/print.sypr", "expiresAt": "2026-11-14T16:00:00.000Z", "finishedAt": "2026-11-14T10:00:00.000Z"}"#) {
+        check(ready.isReady && ready.state == "ready" && ready.printLink == "https://example.invalid/print.sypr", "a ready answer reads as before")
+        check(ready.finishedAt == stamp, "it carries the finishedAt of the copy its track was built from")
+    } else {
+        check(false, "a ready answer with finishedAt reads")
+    }
+    let nullStamp = answer(#"{"follow": "ready", "track": \#(trackJSON), "printUrl": "https://example.invalid/p", "finishedAt": null}"#)
+    check(nullStamp?.isReady == true && nullStamp?.finishedAt == nil, "finishedAt null (a copy with none): no stamp, and the answer still reads")
+    let noStamp = answer(#"{"follow": "ready", "track": \#(trackJSON), "printUrl": "https://example.invalid/p"}"#)
+    check(noStamp?.isReady == true && noStamp?.finishedAt == nil, "no finishedAt (an older server): no stamp, and still ready")
+    check(answer(#"{"follow": "making", "message": "Being made.", "finishedAt": "  "}"#)?.finishedAt == nil, "an empty stamp is none")
+    check(answer(#"{"follow": "ready", "track": \#(trackJSON), "printUrl": "https://example.invalid/p", "finishedAt": 1763114400000}"#)?.finishedAt == "1763114400000",
+          "a number is written the way the job's own reader writes it")
+    check(answer(#"{"follow": "ready", "track": \#(trackJSON), "printUrl": "https://example.invalid/p", "finishedAt": true}"#)?.finishedAt == nil,
+          "a yes or no is not a stamp")
+
+    // A kept track is used only when its stamp is the copy's finishedAt now.
+    check(FollowTrackStamp.matches(stamp, "2026-11-14T10:00:00.000Z"), "the same finished copy: the kept track is used")
+    check(!FollowTrackStamp.matches(stamp, "2026-11-14T11:30:00.000Z"),
+          "the copy was finished again under the same version (Describe the rest): the track is fetched again")
+    check(!FollowTrackStamp.matches(nil, stamp), "a track kept before the stamp existed: fetched again")
+    check(!FollowTrackStamp.matches(stamp, nil) && !FollowTrackStamp.matches(nil, nil), "a copy with no finishedAt: fetched again")
+    check(FollowTrackStamp.matches("2026-11-14T10:00:00Z", stamp), "the same moment written without milliseconds is the same copy")
+    check(!FollowTrackStamp.matches("", "") && !FollowTrackStamp.matches("x", "y"), "empty or different text is no match")
+
+    // meta.json of a track kept before the contract has no stamp: it still
+    // reads, and the track is fetched again once.
+    let old = Data(#"{"title": "The Kite", "job": "j1", "copyVersion": 2, "filmSeconds": 90, "coversStart": 0, "coversEnd": 90, "lines": 4, "bytes": 7000, "savedAt": 1763100000}"#.utf8)
+    if let meta = try? JSONDecoder().decode(FollowTrackMeta.self, from: old) {
+        check(meta.finishedAt == nil && meta.job == "j1" && meta.copyVersion == 2, "an old kept track's meta.json still reads, with no stamp")
+        check(!FollowTrackStamp.matches(meta.finishedAt, stamp), "so an old kept track is stale: one extra request")
+    } else {
+        check(false, "an old meta.json reads")
+    }
+    let kept = FollowTrackMeta(title: "The Kite", job: "j1", copyVersion: 2, filmSeconds: 90, coversStart: 0, coversEnd: 90,
+                               lines: 4, bytes: 7000, savedAt: 1763100000, finishedAt: stamp)
+    if let data = try? JSONEncoder().encode(kept), let back = try? JSONDecoder().decode(FollowTrackMeta.self, from: data) {
+        check(back == kept && back.finishedAt == stamp, "a kept track's meta.json keeps the answer's finishedAt")
+    } else {
+        check(false, "meta.json with a stamp is written and read back")
+    }
+
+    // The described video screen and the store need a phone, so their
+    // source is checked.
+    let screenSource = readText("Sources/DescribedVideoView.swift")
+    let opener = body("private func openFollowAlong() async", in: screenSource)
+    check(opener.contains("finishedCopies.first(where: { $0.number == viewVersion })?.finishedAt")
+          && opener.contains("followStore.stored(job: current.id, version: viewVersion, finishedAt: finishedAt)")
+          && opener.contains("followStore.fetch(jobId: current.id, version: viewVersion, service: service)"),
+          "Follow along with my TV uses a kept track only when its stamp is this copy's finishedAt now, and otherwise fetches it again")
+    let storeSource = readText("Sources/FollowAlongStore.swift")
+    check(body("func stored(job: String, version: Int, finishedAt: String?)", in: storeSource).contains("FollowTrackStamp.matches(kept.finishedAt, finishedAt)"),
+          "the store hands back a kept track only when the stamps match")
+    check(!storeSource.contains("func stored(job: String, version: Int) ->"), "no lookup of a kept track that ignores the stamp")
+    let fetcher = body("func fetch(jobId: String, version: Int, service: DescribedVideoService)", in: storeSource)
+    check(fetcher.components(separatedBy: "finishedAt: answer.finishedAt").count - 1 == 2,
+          "a fetched track is kept with the answer's finishedAt, and replaces the kept track and fingerprint")
+}
+
 // MARK: - The sources keep the rules
 
 do {

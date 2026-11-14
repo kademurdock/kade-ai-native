@@ -533,50 +533,9 @@ struct DVReadySections: Decodable {
     let waitSeconds: Double?
 }
 
-/// Nov 14 2026 (Tellavision Follow along, design Part 5.2): the answer of
-/// GET and POST /jobs/:id/track. Ready: the track (track.json) and a signed
-/// link to the fingerprint, good for six hours. Making: it is being made.
-/// Anything else comes with the server's plain reason.
-///
-/// Read leniently, by hand, because track.json is kept on the phone exactly
-/// as it came: the state is `state` (or `status`, or the job's `follow`
-/// word); the track is `track` (or the answer itself, when it is a track);
-/// the link is `printUrl`, `printURL`, `printLink`, `fingerprintUrl`,
-/// `fingerprintURL`, `url`, `print` (as text, or an object with `url`), or
-/// `links.print`; the reason is `reason`, `message` or `error`.
-struct DVTrackAnswer {
-    /// ready, making, possible or gone; "" when the server did not say.
-    let state: String
-    /// The track's JSON, when there is one.
-    let trackData: Data?
-    let printLink: String?
-    let reason: String?
-
-    var isReady: Bool { trackData != nil && printLink != nil }
-
-    static func read(_ data: Data) -> DVTrackAnswer? {
-        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
-        func words(_ value: Any?) -> String? {
-            guard let text = value as? String else { return nil }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        var track = object["track"] as? [String: Any]
-        if track == nil, words(object["format"]) == "kade-follow-track" { track = object }
-        var link: String?
-        for key in ["printUrl", "printURL", "printLink", "fingerprintUrl", "fingerprintURL", "url"] where link == nil {
-            link = words(object[key])
-        }
-        if link == nil { link = words(object["print"]) }
-        if link == nil, let print = object["print"] as? [String: Any] { link = words(print["url"]) ?? words(print["link"]) }
-        if link == nil, let links = object["links"] as? [String: Any] { link = words(links["print"]) ?? words(links["fingerprint"]) }
-        let state = (words(object["state"]) ?? words(object["status"]) ?? words(object["follow"])
-                     ?? (track != nil ? "ready" : "")).lowercased()
-        let trackData = track.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
-        let reason = words(object["reason"]) ?? words(object["message"]) ?? words(object["error"])
-        return DVTrackAnswer(state: state, trackData: trackData, printLink: link, reason: reason)
-    }
-}
+// DVTrackAnswer, the answer of GET and POST /jobs/:id/track (Tellavision
+// Follow along, Nov 14 2026), lives in FollowAlongModel.swift, so the Follow
+// along tests read it (they do not compile this file).
 
 /// Sep 25 2026, Kade: "people should be able to have it remember the speeds
 /// they like." Her usual narration speed, the fastest it may go to fit a gap,

@@ -2033,9 +2033,15 @@ struct DescribedVideoView: View {
     }
 
     /// Opens the sheet on the track kept for this copy, or gets it first.
+    /// "Describe the rest" finishes a copy again under the same version
+    /// number, and the server builds a fresh track for it (Nov 14 2026). So
+    /// a kept track is used only when it was built from the copy as it is
+    /// finished now: its stamp is this copy's finishedAt. Otherwise the track
+    /// is fetched again, and the fresh track and fingerprint replace it.
     private func openFollowAlong() async {
         guard let current = job, fetching.isEmpty, viewVersion > 0 else { return }
-        if let kept = followStore.stored(job: current.id, version: viewVersion) {
+        let finishedAt = current.finishedCopies.first(where: { $0.number == viewVersion })?.finishedAt
+        if let kept = followStore.stored(job: current.id, version: viewVersion, finishedAt: finishedAt) {
             samplePlayer?.stop()
             activeSheet = .followAlong(kept)
             return
