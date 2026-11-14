@@ -426,10 +426,10 @@ enum FollowTrackStamp {
     /// True only when both stamps are known and name the same moment: the
     /// same text, or the same instant written another way (with or without
     /// milliseconds).
-    static func matches(_ kept: String?, _ copy: String?) -> Bool {
-        guard let kept = clean(kept), let copy = clean(copy) else { return false }
-        if kept == copy { return true }
-        guard let first = moment(kept), let second = moment(copy) else { return false }
+    static func matches(_ kept: String?, _ finished: String?) -> Bool {
+        guard let kept = clean(kept), let finished = clean(finished) else { return false }
+        if kept == finished { return true }
+        guard let first = moment(kept), let second = moment(finished) else { return false }
         return abs(first.timeIntervalSince(second)) < 0.0005
     }
 
