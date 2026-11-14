@@ -122,8 +122,8 @@ jobs:
           off="$("$jsc" --useJIT=false Sources/syncprint.js dev/follow-along/time-match.js 2>&1 | tail -n 1 || true)"
           echo "JIT on: $on"
           echo "JIT off: $off"
-          echo "::notice title=jsc, JIT on::$on"
-          echo "::notice title=jsc, JIT off::$off"
+          echo "::notice title=jsc JIT on::$on"
+          echo "::notice title=jsc JIT off::$off"
 
       - name: Puppet gallery screenshots
         id: gallery

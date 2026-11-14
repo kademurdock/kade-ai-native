@@ -166,7 +166,7 @@ if timingOnly {
     let label = jitOff ? "JIT off" : "JIT on"
     let line = "10 minute film, fingerprint \(Int(printMillis)) ms, load \(Int(loadMillis)) ms, 8 s matches \(times.map { String(Int($0)) }.joined(separator: ", ")) ms"
     print("Follow along timing (\(label)): \(line)")
-    print("::notice title=Follow along timing, \(label)::\(annotation(line))")
+    print("::notice title=Follow along timing \(label)::\(annotation(line))")
     exit(0)
 }
 
