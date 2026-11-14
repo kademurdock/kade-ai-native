@@ -501,8 +501,11 @@ let owners: [String: Owner] = [
         marks: owned("FamilyStoryPlayer.swift")),
     "FollowAlongAudio.swift": Owner(
         reason: "Follow along owns and holds the session, and holds the microphone lane, for as long as it listens or speaks; its speech and chimes play inside that",
-        marks: owned("FollowAlongAudio.swift") + [("FollowAlongAudio.swift", "KadeAudioLanes.beginRecording(Self.laneName)"),
-                                                  ("FollowAlongAudio.swift", "KadeAudioLanes.endRecording(Self.laneName)")]),
+        marks: [("FollowAlongAudio.swift", "KadeAudioSession.shared.take(Self.sessionName)"),
+                ("FollowAlongAudio.swift", "KadeAudioSession.shared.hold(Self.sessionName)"),
+                ("FollowAlongAudio.swift", "KadeAudioSession.shared.handBack(Self.sessionName)"),
+                ("FollowAlongAudio.swift", "KadeAudioLanes.beginRecording(Self.laneName)"),
+                ("FollowAlongAudio.swift", "KadeAudioLanes.endRecording(Self.laneName)")]),
     "KadeFeedback.swift": Owner(
         reason: "earcons and room chimes are short sounds; the thinking bubbles hold by name",
         marks: [("KadeFeedback.swift", "KadeAudioSession.shared.shortSound(seconds:player.duration)"),

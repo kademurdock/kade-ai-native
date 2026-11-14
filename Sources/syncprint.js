@@ -83,6 +83,7 @@
     ambiguousRatio: 0.7, // a second place this close to the winner makes the answer ambiguous
     fullScore: 20.0, // score at which confidence reaches 1
     windowSec: 3.0, // how near the expected time counts as near
+    calibrate: 32, // scores at this many offsets show a clip's chance level (0: off)
     quietDropDb: 25, // the film is "quiet" when this far below its usual loud level
     silenceDb: 10 // a missed clip this far below the film's expected loudness, as heard in this room, is "silence"
   };
@@ -182,6 +183,7 @@
     if (!(p.fullScore > p.minScore && p.fullScore > p.nearMinScore)) return 'fullScore';
     if (!(p.windowSec > 0 && p.windowSec <= MAX_WINDOW_SEC)) return 'windowSec';
     if (!(p.quietDropDb >= 0 && p.silenceDb >= 0)) return 'quiet';
+    if (!isInt(p.calibrate, 0, 4096)) return 'calibrate';
     return '';
   }
 
@@ -854,6 +856,7 @@
     this.durationSec = pr.durationSamples / p.sampleRate;
     this.secPerFrame = p.hop / p.sampleRate;
     this.perLevel = p.levelFrames * p.hop / p.sampleRate;
+    this.sameFrames = Math.round(0.5 * p.sampleRate / p.hop); // half a second: candidates this close are one place
     this.nb = p.binHi - p.binLo + 1;
     this.rt = pr.peakFrame;
     this.rf = pr.peakBin;
@@ -1169,7 +1172,8 @@
     }
     if (list.length === 0) return this.quiet(out, expectSec, clipSec, gainDb);
 
-    // 5. decide
+    // 5. decide, after measuring each score against this clip's own chance level
+    if (cfg.calibrate > 0) this.calibrate(res, list);
     for (k = 0; k < list.length; k++) {
       c = list[k];
       c.ok = (c.votes >= cfg.minVotes && c.z >= cfg.minScore) || (c.near && c.z >= cfg.nearMinScore);
@@ -1192,12 +1196,16 @@
     out.runnerUp = second ? second.z : 0;
     out.filmSec = (best.d + best.shift) * this.secPerFrame;
     if (!best.ok) { out.filmSec = null; return this.quiet(out, expectSec, clipSec, gainDb); }
-    var rival = false;
+    // a rival is another place in the film that scores about as well; a candidate
+    // within half a second of the winner is the same place a little off (the
+    // shoulder of the same peak, wide when the sound holds a steady tone)
+    var rival = false, same = this.sameFrames;
     for (k = 0; k < list.length; k++) {
-      if (list[k] !== best && list[k].ok && list[k].z >= cfg.ambiguousRatio * best.z) {
-        if (!(best.near && !list[k].near)) rival = true;
-        out.ambiguous = true;
-      }
+      c = list[k];
+      if (c === best || !c.ok || c.z < cfg.ambiguousRatio * best.z) continue;
+      if (c.d - best.d < same && best.d - c.d < same) continue;
+      if (!(best.near && !c.near)) rival = true;
+      out.ambiguous = true;
     }
     if (rival) { out.reason = 'ambiguous'; out.filmSec = null; return this.quiet(out, expectSec, clipSec, gainDb); }
     var floorScore = best.near ? cfg.nearMinScore : cfg.minScore;
@@ -1211,6 +1219,46 @@
     var fl = this.levelAt(out.filmSec, clipSec);
     if (fl !== null && fl >= this.loudDb - cfg.quietDropDb) out.gainDb = out.level - fl;
     return out;
+  };
+
+  // A clip with a strong rhythm or long steady tones scores high against almost
+  // any stretch of film, because its points do not vary independently. Scores at
+  // offsets spread evenly over the film (away from the best candidates) show this
+  // clip's chance level; every candidate is then measured against it. A clip that
+  // behaves as the score assumes (chance mean 0 or less, spread 1 or less) keeps
+  // its scores unchanged.
+  Matcher.prototype.calibrate = function (res, list) {
+    var R = this.cfg.calibrate, frames = this.frames, qF = res.frames;
+    var span = frames - qF, j, k, d, z, n = 0, s = 0, s2 = 0, skip;
+    if (span < 2 * R) return;
+    // the three best candidates may be the match itself: stay a clip's length away
+    var top = [-1e9, -1e9, -1e9], topD = [0, 0, 0];
+    for (j = 0; j < list.length; j++) {
+      z = list[j].z;
+      if (z > top[2]) {
+        k = 2;
+        while (k > 0 && z > top[k - 1]) { top[k] = top[k - 1]; topD[k] = topD[k - 1]; k--; }
+        top[k] = z; topD[k] = list[j].d;
+      }
+    }
+    for (k = 0; k < R; k++) {
+      d = Math.floor((k + 0.5) * span / R);
+      skip = false;
+      for (j = 0; j < 3; j++) {
+        if (top[j] > -1e9 && d > topD[j] - qF && d < topD[j] + qF) skip = true;
+      }
+      if (skip) continue;
+      z = this.score(res, d);
+      if (z <= -1000) continue;
+      n++; s += z; s2 += z * z;
+    }
+    if (n < R / 2) return;
+    var mu = s / n, sd = s2 / n - mu * mu;
+    sd = sd > 0 ? Math.sqrt(sd) : 0;
+    if (mu < 0) mu = 0;
+    if (sd < 1) sd = 1;
+    if (mu === 0 && sd === 1) return;
+    for (j = 0; j < list.length; j++) list[j].z = (list[j].z - mu) / sd;
   };
 
   // A clip that was not found: was it silence? It is when it is far quieter than
@@ -1419,8 +1467,11 @@
     var since = this.lastListenEnd === null ? 1e9 : now - this.lastListenEnd;
     var wait, clip;
     if (st === 'searching') {
-      wait = o.searchWaitSec; clip = o.searchClipSec;
+      clip = o.searchClipSec;
       if (this.misses >= 3) clip = o.lostClipSec; // nothing yet: try longer clips
+      // clips one after another: each search studies fresh sound, not most of the
+      // last clip again (which would keep the processor busy without end)
+      wait = o.searchWaitSec + clip;
     } else if (st === 'locked') {
       if (this.misses > 0 || this.pending !== null) { wait = 0; clip = o.recheckClipSec; }
       else {

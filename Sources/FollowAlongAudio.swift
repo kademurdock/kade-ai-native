@@ -860,6 +860,8 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     private func say(_ text: String, sound: FollowSoundKind?, stops: Bool) {
         status = text
         pendingSentence = (text: text, sound: sound, stops: stops)
+        // No new line is planned while a sentence waits its turn.
+        gate.speaking = true
         if case .cue = saying { speaker?.stopSpeaking(at: .immediate) }
         flushSentence()
     }
@@ -868,6 +870,7 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         guard let pending = pendingSentence, saying == nil else { return }
         let wait = gate.voiceOverQuietAt - FollowClock.now()
         if wait > 0 {
+            gate.speaking = true
             scheduleFlush(after: wait)
             return
         }
@@ -901,7 +904,7 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
     /// A description line from the planner.
     private func speakLine(id: String, text: String) {
         guard phase == .listening, descriptionsOn, saying == nil, pendingSentence == nil else {
-            gate.speaking = saying != nil
+            gate.speaking = saying != nil || pendingSentence != nil
             loop?.finished(cue: id, started: false, seconds: nil, characters: text.count, now: FollowClock.now())
             return
         }
@@ -1076,9 +1079,9 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         guard phase == .listening else { return }
         let session = AVAudioSession.sharedInstance()
         let outputs = session.currentRoute.outputs
-        let speaker = outputs.isEmpty || outputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
+        let onPhoneSpeaker = outputs.isEmpty || outputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
         let delay = max(0, min(0.5, session.outputLatency + session.ioBufferDuration))
-        loop?.update(lead: delay + settings.nudge, outputDelay: delay, echoRisk: speaker)
+        loop?.update(lead: delay + settings.nudge, outputDelay: delay, echoRisk: onPhoneSpeaker)
     }
 
     private static let personalOutputs: Set<AVAudioSession.Port> = [.headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE]
@@ -1247,9 +1250,12 @@ final class FollowAlongPlayer: NSObject, ObservableObject {
         if current == nil, saying != nil {
             // A sentence still waiting for its notes never started: let it go.
             saying = nil
+        }
+        if saying != nil {
+            speaker?.stopSpeaking(at: .immediate)
+        } else {
             gate.speaking = false
         }
-        if saying != nil { speaker?.stopSpeaking(at: .immediate) }
         let battery = Double(UIDevice.current.batteryLevel)
         if UIDevice.current.isBatteryMonitoringEnabled, battery >= 0 { report.batteryNow = battery }
         UIDevice.current.isBatteryMonitoringEnabled = false
