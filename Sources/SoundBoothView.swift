@@ -157,6 +157,8 @@ struct SoundBoothView: View {
     /// The goal announcement VoiceOver is still speaking. Focus moves to the
     /// form's first field once it has been heard, not on top of it.
     @State private var focusAfterAnnouncement: String?
+    /// Where that focus move goes; nil means the form's first field.
+    @State private var focusTargetAfterAnnouncement: BoothFocus?
     /// Nil while the four choices are showing.
     private var goal: BoothGoal? { choosingGoal ? nil : BoothGoal(rawValue: savedGoal) }
 
@@ -330,7 +332,9 @@ struct SoundBoothView: View {
         }
     }
 
-    private enum BoothFocus: Hashable { case question, firstField }
+    /// `field(key)`: a setting's own control (its guide key), where a
+    /// refusal before rendering sends her (Nov 15 2026).
+    private enum BoothFocus: Hashable { case question, firstField, field(String) }
 
     var body: some View {
         ScrollView {
@@ -444,7 +448,9 @@ struct SoundBoothView: View {
             guard let waiting = focusAfterAnnouncement,
                   (note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String) == waiting else { return }
             focusAfterAnnouncement = nil
-            if goal != nil && activeSheet == nil { boothFocus = .firstField }
+            let target = focusTargetAfterAnnouncement ?? .firstField
+            focusTargetAfterAnnouncement = nil
+            if goal != nil && activeSheet == nil { boothFocus = target }
         }
         .alert("Generation stopped", isPresented: $showRenderConfirmation) {
             Button("OK", role: .cancel) { }
@@ -671,6 +677,7 @@ struct SoundBoothView: View {
         selectEngine(target)
         let spoken = "\(g.making). The form is below."
         focusAfterAnnouncement = spoken
+        focusTargetAfterAnnouncement = nil
         Task {
             // Let the choices leave and VoiceOver settle before speaking.
             try? await Task.sleep(nanoseconds: 350_000_000)
@@ -1133,12 +1140,14 @@ struct SoundBoothView: View {
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.4)))
                         .accessibilityLabel(st.label)
                         .accessibilityHint(hint)
+                        .accessibilityFocused($boothFocus, equals: .field(st.key))
                 } else {
                     TextField(st.hint, text: binding(for: st), axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...3)
                         .accessibilityLabel(st.label)
                         .accessibilityHint(hint)
+                        .accessibilityFocused($boothFocus, equals: .field(st.key))
                 }
                 Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
@@ -1187,6 +1196,7 @@ struct SoundBoothView: View {
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel(st.label)
                     .accessibilityHint(hint)
+                    .accessibilityFocused($boothFocus, equals: .field(st.key))
                 Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
             }
             .disabled(isLocked)
@@ -1286,6 +1296,7 @@ struct SoundBoothView: View {
             .disabled(workspaceBusy || clips.count >= st.clipMax)
             .accessibilityLabel(clips.isEmpty ? st.label : "\(st.label). \(clips.count) of \(st.clipMax) imported.")
             .accessibilityHint(st.lockReason == nil ? hint + " Opens Files." : hint)
+            .accessibilityFocused($boothFocus, equals: .field(st.key))
             Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
 
             if clips.count < st.clipMax, let row = mediaLinkRow(for: st) {
@@ -1597,6 +1608,43 @@ struct SoundBoothView: View {
         return st.forTasks.map { $0.contains(chosenFix) } ?? true
     }
 
+    /// The choices a clean-up task shows (the guide's `forTasks`).
+    private func fixChoices(for task: String) -> [SoundBoothGuide.Setting] {
+        (currentEngine?.settings ?? []).filter { st in
+            guard st.key.hasPrefix("fix_"), st.key != "fix_task" else { return false }
+            return st.forTasks.map { $0.contains(task) } ?? true
+        }
+    }
+
+    /// What to do, drawn as settingRow draws a choice, but a change she makes
+    /// here says which task is picked and which choices are now shown, since
+    /// the rows below appear and go without a sound.
+    private func fixTaskPicker(_ task: SoundBoothGuide.Setting) -> some View {
+        let hint = Self.hintText(for: task)
+        return VStack(alignment: .leading, spacing: 4) {
+            Picker(task.label, selection: Binding(
+                get: { values["fix_task"] ?? task.defaultString ?? "" },
+                set: { next in
+                    let before = chosenFix
+                    values["fix_task"] = next
+                    guard next != before else { return }
+                    let name = task.optionLabel(next) ?? Self.optionText(next)
+                    let shown = fixChoices(for: next).map { $0.label }
+                    announce(shown.isEmpty
+                        ? "\(name). No other choices for this one."
+                        : "\(name). Shown: \(shown.joined(separator: ", ")).")
+                }
+            )) {
+                ForEach(task.options ?? [], id: \.self) { o in
+                    Text(task.optionLabel(o) ?? Self.optionText(o)).tag(o)
+                }
+            }
+            .accessibilityLabel(task.label)
+            .accessibilityHint(hint)
+            Text(hint).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+    }
+
     private var recordingTaskSection: some View {
         let settings = currentEngine?.settings ?? []
         return VStack(alignment: .leading, spacing: 10) {
@@ -1621,7 +1669,7 @@ struct SoundBoothView: View {
 
             if isFixTask {
                 if let task = fixTaskSetting {
-                    settingRow(task)
+                    if task.kind == "choice" && task.lockReason == nil { fixTaskPicker(task) } else { settingRow(task) }
                 }
                 ForEach(settings.filter { fixSettingApplies($0) }) { setting in
                     settingRow(setting)
@@ -1837,6 +1885,14 @@ struct SoundBoothView: View {
     private func announceUrgent(_ msg: String) {
         statusLine = msg
         KadeAnnounce.high(msg)
+    }
+
+    /// The same, then VoiceOver focus goes to `target` once the sentence has
+    /// been heard (the goal announcement's hook on `body`).
+    private func announceUrgent(_ msg: String, then target: BoothFocus) {
+        focusAfterAnnouncement = msg
+        focusTargetAfterAnnouncement = target
+        announceUrgent(msg)
     }
 
     private func announce(_ msg: String) {
@@ -2462,17 +2518,24 @@ struct SoundBoothView: View {
             }
         }
         if isFixTask || isWordsTask {
+            /* Nov 15 2026: each refusal is heard in full, then VoiceOver lands
+             * on the control to fix, so she never hunts for it in a form that
+             * changes with the task. */
             guard !clips.isEmpty, !clipsLocked else {
-                announceUrgent(isFixTask ? "Import the recording you want to clean up or change first." : "Import the recording whose words you want to change first."); return
+                let clipKey = currentEngine?.settings.first(where: { $0.kind == "clip" })?.key ?? ""
+                let said = isFixTask ? "Import the recording you want to clean up or change first." : "Import the recording whose words you want to change first."
+                if clipKey.isEmpty { announceUrgent(said) } else { announceUrgent(said, then: .field(clipKey)) }
+                return
             }
             if isFixTask && chosenFix == "voice" && (values["fix_description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                announceUrgent("Describe the new voice first."); return
+                announceUrgent("Describe the new voice first.", then: .field("fix_description")); return
             }
             if isWordsTask && ((st["old_text"] as? String) == nil || (st["new_text"] as? String) == nil) {
-                announceUrgent("Type the words it says now and the new words first."); return
+                let missing = (st["old_text"] as? String) == nil ? "old_text" : "new_text"
+                announceUrgent("Type the words it says now and the new words first.", then: .field(missing)); return
             }
             if isFixTask, let end = st["edit_end"] as? Double, end <= (st["edit_start"] as? Double ?? 0) {
-                announceUrgent("The edit end must be after the edit start."); return
+                announceUrgent("The edit end must be after the edit start.", then: .field("edit_end")); return
             }
         }
         /* Nov 15 2026: a clean-up or a word change is sent without the speech
