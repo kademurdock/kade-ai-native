@@ -537,7 +537,7 @@ enum FollowWords {
     static let damagedDownload = "The follow-along track did not download whole. Try again."
     static let making = "The follow-along track is being made. Try again in a minute or two."
     static let notReady = "A follow-along track is not ready for this video."
-    static let gone = "The original video is no longer on the server, so a follow-along track cannot be made. Describe it again to get one."
+    static let gone = "The original video is no longer stored, so Follow along can't be made for this copy. Bringing the video in again makes a new described copy that can follow along."
     /// The screen before anything is said, and while it gets ready.
     static let ready = "Press Start listening, then start the film on your TV."
     static let preparing = "Getting the track ready."

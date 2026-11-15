@@ -446,7 +446,7 @@ check(FollowWords.micDenied == "Kade-AI is not allowed to use the microphone. Op
 check(FollowWords.couldNotStart == "Follow along could not start on this phone.", "failure: JavaScript")
 check(FollowWords.micBusy == "The microphone is busy. Try again after your call.", "failure: microphone busy")
 check(FollowWords.trackEnds == "This track ends here. Follow along is off.", "failure: a part ends")
-check(FollowWords.gone == "The original video is no longer on the server, so a follow-along track cannot be made. Describe it again to get one.", "server: original gone")
+check(FollowWords.gone == "The original video is no longer stored, so Follow along can't be made for this copy. Bringing the video in again makes a new described copy that can follow along.", "server: original gone")
 check(FollowWords.privacy == "Your phone listens only to find your place in the film. The sound is checked on this phone. It is never saved and never sent anywhere. The microphone stays on until you press Stop or the film ends.", "the privacy sentence")
 check(FollowWords.button == "Follow along with my TV", "the button")
 check(FollowWords.buttonHint == "Your phone listens for the film on another screen and speaks the descriptions in step.", "the button's hint")

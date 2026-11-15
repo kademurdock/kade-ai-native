@@ -8,6 +8,13 @@ Saved on November 14, 2026, for the contract check between the website and the p
 - They come from github.com/kademurdock/LibreChat, branch claude/tellavision-sync-20261114, commit 2b42b45f6. That commit merges kade (2d20870e6) into the branch. Its Follow along code is the same as in 0cb6c2e87, the commit that added finishedAt to the ready answer.
 - The fingerprint library is syncprint 1.1.1. Its sha256 is 7a1191ea3ce1eb39d4cdfe14bf7853b62ef8540c942cba4dbfa52a7bf0c384a6, the same file as Sources/syncprint.js.
 
+## The gone answers, remade November 14, late
+
+- track-409-gone-get.json and track-409-gone-post.json were made again from the live website code, commit 563157bd1 on branch claude/deploy-20261114 of github.com/kademurdock/LibreChat (the deploy that turned Follow along on for everyone). Its fingerprint library is the same syncprint 1.1.1 file.
+- Their reason now reads: "The original video is no longer stored, so Follow along can't be made for this copy. Bringing the video in again makes a new described copy that can follow along."
+- Each is 202 bytes, SHA-256 786a5afb660aa1159ab8d4b2c61d3efb8cbb5bef341fabdcf4d891dd49d38470. Only these two files were copied in. In the same run the other answers differed only in their dates, so they were kept.
+- FollowWords.gone in the app says the same sentence, and the contract test checks they match.
+
 ## How they were made
 
 The website lane's sample script ran the website's real code in one process: the routes, the free check, the describe engine and its sound passes, the fingerprint worker, the track planner and the check lane. The script is kept with that lane's notes, not in this repository.
