@@ -14,14 +14,13 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: Speech that keeps going, quicker replies"
-    static let body = "Spoken replies no longer go silent after a phone call, Siri or another app's sound, and chat speech no longer takes the microphone from a call, a Clubhouse room or a recording. Stop now stops the voice too. In a chat, Magic Tap pauses and resumes the voice, and starts the microphone when nothing is playing; on a call it stops the character talking. The chat list no longer drops the message under your finger when a reply finishes, and with VoiceOver on, older messages stay in place. Announcements wait for the voice instead of talking over it. Voice speed, delivery style and fillers follow your account, so every device sounds the same. Replies you hear start sooner, and a reply cut off by a weak connection picks itself back up. The Spotter keeps the screen awake for the whole camera call and skips pictures that have not changed. A described film you part watched opens paused where you stopped, with Play from here and Play from the beginning, and you can listen to a described video while it is still being made."
+    static let title = "What's new: VoiceOver keeps its volume, and Follow along with my TV"
+    static let body = "VoiceOver no longer stays turned down after the app plays a sound, a voice or a film: when the app goes quiet it lets the sound go, so VoiceOver comes back to its own volume. " + followAlongNews
 
     /// Nov 14 2026 (Tellavision Follow along): the release words for the
     /// build that carries it. Help's What's new shows them only where Follow
-    /// along is offered (it starts with the administrator alone); fold them
-    /// into `body` when the build is prepared and the server offers it to
-    /// everyone.
+    /// along is offered (it starts with the administrator alone). 2.2.21:
+    /// the server offers it to everyone, so `body` carries these words.
     static let followAlongNews = "New: Follow along with my TV. On a finished described video, your phone listens to the same film playing on your TV, finds your place, and speaks the descriptions in the gaps, in your VoiceOver voice. Pause the TV and it waits; skip and it finds the new place. A soft chime means a line did not fit: pause the TV to hear it. The film's sound is checked on your phone and never saved or sent."
 
     private let seenKey = "kade.whatsNew.seenVersion"

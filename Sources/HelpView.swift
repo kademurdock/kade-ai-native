@@ -247,14 +247,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "New for you: Follow along with my TV",
-                body: KadeWhatsNew.followAlongNews,
-                ownerTrial: true,
-                followAlong: true
+                title: "Newest build, 2.2.21: VoiceOver keeps its volume, and Follow along with my TV",
+                body: KadeWhatsNew.body
             ),
             HelpEntry(
-                title: "Newest build, 2.2.20: Speech that keeps going, quicker replies",
-                body: KadeWhatsNew.body
+                title: "In 2.2.20: Speech that keeps going, quicker replies",
+                body: "Spoken replies no longer go silent after a phone call, Siri or another app's sound, and chat speech no longer takes the microphone from a call, a Clubhouse room or a recording. Stop now stops the voice too. In a chat, Magic Tap pauses and resumes the voice, and starts the microphone when nothing is playing; on a call it stops the character talking. The chat list no longer drops the message under your finger when a reply finishes, and with VoiceOver on, older messages stay in place. Announcements wait for the voice instead of talking over it. Voice speed, delivery style and fillers follow your account, so every device sounds the same. Replies you hear start sooner, and a reply cut off by a weak connection picks itself back up. The Spotter keeps the screen awake for the whole camera call and skips pictures that have not changed. A described film you part watched opens paused where you stopped, with Play from here and Play from the beginning, and you can listen to a described video while it is still being made."
             ),
             HelpEntry(
                 title: "In 2.2.19: Truer talking faces, interruptions remembered right",
