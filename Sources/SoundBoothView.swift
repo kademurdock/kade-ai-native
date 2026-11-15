@@ -226,9 +226,12 @@ struct SoundBoothView: View {
         case voicePicker
         case player(URL, String)
         case share(ShareItem)
+        /// Nov 15 2026: the Open voices panel (VoxCPM2 and Ming).
+        case openVoices
         var id: String {
             switch self {
             case .voicePicker: return "voice"
+            case .openVoices: return "open-voices"
             case .player(let u, _): return "player-\(u.absoluteString)"
             case .share(let i): return "share-\(i.id.uuidString)"
             }
@@ -343,8 +346,11 @@ struct SoundBoothView: View {
                     if engine == "scenema", let task = currentEngine?.settings.first(where: { $0.key == "auk_task" }) {
                         settingRow(task)
                     }
-                    if isUpload { uploadSection } else { scriptSection }
-                    if !usesDirectPrompt {
+                    /* Nov 15 2026: Clean up or change, and Change words, work
+                     * on an imported recording, so they get their own short
+                     * form instead of the script editor and writing desk. */
+                    if isUpload { uploadSection } else if isFixTask || isWordsTask { recordingTaskSection } else { scriptSection }
+                    if !usesDirectPrompt && !isFixTask && !isWordsTask {
                         DisclosureGroup("Voice, references, and writing desk", isExpanded: $showWritingDesk) {
                             /* Part 296: when the guide groups this engine's
                              * settings (More settings), Easy and Advanced
@@ -360,6 +366,7 @@ struct SoundBoothView: View {
                     // A render picked back up on the front door can still be stopped.
                     stopRenderButton
                 }
+                openVoicesButton
                 librarySection
             }
             .padding()
@@ -378,6 +385,12 @@ struct SoundBoothView: View {
                 BoothPlayerSheet(url: url, title: title)
             case .share(let item):
                 ShareSheet(item: item)
+            case .openVoices:
+                SoundBoothOpenVoicesView(
+                    apiClient: apiClient,
+                    engines: health?.openVoices?.engines ?? [],
+                    coldNote: health?.openVoices?.coldNote ?? ""
+                )
             }
         }
         /* Import a clip to clone. `.fileImporter` is the Files browser, which
@@ -459,6 +472,8 @@ struct SoundBoothView: View {
     }
     private var generateLabel: String {
         if engine == "scenema" && values["auk_task"] == "edit" { return "Edit recording" }
+        if isFixTask { return "Clean up or change recording" }
+        if isWordsTask { return "Change the words" }
         return isEffects ? "Generate sounds" : isMusic ? "Make music" : engine == "seed" ? "Generate scene" : "Perform script"
     }
     private var editorHint: String {
@@ -970,9 +985,23 @@ struct SoundBoothView: View {
                             Button(recipe.label) {
                                 values["auk_task"] = recipe.task
                                 if recipe.task == "speech" { clips = [] }
-                                values[recipe.task == "speech" ? "voice_description" : "instruction"] = recipe.text
                                 invalidateQuote()
-                                announce("Example filled in. Edit it to suit your idea. No generation started.")
+                                /* Nov 15 2026: a clean-up recipe picks its task and
+                                 * choices; a Change words recipe fills its boxes.
+                                 * Neither is free-form text for AuK. */
+                                if recipe.task == "clean_up_or_change" {
+                                    if let fix = recipe.fix, !fix.isEmpty { values["fix_task"] = fix }
+                                    for (slot, value) in recipe.slots ?? [:] { values["fix_\(slot)"] = value }
+                                    announce("\(recipe.label) is set up. Import the recording to change, then choose Clean up or change recording. No generation started.")
+                                } else if recipe.task == "change_words" {
+                                    values["words_kind"] = recipe.wordsKind ?? "spoken"
+                                    if let old = recipe.oldWords { values["old_text"] = old }
+                                    if let replacement = recipe.newWords { values["new_text"] = replacement }
+                                    announce("Example filled in. Import the recording, then set the words and where they are. No generation started.")
+                                } else {
+                                    values[recipe.task == "speech" ? "voice_description" : "instruction"] = recipe.text
+                                    announce("Example filled in. Edit it to suit your idea. No generation started.")
+                                }
                             }
                         }
                     }
@@ -1050,6 +1079,10 @@ struct SoundBoothView: View {
     private func settingApplies(_ setting: SoundBoothGuide.Setting) -> Bool {
         guard engine == "scenema" else { return true }
         if ["auk_task", "instruction"].contains(setting.key) { return false }
+        // Nov 15 2026: the clean-up choices live in their own form (recordingTaskSection).
+        if setting.key.hasPrefix("fix_") { return false }
+        // Nov 14 2026: the Change words boxes only while Task is change words.
+        if Self.wordsKeys.contains(setting.key) { return isWordsTask }
         return isEditTask || !["edit_start", "edit_end"].contains(setting.key)
     }
 
@@ -1114,7 +1147,7 @@ struct SoundBoothView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Picker(st.label, selection: binding(for: st, fallback: st.defaultString ?? "")) {
                     ForEach(st.options ?? [], id: \.self) { o in
-                        Text(Self.optionText(o)).tag(o)
+                        Text(st.optionLabel(o) ?? Self.optionText(o)).tag(o)
                     }
                 }
                 .accessibilityLabel(st.label)
@@ -1307,7 +1340,7 @@ struct SoundBoothView: View {
         if max > 1 { return "@Audio\(index + 1): " }
         // Sep 27 2026: "Singing: " for Sing it in my voice, in its guide's words.
         if isUpload { return currentEngine?.ui?.clip ?? "Singing: " }
-        return engine == "yue2" ? "Covering: " : isEditTask ? "Editing: " : "Cloning: "
+        return engine == "yue2" ? "Covering: " : isRecordingTask ? "Editing: " : "Cloning: "
     }
 
     /// Part 293, the Family feature pack: which media-link row the cover field
@@ -1541,6 +1574,103 @@ struct SoundBoothView: View {
             .accessibilityHint("Cancels the render that is running now.")
         }
     }
+
+    // MARK: - Clean up or change a recording (Nov 15 2026)
+
+    /// AuK follows only the changes it was trained on, one per try, so these
+    /// are sent as a task and fixed choices (the server's
+    /// kadeSoundBoothTasks.js), never as free-form words. "What to do" is the
+    /// task list; each task shows only the choices it needs (`forTasks`).
+    private var fixTaskSetting: SoundBoothGuide.Setting? {
+        currentEngine?.settings.first(where: { $0.key == "fix_task" })
+    }
+
+    /// The task picked under What to do, or the guide's default.
+    private var chosenFix: String {
+        let picked = (values["fix_task"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return picked.isEmpty ? (fixTaskSetting?.defaultString ?? "clean_up") : picked
+    }
+
+    /// True when a clean-up choice belongs to the task picked now.
+    private func fixSettingApplies(_ st: SoundBoothGuide.Setting) -> Bool {
+        guard st.key.hasPrefix("fix_"), st.key != "fix_task" else { return false }
+        return st.forTasks.map { $0.contains(chosenFix) } ?? true
+    }
+
+    private var recordingTaskSection: some View {
+        let settings = currentEngine?.settings ?? []
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(isFixTask ? "Clean up or change a recording" : "Change words in a recording")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(isFixTask
+                 ? "Import a recording, then pick one change. Each try is a fresh take, and your original is kept."
+                 : "Import a recording, then type the words it says now, the new words, and roughly where they are.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            TextField("Track title (optional)", text: trackTitleBinding)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Track title")
+                .accessibilityHint("Up to 80 characters. You can rename it in the library.")
+                .accessibilityFocused($boothFocus, equals: .firstField)
+
+            if let clip = settings.first(where: { $0.kind == "clip" }) {
+                settingRow(clip)
+            }
+
+            if isFixTask {
+                if let task = fixTaskSetting {
+                    settingRow(task)
+                }
+                ForEach(settings.filter { fixSettingApplies($0) }) { setting in
+                    settingRow(setting)
+                }
+                ForEach(settings.filter { ["edit_start", "edit_end"].contains($0.key) }) { setting in
+                    settingRow(setting)
+                }
+            } else {
+                settingsList(settings.filter { Self.wordsKeys.contains($0.key) })
+            }
+
+            Button {
+                KadeHaptics.press()
+                Task { await renderTapped(preview: false) }
+            } label: {
+                Text(generateLabel).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(KadeHeroButtonStyle())
+            .disabled(workspaceBusy || !importError.isEmpty)
+            .accessibilityHint((isFixTask
+                ? "Makes a fresh take with this one change. Your original is kept. "
+                : "Makes fresh takes and keeps the one that says the new words. Your original is kept. ") + (currentEngine?.cost ?? ""))
+            Text(currentEngine?.cost ?? "").font(.footnote)
+
+            stopRenderButton
+        }
+    }
+
+    // MARK: - Open voices (Nov 15 2026)
+
+    /// The door to the Open voices panel (VoxCPM2 and Ming). Shown only while
+    /// the server lists at least one of them for this account.
+    @ViewBuilder
+    private var openVoicesButton: some View {
+        if let block = health?.openVoices, !block.engines.isEmpty {
+            let names = block.engines.map { $0.label }.joined(separator: " and ")
+            Button {
+                KadeHaptics.press()
+                activeSheet = .openVoices
+            } label: {
+                Label("Open voices: design a voice, or speak with a saved one", systemImage: "person.wave.2")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(KadeCardButtonStyle())
+            .disabled(activeSheet != nil)
+            .accessibilityHint("Opens the Open voices panel, with \(names). Make takes from a description, keep the ones you like, and reuse them.")
+        }
+    }
+
 
     // MARK: - Library
 
@@ -1795,7 +1925,7 @@ struct SoundBoothView: View {
             do {
                 let data = try Data(contentsOf: url)
                 guard data.count <= 20 * 1024 * 1024 else {
-                    importError = isUpload || isEditTask || engine == "yue2"
+                    importError = isUpload || isRecordingTask || engine == "yue2"
                         ? "That recording is bigger than twenty megabytes. A whole song fits as an MP3, so export an MP3 and import that."
                         : engine == "scenema" ? "That clip is bigger than twenty megabytes. AuK needs only the first eight seconds for a reference voice; import a shorter clip."
                         : "That clip is bigger than twenty megabytes. Import a clip of thirty seconds or less."
@@ -1809,7 +1939,7 @@ struct SoundBoothView: View {
                     engine: engine
                 )
                 // Oct 2 2026: a Seed clip shows its length too, since Seed takes 30 seconds at most.
-                let showLength = isUpload || engine == "seed" || isEditTask
+                let showLength = isUpload || engine == "seed" || isRecordingTask
                 clips.append((url: imported.url, name: showLength ? Self.withLength(imported.name, seconds: imported.seconds) : imported.name))
                 Earcons.shared.play(.actionDone)
                 KadeHaptics.success()
@@ -1861,7 +1991,18 @@ struct SoundBoothView: View {
         guard let g = currentEngine else { return out }
         for st in g.settings {
             if st.lockReason != nil { continue }
-            let raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            /* Nov 15 2026: a clean-up choice goes only with Clean up or change,
+             * and only the ones its chosen task uses; the Change words boxes
+             * only with change words. A choice left as it was is sent as its
+             * default, which is what the picker shows. */
+            var raw = (values[st.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if engine == "scenema" {
+                let isFix = st.key.hasPrefix("fix_")
+                let isWords = Self.wordsKeys.contains(st.key)
+                if isFix && !(isFixTask && (st.key == "fix_task" || fixSettingApplies(st))) { continue }
+                if isWords && !isWordsTask { continue }
+                if (isFix || isWords) && raw.isEmpty && st.kind == "choice", let fallback = st.defaultString { raw = fallback }
+            }
             switch st.kind {
             case "toggle":
                 let enabled = values[st.key].map { $0 == "1" } ?? st.defaultBool ?? false
@@ -2012,6 +2153,14 @@ struct SoundBoothView: View {
 
     /// True when AuK HQ is set to edit an imported recording.
     private var isEditTask: Bool { engine == "scenema" && values["auk_task"] == "edit" }
+    /// Nov 15 2026: AuK HQ set to Clean up or change (one trained task per try).
+    private var isFixTask: Bool { engine == "scenema" && values["auk_task"] == "clean_up_or_change" }
+    /// Nov 14 2026: AuK HQ set to change words.
+    private var isWordsTask: Bool { engine == "scenema" && values["auk_task"] == "change_words" }
+    /// Any AuK HQ task that works on an imported recording.
+    private var isRecordingTask: Bool { isEditTask || isFixTask || isWordsTask }
+    /// The Change words boxes (shown and sent only for change words).
+    private static let wordsKeys: Set<String> = ["words_kind", "old_text", "new_text", "words_from", "words_to", "takes"]
 
     /// Oct 2 2026, her report: "it writes things in the wrong places like
     /// voice descriptions." The script editor gets only the words to perform
@@ -2291,7 +2440,7 @@ struct SoundBoothView: View {
                 return
             }
         }
-        if engine == "yue2" || isEditTask, let settings = currentEngine?.settings {
+        if engine == "yue2" || isRecordingTask, let settings = currentEngine?.settings {
             // A locked setting is never sent, so it is never checked either.
             for setting in settings where ["number", "range"].contains(setting.kind) && setting.lockReason == nil {
                 let raw = (values[setting.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2312,8 +2461,24 @@ struct SoundBoothView: View {
                 announceUrgent("The edit end must be after the edit start."); return
             }
         }
-        let s = script.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard preview || !s.isEmpty || (st["auk_task"] as? String == "edit") else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
+        if isFixTask || isWordsTask {
+            guard !clips.isEmpty, !clipsLocked else {
+                announceUrgent(isFixTask ? "Import the recording you want to clean up or change first." : "Import the recording whose words you want to change first."); return
+            }
+            if isFixTask && chosenFix == "voice" && (values["fix_description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                announceUrgent("Describe the new voice first."); return
+            }
+            if isWordsTask && ((st["old_text"] as? String) == nil || (st["new_text"] as? String) == nil) {
+                announceUrgent("Type the words it says now and the new words first."); return
+            }
+            if isFixTask, let end = st["edit_end"] as? Double, end <= (st["edit_start"] as? Double ?? 0) {
+                announceUrgent("The edit end must be after the edit start."); return
+            }
+        }
+        /* Nov 15 2026: a clean-up or a word change is sent without the speech
+         * script; the recording and the task are the whole request. */
+        let s = (isFixTask || isWordsTask) ? "" : script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard preview || !s.isEmpty || isRecordingTask else { announce(isEffects ? "Describe your sounds first." : isMusic ? "Describe the music you want first." : "Write a script first."); return }
         var body = st
         if engine != "lyria" && !clips.isEmpty && !clipsLocked { body["referenceExpected"] = true }
         body["title"] = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2427,7 +2592,7 @@ struct SoundBoothView: View {
         case "stable": kind = "sound"; lead = "Your sounds"
         default:
             kind = "scene"
-            lead = preview ? "Your voice sample" : (values["auk_task"] == "edit" ? "Your edit" : "Your reading")
+            lead = preview ? "Your voice sample" : (isRecordingTask ? "Your edit" : "Your reading")
         }
         let named = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let typed = (usesDirectPrompt || text.isEmpty) ? script : text
@@ -2631,6 +2796,12 @@ struct SoundBoothView: View {
             let saved = (p.voiceDescription ?? split.headers["voice"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let box = (values["voice_description"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if box.isEmpty && !saved.isEmpty && (clips.isEmpty || clipsLocked) { values["voice_description"] = saved }
+        }
+        /* Nov 15 2026: a clean-up take is saved as an edit of kind "task";
+         * it opens on Clean up or change with the same task picked. */
+        if p.engine == "scenema", values["edit_kind"] == "task", let task = values["edit_task"], !task.isEmpty {
+            values["auk_task"] = "clean_up_or_change"
+            values["fix_task"] = task
         }
         // Part 296: a saved score sits in More settings, so the group opens to show it.
         if moreSettingsHoldWords(engine: p.engine) { showMoreSettings = true }
@@ -3129,7 +3300,8 @@ struct SoundBoothView: View {
 /// Audio player sheet. AVKit's controls are properly labelled for VoiceOver
 /// out of the box, which is why this is a VideoPlayer over an audio URL
 /// rather than a hand-rolled transport — the same choice My Creations made.
-private struct BoothPlayerSheet: View {
+/// Nov 15 2026: no longer private, so the Open voices panel plays its takes here too.
+struct BoothPlayerSheet: View {
     let url: URL
     let title: String
     @State private var player = AVPlayer()

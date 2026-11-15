@@ -485,8 +485,22 @@ struct SoundBoothGuide: Decodable {
         /// the Family feature pack"). A locked setting is shown greyed out
         /// with this reason, never hidden, and its value is never sent.
         let locked: String?
+        /// Nov 15 2026 (Clean up or change): what each option says, keyed by
+        /// the value that is sent ("clean_up" says "Clean up noise and
+        /// echo"). Absent on older servers and on most settings; then the
+        /// option's own words are shown (`optionText`).
+        let labels: [String: String]?
+        /// Nov 15 2026: the AuK clean-up tasks this choice belongs to
+        /// ("remove_effect" for Effect to remove). Absent: it is not tied to
+        /// one clean-up task.
+        let forTasks: [String]?
         var id: String { key }
         var clipMax: Int { Int(max ?? 1) }
+        /// The words an option says: the server's label when it sent one.
+        func optionLabel(_ option: String) -> String? {
+            let said = (labels?[option] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return said.isEmpty ? nil : said
+        }
         /// The reason, when the setting is locked. An empty string counts as
         /// unlocked, as it does on the web page.
         var lockReason: String? {
@@ -494,7 +508,7 @@ struct SoundBoothGuide: Decodable {
             return reason.isEmpty ? nil : reason
         }
 
-        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, lockedLink, advanced, locked, `default` }
+        private enum CodingKeys: String, CodingKey { case key, label, hint, kind, options, min, max, step, link, lockedLink, advanced, locked, labels, forTasks, `default` }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             key = try c.decode(String.self, forKey: .key)
@@ -510,6 +524,9 @@ struct SoundBoothGuide: Decodable {
             // Part 296: read leniently, so an odd value never breaks the guide.
             advanced = try? c.decodeIfPresent(Bool.self, forKey: .advanced)
             locked = try? c.decodeIfPresent(String.self, forKey: .locked)
+            // Nov 15 2026, read leniently like the Part 296 fields.
+            labels = try? c.decodeIfPresent([String: String].self, forKey: .labels)
+            forTasks = try? c.decodeIfPresent([String].self, forKey: .forTasks)
             // `default` is one of three shapes depending on the kind.
             defaultString = try? c.decodeIfPresent(String.self, forKey: .default)
             defaultNumber = try? c.decodeIfPresent(Double.self, forKey: .default)
@@ -520,6 +537,32 @@ struct SoundBoothGuide: Decodable {
         let label: String
         let task: String
         let text: String
+        /// Nov 15 2026: a Clean up or change recipe names its task
+        /// ("clean_up") and that task's choices ({"effect": "phone"}).
+        let fix: String?
+        let slots: [String: String]?
+        /// Nov 14 2026: a Change words recipe's spoken or sung, and its old
+        /// and new words.
+        let wordsKind: String?
+        let oldWords: String?
+        let newWords: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case label, task, text, fix, slots
+            case wordsKind = "kind", oldWords = "old", newWords = "new"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            label = try c.decode(String.self, forKey: .label)
+            task = try c.decode(String.self, forKey: .task)
+            text = try c.decode(String.self, forKey: .text)
+            // The Nov 14/15 fields are read leniently: an odd value never breaks the guide.
+            fix = try? c.decodeIfPresent(String.self, forKey: .fix)
+            slots = try? c.decodeIfPresent([String: String].self, forKey: .slots)
+            wordsKind = try? c.decodeIfPresent(String.self, forKey: .wordsKind)
+            oldWords = try? c.decodeIfPresent(String.self, forKey: .oldWords)
+            newWords = try? c.decodeIfPresent(String.self, forKey: .newWords)
+        }
     }
     /// Sep 27 2026, Sing it in my voice: the words an upload engine's screen
     /// says, from its guide entry (myVoice.ts `ui`), so a wording fix is a
@@ -613,6 +656,9 @@ struct SoundBoothHealth: Decodable {
     let guide: SoundBoothGuide?
     /// Part 293: this person's Family feature pack map. Absent on older servers.
     let features: KadeFamilyFeatures?
+    /// Nov 15 2026: Open voices (VoxCPM2 and Ming). Absent on older servers
+    /// and while the server's switch is off; never inside `guide.engines`.
+    let openVoices: SoundBoothOpenVoicesBlock?
 }
 
 /// THE FAMILY FEATURE PACK (Part 293, Sep 25 2026). One map per person, the
