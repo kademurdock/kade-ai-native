@@ -247,8 +247,12 @@ struct HelpSection: Identifiable {
         // thing in two sentences.
         HelpSection(title: "What's new", entries: [
             HelpEntry(
-                title: "Newest build, 2.2.21: VoiceOver keeps its volume, and Follow along with my TV",
+                title: "Newest build, 2.2.22: Open voices, and Clean up or change, in the Sound Booth",
                 body: KadeWhatsNew.body
+            ),
+            HelpEntry(
+                title: "In 2.2.21: VoiceOver keeps its volume, and Follow along with my TV",
+                body: KadeWhatsNew.body2221
             ),
             HelpEntry(
                 title: "In 2.2.20: Speech that keeps going, quicker replies",

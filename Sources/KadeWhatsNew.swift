@@ -14,8 +14,11 @@ final class KadeWhatsNew: ObservableObject {
 
     /// Rewrite these with every release that changes something people will
     /// notice, and keep Help's "What's new" entry saying the same thing.
-    static let title = "What's new: VoiceOver keeps its volume, and Follow along with my TV"
-    static let body = "VoiceOver no longer stays turned down after the app plays a sound, a voice or a film: when the app goes quiet it lets the sound go, so VoiceOver comes back to its own volume. " + followAlongNews
+    static let title = "What's new: Open voices, and Clean up or change, in the Sound Booth"
+    static let body = "The Sound Booth has Open voices. Design a voice from a description, or speak with a voice you saved or a clip you bring in, using VoxCPM2 or Ming. Ming has its own controls: a built-in voice, emotion, speed, pitch, volume, language and sound tags. Keep the takes you like as saved voices; every take is also in My Creations. The booth can also clean up or change a recording: pick what to do, and it shows only the choices that job uses."
+
+    /// 2.2.21's words, kept for Help's "In 2.2.21" entry.
+    static let body2221 = "VoiceOver no longer stays turned down after the app plays a sound, a voice or a film: when the app goes quiet it lets the sound go, so VoiceOver comes back to its own volume. " + followAlongNews
 
     /// Nov 14 2026 (Tellavision Follow along): the release words for the
     /// build that carries it. Help's What's new shows them only where Follow
